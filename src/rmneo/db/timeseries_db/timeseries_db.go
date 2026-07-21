@@ -64,16 +64,13 @@ Access Control:
 package timeseries_db
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
-	dbcore "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/processed_ts_db"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"strconv"
+	"strings"
 	"time"
-
-	"github.com/espressif/esp-rainmaker-neo/src/utils"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -81,6 +78,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+
+	dbcore "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/processed_ts_db"
+	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )
 
 const (
@@ -112,6 +115,75 @@ type TimeseriesEntry struct {
 	Timezone   string      `dynamodbav:"tz,omitempty"`
 	Value      interface{} `dynamodbav:"value"`
 	Cumulative bool        `dynamodbav:"cumulative,omitempty"`
+}
+
+// NodeTimeseriesPayload is the wire representation of one point published by
+// a node on a timeseries MQTT topic.
+type NodeTimeseriesPayload struct {
+	Key        string          `json:"k"`
+	DataType   string          `json:"dt"`
+	Timestamp  int64           `json:"t"`
+	Value      json.RawMessage `json:"v"`
+	Timezone   string          `json:"tz,omitempty"`
+	Cumulative bool            `json:"cumulative,omitempty"`
+}
+
+// UnMarshalNodePayloadToTimeseriesEntry validates a node payload and converts
+// it into the raw-table representation.
+func (db *TimeseriesDB) UnMarshalNodePayloadToTimeseriesEntry(nodeID, topicName string, point NodeTimeseriesPayload) (*TimeseriesEntry, error) {
+	if nodeID == "" {
+		return nil, rmerror.NewRMError(nil, "missing required field: node_id")
+	}
+	if strings.TrimSpace(point.Key) == "" {
+		return nil, rmerror.NewRMError(nil, "missing required field: k")
+	}
+	if point.Timestamp <= 0 {
+		return nil, rmerror.NewRMError(nil, "t must be a positive Unix timestamp in seconds")
+	}
+	if len(bytes.TrimSpace(point.Value)) == 0 || bytes.Equal(bytes.TrimSpace(point.Value), []byte("null")) {
+		return nil, rmerror.NewRMError(nil, "missing required field: v")
+	}
+
+	var value interface{}
+	switch point.DataType {
+	case "bool":
+		var typedValue bool
+		if err := json.Unmarshal(point.Value, &typedValue); err != nil {
+			return nil, rmerror.NewRMError(err, "v must be a bool when dt is bool")
+		}
+		value = typedValue
+	case "int":
+		var typedValue int64
+		if err := json.Unmarshal(point.Value, &typedValue); err != nil {
+			return nil, rmerror.NewRMError(err, "v must be an integer when dt is int")
+		}
+		value = typedValue
+	case "float":
+		var typedValue float64
+		if err := json.Unmarshal(point.Value, &typedValue); err != nil {
+			return nil, rmerror.NewRMError(err, "v must be a number when dt is float")
+		}
+		value = typedValue
+	case "string":
+		var typedValue string
+		if err := json.Unmarshal(point.Value, &typedValue); err != nil {
+			return nil, rmerror.NewRMError(err, "v must be a string when dt is string")
+		}
+		value = typedValue
+	default:
+		return nil, rmerror.NewRMError(nil, fmt.Sprintf("unsupported dt %q", point.DataType))
+	}
+
+	return &TimeseriesEntry{
+		Timestamp:  point.Timestamp,
+		NodeID:     nodeID,
+		TopicName:  topicName,
+		DataKey:    point.Key,
+		DataType:   point.DataType,
+		Timezone:   point.Timezone,
+		Value:      value,
+		Cumulative: point.Cumulative,
+	}, nil
 }
 
 // TimeseriesQueryResult represents the result of a paginated timeseries query
@@ -298,6 +370,40 @@ func (db *TimeseriesDB) PutTimeseriesData(entry *TimeseriesEntry) error {
 		return rmerror.NewRMError(err, "failed to put timeseries data")
 	}
 
+	return nil
+}
+
+// PutTimeseriesDataBatch stores timeseries data using DynamoDB BatchWriteItem.
+// Entries are fully marshalled before the first write is attempted.
+func (db *TimeseriesDB) PutTimeseriesDataBatch(entries []*TimeseriesEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	authorizedNodes := make(map[string]struct{})
+	items := make([]map[string]types.AttributeValue, len(entries))
+	for i, entry := range entries {
+		if entry == nil {
+			return rmerror.NewRMError(nil, fmt.Sprintf("nil timeseries entry at index %d", i))
+		}
+		if _, ok := authorizedNodes[entry.NodeID]; !ok {
+			if err := db.IsAuthorized(utils.NodePutConfig, entry.NodeID); err != nil {
+				return rmerror.NewRMError(err, "unauthorized access to node timeseries data")
+			}
+			authorizedNodes[entry.NodeID] = struct{}{}
+		}
+
+		entry.NodeKeyDt = fmt.Sprintf("%s.%s.%s", entry.NodeID, entry.DataKey, entry.DataType)
+		av, err := attributevalue.MarshalMap(entry)
+		if err != nil {
+			return rmerror.NewRMError(err, fmt.Sprintf("failed to marshal timeseries entry at index %d", i))
+		}
+		items[i] = av
+	}
+
+	if err := db.BatchPutItems(db.Ctx.Context, items, RawTSDataTable); err != nil {
+		return rmerror.NewRMError(err, "failed to batch put timeseries data")
+	}
 	return nil
 }
 

@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-Two RainMaker lambdas process high-volume MQTT-derived events:
+Three RainMaker lambdas process high-volume MQTT-derived events:
 
 - `presence_event_handler` — consumes IoT presence events
   (`$aws/events/presence/disconnected/#`) and updates each node's online
@@ -11,6 +11,8 @@ Two RainMaker lambdas process high-volume MQTT-derived events:
   (`rainmaker/nodes/+/to_cloud`) such as `getGroupInfo`, `setNodeConfig`,
   `getSchedDetails`, etc., and publishes responses back on
   `rainmaker/nodes/<thing>/from_cloud`.
+- `timeseries_ingest_handler` — expands batch reports from
+  `rainmaker/nodes/+/ts/+/batch` into raw timeseries rows.
 
 Each lambda can be fed by the IoT topic rule in one of **two modes**, selected at
 runtime:
@@ -82,8 +84,9 @@ The business logic behind both paths is identical; only the envelope differs.
 
 ### 3.2 Both modes provisioned at deploy time
 
-Each handler's infrastructure **always** includes the full SQS path, regardless of
-which mode is currently active:
+The presence, publish-input, and timeseries handler stacks
+**always** create the full SQS infrastructure, regardless of which mode is
+currently active:
 
 ```mermaid
 flowchart LR
@@ -101,7 +104,8 @@ flowchart LR
 
 Concretely:
 
-- Both queues (`node-conn-queue`, `node-to-cloud-queue`) and
+- All queues (`node-conn-queue`, `node-to-cloud-queue`, and
+  `timeseries-ingest-queue`) and
   their DLQs always exist.
 - Each lambda has `iot.amazonaws.com lambda:InvokeFunction` so the direct
   action can fire.
@@ -127,16 +131,16 @@ PUT  /v1/admin/iot-event-mode    body: {"mode": "direct"|"sqs"}
 
 Both endpoints are super-admin only.
 
-**GET** — calls `iot:GetTopicRule` for both `node_disconnected_rule` and
-`node_to_cloud_rule` and reports `"sqs"` if the first action is an Sqs
+**GET** — calls `iot:GetTopicRule` for `node_disconnected_rule`,
+`node_to_cloud_rule`, and `node_ts_batch_rule` and reports `"sqs"` if the first action is an Sqs
 action, else `"direct"`. No DB cache: the IoT rule is the single source of
 truth, and this endpoint never disagrees with `aws iot get-topic-rule`.
 
 ```json
-{ "presence": "direct", "publish_input": "direct" }
+{ "presence": "direct", "publish_input": "direct", "timeseries": "direct" }
 ```
 
-**PUT** — flips both rules together. For each rule:
+**PUT** — flips all three rules together. For each rule:
 
 1. `iot:GetTopicRule` to fetch the current SQL, SQL version, description,
    disabled flag, and error_action.
@@ -144,12 +148,12 @@ truth, and this endpoint never disagrees with `aws iot get-topic-rule`.
    only `Actions` with the requested action (Lambda or SQS).
 3. `iot:ReplaceTopicRule` with the new payload.
 
-Failure semantics: presence flip first, then publish_input. If the second
-flip fails, the API returns 500 with a body describing which rule failed.
-The operation is idempotent — the caller retries until both are in the target
-state. There is deliberately no two-phase commit: a partial flip leaves the
-deployment functional, because each rule independently routes events through a
-working pipeline.
+Failure semantics: presence flips first, then publish_input, then timeseries.
+If a flip fails, the API returns 500 with a body describing which rule failed.
+The operation is idempotent — caller retries until all are in the target
+state. We don't run a two-phase commit because a partial flip leaves the
+deployment functional (each rule independently routes events through a
+working pipeline).
 
 ```mermaid
 sequenceDiagram
@@ -166,20 +170,24 @@ sequenceDiagram
     L->>IoT: GetTopicRule(node_to_cloud_rule)
     IoT-->>L: {sql, errorAction, ...}
     L->>IoT: ReplaceTopicRule(node_to_cloud_rule, new payload)
-    L-->>API: {"presence":"sqs","publish_input":"sqs"}
+    L->>IoT: GetTopicRule(node_ts_batch_rule)
+    L->>IoT: ReplaceTopicRule(node_ts_batch_rule, new payload)
+    L-->>API: {"presence":"sqs","publish_input":"sqs","timeseries":"sqs"}
 ```
 
 ### 3.4 IAM for the mode-flip lambda
 
 The lambda's role grants:
 
-- `iot:GetTopicRule`, `iot:ReplaceTopicRule` on the two specific rule ARNs.
-- `iam:PassRole` on **four** roles, conditioned on
+- `iot:GetTopicRule`, `iot:ReplaceTopicRule` on the three specific rule ARNs.
+- `iam:PassRole` on **six** roles, conditioned on
   `iam:PassedToService=iot.amazonaws.com`:
   - `presence_event_handler` IoT-rule role (used by SQS action)
   - `presence_event_handler` IoT-rule error-action role
   - `publish_input_event_handler` IoT-rule role
   - `publish_input_event_handler` IoT-rule error-action role
+  - `timeseries_ingest_handler` IoT-rule role
+  - `timeseries_ingest_handler` IoT-rule error-action role
 
 The PassRole requirement comes from AWS IAM: any `ReplaceTopicRule` call
 that puts a role-bearing action (SQS, DynamoDB, etc.) or error_action into
@@ -190,7 +198,7 @@ attach the role to other services.
 Environment variables (set by the CDK construct) supply the wiring needed
 to construct each rule's actions: `PRESENCE_LAMBDA_ARN`,
 `NODE_CONN_QUEUE_URL`, `PRESENCE_IOT_RULE_ROLE_ARN`, plus the
-publish_input equivalents.
+publish_input and timeseries equivalents.
 
 ---
 
@@ -239,7 +247,7 @@ The runtime API mutates the IoT topic rule out-of-band via
 (`rmng-admin-configs`, `config_key="iot_event_mode"`). On every stack
 create/update, a CloudFormation custom resource invokes the
 `iot_event_mode` lambda with a `{"action":"reapply"}` payload; the lambda
-reads the row and re-applies the stored mode to both rules. This means
+reads the row and re-applies the stored mode to all three rules. This means
 the runtime-set mode survives any redeploy — including ones that edit the
 rule itself (SQL change, error_action change, lambda ARN ref change),
 ones that ship the synthesized template through SAM/CFN tooling rather
@@ -257,7 +265,7 @@ sequenceDiagram
     Note over Rule: live action: Lambda direct (CFN's choice)
     CFN->>CR: invoke (Update event, after Rule + Lambda are settled)
     CR->>L: lambda:invoke {"action":"reapply"}
-    L->>DDB: GetItem config_key=iot_event_mode → {presence:sqs, publish_input:sqs}
+    L->>DDB: GetItem config_key=iot_event_mode → {presence:sqs, publish_input:sqs, timeseries:sqs}
     L->>Rule: GetTopicRule + ReplaceTopicRule with stored mode
     Note over Rule: live action: SQS (back to runtime-set state)
     L-->>CR: {"status":"applied", ...}
@@ -272,16 +280,16 @@ an SQS action. CloudFormation rewrites the rule via the whole-payload
 `ReplaceTopicRule` API whenever any of its properties change. After CFN
 finishes that rewrite, the reapply custom resource runs:
 
-1. The `AwsCustomResource` is wired with `add_dependency` on both handler
-   stacks (so it runs *after* both rules are written) and on the
+1. The `AwsCustomResource` is wired with `add_dependency` on all handler
+   stacks (so it runs *after* all rules are written) and on the
    `iot_event_mode` lambda (so the lambda exists). Its
    `physical_resource_id` is timestamped, so CloudFormation invokes it
    on every Create/Update — not only when its own properties change.
 2. The lambda reads the durable row from `rmng-admin-configs`. If the row
    is missing (fresh stack, never flipped), it's a no-op — the
    CFN-synthesized direct mode stays.
-3. If the row says `sqs`, the lambda calls the flip (the same helper
-   the runtime API uses) for both rules, returning them to SQS.
+3. If the row says `sqs`, the lambda calls `flipRule` (the same helper
+   the runtime API uses) for all rules, returning them to SQS.
 
 | Scenario | Behaviour |
 | -------- | --------- |
@@ -315,18 +323,14 @@ the rule update.
   AwsCustomResource fails its Update, which fails the CFN stack update. The
   failure is loud by design: a mode that silently reverted on deploy would be
   discovered only under load.
-- If the flip succeeds on the rules but fails to write the
-  DDB row, the API returns 500 and the operator retries. The next reapply
-  pass (next deploy) heals to whatever the row eventually says — at worst
-  the mode reverts on next deploy.
-- If a flip fails partway through (presence flipped,
-  publish_input failed, or vice versa), the row is **not** written; the
-  next reapply pass leaves the live state untouched (no-op). The
-  operator retries the API.
+- `handlePut` persists the requested mode before flipping the rules. If a
+  flip fails partway through, the API returns 500 and the operator retries;
+  the next deploy-time reapply can also finish restoring every rule from the
+  already-committed row.
 
 #### Drift detection
 
-`aws cloudformation detect-stack-drift` will flag both rules as drifted
+`aws cloudformation detect-stack-drift` will flag the rules as drifted
 whenever the runtime mode is `sqs` (CFN's recorded template says
 Lambda-direct). This is informational, not a bug — it confirms the
 mechanism is working as designed.
@@ -339,6 +343,7 @@ mechanism is working as designed.
 | --- | --- |
 | Presence handler | Consumes presence events; sniffs the payload shape and dispatches one event or a batch |
 | Publish-input handler | Same, for device-to-cloud events |
+| Timeseries batch handler | Expands batch reports into raw timeseries rows; dispatches direct or SQS payloads |
 | Mode-flip API | Super-admin `GET`/`PUT /v1/admin/iot-event-mode`, plus the reapply path the drift custom resource calls |
 | Admin-configs table | `rmng-admin-configs`, one row per `config_key`, holding runtime-flippable admin state |
 | Handler infrastructure | Provisions both paths on every deploy: queue, DLQ, event-source mapping and both sets of IAM |

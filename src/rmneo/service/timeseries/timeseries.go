@@ -5,13 +5,16 @@
 package timeseries
 
 import (
+	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
+	"time"
+
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/processed_ts_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/timeseries_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/timeutil"
-	"strings"
-	"time"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/config"
@@ -61,6 +64,13 @@ type TimeseriesDataPoint struct {
 	Value      interface{} `json:"value"`
 	Timezone   string      `json:"tz,omitempty"`
 	Cumulative bool        `json:"cumulative,omitempty"`
+}
+
+// TimeseriesBatchPayload is the payload passed from the MQTT ingestion
+// handler to the timeseries service.
+type TimeseriesBatchPayload struct {
+	TopicName string                                `json:"topic_name,omitempty"`
+	Data      []timeseries_db.NodeTimeseriesPayload `json:"data"`
 }
 
 // Get retrieves timeseries data for a node
@@ -528,9 +538,38 @@ func (s *TimeseriesService) handleRawDataRequest(tsDB *timeseries_db.TimeseriesD
 	return response, nil
 }
 
-// Put is not supported for timeseries data (data is ingested via IoT rules)
+// Put validates and stores a batch published through the timeseries IoT rule.
 func (s *TimeseriesService) Put(rmngCtx *rmngctx.RmngContext, nodeID string, data interface{}) error {
-	return rmerror.NewRMError(nil, "PUT operation not supported for timeseries data - use IoT topic for data ingestion")
+	encoded, err := json.Marshal(data)
+	if err != nil {
+		return rmerror.NewRMError(err, "failed to marshal timeseries batch payload")
+	}
+
+	var payload TimeseriesBatchPayload
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		return rmerror.NewRMError(err, "failed to unmarshal timeseries batch payload")
+	}
+	if len(payload.Data) == 0 {
+		return rmerror.NewRMError(nil, "batch data must contain at least one point")
+	}
+
+	timeseriesDB := timeseries_db.NewTimeseriesDB(rmngCtx)
+	entries := make([]*timeseries_db.TimeseriesEntry, len(payload.Data))
+	for i, point := range payload.Data {
+		entry, err := timeseriesDB.UnMarshalNodePayloadToTimeseriesEntry(nodeID, payload.TopicName, point)
+		if err != nil {
+			return rmerror.NewRMError(err, fmt.Sprintf("invalid data point at index %d", i))
+		}
+		entries[i] = entry
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		return entries[i].Timestamp < entries[j].Timestamp
+	})
+
+	if err := timeseriesDB.PutTimeseriesDataBatch(entries); err != nil {
+		return rmerror.NewRMError(err, "failed to store timeseries batch")
+	}
+	return nil
 }
 
 // Delete removes all timeseries data for a node. It reads the node's config

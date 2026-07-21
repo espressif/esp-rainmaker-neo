@@ -6,6 +6,7 @@ package timeseries_test
 
 import (
 	"context"
+	"encoding/json"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/processed_ts_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/timeseries_db"
@@ -200,10 +201,39 @@ var _ = Describe("TimeseriesService", func() {
 	})
 
 	Describe("Put", func() {
-		It("should return error for PUT operations", func() {
-			err := timeseriesService.Put(rmngCtx, testNodeID, map[string]interface{}{})
-			Expect(err).ToNot(BeNil())
-			Expect(err.Error()).To(ContainSubstring("PUT operation not supported for timeseries data"))
+		It("should validate and batch-store node timeseries data", func() {
+			testUser.Permissions.SetAllow(utils.NodePutConfig.String(), testNodeID)
+			err := timeseriesService.Put(rmngCtx, testNodeID, timeseries.TimeseriesBatchPayload{
+				TopicName: "group-1",
+				Data: []timeseries_db.NodeTimeseriesPayload{
+					{Key: "temperature", DataType: "float", Timestamp: 1743656583, Value: json.RawMessage(`25.5`)},
+					{Key: "online", DataType: "bool", Timestamp: 1743656583, Value: json.RawMessage(`true`)},
+				},
+			})
+			Expect(err).ToNot(HaveOccurred())
+
+			entry, err := timeseries_db.NewTimeseriesDB(rmngCtx).GetLatestTimeseriesData(testNodeID, "temperature", "float")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(entry.TopicName).To(Equal("group-1"))
+			Expect(entry.Value).To(Equal(25.5))
+		})
+
+		It("should submit batch points in ascending timestamp order", func() {
+			testUser.Permissions.SetAllow(utils.NodePutConfig.String(), testNodeID)
+			err := timeseriesService.Put(rmngCtx, testNodeID, timeseries.TimeseriesBatchPayload{
+				Data: []timeseries_db.NodeTimeseriesPayload{
+					{Key: "energy", DataType: "float", Timestamp: 3000, Value: json.RawMessage(`30`)},
+					{Key: "energy", DataType: "float", Timestamp: 1000, Value: json.RawMessage(`10`)},
+					{Key: "energy", DataType: "float", Timestamp: 2000, Value: json.RawMessage(`20`)},
+				},
+			})
+			Expect(err).ToNot(HaveOccurred())
+
+			operations := mockDB.ProfileGet().Accesses[timeseries_db.RawTSDataTable].Operations
+			Expect(operations).To(HaveLen(3))
+			Expect(operations[0].Details).To(Equal(testNodeID + ".energy.float:1000"))
+			Expect(operations[1].Details).To(Equal(testNodeID + ".energy.float:2000"))
+			Expect(operations[2].Details).To(Equal(testNodeID + ".energy.float:3000"))
 		})
 	})
 

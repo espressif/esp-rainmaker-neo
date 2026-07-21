@@ -169,12 +169,13 @@ class RMNGCoreStack(Stack):
 
         # Admin services
         self.integration_core = IntegrationCore(self, "IntegrationCore", common_resources)
-        # superAdmin API to flip presence/publish_input IoT rules between
+        # superAdmin API to flip presence/publish_input/timeseries IoT rules between
         # Lambda-direct and SQS at runtime (see rmneo/handlers/admin/iot_event_mode/).
         self.iot_event_mode_core = IotEventModeCore(
             self, "IotEventModeCore", common_resources,
             presence_handler=self.node_core.presence_event_handler_api,
             publish_input_handler=self.node_core.publish_input_event_handler_api,
+            timeseries_handler=self.service_core.timeseries_core,
         )
         # superAdmin API vending read-only creds for the rmng-owned values the dashboard's
         # post-deployment page reports (see rmneo/handlers/admin/rmng_admin_creds/).

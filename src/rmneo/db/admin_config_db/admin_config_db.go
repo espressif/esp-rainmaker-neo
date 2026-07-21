@@ -17,6 +17,7 @@ table):
 For config_key="iot_event_mode" the attributes are:
 - presence (String): "direct" | "sqs"
 - publish_input (String): "direct" | "sqs"
+- timeseries (String): "direct" | "sqs"
 - updated_at (Number): unix milliseconds
 - updated_by (String): superAdmin user id (or "system" when written by
   the deploy-time reapply path)
@@ -60,10 +61,11 @@ const (
 )
 
 // IoTEventModeConfig is the row stored under config_key="iot_event_mode".
-// Both Presence and PublishInput are one of "direct" | "sqs".
+// Presence, PublishInput, and Timeseries are one of "direct" | "sqs".
 type IoTEventModeConfig struct {
 	Presence     string `dynamodbav:"presence"`
 	PublishInput string `dynamodbav:"publish_input"`
+	Timeseries   string `dynamodbav:"timeseries"`
 	UpdatedAt    int64  `dynamodbav:"updated_at"`
 	UpdatedBy    string `dynamodbav:"updated_by"`
 }
@@ -108,7 +110,7 @@ func (a *AdminConfigDB) GetIoTEventMode() (*IoTEventModeConfig, error) {
 // SetIoTEventMode persists the runtime-set modes so the reapply custom
 // resource can restore them on the next stack update. updatedBy should be
 // the caller's user id (or utils.SYSTEM_ACTOR for system-driven writes).
-func (a *AdminConfigDB) SetIoTEventMode(presence, publishInput, updatedBy string) error {
+func (a *AdminConfigDB) SetIoTEventMode(presence, publishInput, timeseries, updatedBy string) error {
 	if err := a.IsAuthorized(utils.AdminConfigSet, IoTEventModeConfigKey); err != nil {
 		return err
 	}
@@ -118,10 +120,11 @@ func (a *AdminConfigDB) SetIoTEventMode(presence, publishInput, updatedBy string
 		Key: map[string]types.AttributeValue{
 			adminConfigPartitionKey: &types.AttributeValueMemberS{Value: IoTEventModeConfigKey},
 		},
-		UpdateExpression: aws.String("SET presence = :p, publish_input = :pi, updated_at = :ts, updated_by = :ub"),
+		UpdateExpression: aws.String("SET presence = :p, publish_input = :pi, timeseries = :t, updated_at = :ts, updated_by = :ub"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":p":  &types.AttributeValueMemberS{Value: presence},
 			":pi": &types.AttributeValueMemberS{Value: publishInput},
+			":t":  &types.AttributeValueMemberS{Value: timeseries},
 			":ts": &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", time.Now().UnixMilli())},
 			":ub": &types.AttributeValueMemberS{Value: updatedBy},
 		},

@@ -9,8 +9,8 @@ Endpoints under test:
   GET  /v1/admin/iot-event-mode
   PUT  /v1/admin/iot-event-mode  body: {"mode": "direct"|"sqs"}
 
-The PUT endpoint flips the action on both node_disconnected_rule and
-node_to_cloud_rule between Lambda-direct and SQS in one call. Both
+The PUT endpoint flips the action on node_disconnected_rule,
+node_to_cloud_rule, and node_ts_batch_rule between Lambda-direct and SQS in one call. All
 infrastructure paths (lambda permissions, SQS queues, event-source mappings)
 are pre-provisioned by the handler stacks, so the flip is a pure
 iot:ReplaceTopicRule call with no redeploy.
@@ -27,8 +27,8 @@ import boto3
 import pytest
 
 
-# Every test in this module mutates the action attached to two global IoT
-# topic rules (node_disconnected_rule, node_to_cloud_rule). They cannot run in
+# Every test in this module mutates the action attached to three global IoT
+# topic rules. They cannot run in
 # parallel with each other: a flip from one test would race the
 # read-modify-write cycle of another. xdist_group pins them to a single
 # worker so they execute serially under --dist=loadgroup. Tests in other
@@ -41,6 +41,7 @@ pytestmark = pytest.mark.xdist_group("iot_event_mode")
 
 PRESENCE_RULE = "node_disconnected_rule"
 PUBLISH_INPUT_RULE = "node_to_cloud_rule"
+TIMESERIES_RULE = "node_ts_batch_rule"
 ADMIN_CONFIG_TABLE = "rmng-admin-configs"
 ADMIN_CONFIG_KEY = "iot_event_mode"
 IOT_EVENT_MODE_LAMBDA = "rmng-iot-event-mode"
@@ -57,14 +58,16 @@ def _action_mode(action):
 
 
 def _read_rule_modes_via_aws():
-    """Read both rules' current first-action mode directly from the IoT
+    """Read all rules' current first-action mode directly from the IoT
     control plane (i.e. independent of the lambda under test)."""
     iot = boto3.client("iot", region_name=REGION)
     presence = iot.get_topic_rule(ruleName=PRESENCE_RULE)["rule"]
     publish_input = iot.get_topic_rule(ruleName=PUBLISH_INPUT_RULE)["rule"]
+    timeseries = iot.get_topic_rule(ruleName=TIMESERIES_RULE)["rule"]
     return {
         "presence": _action_mode(presence["actions"][0]),
         "publish_input": _action_mode(publish_input["actions"][0]),
+        "timeseries": _action_mode(timeseries["actions"][0]),
     }
 
 
@@ -84,7 +87,7 @@ def restore_iot_event_mode(super_admin_user):
             user_log(f"Could not read post-test mode for restore: {current}")
             return
         if current != initial:
-            # We only have a single mode dial, so flip both back together by
+            # We only have a single mode dial, so flip all back together by
             # picking whichever value matches the pre-test state. If presence
             # and publish_input started in different modes (shouldn't happen
             # in normal deploys), prefer the presence value.
@@ -96,14 +99,16 @@ def restore_iot_event_mode(super_admin_user):
 
 
 def test_admin_get_iot_event_mode(super_admin_user):
-    """GET as super-admin returns both rule modes."""
+    """GET as super-admin returns all rule modes."""
     user_log("Reading current iot-event-mode...")
     result = super_admin_user.admin_get_iot_event_mode()
     assert isinstance(result, dict), f"Expected dict, got: {result}"
     assert "presence" in result
     assert "publish_input" in result
+    assert "timeseries" in result
     assert result["presence"] in VALID_MODES, f"Bad presence mode: {result['presence']}"
     assert result["publish_input"] in VALID_MODES, f"Bad publish_input mode: {result['publish_input']}"
+    assert result["timeseries"] in VALID_MODES, f"Bad timeseries mode: {result['timeseries']}"
 
     # Cross-check against the IoT control plane directly: the API's view
     # must match what AWS itself reports.
@@ -158,7 +163,7 @@ def test_admin_put_iot_event_mode_denied_for_non_admin(test_user1, restore_iot_e
 
 @pytest.mark.parametrize("target_mode", ["sqs", "direct"])
 def test_admin_put_iot_event_mode_flip(super_admin_user, restore_iot_event_mode, target_mode):
-    """PUT flips both rules to the requested mode and the change is visible
+    """PUT flips all rules to the requested mode and the change is visible
     both in the API response and in the IoT control plane.
 
     The fixture handles restoration so this test runs cleanly in either
@@ -168,18 +173,18 @@ def test_admin_put_iot_event_mode_flip(super_admin_user, restore_iot_event_mode,
 
     result = super_admin_user.admin_put_iot_event_mode(target_mode)
     assert isinstance(result, dict), f"Expected dict on success, got: {result}"
-    assert result == {"presence": target_mode, "publish_input": target_mode}, \
+    assert result == {"presence": target_mode, "publish_input": target_mode, "timeseries": target_mode}, \
         f"Unexpected PUT response: {result}"
 
     # Verify against the live IoT control plane.
     aws_view = _read_rule_modes_via_aws()
-    assert aws_view == {"presence": target_mode, "publish_input": target_mode}, \
+    assert aws_view == {"presence": target_mode, "publish_input": target_mode, "timeseries": target_mode}, \
         f"AWS-side rule actions don't match requested mode. aws={aws_view}"
 
     # GET should now agree.
     get_result = super_admin_user.admin_get_iot_event_mode()
     assert isinstance(get_result, dict)
-    assert get_result == {"presence": target_mode, "publish_input": target_mode}, \
+    assert get_result == {"presence": target_mode, "publish_input": target_mode, "timeseries": target_mode}, \
         f"GET after PUT disagrees: {get_result}"
 
 
@@ -251,6 +256,7 @@ def test_admin_put_persists_to_rmng_admin_config(super_admin_user, restore_iot_e
     )
     assert item["presence"]["S"] == target_mode, item
     assert item["publish_input"]["S"] == target_mode, item
+    assert item["timeseries"]["S"] == target_mode, item
     assert "updated_at" in item and item["updated_at"]["N"], (
         f"updated_at missing or empty: {item}"
     )
@@ -272,30 +278,33 @@ def test_drift_correction_reapply_restores_runtime_mode(super_admin_user, restor
     """
     iot = boto3.client("iot", region_name=REGION)
 
-    # Step 1: ensure both rules are in direct mode (so we can capture their
+    # Step 1: ensure all rules are in direct mode (so we can capture their
     # Lambda actions to replay later as the "CFN rewrite").
-    user_log("Drift-test setup: forcing both rules to direct mode...")
+    user_log("Drift-test setup: forcing all rules to direct mode...")
     setup = super_admin_user.admin_put_iot_event_mode("direct")
-    assert isinstance(setup, dict) and setup == {"presence": "direct", "publish_input": "direct"}, setup
+    assert isinstance(setup, dict) and setup == {"presence": "direct", "publish_input": "direct", "timeseries": "direct"}, setup
 
     presence_rule = iot.get_topic_rule(ruleName=PRESENCE_RULE)["rule"]
     publish_input_rule = iot.get_topic_rule(ruleName=PUBLISH_INPUT_RULE)["rule"]
+    timeseries_rule = iot.get_topic_rule(ruleName=TIMESERIES_RULE)["rule"]
     presence_lambda_action = presence_rule["actions"][0]
     publish_input_lambda_action = publish_input_rule["actions"][0]
+    timeseries_lambda_action = timeseries_rule["actions"][0]
     assert "lambda" in presence_lambda_action, presence_lambda_action
     assert "lambda" in publish_input_lambda_action, publish_input_lambda_action
+    assert "lambda" in timeseries_lambda_action, timeseries_lambda_action
 
     # Step 2: flip to sqs via the API (writes both the live rule and the
     # rmng_admin_config row).
     user_log("Drift-test: flipping to sqs via API...")
     flip = super_admin_user.admin_put_iot_event_mode("sqs")
-    assert isinstance(flip, dict) and flip == {"presence": "sqs", "publish_input": "sqs"}, flip
-    assert _read_rule_modes_via_aws() == {"presence": "sqs", "publish_input": "sqs"}
+    assert isinstance(flip, dict) and flip == {"presence": "sqs", "publish_input": "sqs", "timeseries": "sqs"}, flip
+    assert _read_rule_modes_via_aws() == {"presence": "sqs", "publish_input": "sqs", "timeseries": "sqs"}
 
-    # Step 3: simulate a CFN rewrite by directly replacing both rules with
+    # Step 3: simulate a CFN rewrite by directly replacing all rules with
     # their original Lambda-direct payloads (preserving SQL, error_action,
     # etc., as CFN would). The row still says sqs.
-    user_log("Drift-test: simulating CFN rewrite by replacing both rules with Lambda-direct action...")
+    user_log("Drift-test: simulating CFN rewrite by replacing all rules with Lambda-direct action...")
 
     def _payload_with_action(rule, action):
         payload = {"actions": [action]}
@@ -319,8 +328,12 @@ def test_drift_correction_reapply_restores_runtime_mode(super_admin_user, restor
         ruleName=PUBLISH_INPUT_RULE,
         topicRulePayload=_payload_with_action(publish_input_rule, publish_input_lambda_action),
     )
-    assert _read_rule_modes_via_aws() == {"presence": "direct", "publish_input": "direct"}, (
-        "Manual rewrite did not land both rules in direct mode"
+    iot.replace_topic_rule(
+        ruleName=TIMESERIES_RULE,
+        topicRulePayload=_payload_with_action(timeseries_rule, timeseries_lambda_action),
+    )
+    assert _read_rule_modes_via_aws() == {"presence": "direct", "publish_input": "direct", "timeseries": "direct"}, (
+        "Manual rewrite did not land all rules in direct mode"
     )
 
     # Step 4: invoke the iot_event_mode lambda directly with the same
@@ -340,13 +353,14 @@ def test_drift_correction_reapply_restores_runtime_mode(super_admin_user, restor
     assert body.get("status") == "applied", f"Expected applied, got: {body}"
     assert body.get("presence") == "sqs", body
     assert body.get("publish_input") == "sqs", body
+    assert body.get("timeseries") == "sqs", body
 
     # Step 5: confirm the live rules are back to sqs.
     after = _read_rule_modes_via_aws()
-    assert after == {"presence": "sqs", "publish_input": "sqs"}, (
+    assert after == {"presence": "sqs", "publish_input": "sqs", "timeseries": "sqs"}, (
         f"Reapply did not restore runtime mode. live={after}"
     )
-    user_log("Drift-test: reapply restored both rules to sqs as expected")
+    user_log("Drift-test: reapply restored all rules to sqs as expected")
 
 
 @pytest.mark.unsafe
@@ -379,3 +393,4 @@ def test_admin_put_iot_event_mode_round_trip_does_not_disrupt_presence(
     assert isinstance(flip_to_direct, dict), f"Flip to direct failed: {flip_to_direct}"
     assert flip_to_direct["presence"] == "direct"
     assert flip_to_direct["publish_input"] == "direct"
+    assert flip_to_direct["timeseries"] == "direct"

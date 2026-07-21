@@ -5176,9 +5176,9 @@ components:
           type: string
           enum: [direct, sqs]
           description: |
-            Target IoT-rule action mode applied to both `node_disconnected_rule`
-            and `node_to_cloud_rule`. `direct` makes each rule invoke its
-            lambda directly; `sqs` makes each rule write to its SQS queue,
+            Target IoT-rule action mode applied to `node_disconnected_rule`,
+            `node_to_cloud_rule`, and `node_ts_batch_rule`. `direct` makes each
+            rule invoke its lambda directly; `sqs` makes each rule write to its SQS queue,
             which the lambda then consumes in batches.
 
     IotEventModeResponse:
@@ -5186,6 +5186,7 @@ components:
       required:
         - presence
         - publish_input
+        - timeseries
       properties:
         presence:
           type: string
@@ -5195,6 +5196,10 @@ components:
           type: string
           enum: [direct, sqs]
           description: Current action mode of `node_to_cloud_rule`.
+        timeseries:
+          type: string
+          enum: [direct, sqs]
+          description: Current action mode of `node_ts_batch_rule`.
 
     UpdateAppPlatformRequest:
       type: object

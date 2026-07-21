@@ -29,6 +29,7 @@ import (
 const (
 	presenceRuleName     = "node_disconnected_rule"
 	publishInputRuleName = "node_to_cloud_rule"
+	timeseriesRuleName   = "node_ts_batch_rule"
 
 	modeDirect = "direct"
 	modeSQS    = "sqs"
@@ -53,6 +54,7 @@ type modeRequest struct {
 type modeResponse struct {
 	Presence     string `json:"presence"`
 	PublishInput string `json:"publish_input"`
+	Timeseries   string `json:"timeseries"`
 }
 
 // reapplyRequest is the payload the AwsCustomResource sends on every stack
@@ -67,6 +69,7 @@ type reapplyResponse struct {
 	Status       string `json:"status"`
 	Presence     string `json:"presence"`
 	PublishInput string `json:"publish_input"`
+	Timeseries   string `json:"timeseries"`
 }
 
 func presenceConfig() ruleConfig {
@@ -84,6 +87,15 @@ func publishInputConfig() ruleConfig {
 		lambdaArn:  os.Getenv("PUBLISH_INPUT_LAMBDA_ARN"),
 		queueURL:   os.Getenv("NODE_TO_CLOUD_QUEUE_URL"),
 		iotRoleArn: os.Getenv("PUBLISH_INPUT_IOT_RULE_ROLE_ARN"),
+	}
+}
+
+func timeseriesConfig() ruleConfig {
+	return ruleConfig{
+		name:       timeseriesRuleName,
+		lambdaArn:  os.Getenv("TIMESERIES_LAMBDA_ARN"),
+		queueURL:   os.Getenv("TIMESERIES_QUEUE_URL"),
+		iotRoleArn: os.Getenv("TIMESERIES_IOT_RULE_ROLE_ARN"),
 	}
 }
 
@@ -195,9 +207,15 @@ func handleGet(ctx context.Context) (events.APIGatewayProxyResponse, error) {
 		rlog.Error(ctx).Err(err).Str("rule", publishInputRuleName).Msg("Failed to read rule mode")
 		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
 	}
+	timeseries, err := detectMode(ctx, timeseriesRuleName)
+	if err != nil {
+		rlog.Error(ctx).Err(err).Str("rule", timeseriesRuleName).Msg("Failed to read rule mode")
+		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
+	}
 	return utils.APIGwRespJSON(http.StatusOK, modeResponse{
 		Presence:     presence,
 		PublishInput: publishInput,
+		Timeseries:   timeseries,
 	}), nil
 }
 
@@ -222,12 +240,12 @@ func handlePut(ctx context.Context, request events.APIGatewayProxyRequest, updat
 	// call uses a SystemActor context so the in-DB IsAuthorized check is
 	// satisfied regardless of the original caller's identity.
 	adminDB := admin_config_db.NewAdminConfigDB(systemContext(ctx))
-	if err := adminDB.SetIoTEventMode(req.Mode, req.Mode, updatedBy); err != nil {
+	if err := adminDB.SetIoTEventMode(req.Mode, req.Mode, req.Mode, updatedBy); err != nil {
 		rlog.Error(ctx).Err(err).Msg("Failed to persist runtime IoT event mode")
 		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
 	}
 
-	for _, cfg := range []ruleConfig{presenceConfig(), publishInputConfig()} {
+	for _, cfg := range []ruleConfig{presenceConfig(), publishInputConfig(), timeseriesConfig()} {
 		if err := flipRule(ctx, cfg, req.Mode); err != nil {
 			rlog.Error(ctx).Err(err).Str("rule", cfg.name).Str("mode", req.Mode).Msg("Failed to flip IoT rule mode")
 			// DB row is already committed; the next reapply will retry the flip.
@@ -238,7 +256,7 @@ func handlePut(ctx context.Context, request events.APIGatewayProxyRequest, updat
 	return handleGet(ctx)
 }
 
-// handleReapply re-applies the durably-stored modes to both rules. Invoked
+// handleReapply re-applies the durably-stored modes to all rules. Invoked
 // by the AwsCustomResource on every stack create/update so a CloudFormation
 // rewrite of the rule (forced by any non-action property change) is healed
 // back to the runtime-set mode before the deploy completes.
@@ -256,6 +274,7 @@ func handleReapply(ctx context.Context) (reapplyResponse, error) {
 			Status:       "noop",
 			Presence:     modeDirect,
 			PublishInput: modeDirect,
+			Timeseries:   modeDirect,
 		}, nil
 	}
 
@@ -267,18 +286,26 @@ func handleReapply(ctx context.Context) (reapplyResponse, error) {
 	if publishInput == "" {
 		publishInput = modeDirect
 	}
+	timeseries := cfg.Timeseries
+	if timeseries == "" {
+		timeseries = modeDirect
+	}
 
-	rlog.Info(ctx).Str("presence", presence).Str("publish_input", publishInput).Msg("iot_event_mode reapply: restoring stored mode")
+	rlog.Info(ctx).Str("presence", presence).Str("publish_input", publishInput).Str("timeseries", timeseries).Msg("iot_event_mode reapply: restoring stored mode")
 	if err := flipRule(ctx, presenceConfig(), presence); err != nil {
 		return reapplyResponse{Status: "error"}, err
 	}
 	if err := flipRule(ctx, publishInputConfig(), publishInput); err != nil {
 		return reapplyResponse{Status: "error"}, err
 	}
+	if err := flipRule(ctx, timeseriesConfig(), timeseries); err != nil {
+		return reapplyResponse{Status: "error"}, err
+	}
 	return reapplyResponse{
 		Status:       "applied",
 		Presence:     presence,
 		PublishInput: publishInput,
+		Timeseries:   timeseries,
 	}, nil
 }
 

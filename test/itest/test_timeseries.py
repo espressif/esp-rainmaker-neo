@@ -48,8 +48,10 @@ def test_timeseries_comprehensive(associated_device, basic_ingest):
     if hasattr(device, 'subgroup_ids') and device.subgroup_ids:
         subgroup_str = ",".join(device.subgroup_ids)
         expected_topic += f"-{subgroup_str}"
+    expected_batch_topic = f"{expected_topic}/batch"
 
     print(f"Expected timeseries topic: {expected_topic}")
+    print(f"Expected batch timeseries topic: {expected_batch_topic}")
 
     # PART 1: PUBLISH COMPREHENSIVE TEST DATA
     print("📊 Publishing comprehensive test data...")
@@ -123,6 +125,29 @@ def test_timeseries_comprehensive(associated_device, basic_ingest):
         basic_published_timestamps.append(int(time.time() * 1000))
         time.sleep(1)
 
+    # Publish separate keys through the batch topic so both ingestion paths are
+    # exercised and independently validated by this test.
+    batch_test_data = [
+        {"name": "batch_humidity", "dt": "float", "value": 62.4, "cumulative": False},
+        {"name": "batch_count", "dt": "int", "value": 84, "cumulative": False},
+    ]
+    batch_timestamp = int(time.time())
+    batch_points = [
+        {
+            "k": data_point["name"],
+            "dt": data_point["dt"],
+            "t": batch_timestamp,
+            "v": data_point["value"],
+            "tz": "UTC",
+            "cumulative": data_point["cumulative"],
+        }
+        for data_point in batch_test_data
+    ]
+    assert device.publish_timeseries_batch(
+        batch_points,
+        basic_ingest=basic_ingest,
+    ), "Failed to publish timeseries batch"
+
     # Publish comprehensive temperature data (50 points total)
     # This will be used for both aggregates testing AND pagination testing
     print(f"📊 Publishing comprehensive temperature data ({len(temperature_test_data)} points)...")
@@ -147,7 +172,9 @@ def test_timeseries_comprehensive(associated_device, basic_ingest):
 
     def validate_basic_timeseries_data():
         """Validate basic timeseries data was stored correctly"""
-        for i, data_point in enumerate(basic_test_data):
+        test_data = basic_test_data + batch_test_data
+        published_timestamps = basic_published_timestamps + [batch_timestamp] * len(batch_test_data)
+        for i, data_point in enumerate(test_data):
             path = data_point["name"]
             data_type = data_point["dt"]
             expected_value = data_point["value"]
@@ -177,10 +204,9 @@ def test_timeseries_comprehensive(associated_device, basic_ingest):
             assert latest_entry["cumulative"] == data_point["cumulative"], f"Cumulative flag should match"
 
             # Validate timestamp is recent (within last 30 seconds for basic data)
-            if i < len(basic_published_timestamps):
-                entry_timestamp = latest_entry["ts"]
-                time_diff = abs(entry_timestamp - basic_published_timestamps[i])
-                assert time_diff < 30000, f"Timestamp should be recent for {path}"
+            entry_timestamp = latest_entry["ts"]
+            time_diff = abs(entry_timestamp - published_timestamps[i])
+            assert time_diff < 30000, f"Timestamp should be recent for {path}"
 
             print(f"✅ Validated {path} data: {expected_value}")
 

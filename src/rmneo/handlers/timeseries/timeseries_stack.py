@@ -11,7 +11,17 @@ from aws_cdk import (
     RemovalPolicy,
 )
 from constructs import Construct
-from app_common import CommonResources, ManagedTable, create_iot_rule_role, create_iot_topic_rule, create_ssm_string_parameter, create_iot_rule_log_group
+from app_common import (
+    CommonResources,
+    ManagedTable,
+    create_base_lambda_role,
+    create_iot_rule_log_group,
+    create_iot_rule_role,
+    create_iot_topic_rule,
+    create_lambda_function,
+    create_ssm_string_parameter,
+    setup_sqs_lambda_infra,
+)
 from src.rmneo.stacks.base_res_constants import TABLE_NAMES, SSM_PARAMETERS
 from arn_utils import get_table_arn
 
@@ -83,15 +93,14 @@ class TimeseriesCore(Construct):
             self, "TimeseriesLogGroup", rule_name="timeseries",
         )
 
-        # Create IAM role for IoT rule
+        # Keep legacy single-point reports on the direct IoT Rule -> DynamoDB
+        # path so existing devices do not incur a Lambda invocation.
         iot_rule_role = create_iot_rule_role(
             self, "TimeseriesIoTRuleRole",
             role_name="timeseries-iot-rule-role",
             common_resources=common_resources,
-            description="Role for IoT rule to access DynamoDB for timeseries data",
+            description="Role for timeseries IoT rules to access DynamoDB and SQS",
         )
-
-        # Manually grant permissions to the IoT rule role for DynamoDB operations
         iot_rule_role.add_to_policy(iam.PolicyStatement(
             actions=[
                 "dynamodb:PutItem",
@@ -100,7 +109,42 @@ class TimeseriesCore(Construct):
             resources=[get_table_arn(TABLE_NAMES['RAW_TS_DATA'], region)]
         ))
 
-        # Create error action role for IoT rules
+        # Batch reports use a dedicated topic and Lambda which writes one raw
+        # table row per data point.
+        function_name = "timeseries_ingest_handler"
+        timeseries_ingest_role = create_base_lambda_role(self, function_name, common_resources)
+        timeseries_ingest_role.add_to_policy(iam.PolicyStatement(
+            actions=[
+                "dynamodb:BatchWriteItem",
+                "dynamodb:PutItem",
+            ],
+            resources=[get_table_arn(TABLE_NAMES['RAW_TS_DATA'], region)]
+        ))
+        self.timeseries_ingest_function = create_lambda_function(
+            self,
+            function_name,
+            common_resources,
+            lambda_role=timeseries_ingest_role,
+        )
+
+        # Provision both delivery paths so node_ts_batch_rule can be switched
+        # between Lambda-direct and SQS at runtime. In SQS mode, the event
+        # source mapping batches MQTT reports and applies backpressure before
+        # invoking timeseries_ingest_handler.
+        batch_sqs_infra = setup_sqs_lambda_infra(
+            self,
+            name_prefix="timeseries-ingest",
+            construct_id_prefix="TimeseriesIngest",
+            lambda_function=self.timeseries_ingest_function,
+            lambda_role=timeseries_ingest_role,
+            iot_rule_role=iot_rule_role,
+        )
+        self.timeseries_ingest_queue = batch_sqs_infra.queue
+        self.timeseries_ingest_dlq = batch_sqs_infra.dlq
+        self.iot_rule_role = iot_rule_role
+        self.iot_rule_error_role = batch_sqs_infra.error_role
+
+        # Keep the legacy single-point rule's existing error-action role.
         error_role = create_iot_rule_role(
             self, "TimeseriesErrorRole",
             role_name="timeseries-iot-rule-error-role",
@@ -114,7 +158,7 @@ class TimeseriesCore(Construct):
             resources=[log_group.log_group_arn + ":*"]
         ))
 
-        # Create IoT Core rule for timeseries data ingestion
+        # Legacy single-point ingestion rule.
         node_ts_rule = create_iot_topic_rule(
             self, "NodeTsRule",
             rule_name="node_ts_rule",
@@ -158,5 +202,43 @@ class TimeseriesCore(Construct):
         node_ts_rule.add_resource_dependency(iot_rule_role.node.default_child)
         node_ts_rule.add_resource_dependency(error_role.node.default_child)
 
-        # Store the rule reference for potential use in other constructs
+        # Dedicated batch ingestion rule. The extra "batch" topic segment keeps
+        # it disjoint from node_ts_rule while remaining covered by existing
+        # device and bridge `.../ts/*` publish policies.
+        node_ts_batch_rule = create_iot_topic_rule(
+            self, "NodeTsBatchRule",
+            rule_name="node_ts_batch_rule",
+            topic_rule_payload=iot.CfnTopicRule.TopicRulePayloadProperty(
+                sql="""
+                SELECT
+                    topic(3) as node_id,
+                    topic(5) as topic_name,
+                    * as payload
+                FROM 'rainmaker/nodes/+/ts/+/batch'
+                """,
+                aws_iot_sql_version="2016-03-23",
+                actions=[
+                    iot.CfnTopicRule.ActionProperty(
+                        lambda_=iot.CfnTopicRule.LambdaActionProperty(
+                            function_arn=self.timeseries_ingest_function.function_arn
+                        )
+                    )
+                ],
+                rule_disabled=False,
+                description="Rule for batched timeseries data ingestion with basic ingest",
+                error_action=batch_sqs_infra.error_action,
+            )
+        )
+
+        self.timeseries_ingest_function.add_permission(
+            "TimeseriesIngestInvokePermission",
+            principal=iam.ServicePrincipal("iot.amazonaws.com"),
+            action="lambda:InvokeFunction",
+        )
+
+        for dep in batch_sqs_infra.dependencies:
+            node_ts_batch_rule.add_resource_dependency(dep)
+
+        # Store rule references for potential use in other constructs.
         self.node_ts_rule = node_ts_rule
+        self.node_ts_batch_rule = node_ts_batch_rule
