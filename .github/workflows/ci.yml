@@ -19,15 +19,15 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # Kept in lockstep with go.mod and misc/docker/Dockerfile. A ginkgo CLI newer
+  # Kept in lockstep with go.mod and deployment/docker/Dockerfile. A ginkgo CLI newer
   # than the library it drives produces confusing failures — bump all together.
   GINKGO_VERSION: v2.28.3
   GOMEGA_VERSION: v1.40.0
   GOCOVER_COBERTURA_VERSION: v1.5.0
-  # Matches misc/docker/Dockerfile's NODE_VERSION: Node 24 bundles the npm major
-  # that resolved the committed package-lock.json.
+  # Matches deployment/docker/Dockerfile's NODE_VERSION: Node 24 bundles the npm
+  # major that resolved the committed package-lock.json.
   NODE_VERSION: "24"
-  # The Lambda runtime target (see misc/docker/Dockerfile).
+  # The Lambda runtime target (see deployment/docker/Dockerfile).
   PYTHON_VERSION: "3.12"
 
 jobs:
@@ -121,14 +121,14 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: src/admin/dashboard
+        working-directory: dashboard
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: src/admin/dashboard/package-lock.json
+          cache-dependency-path: dashboard/package-lock.json
       - name: Build
         working-directory: .
         run: make admin-dashboard-build
@@ -148,13 +148,13 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
       - name: Validate OpenAPI
         run: |
-          npx --yes @apidevtools/swagger-cli validate misc/swagger/Api_Swagger.yaml
-          npx --yes @apidevtools/swagger-cli validate misc/swagger/User_Api_Swagger.yaml
+          npx --yes @apidevtools/swagger-cli validate docs/api/Api_Swagger.yaml
+          npx --yes @apidevtools/swagger-cli validate docs/api/User_Api_Swagger.yaml
       - name: Validate AsyncAPI
         run: |
-          npx --yes @asyncapi/cli validate misc/swagger/MQTT_Node.yaml
-          npx --yes @asyncapi/cli validate misc/swagger/MQTT_User.yaml
-          npx --yes @asyncapi/cli validate misc/swagger/Push_User.yaml
+          npx --yes @asyncapi/cli validate docs/api/MQTT_Node.yaml
+          npx --yes @asyncapi/cli validate docs/api/MQTT_User.yaml
+          npx --yes @asyncapi/cli validate docs/api/Push_User.yaml
 
   # Working-tree secret scan, configured by .gitleaks.toml.
   #
@@ -197,7 +197,7 @@ jobs:
       # run until vitest is bumped, so this is scoped rather than silenced.
       # Widen it to the full tree once that bump lands.
       - name: npm audit (dashboard, prod deps)
-        working-directory: src/admin/dashboard
+        working-directory: dashboard
         run: npm audit --omit=dev --audit-level=high
       - name: pip-audit
         run: |

@@ -40,11 +40,11 @@ id = "private-key"
   description = """
   Sphinx spec docs and the OpenAPI definition, which carry request/response
   examples containing sample PEM chains: docs/en/specs/gva.md,
-  docs/en/specs/notifications-push.md, misc/swagger/Api_Swagger.yaml.
+  docs/en/specs/notifications-push.md, docs/api/Api_Swagger.yaml.
   """
   paths = [
     '''^docs/en/specs/.*\.md$''',
-    '''^misc/swagger/.*\.ya?ml$''',
+    '''^docs/api/.*\.ya?ml$''',
   ]
 
   [[rules.allowlists]]
@@ -63,11 +63,11 @@ id = "generic-api-key"
   [[rules.allowlists]]
   description = """
   High-entropy strings in API examples and auth-flow docs that are not keys:
-  misc/swagger/Api_Swagger.yaml's `next_key` values are base64-encoded DynamoDB
-  pagination cursors, and src_esp_user/misc/specs/auth-flows.md uses truncated
+  docs/api/Api_Swagger.yaml's `next_key` values are base64-encoded DynamoDB
+  pagination cursors, and src/espuser/docs/specs/auth-flows.md uses truncated
   placeholder tokens ("a1b2c3d4.9f8e7d6c...") in its form-encoded request samples.
   """
   paths = [
-    '''^misc/swagger/.*\.ya?ml$''',
-    '''^src_esp_user/misc/specs/.*\.md$''',
+    '''^docs/api/.*\.ya?ml$''',
+    '''^src/espuser/docs/specs/.*\.md$''',
   ]
