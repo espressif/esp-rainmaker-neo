@@ -5,7 +5,7 @@
  */
 
 import type { LucideIcon } from "lucide-react";
-import { CheckCircle2, Clock, Database, Loader } from "lucide-react";
+import { CheckCircle2, Clock, Database, LoaderCircle } from "lucide-react";
 import type { Color } from "@espressif/dashboard-ui-components";
 
 export type RegistrationJobStatus =
@@ -17,6 +17,8 @@ export type RegistrationJobStatus =
 export interface RegistrationJobStatusPresentation {
   Icon: LucideIcon;
   color: Color;
+  /** Transient in-progress states render a spinner in place of {@link Icon}. */
+  spinning?: boolean;
   i18nKey: string;
   labelFallback: string;
 }
@@ -32,8 +34,9 @@ export const REGISTRATION_JOB_STATUS_PRESENTATION: Record<
     labelFallback: "Requested",
   },
   started: {
-    Icon: Loader,
+    Icon: LoaderCircle,
     color: "warning",
+    spinning: true,
     i18nKey: "register:status.started",
     labelFallback: "Started",
   },

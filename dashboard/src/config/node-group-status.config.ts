@@ -5,7 +5,7 @@
  */
 
 import type { LucideIcon } from "lucide-react";
-import { CheckCircle2, CircleDashed, Loader } from "lucide-react";
+import { CheckCircle2, CircleDashed, LoaderCircle } from "lucide-react";
 import type { DynamicGroupStatus } from "@aws-sdk/client-iot";
 import type { Color } from "@espressif/dashboard-ui-components";
 
@@ -30,14 +30,14 @@ export const NODE_GROUP_STATUS_PRESENTATION: Record<
     labelFallback: "Active",
   },
   BUILDING: {
-    Icon: Loader,
+    Icon: LoaderCircle,
     color: "info",
     spinning: true,
     i18nKey: "node-groups:details.status.BUILDING",
     labelFallback: "Building",
   },
   REBUILDING: {
-    Icon: Loader,
+    Icon: LoaderCircle,
     color: "warning",
     spinning: true,
     i18nKey: "node-groups:details.status.REBUILDING",

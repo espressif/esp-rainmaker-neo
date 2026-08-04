@@ -5,11 +5,9 @@
  */
 
 import { useTranslation } from "react-i18next";
-import { Badge, Spinner } from "@espressif/dashboard-ui-components/components";
+import { StatusBadge } from "@/components/status-badge";
 import { getNodeGroupStatusPresentation } from "@/config/node-group-status.config";
 import type { NodeGroupStatusBadgeProps } from "./node-group-status-badge.props";
-
-const ICON_SIZE_PX = 14;
 
 export function NodeGroupStatusBadge({ status }: NodeGroupStatusBadgeProps) {
   const { t } = useTranslation("node-groups");
@@ -23,13 +21,11 @@ export function NodeGroupStatusBadge({ status }: NodeGroupStatusBadgeProps) {
   const label = i18nKey ? t(i18nKey, labelFallback) : status;
 
   return (
-    <Badge color={color} variant="soft" className="font-normal gap-1.5">
-      {spinning ? (
-        <Spinner size={ICON_SIZE_PX} className="shrink-0" aria-hidden />
-      ) : (
-        <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden />
-      )}
-      {label}
-    </Badge>
+    <StatusBadge
+      label={label}
+      Icon={Icon}
+      color={color}
+      isLoading={spinning}
+    />
   );
 }
