@@ -16,7 +16,7 @@
       "searchByCustomTag": "按自定义标签搜索 \"{{query}}\"",
       "tagSources": {
         "admin": "管理员标签",
-        "device": "设备标签",
+        "device": "节点标签",
         "user": "用户标签"
       }
     }
@@ -54,10 +54,10 @@
       "manageAllTags": "管理所有标签",
       "adminTags": "管理员标签",
       "userTags": "用户标签",
-      "deviceTags": "设备标签",
+      "deviceTags": "节点标签",
       "noAdminTags": "无管理员标签",
       "noUserTags": "无用户标签",
-      "noDeviceTags": "无设备标签",
+      "noDeviceTags": "无节点标签",
       "tagsError": "加载标签失败"
     },
     "otaJobs": {
@@ -129,10 +129,10 @@
         "emptyDescription": "终端用户尚未为此节点添加标签。"
       },
       "device": {
-        "title": "设备标签",
-        "description": "由设备上报的标签（只读）。",
-        "emptyHeading": "暂无设备上报的标签",
-        "emptyDescription": "此设备尚未上报任何标签。"
+        "title": "节点标签",
+        "description": "由节点上报的标签（只读）。",
+        "emptyHeading": "暂无节点上报的标签",
+        "emptyDescription": "此节点尚未上报任何标签。"
       }
     },
     "columns": {

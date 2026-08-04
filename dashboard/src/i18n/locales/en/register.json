@@ -53,7 +53,7 @@
       "ariaLabel": "Choose capabilities",
       "s3": {
         "label": "File Storage (S3)",
-        "description": "Enable S3-backed file storage on the device."
+        "description": "Enable S3-backed file storage on the node."
       },
       "kvs": {
         "label": "Camera Streaming (KVS)",

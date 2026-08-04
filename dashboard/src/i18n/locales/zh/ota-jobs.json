@@ -1,9 +1,9 @@
 {
   "thingSelector": {
-    "label": "设备",
-    "placeholder": "选择设备",
-    "emptyText": "未找到设备。",
-    "searchPlaceholder": "搜索设备..."
+    "label": "节点",
+    "placeholder": "选择节点",
+    "emptyText": "未找到节点。",
+    "searchPlaceholder": "搜索节点..."
   },
   "s3ListObjectsSelector": {
     "label": "对象",
@@ -109,13 +109,13 @@
   },
   "filters": {
     "targetSelectionTrigger": "任务模式",
-    "groupLabel": "设备组",
-    "groupModalTitle": "按设备组筛选",
-    "groupModalDescription": "仅显示以所选设备组为目标的 OTA 任务。",
+    "groupLabel": "节点组",
+    "groupModalTitle": "按节点组筛选",
+    "groupModalDescription": "仅显示以所选节点组为目标的 OTA 任务。",
     "groupModalApply": "应用",
-    "groupSearchPlaceholder": "搜索设备组…",
-    "groupEmptyText": "未找到设备组",
-    "groupLoadError": "无法加载设备组。请检查网络连接后重试。"
+    "groupSearchPlaceholder": "搜索节点组…",
+    "groupEmptyText": "未找到节点组",
+    "groupLoadError": "无法加载节点组。请检查网络连接后重试。"
   },
   "cancelOtaJob": {
     "confirmTitle": "取消 OTA 作业",

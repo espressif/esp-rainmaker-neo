@@ -1,25 +1,25 @@
 {
   "awsThingsList": {
-    "searchPlaceholder": "按设备 ID 搜索",
+    "searchPlaceholder": "按节点 ID 搜索",
     "noResults": {
-      "title": "无设备",
-      "description": "没有符合搜索条件的设备。"
+      "title": "无节点",
+      "description": "没有符合搜索条件的节点。"
     },
     "error": {
-      "title": "加载设备失败"
+      "title": "加载节点失败"
     }
   },
-  "pageTitle": "设备组",
-  "heading": "设备组",
+  "pageTitle": "节点组",
+  "heading": "节点组",
   "breadcrumbs": {
     "new": "创建新分组",
     "nodes": "节点",
     "otaJobs": "OTA 任务"
   },
   "new": {
-    "pageTitle": "创建设备组",
-    "backToGroups": "返回设备组",
-    "submitButton": "创建设备组",
+    "pageTitle": "创建节点组",
+    "backToGroups": "返回节点组",
+    "submitButton": "创建节点组",
     "sections": {
       "basicDetails": {
         "label": "基本信息",
@@ -70,19 +70,19 @@
       "rulesRequired": "请为动态分组至少添加一条规则。"
     },
     "status": {
-      "dialogTitle": "设备组创建状态",
+      "dialogTitle": "节点组创建状态",
       "submitting": "创建中…",
-      "creatingTitle": "正在创建设备组",
+      "creatingTitle": "正在创建节点组",
       "creatingDescription": "这可能需要一些时间。请勿关闭此窗口。",
-      "successTitle": "设备组创建成功。",
-      "successDescription": "您的设备组已就绪。打开其详情以添加节点或启动 OTA 任务。",
-      "viewDetails": "查看设备组详情",
-      "errorTitle": "创建设备组失败。",
+      "successTitle": "节点组创建成功。",
+      "successDescription": "您的节点组已就绪。打开其详情以添加节点或启动 OTA 任务。",
+      "viewDetails": "查看节点组详情",
+      "errorTitle": "创建节点组失败。",
       "errorDescription": "请重试。",
-      "duplicateError": "已存在同名的设备组。"
+      "duplicateError": "已存在同名的节点组。"
     }
   },
-  "createNodeGroupButton": "创建设备组",
+  "createNodeGroupButton": "创建节点组",
   "search": {
     "groupName": {
       "placeholder": "按名称搜索"
@@ -100,22 +100,22 @@
     "parentsHeading": "父级分组"
   },
   "deleteNodeGroup": {
-    "confirmTitle": "删除设备组",
-    "confirmDescription": "确定要删除该设备组吗?",
-    "aria": "删除设备组 {{groupName}}"
+    "confirmTitle": "删除节点组",
+    "confirmDescription": "确定要删除该节点组吗?",
+    "aria": "删除节点组 {{groupName}}"
   },
   "noResults": "无结果。",
-  "noResultsDescription": "未找到设备组。请尝试调整搜索条件。",
-  "loading": "加载设备组中...",
+  "noResultsDescription": "未找到节点组。请尝试调整搜索条件。",
+  "loading": "加载节点组中...",
   "error": {
-    "title": "加载设备组失败",
-    "description": "加载设备组时出现意外错误。请稍后再试。"
+    "title": "加载节点组失败",
+    "description": "加载节点组时出现意外错误。请稍后再试。"
   },
   "details": {
-    "backToGroups": "返回设备组列表",
-    "backToGroupsList": "返回设备组列表",
-    "resourceLabel": "设备组 ID",
-    "errorTitle": "无法加载该设备组的详情",
+    "backToGroups": "返回节点组列表",
+    "backToGroupsList": "返回节点组列表",
+    "resourceLabel": "节点组 ID",
+    "errorTitle": "无法加载该节点组的详情",
     "type": {
       "static": "静态",
       "dynamic": "动态",
@@ -159,7 +159,7 @@
     },
     "otaJobs": {
       "title": "该分组的 OTA 任务",
-      "description": "以该设备组为目标的 OTA 任务。",
+      "description": "以该节点组为目标的 OTA 任务。",
       "noResults": {
         "title": "暂无 OTA 任务",
         "description": "该分组还没有 OTA 任务。"
@@ -170,10 +170,10 @@
     },
     "delete": {
       "button": "删除分组",
-      "title": "删除设备组",
-      "description": "该操作将永久删除此设备组,且无法撤销。",
-      "success": "设备组删除成功。",
-      "error": "删除设备组失败。"
+      "title": "删除节点组",
+      "description": "该操作将永久删除此节点组,且无法撤销。",
+      "success": "节点组删除成功。",
+      "error": "删除节点组失败。"
     }
   }
 }

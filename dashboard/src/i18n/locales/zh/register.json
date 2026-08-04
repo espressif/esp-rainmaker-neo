@@ -53,7 +53,7 @@
       "ariaLabel": "选择功能",
       "s3": {
         "label": "文件存储 (S3)",
-        "description": "在设备上启用基于 S3 的文件存储。"
+        "description": "在节点上启用基于 S3 的文件存储。"
       },
       "kvs": {
         "label": "摄像头视频流 (KVS)",

@@ -16,7 +16,7 @@
       "searchByCustomTag": "Search by custom tag \"{{query}}\"",
       "tagSources": {
         "admin": "Admin Tag",
-        "device": "Device Tag",
+        "device": "Node Tag",
         "user": "User Tag"
       }
     }
@@ -54,10 +54,10 @@
       "manageAllTags": "Manage all tags",
       "adminTags": "Admin Tags",
       "userTags": "User Tags",
-      "deviceTags": "Device Tags",
+      "deviceTags": "Node Tags",
       "noAdminTags": "No admin tags",
       "noUserTags": "No user tags",
-      "noDeviceTags": "No device tags",
+      "noDeviceTags": "No node tags",
       "tagsError": "Failed to load tags"
     },
     "otaJobs": {
@@ -129,10 +129,10 @@
         "emptyDescription": "End users have not added tags for this node."
       },
       "device": {
-        "title": "Device tags",
-        "description": "Tags reported by the device (read-only).",
-        "emptyHeading": "No device tags reported",
-        "emptyDescription": "This device has not reported any tags."
+        "title": "Node tags",
+        "description": "Tags reported by the node (read-only).",
+        "emptyHeading": "No node tags reported",
+        "emptyDescription": "This node has not reported any tags."
       }
     },
     "columns": {

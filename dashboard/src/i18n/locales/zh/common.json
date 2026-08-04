@@ -45,8 +45,8 @@
   "thingGroupSelector": {
     "label": "父组（可选）",
     "placeholder": "选择父组（可选）",
-    "emptyText": "未找到设备组。",
-    "searchPlaceholder": "搜索设备组...",
+    "emptyText": "未找到节点组。",
+    "searchPlaceholder": "搜索节点组...",
     "addToSubgroup": "添加到子组",
     "subgroupLabel": "子组",
     "subgroupPlaceholder": "选择子组",
@@ -187,8 +187,8 @@
     }
   },
   "searchFields": {
-    "deviceType": "设备类型",
-    "deviceModel": "设备型号",
+    "deviceType": "节点类型",
+    "deviceModel": "节点型号",
     "firmwareVersion": "固件版本",
     "onlineStatus": "在线状态",
     "createdBy": "创建者",
