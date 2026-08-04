@@ -3,14 +3,47 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8">
-    <title>Swagger UI</title>
+    <title>ESP RainMaker Neo HTTP APIs</title>
     <link rel="stylesheet" type="text/css" href="./swagger-ui.css" />
     <link rel="stylesheet" type="text/css" href="index.css" />
-    <link rel="icon" type="image/png" href="./favicon-32x32.png" sizes="32x32" />
-    <link rel="icon" type="image/png" href="./favicon-16x16.png" sizes="16x16" />
+    <!-- ESP RainMaker NEO cloud mark, cropped from logo-neo-vertical.png.
+         Deliberately not the vendored favicon-*.png, which are Swagger's own
+         and put the Swagger logo in the browser tab. -->
+    <link
+      rel="icon"
+      type="image/png"
+      href="./favicon-neo-32x32.png"
+      sizes="32x32"
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      href="./favicon-neo-16x16.png"
+      sizes="16x16"
+    />
+    <link rel="apple-touch-icon" href="./logo-neo-mark.png" />
+    <!-- Back to the root landing page. This file is served at /http/, so "../"
+         is the site root. Kept as a plain static banner above #swagger-ui rather
+         than injected into Swagger UI's own topbar, which it renders itself. -->
+    <style>
+      .rmng-home {
+        font: 14px/1.4 system-ui, sans-serif;
+        padding: 12px 16px;
+        background: #fafcff;
+        border-bottom: 1px solid #e1e1e1;
+      }
+      .rmng-home a {
+        color: #2a5a9a;
+        text-decoration: none;
+      }
+      .rmng-home a:hover {
+        text-decoration: underline;
+      }
+    </style>
   </head>
 
   <body>
+    <div class="rmng-home"><a href="../">&larr; API Reference Home</a></div>
     <div id="swagger-ui"></div>
     <script src="./swagger-ui-bundle.js" charset="UTF-8"> </script>
     <script src="./swagger-ui-standalone-preset.js" charset="UTF-8"> </script>

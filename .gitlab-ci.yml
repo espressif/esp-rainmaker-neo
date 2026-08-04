@@ -282,12 +282,21 @@ deploy_eu-west-1:
     - echo ${CI_GITLAB_PASSWORD_APP_FRAMEWORKS_DOCKER_PUSH} | docker login
       --username ${CI_GITLAB_USERNAME_APP_FRAMEWORKS_DOCKER_PUSH}
       --password-stdin ${DOCKER_IMAGE_REGISTRY}
-    - docker build -f deployment/docker/Dockerfile --no-cache ${DOCKER_BUILD_ARGS}
-      --tag ${DOCKER_IMAGE_NAME} .
+    - docker build -f deployment/docker/Dockerfile --no-cache
+      ${DOCKER_BUILD_ARGS} --tag ${DOCKER_IMAGE_NAME} .
     - docker push ${DOCKER_IMAGE_NAME}
 
 build_docker:
   extends: .build_docker_template
+
+.inject_home_link: &inject_home_link
+  - |
+    banner="<div class=\"rmng-home\"><a href=\"${HOME_HREF}\">\&larr; API Reference Home</a></div>"
+    style="<style>.rmng-home{font:14px/1.4 system-ui,sans-serif;padding:12px 16px;background:#fafcff;border-bottom:1px solid #e1e1e1}.rmng-home a{color:#2a5a9a;text-decoration:none}.rmng-home a:hover{text-decoration:underline}</style>"
+    for f in $(find "${INJECT_DIR}" -name index.html); do
+      sed -i "s|</head>|${style}</head>|" "$f"
+      sed -i "s|\(<body[^>]*>\)|\1${banner}|" "$f"
+    done
 
 # -------------------------
 # Swagger sync to S3
@@ -318,10 +327,23 @@ sync_swagger:
   script:
     - export AWS_ACCESS_KEY_ID=${RMNG_PROD_ACCESS_KEY}
     - export AWS_SECRET_ACCESS_KEY=${RMNG_PROD_SECRET_ACCESS_KEY}
-    - aws s3 sync docs/api/ s3://esp-rainmaker-neo-api/ --delete --exclude
-      "MQTT_*.yaml" --exclude "mqtt_*" --exclude "Push_*.yaml"
-    - aws cloudfront create-invalidation --distribution-id E3F6AIL6K7W45G --paths "/*"
-    - 'echo "HTTP APIs site: https://api.docs.neo.rainmaker.espressif.com"'
+    - aws s3 sync docs/api/ s3://esp-rainmaker-neo-api/http/ --delete --exclude
+      "MQTT_*.yaml" --exclude "mqtt_*" --exclude "Push_*.yaml" --exclude
+      "landing_index.html"
+    - aws s3 cp docs/api/landing_index.html
+      s3://esp-rainmaker-neo-api/index.html
+    - aws s3 cp docs/api/favicon-neo-16x16.png
+      s3://esp-rainmaker-neo-api/favicon-neo-16x16.png
+    - aws s3 cp docs/api/favicon-neo-32x32.png
+      s3://esp-rainmaker-neo-api/favicon-neo-32x32.png
+    - aws s3 cp docs/api/logo-neo-mark.png
+      s3://esp-rainmaker-neo-api/logo-neo-mark.png
+    - aws s3 cp docs/api/logo-neo-vertical.png
+      s3://esp-rainmaker-neo-api/logo-neo-vertical.png
+    - aws cloudfront create-invalidation --distribution-id E3F6AIL6K7W45G
+      --paths "/*"
+    - 'echo "API reference site: https://api.docs.neo.rainmaker.espressif.com"'
+    - 'echo "  HTTP: https://api.docs.neo.rainmaker.espressif.com/http/"'
 
 # -------------------------
 # MQTT AsyncAPI sync to S3
@@ -339,7 +361,6 @@ sync_mqtt:
     - if: '$CI_COMMIT_BRANCH == "main"'
       changes:
         - docs/api/MQTT_*.yaml
-        - docs/api/mqtt_index.html
   variables:
     AWS_DEFAULT_REGION: us-east-1
   before_script:
@@ -356,20 +377,20 @@ sync_mqtt:
       @asyncapi/html-template@2.3.0 -o dist/node --force-write"
     - "asyncapi generate fromTemplate docs/api/MQTT_User.yaml
       @asyncapi/html-template@2.3.0 -o dist/user --force-write"
-    - aws s3 sync dist/node/ s3://esp-rainmaker-neo-mqtt/node/ --delete
-    - aws s3 sync dist/user/ s3://esp-rainmaker-neo-mqtt/user/ --delete
-    # Push payloads moved to sync_events (events.docs.neo); drop the stale copy.
-    - aws s3 rm s3://esp-rainmaker-neo-mqtt/push/ --recursive
-    - aws s3 cp docs/api/mqtt_index.html
-      s3://esp-rainmaker-neo-mqtt/index.html
+    - export HOME_HREF="../../" INJECT_DIR="dist"
+    - *inject_home_link
+    - aws s3 sync dist/node/ s3://esp-rainmaker-neo-api/mqtt/node/ --delete
+    - aws s3 sync dist/user/ s3://esp-rainmaker-neo-api/mqtt/user/ --delete
     # Raw specs alongside their renderings, for codegen and diffing. Safe at the
-    # bucket root: the --delete syncs above are scoped to node/ and user/.
-    - aws s3 cp docs/api/MQTT_Node.yaml s3://esp-rainmaker-neo-mqtt/MQTT_Node.yaml
-    - aws s3 cp docs/api/MQTT_User.yaml s3://esp-rainmaker-neo-mqtt/MQTT_User.yaml
-    - aws cloudfront create-invalidation --distribution-id E3Q0BLMA5KBDH0 --paths "/*"
-    - 'echo "MQTT Reference site: https://mqtt.docs.neo.rainmaker.espressif.com"'
-    - 'echo "  Node: https://mqtt.docs.neo.rainmaker.espressif.com/node/"'
-    - 'echo "  User: https://mqtt.docs.neo.rainmaker.espressif.com/user/"'
+    # mqtt/ prefix root: the --delete syncs above are scoped to node/ and user/.
+    - aws s3 cp docs/api/MQTT_Node.yaml
+      s3://esp-rainmaker-neo-api/mqtt/MQTT_Node.yaml
+    - aws s3 cp docs/api/MQTT_User.yaml
+      s3://esp-rainmaker-neo-api/mqtt/MQTT_User.yaml
+    - aws cloudfront create-invalidation --distribution-id E3F6AIL6K7W45G
+      --paths "/mqtt/*"
+    - 'echo "MQTT Node: https://api.docs.neo.rainmaker.espressif.com/mqtt/node/"'
+    - 'echo "MQTT User: https://api.docs.neo.rainmaker.espressif.com/mqtt/user/"'
 
 # -------------------------
 # Notification/event payloads (AsyncAPI) sync to S3
@@ -398,16 +419,19 @@ sync_events:
     - export AWS_SECRET_ACCESS_KEY=${RMNG_PROD_SECRET_ACCESS_KEY}
     - "asyncapi generate fromTemplate docs/api/Push_User.yaml
       @asyncapi/html-template@2.3.0 -o dist/events --force-write"
-    # Unlike sync_mqtt this sync targets the bucket root, so --delete would remove
-    # the raw spec copied below on every run; --exclude keeps it out of scope.
-    - aws s3 sync dist/events/ s3://esp-rainmaker-neo-events/ --delete --exclude
-      "Push_User.yaml"
+    - export HOME_HREF="../" INJECT_DIR="dist"
+    - *inject_home_link
+    # This sync targets the events/ prefix root, so --delete would remove the raw
+    # spec copied below on every run; --exclude keeps it out of scope.
+    - aws s3 sync dist/events/ s3://esp-rainmaker-neo-api/events/ --delete
+      --exclude "Push_User.yaml"
     # Raw spec alongside its rendering, for codegen and diffing.
-    - aws s3 cp docs/api/Push_User.yaml s3://esp-rainmaker-neo-events/Push_User.yaml
-    # Distribution for events.docs.neo.rainmaker.espressif.com — update the ID
-    # if it is recreated.
-    - aws cloudfront create-invalidation --distribution-id E270IBMQ3EC88Q --paths "/*"
-    - 'echo "Events payloads site: https://events.docs.neo.rainmaker.espressif.com"'
+    - aws s3 cp docs/api/Push_User.yaml
+      s3://esp-rainmaker-neo-api/events/Push_User.yaml
+    - aws cloudfront create-invalidation --distribution-id E3F6AIL6K7W45G
+      --paths "/events/*"
+    - 'echo "Events payloads site:
+      https://api.docs.neo.rainmaker.espressif.com/events/"'
 
 # -------------------------
 # Cloud specification docs (Sphinx) -> Espressif doc server

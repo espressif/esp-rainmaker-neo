@@ -108,12 +108,5 @@ When the check trips the HTML is still produced; read
 ## API reference
 
 The HTTP and MQTT surfaces are **not** part of this build. They are specified as
-OpenAPI and AsyncAPI documents under `docs/api/`, and published as their own
-sites:
-
-| Surface | Site | Raw spec |
-| --- | --- | --- |
-| HTTP APIs | <https://api.docs.neo.rainmaker.espressif.com> | `Api_Swagger.yaml`, `User_Api_Swagger.yaml` |
-| MQTT — node | <https://mqtt.docs.neo.rainmaker.espressif.com/node/> | `/MQTT_Node.yaml` |
-| MQTT — user | <https://mqtt.docs.neo.rainmaker.espressif.com/user/> | `/MQTT_User.yaml` |
-| Push / event payloads | <https://events.docs.neo.rainmaker.espressif.com> | `/Push_User.yaml` |
+OpenAPI and AsyncAPI documents under `docs/api/`, and published under
+<https://api.docs.neo.rainmaker.espressif.com>, which indexes them all.

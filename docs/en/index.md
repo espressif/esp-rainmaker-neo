@@ -185,12 +185,8 @@ These pages go deeper on individual topics: the
 ## API reference
 
 The HTTP and MQTT surfaces are **not** part of this build. They are specified as
-OpenAPI and AsyncAPI documents under `docs/api/` and published as their own
-sites:
+OpenAPI and AsyncAPI documents under `docs/api/` and published as here: https://api.docs.neo.rainmaker.espressif.com
 
-- **HTTP APIs** — <https://api.docs.neo.rainmaker.espressif.com> - the APIs prefixed with /v1/admin are the ones that are available solely to admins.
-- **MQTT** — <https://mqtt.docs.neo.rainmaker.espressif.com/user>
-- **Push / event payloads** — <https://events.docs.neo.rainmaker.espressif.com>
-
-Each site serves the raw YAML alongside its rendering. The specs describe the API
-contract; every deployment serves that contract at its own API Gateway hostname.
+That page links the HTTP, MQTT and event references, each serving the raw YAML
+alongside its rendering. The specs describe the API contract; every deployment
+serves that contract at its own API Gateway hostname.

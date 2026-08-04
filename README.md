@@ -41,7 +41,7 @@ There are three ways to use it, in increasing order of involvement:
 
 1. [Quick start](#option-1-public-esp-rainmaker-neo): Public ESP RainMaker Neo
 2. [Deploy in your own account](#option-2-packaged-esp-rainmaker-neo): Packaged ESP RainMaker Neo
-3. [Built From Source](#option-3-bfs-esp-rainmaker-neo): Built From Source ESP RainMaker Neo
+3. [Built From Source](#option-3-built-from-source-esp-rainmaker-neo): Built-From-Source ESP RainMaker Neo
 
 ### Option 1: Public ESP RainMaker Neo
 
@@ -51,7 +51,7 @@ Use the public ESP RainMaker Neo deployment — no cloud setup at all. Check out
 
 Run the pre-built ESP RainMaker Neo cloud in your own AWS account. Check out the detailed documentation [here](https://docs.neo.rainmaker.espressif.com/) for more information.
 
-### Option 3: BFS ESP RainMaker Neo
+### Option 3: Built-From-Source ESP RainMaker Neo
 
 Build, modify and deploy the cloud yourself. This repository holds the cloud backend, its infrastructure, the admin dashboard, docs, and the test tooling.
 
@@ -61,11 +61,7 @@ See **[BUILD.md](BUILD.md)** for the full guide.
 
 The cloud specification lives as Markdown under [docs/en/specs/](docs/en/specs/), with [docs/en/index.md](docs/en/index.md) as the table of contents. The pages are readable directly in the repo; to build and view the HTML docs locally, see the [docs build guide](docs/README.md).
 
-- [HTTP APIs (Swagger)](https://api.docs.neo.rainmaker.espressif.com)
-- [MQTT Reference (AsyncAPI)](https://mqtt.docs.neo.rainmaker.espressif.com)
-  - [Node](https://mqtt.docs.neo.rainmaker.espressif.com/node/)
-  - [User](https://mqtt.docs.neo.rainmaker.espressif.com/user/)
-- [Notification/Event payloads (AsyncAPI)](https://events.docs.neo.rainmaker.espressif.com)
+- [HTTP, MQTT and Events Reference](https://api.docs.neo.rainmaker.espressif.com)
 - [Glossary](misc/GLOSSARY.md)
 
 ## Contributing
