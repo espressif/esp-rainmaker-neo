@@ -1,0 +1,57 @@
+{
+  "title": "生成测试节点",
+  "description": "为测试节点生成设备凭证和 NVS 分区二进制文件。",
+  "pageTitle": "生成测试节点",
+  "pageDescription": "为一批测试节点生成设备凭证和工厂分区二进制文件 — 可直接烧录和配网。",
+  "form": {
+    "title": "批量配置",
+    "description": "选择要生成的测试节点数量以及包含的设备数据。"
+  },
+  "fields": {
+    "count": "设备数量",
+    "countHint": "每批最多 20 台设备。",
+    "matter": "生成 Matter 设备数据",
+    "matterHint": "在 RainMaker 凭证之外，同时生成 Matter 认证证书和配网数据。",
+    "matterAriaLabel": "Matter 设备数据",
+    "vendorId": "DAC 厂商 ID (VID)",
+    "productId": "DAC 产品 ID (PID)"
+  },
+  "info": {
+    "title": "每台设备将获得：",
+    "description": "烧录和配网单个测试节点所需的一切。",
+    "cert": "ECDSA P-256 密钥对和证书（由自动生成的 CA 签名）",
+    "nvs": "包含凭证的 NVS 分区二进制文件（12 KB）",
+    "qr": "用于 BLE 配网的二维码",
+    "matterDac": "DAC + PAI 设备认证证书（由 CHIP 测试 PAI 签名）",
+    "matterCommissioning": "Matter 配网数据（识别码、配对码、SPAKE2+ 验证器）",
+    "matterNvs": "合并的 Matter + RainMaker NVS 工厂分区二进制文件",
+    "matterQr": "Matter 配网二维码和手动配对码"
+  },
+  "matterNotice": {
+    "title": "Matter：仅供评估的认证证书",
+    "description": "Matter 设备认证证书 (DAC) 由 CHIP 测试 PAI 签名，调试器仅在评估和测试时接受。生产环境的 Matter 设备需要在真实认证链下签发的有效 DAC — 请联系乐鑫获取生产环境 Matter 凭证。"
+  },
+  "config": {
+    "missingEndpointTitle": "未配置 IoT 端点",
+    "missingEndpointDescription": "生成测试节点需要此部署的 IoT 端点，但当前尚未配置。请在环境或运行时配置中设置该端点并重新加载后再生成。"
+  },
+  "errors": {
+    "noMqttHost": "未配置 IoT 端点",
+    "countInteger": "请输入整数台设备。",
+    "countMin": "至少生成 1 台设备。",
+    "countMax": "每批最多 20 台设备。"
+  },
+  "status": {
+    "dialogTitle": "节点生成状态",
+    "generatingTitle": "正在生成测试节点",
+    "generatingDescription": "这可能需要一些时间。请勿关闭此窗口。",
+    "doneTitle": "测试节点生成成功",
+    "doneDescription": "请先下载安装包以保存设备凭证，然后注册生成的节点。",
+    "register": "注册节点",
+    "registerHint": "请先下载安装包",
+    "errorTitle": "生成失败",
+    "errorFallback": "生成测试节点时出现问题。请重试 — 如果问题仍然存在，请检查部署配置。"
+  },
+  "submit": "生成",
+  "generating": "正在生成…"
+}

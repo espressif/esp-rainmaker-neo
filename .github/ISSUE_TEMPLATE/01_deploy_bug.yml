@@ -1,0 +1,51 @@
+name: Build or deployment bug
+description: Something fails during `make go_build`, `make synth`, or `make deploy`
+labels: ["Type: Bug", "Area: Deploy"]
+body:
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Answers checklist
+      options:
+        - label: I have read the deployment documentation and the issue is not addressed there.
+          required: true
+        - label: I have searched existing issues and this is not a duplicate.
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Contents of `VERSION` or the git commit SHA.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: |
+        - OS: macOS 15
+        - Go: 1.26.5
+        - Python: 3.12
+        - CDK: 2.x
+        - AWS region: ap-south-1
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The exact commands you ran, in order.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Full error output
+      description: >-
+        Complete command output, plus the CloudFormation events if the failure
+        happened during `make deploy`.
+        **Redact sensitive info**: account IDs, tokens, certificates, emails,
+        and secrets.
+      render: text
+    validations:
+      required: true

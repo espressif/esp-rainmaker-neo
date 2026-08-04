@@ -1,0 +1,57 @@
+{
+  "title": "Generate Test Nodes",
+  "description": "Generate device credentials and NVS partition binaries for test nodes.",
+  "pageTitle": "Generate test nodes",
+  "pageDescription": "Generate device credentials and factory partition binaries for a batch of test nodes - ready to flash and provision.",
+  "form": {
+    "title": "Batch configuration",
+    "description": "Choose how many test nodes to generate and what device data to include."
+  },
+  "fields": {
+    "count": "Number of devices",
+    "countHint": "Maximum 20 devices per batch.",
+    "matter": "Generate Matter-enabled device data",
+    "matterHint": "Produce Matter attestation certificates and commissioning data alongside RainMaker credentials.",
+    "matterAriaLabel": "Matter device data",
+    "vendorId": "DAC Vendor ID (VID)",
+    "productId": "DAC Product ID (PID)"
+  },
+  "info": {
+    "title": "Each device will get:",
+    "description": "Everything needed to flash and provision one test node.",
+    "cert": "ECDSA P-256 key pair and certificate (signed by auto-generated CA)",
+    "nvs": "NVS partition binary (12 KB) with credentials",
+    "qr": "QR code for BLE provisioning",
+    "matterDac": "DAC + PAI device attestation certificates (signed by the CHIP test PAI)",
+    "matterCommissioning": "Matter commissioning data (discriminator, passcode, SPAKE2+ verifier)",
+    "matterNvs": "Merged Matter + RainMaker NVS factory partition binary",
+    "matterQr": "Matter onboarding QR code and manual pairing code"
+  },
+  "matterNotice": {
+    "title": "Matter: evaluation-only attestation certificates",
+    "description": "Matter device attestation certificates (DACs) are signed with the CHIP Test PAI, which commissioners accept only for evaluation and testing. Production Matter devices require valid DACs issued under a real attestation chain — contact Espressif to obtain production Matter credentials."
+  },
+  "config": {
+    "missingEndpointTitle": "IoT endpoint not configured",
+    "missingEndpointDescription": "Test node generation needs this deployment's IoT endpoint, which isn't configured. Set it in the environment or runtime configuration and reload before generating."
+  },
+  "errors": {
+    "noMqttHost": "IoT endpoint not configured",
+    "countInteger": "Enter a whole number of devices.",
+    "countMin": "Generate at least 1 device.",
+    "countMax": "Maximum 20 devices per batch."
+  },
+  "status": {
+    "dialogTitle": "Node generation status",
+    "generatingTitle": "Generating test nodes",
+    "generatingDescription": "This may take a while. Do not close this window.",
+    "doneTitle": "Test nodes generated successfully",
+    "doneDescription": "Download the package to keep the device credentials, then register the generated nodes.",
+    "register": "Register nodes",
+    "registerHint": "Download the package first",
+    "errorTitle": "Generation failed",
+    "errorFallback": "Something went wrong while generating the test nodes. Please try again — if the problem persists, verify the deployment configuration."
+  },
+  "submit": "Generate",
+  "generating": "Generating..."
+}

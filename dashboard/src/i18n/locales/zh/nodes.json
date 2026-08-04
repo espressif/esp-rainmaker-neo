@@ -1,0 +1,165 @@
+{
+  "advancedIndicesSearch": {
+    "searchBarContent": {
+      "selectFieldPlaceholder": "选择字段...",
+      "pickOperator": "选择运算符",
+      "pickValue": "选择值 ↓",
+      "addFilterFirst": "点击添加搜索条件...",
+      "addAnotherFilter": "添加其他条件...",
+      "typeValuePlaceholder": "输入值...",
+      "maxFiltersReached": "已达到筛选条件上限",
+      "suggestedValues": "建议值"
+    },
+    "fieldSelector": {
+      "loadingFields": "正在加载字段…",
+      "noFieldsMatch": "没有与 \"{{query}}\" 匹配的字段",
+      "searchByCustomTag": "按自定义标签搜索 \"{{query}}\"",
+      "tagSources": {
+        "admin": "管理员标签",
+        "device": "设备标签",
+        "user": "用户标签"
+      }
+    }
+  },
+  "pageTitle": "节点",
+  "heading": "节点",
+  "breadcrumbs": {
+    "overview": "概览",
+    "tags": "标签",
+    "attributes": "属性",
+    "otaJobs": "OTA 任务"
+  },
+  "details": {
+    "backToNodes": "返回节点列表",
+    "backToNodesList": "返回节点列表",
+    "errorTitle": "抱歉，无法加载此节点的详细信息",
+    "thingNameLabel": "节点 ID",
+    "firmwareVersion": "固件版本",
+    "statusUpdatedPrefix": "更新于",
+    "tabs": {
+      "overview": "概览",
+      "tags": "标签",
+      "attributes": "属性",
+      "otaJobs": "OTA 任务"
+    },
+    "overview": {
+      "deviceInfo": {
+        "type": "类型",
+        "model": "型号",
+        "version": "版本"
+      },
+      "groups": "分组",
+      "noGroups": "无分组",
+      "tagsSection": "标签",
+      "manageAllTags": "管理所有标签",
+      "adminTags": "管理员标签",
+      "userTags": "用户标签",
+      "deviceTags": "设备标签",
+      "noAdminTags": "无管理员标签",
+      "noUserTags": "无用户标签",
+      "noDeviceTags": "无设备标签",
+      "tagsError": "加载标签失败"
+    },
+    "otaJobs": {
+      "columns": {
+        "queuedAt": "排队时间",
+        "startedAt": "开始时间"
+      },
+      "noResultsHeading": "暂无 OTA 任务",
+      "noResultsDescription": "此节点尚无 OTA 任务。",
+      "error": {
+        "title": "加载 OTA 任务失败",
+        "description": "加载 OTA 任务时发生错误，请稍后重试。"
+      }
+    }
+  },
+  "loading": "加载节点中...",
+  "columns": {
+    "typeModel": "类型 / 型号",
+    "fwVersion": "固件版本"
+  },
+  "searchByNodeId": "按节点 ID 搜索",
+  "clearAllFilters": "清除所有筛选",
+  "typeModelFilterTrigger": "类型/型号",
+  "typeModelTypeRequired": "类型为必填项",
+  "typeModelFieldType": "类型",
+  "typeModelFieldTypePlaceholder": "类型",
+  "typeModelFieldModel": "型号",
+  "typeModelFieldModelPlaceholder": "型号（可选）",
+  "firmwareVersionFilterTrigger": "固件版本",
+  "firmwareVersionRequired": "固件版本为必填项",
+  "firmwareVersionFieldLabel": "固件版本",
+  "firmwareVersionFieldPlaceholder": "输入固件版本",
+  "totalClaimedNodes": "已注册 {{total}} / {{quota}} 个节点",
+  "quotaDetails": {
+    "percentClaimed": "已认领 {{percent}}%",
+    "percentValue": "{{percent}}%",
+    "nodesClaimed": "个节点已认领",
+    "quotaLabel": "配额",
+    "claimedLabel": "已认领"
+  },
+  "advancedSearch": {
+    "clear": "清除高级搜索"
+  },
+  "noSearchResults": {
+    "title": "未找到节点",
+    "description": "请调整搜索或筛选条件以查找节点。"
+  },
+  "error": {
+    "title": "加载节点失败",
+    "description": "加载节点时发生错误，请稍后重试。"
+  },
+  "tags": {
+    "addTag": "添加标签",
+    "editTag": "编辑标签",
+    "deleteTag": "删除标签",
+    "viewMore": "查看另外 {{count}} 个",
+    "errorLoading": "加载标签失败",
+    "sections": {
+      "admin": {
+        "title": "管理员标签",
+        "description": "由管理员管理的标签。",
+        "emptyHeading": "暂无管理员标签",
+        "emptyDescription": "添加管理员标签以对此节点进行分类。"
+      },
+      "user": {
+        "title": "用户标签",
+        "description": "由终端用户添加的标签。",
+        "emptyHeading": "暂无用户标签",
+        "emptyDescription": "终端用户尚未为此节点添加标签。"
+      },
+      "device": {
+        "title": "设备标签",
+        "description": "由设备上报的标签（只读）。",
+        "emptyHeading": "暂无设备上报的标签",
+        "emptyDescription": "此设备尚未上报任何标签。"
+      }
+    },
+    "columns": {
+      "tag": "标签",
+      "key": "键"
+    },
+    "form": {
+      "keyLabel": "键",
+      "keyPlaceholder": "例如 environment",
+      "valuePlaceholder": "例如 production",
+      "keyRequired": "键为必填项",
+      "valueRequired": "值为必填项",
+      "keyFormat": "键不能包含空格或冒号",
+      "keyExists": "已存在使用此键的标签",
+      "noChange": "输入新值以保存",
+      "saveError": "保存标签失败",
+      "save": "保存"
+    },
+    "delete": {
+      "title": "删除标签",
+      "description": "确定要删除标签 \"{{key}}\" 吗？此操作无法撤销。"
+    }
+  },
+  "attributes": {
+    "title": "属性",
+    "description": "此节点的 AWS IoT Thing 属性。",
+    "emptyDescription": "此节点没有 AWS IoT Thing 属性。",
+    "errorLoading": "加载属性失败"
+  }
+}

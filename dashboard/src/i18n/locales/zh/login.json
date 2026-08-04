@@ -1,0 +1,15 @@
+{
+  "title": "登录",
+  "description": "输入您的凭据以访问您的账户",
+  "errorTitle": "无法登录",
+  "invalidCredentials": "用户名或密码无效",
+  "usernameLabel": "用户名",
+  "usernamePlaceholder": "请输入用户名",
+  "passwordLabel": "密码",
+  "passwordPlaceholder": "请输入密码",
+  "keepSignedInLabel": "保持登录",
+  "submit": "登录",
+  "forgotPasswordLink": "忘记密码？",
+  "resetSuccessTitle": "密码已更新",
+  "resetSuccessMessage": "您的密码已更新，请使用新密码登录。"
+}

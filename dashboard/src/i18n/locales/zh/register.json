@@ -1,0 +1,131 @@
+{
+  "breadcrumbs": {
+    "jobs": "注册任务",
+    "new": "注册节点"
+  },
+  "heading": "注册",
+  "downloadError": "无法下载 CSV",
+  "downloadFailed": "下载失败",
+  "fileUnavailable": "此文件已不可用，可能已从存储中删除。",
+  "columns": {
+    "fileRequestId": "文件 / 请求 ID",
+    "progress": "进度",
+    "lastUpdated": "最后更新"
+  },
+  "details": {
+    "adminGroups": "管理员分组",
+    "noAdminGroups": "暂无管理员分组"
+  },
+  "error": {
+    "title": "加载注册任务失败",
+    "description": "加载注册任务时出现问题。"
+  },
+  "noResults": "未找到注册任务",
+  "noResultsDescription": "请调整状态筛选条件，或注册新的节点。",
+  "registerNodesButton": "注册节点",
+  "unknownFile": "注册任务",
+  "status": {
+    "requested": "已请求",
+    "started": "已开始",
+    "dataLoaded": "数据已加载",
+    "completed": "已完成"
+  },
+  "new": {
+    "pageTitle": "注册节点",
+    "backToRegistrationJobs": "返回注册任务",
+    "sections": {
+      "basicDetails": "基本信息",
+      "capabilities": "选择能力",
+      "tags": "添加标签"
+    },
+    "fields": {
+      "certificateFile": {
+        "label": "节点证书文件",
+        "title": "将证书 CSV 文件拖放到此处",
+        "description": "仅支持 CSV 文件。"
+      },
+      "nodeGroup": {
+        "label": "选择节点分组",
+        "description": "可选。注册的节点将被添加到此分组（如已选择，还包括子分组）。"
+      }
+    },
+    "capabilities": {
+      "ariaLabel": "选择功能",
+      "s3": {
+        "label": "文件存储 (S3)",
+        "description": "在设备上启用基于 S3 的文件存储。"
+      },
+      "kvs": {
+        "label": "摄像头视频流 (KVS)",
+        "description": "为摄像头节点启用 Kinesis Video Streams。"
+      },
+      "bridge": {
+        "label": "网桥",
+        "description": "为网关节点启用网桥行为。"
+      }
+    },
+    "tags": {
+      "label": "标签",
+      "placeholder": "输入 key:value 并按 Enter",
+      "hint": "格式：key:value（不含空格）。",
+      "autoTagTitle": "部分标签将自动添加",
+      "autoTagNotice": "以下标签将自动添加：registered_from:dashboard、batch:<timestamp>。您可以通过在上方添加相同 key 的标签来覆盖它们。"
+    },
+    "form": {
+      "submit": "注册",
+      "submitting": "注册中…"
+    },
+    "progress": {
+      "dialogTitle": "注册进度",
+      "notStarted": "尚未开始",
+      "initiateTitle": "启动注册",
+      "initiateInProgress": "正在请求安全上传链接…",
+      "initiateSuccess": "注册已启动",
+      "initiateError": "无法启动注册",
+      "uploadTitle": "上传证书文件",
+      "uploadInProgress": "正在上传证书 CSV…",
+      "uploadSuccess": "证书文件已上传",
+      "uploadError": "无法上传证书文件",
+      "createTitle": "创建注册请求",
+      "createInProgress": "正在提交注册请求…",
+      "createSuccess": "注册请求已创建",
+      "createError": "无法创建注册请求",
+      "completedTitle": "注册完成",
+      "completedInProgress": "正在注册节点…这可能需要一点时间",
+      "completedSuccess": "所有节点已成功注册",
+      "completedWithFailures": "{{failedCount}} / {{totalNodes}} 个节点注册失败",
+      "completedError": "注册失败",
+      "backToJobs": "返回注册任务",
+      "registerMore": "注册更多节点",
+      "completedAllFailed": "没有节点被注册",
+      "completedWithUnknownFailures": "部分节点注册失败",
+      "completedStatusUnavailable": "无法获取注册状态",
+      "resultAlert": {
+        "successTitle": "所有节点注册成功",
+        "successDescription": "全部 {{totalNodes}} 个节点均已注册，现在即可使用。",
+        "successDescriptionUnknownTotal": "证书文件中的所有节点均已注册，现在即可使用。",
+        "partialTitle": "部分节点未能注册",
+        "partialDescription": "{{totalNodes}} 个节点中有 {{successCount}} 个已注册，{{failedCount}} 个失败。",
+        "partialDescriptionWithFile": "{{totalNodes}} 个节点中有 {{successCount}} 个已注册，{{failedCount}} 个失败 — 请下载失败节点文件以查看原因。",
+        "partialDescriptionUnknownCounts": "部分节点未能注册。请下载失败节点文件，查看具体节点及失败原因。",
+        "allFailedTitle": "节点注册失败",
+        "allFailedDescription": "全部 {{totalNodes}} 个节点均未能注册。请在注册任务中查看详细信息。",
+        "allFailedDescriptionWithFile": "全部 {{totalNodes}} 个节点均未能注册。请下载失败节点文件以查看原因。",
+        "jobErrorTitle": "注册任务失败",
+        "jobErrorDescription": "注册任务在完成前已中止。请在注册任务中查看详细信息。",
+        "statusErrorTitle": "无法获取注册状态",
+        "statusErrorDescription": "无法读取注册任务状态。任务可能仍在运行，请前往注册任务查看。",
+        "downloadFailedNodes": "下载失败节点",
+        "downloadErrorTitle": "无法下载失败节点文件"
+      }
+    },
+    "errors": {
+      "certificateFileRequired": "请上传节点证书 CSV。",
+      "certificateFileCsvOnly": "仅支持 CSV 文件。"
+    }
+  },
+  "title": "注册节点",
+  "description": "上传包含节点证书的 CSV 文件，以将其注册到系统中。",
+  "progress": "正在提交",
+  "submit": "注册"
+}

@@ -1,0 +1,87 @@
+---
+description: REST API conventions — public contract (wire format, HTTP status codes, OpenAPI)
+globs:
+  - docs/api/**/*.yaml
+alwaysApply: true
+---
+
+## Scope
+Conventions visible to API clients and integrators. Everything here is part of the public contract: wire-format casing, HTTP status codes, OpenAPI shape. Implementation conventions (handler structure, error wrapping, language-specific patterns) live in `backend.mdc` and `go-rules.mdc`. Must be  'REST compliant'.
+
+## Wire-format casing (public contract)
+
+| Surface | Casing | Examples |
+|---|---|---|
+| Request body fields (JSON) | `snake_case` | `node_id`, `group_id`, `user_token` |
+| Response body fields (JSON) | `snake_case` | same |
+| Query string params | `snake_case` | `?user_id=...&node_id=...` |
+| Path params | `PascalCase` | `/v1/users/{UserId}/nodes/{NodeId}`  [TODO: existing specs use camelCase `{userId}`/`{requestId}` — sweep pending] |
+| HTTP header names | `Kebab-Case` capitalised words | `X-Api-Key`, `Content-Type` |
+| OpenAPI `operationId` | `camelCase` | `getNodeConfig`, `listGroups` |
+| OpenAPI `tags[].name` | Title Case | `Nodes`, `User Profile` |
+| OpenAPI schema names | `PascalCase` | `NodeConfig`, `GroupListResponse` |
+| MQTT topics | `snake_case` segments | `rainmaker/nodes/{node_id}/to_cloud` |
+| MQTT payload keys | `snake_case` | same |
+
+External-contract surfaces (Amazon ACC, Alexa Smart Home, Google Smart Home, AWS IoT Lifecycle Events, MCP/JSON-RPC, OAuth state cookies) keep the upstream casing — they are public contracts owned by another party and we mirror them verbatim.
+
+## HTTP status codes (REST) - TODO
+
+### Success codes by operation type
+
+| Operation | Code | Notes |
+|---|---|---|
+| `GET` single item, found | `200` | |
+| `GET` single item, missing | `404` | Never `200` with `null`, never `400` |
+| `GET` list, with items | `200` | |
+| `GET` list, empty | `200` with `[]` | Never `404`, never `500`, never an error |
+| `POST` create — true resource | `201 Created` | New persistent resource came into being |
+| `POST` create — RPC-style state transition | `200` | Accept/reject/verify on existing resource; not a new resource |
+| `POST` ephemeral output | `200` | Generates one-shot data (credentials, NOC, signed URL) but stores nothing |
+| `POST` auth/token endpoints | `200` | OAuth 2.0 RFC 6749 §5.1 mandates `200` even though tokens are issued |
+| `POST` async / queued for processing | `202 Accepted` | Server accepted but hasn't completed (e.g. bulk registration jobs) |
+| `PUT` / `PATCH` on existing | `200` | Return the updated resource or status |
+| `PUT` / `PATCH` on missing | `404` | |
+| `DELETE` success | `204 No Content` | No body |
+| `DELETE` on missing | `404` (or `204` if idempotent-by-design) | Pick one per endpoint and document it. Default `404`. |
+
+### Error codes
+
+| Code | When |
+|---|---|
+| `400 Bad Request` | Caller payload is malformed, missing required field, fails validation. Retrying without changes will not help. |
+| `401 Unauthorized` | Token missing or invalid (auth layer failure). |
+| `403 Forbidden` | Token valid, but the principal isn't allowed to perform this operation on this resource. |
+| `404 Not Found` | Target resource doesn't exist (or the caller lacks visibility — return the same 404, don't leak existence). |
+| `409 Conflict` | Duplicate / idempotency-key collision / concurrent-update conflict. |
+| `422 Unprocessable Entity` | Payload parses but semantically invalid (relationship missing, business rule violated). Optional — `400` is acceptable too. |
+| `429 Too Many Requests` | Caller (or downstream service) hit a rate limit. Mobile SDKs back off on this code. |
+| `500 Internal Server Error` | Server bug, dependency failure. Caller should retry with backoff. |
+| `502/503/504` | Downstream unavailable / timeout. Prefer `500` unless we can specifically attribute. |
+
+### Rules for choosing the right error code
+
+1. **5xx means server's fault.** Never return 5xx for caller-induced failures — wrong codes inflate SLO alerts, confuse client retry logic, and violate RFC 9110. [TODO: password-recovery / change-password handlers collapse all auth-service errors to `400`, masking server failures as caller errors — re-classify case-by-case]
+2. **Validation vs server failure on a POST** — if we can clearly tell the caller's payload caused the failure (JSON parse, missing field, bad enum value), return `400`; otherwise `500`. [TODO: introduce sentinel-error pattern + handler branch for `group` and `mobile_platform` creates — Plan E.3 not landed]
+3. **Throttling / rate-limit downstream failures** map to `429`, not `500`. The caller backs off on `429`; on `500` they may hammer until paged. [TODO: helper to detect downstream throttling and translate to `429` not yet added]
+4. **Don't propagate downstream HTTP codes.** A 4xx from an underlying service is not automatically a 4xx for our caller — decide the right code based on whose fault it is.
+5. **Don't leak internal information.** Error response bodies use a stable status message (`"Failed to <action>"`). Never echo internal exception strings, internal IDs, or stack traces.
+
+## OpenAPI conventions
+
+- Each operation declares every status code it can return. If the handler can return `400`, the spec must list `400`.
+- Reuse the named responses under `components/responses/` where they exist (`BadRequest`, `InternalServerError`, etc.); otherwise inline the `Error` schema for ad-hoc 404s.
+
+## Response envelope
+
+- 2xx success responses **must not** carry a `status` field. HTTP status code already conveys success — never echo it in the body.
+- Responses **must not** echo back request fields — values the caller already supplied via the path (`group_id`, `automation_id`), query string. Return only what the server contributes: server-assigned IDs, computed/derived fields, or a `message`. (e.g. a create returns the generated `automation_id`, not the `group_id` taken from the path.)
+- `message` field is allowed on success responses (optional). Use it for human-readable context. Empty/omitted is acceptable.
+- Error responses (4xx/5xx) use `{message: string}`. The `Error` schema in OpenAPI defines this shape.
+- [TODO: many handlers populate `message: "success"` as a placeholder — reword these to convey something meaningful (what was created/updated/deleted) or drop the field. Sweep pending.]
+
+## Related rules
+
+- `aws-rules.mdc` — naming for AWS resources and the broader wire-format casing source-of-truth.
+- `backend.mdc` — implementation conventions: how handlers parse requests, log, respond.
+- `go-rules.mdc` — Go-specific patterns (Ginkgo, struct tags, AWS SDK mocking).

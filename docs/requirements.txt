@@ -1,0 +1,18 @@
+# Python packages needed to build the docs:
+#   pip install -r requirements.txt
+#
+# esp-docs pins Sphinx, sphinx-idf-theme and the diag extensions itself, so
+# nothing else belongs here. Kept in lockstep with
+# esp-rainmaker-neo-firmware/docs/requirements.txt.
+esp-docs==2.5.1
+
+# esp-docs ships blockdiag/seqdiag/nwdiag but not mermaid. Renders client-side,
+# so the browser fetches mermaid.js from a CDN.
+# Pinned below 2.x: the esp-idf-doc-env image's package index stops at 1.2.3.
+sphinxcontrib-mermaid==1.2.3
+
+# Parses the .md spec pages. 3.0.1 is the newest release whose pins intersect
+# esp-docs 2.5.1's: it wants sphinx>=6,<8 + docutils>=0.18,<0.22 against
+# esp-docs' sphinx~=7.1.2 + docutils<0.21. 4.x needs docutils>=0.19 and Python
+# >=3.10, so it is not a safe bump without moving esp-docs too.
+myst-parser==3.0.1

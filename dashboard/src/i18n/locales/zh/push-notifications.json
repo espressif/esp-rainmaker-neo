@@ -1,0 +1,62 @@
+{
+  "heading": "推送通知",
+  "noIntegrations": "尚未配置推送集成。",
+  "secondaryText": "管理用于向您的应用发送通知的推送集成（APNS / FCM）。",
+  "addIntegrationButton": "添加集成",
+  "sandboxBadge": "沙盒",
+  "deleteSuccess": "推送集成删除成功。",
+  "deleteError": "删除推送集成失败。",
+  "apnsHowToTitle": "如何获取 APNS 凭证",
+  "gcmHowToTitle": "如何获取服务账号 JSON",
+  "bundleId": "应用包 ID",
+  "bundleIdPlaceholder": "例如 com.rainmaker.app",
+  "keyId": "密钥 ID",
+  "keyIdPlaceholder": "例如 ABC123DEFG",
+  "teamId": "团队 ID",
+  "teamIdPlaceholder": "例如 TEAM123456",
+  "authKey": "认证密钥 (.p8)",
+  "authKeyPlaceholder": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----",
+  "sandbox": "使用 APNS 沙箱（开发版本）",
+  "projectId": "项目 ID",
+  "invalidJsonFile": "所选文件不是有效的 JSON",
+  "invalidJsonFormat": "JSON 文件缺少必需的服务账号字段（project_id、client_email、private_key）",
+  "registerSuccess": "推送集成注册成功",
+  "registerError": "推送集成注册失败",
+  "deleteConfirmTitle": "删除集成？",
+  "deleteConfirmDescription": "将删除 {{id}} 及其 SNS 平台应用。已注册的设备将停止接收通知。",
+  "fetchError": "加载推送集成失败",
+  "form": {
+    "sheetTitle": "添加推送通知集成",
+    "typeLabel": "集成类型",
+    "typeIosPrimary": "iOS",
+    "typeIosBadge": "APNS",
+    "typeAndroidPrimary": "Android",
+    "typeAndroidBadge": "FCM",
+    "sandboxPrimary": "使用 APNS 沙盒",
+    "sandboxSecondary": "仅用于开发版本时启用。",
+    "serviceAccountLabel": "服务账号 JSON",
+    "serviceAccountUploadTitle": "将服务账号 JSON 文件拖放到此处",
+    "serviceAccountUploadDescription": "仅接受 .json 文件。",
+    "submit": "注册集成",
+    "steps": {
+      "ios": {
+        "1": "登录 <url>https://developer.apple.com/account/resources</url>",
+        "2": "创建 <term>App</term> 类型的 App ID：添加 <term>bundle ID</term>，启用推送通知，记下 <term>Team ID</term>",
+        "3": "创建 <term>Apple Push Notifications service</term> 类型的密钥并指向该 App ID；下载 <term>.p8</term> 并记下 <term>Key ID</term>"
+      },
+      "android": {
+        "1": "登录 <url>https://console.firebase.google.com/</url>",
+        "2": "创建或选择一个项目",
+        "3": "进入 <term>设置 → 服务账号</term>",
+        "4": "在 <term>Firebase Admin SDK</term> 标签页点击 <term>生成新的私钥</term>"
+      }
+    },
+    "errors": {
+      "bundleIdRequired": "Bundle ID 为必填项。",
+      "keyIdRequired": "Key ID 为必填项。",
+      "teamIdRequired": "Team ID 为必填项。",
+      "authKeyRequired": "身份验证密钥为必填项。",
+      "serviceAccountRequired": "请上传服务账号 JSON 文件。"
+    }
+  }
+}

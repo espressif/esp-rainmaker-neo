@@ -1,0 +1,99 @@
+{
+    "attributes": [
+        {
+            "name": "serial_num",
+            "value": "123abc"
+        },
+        {
+            "name": "model",
+            "value": "myBridge-2019"
+        }
+    ],
+    "config_version": "2019-02-27",
+    "devices": [
+        {
+            "params": [
+                {
+                    "data_type": "string",
+                    "properties": [
+                        "read",
+                        "write"
+                    ],
+                    "type": "esp.param.name",
+                    "id": "name"
+                },
+                {
+                    "data_type": "bool",
+                    "properties": [
+                        "read",
+                        "write",
+                        "time_series"
+                    ],
+                    "ui_type": "esp.ui.toggle",
+                    "type": "esp.param.power",
+                    "id": "power"
+                }
+            ],
+            "primary": "power",
+            "type": "esp.device.switch",
+            "id": "Switch"
+        },
+        {
+            "attributes": [
+                {
+                    "name": "serial_number",
+                    "value": "012345"
+                },
+                {
+                    "name": "mac",
+                    "value": "xx:yy:zz:aa:bb:cc"
+                }
+            ],
+            "params": [
+                {
+                    "data_type": "string",
+                    "properties": [
+                        "read",
+                        "write"
+                    ],
+                    "type": "esp.param.name",
+                    "id": "name"
+                },
+                {
+                    "data_type": "bool",
+                    "properties": [
+                        "read",
+                        "write",
+                        "time_series"
+                    ],
+                    "ui_type": "esp.ui.toggle",
+                    "type": "esp.param.power",
+                    "id": "power"
+                },
+                {
+                    "bounds": {
+                        "max": 100,
+                        "min": 0
+                    },
+                    "data_type": "int",
+                    "properties": [
+                        "read",
+                        "write"
+                    ],
+                    "ui_type": "esp.ui.slider",
+                    "type": "esp.param.brightness",
+                    "id": "brightness"
+                }
+            ],
+            "primary": "power",
+            "type": "esp.device.lightbulb",
+            "id": "Light"
+        }
+    ],
+    "info": {
+        "fw_version": "1.0",
+        "name": "My_Bridge",
+        "type": "Bridge"
+    },
+    "node_id": "RvXVnfWPB8GeqDtVi8ncwA"
+}

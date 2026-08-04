@@ -1,0 +1,115 @@
+{
+  "heading": "部署后配置",
+  "productionNote": "如需上线生产环境，您需要提高邮件与短信的发送限额。同时还需为 SES 和短信申请生产权限，未验证的身份才能收到注册验证码。请联系 AWS 支持。",
+  "currentValue": "当前值",
+  "raisingThisLimit": "如何提高该限额",
+  "credsError": "无法获取受限的 AWS 凭证",
+  "credsErrorDescription": "该部署无法为此账户签发只读凭证。请刷新页面；若持续失败，请检查该部署的权限配置。",
+  "readFailed": "无法读取该值",
+  "awsErrors": {
+    "staleCredentials": "本次会话的 AWS 凭证已失效，这通常发生在重新部署之后。请刷新页面以获取新凭证。",
+    "notPermitted": "该部署的凭证不允许执行此调用。请部署最新的后端，然后刷新页面。",
+    "throttled": "AWS 正在限制这些请求的频率。请稍等片刻后重试。",
+    "generic": "请求失败。请重试；若持续失败，请检查该部署的 AWS 权限配置。"
+  },
+  "sesAccessStatus": {
+    "production": "已开通生产权限",
+    "sandbox": "沙盒中",
+    "reviewPending": "沙盒中 — 生产权限审核中",
+    "reviewDenied": "沙盒中 — 生产权限已被拒绝",
+    "reviewFailed": "沙盒中 — 生产权限申请失败"
+  },
+  "sections": {
+    "ses": {
+      "title": "邮件发送（SES）",
+      "description": "平台如何发送邮件，以及当前允许哪些收件人接收。"
+    },
+    "sns": {
+      "title": "短信发送（SNS）",
+      "description": "平台如何发送短信，以及哪些目标号码可以接收。"
+    },
+    "lambda": {
+      "title": "计算（Lambda）",
+      "description": "账户对平台可同时处理流量的限制。"
+    }
+  },
+  "values": {
+    "cognito_email_cap": {
+      "title": "每日邮件数",
+      "note": "注册确认与密码重置验证码由 Cognito 内置发送方发出，而非 SES，且整个 AWS 账户每天上限为 50 封。该上限无法提高。",
+      "readings": {
+        "cap": "每个 AWS 账户每天 {{cap, number}} 封邮件"
+      }
+    },
+    "ses_sandbox": {
+      "title": "SES 生产权限",
+      "note": "提高邮件发送限额需要此权限。生产环境请退出沙盒。"
+    },
+    "sns_sms_sandbox": {
+      "title": "短信生产权限",
+      "note": "在短信沙盒中，只有您已验证的号码才能收到消息，最多 10 个。生产环境请退出沙盒。"
+    },
+    "sns_monthly_spend": {
+      "title": "短信每月消费上限",
+      "note": "该账户的每月消费上限为 1 美元。生产环境请提高每月消费上限。",
+      "readings": {
+        "limit": "每月 {{limit, number}} 美元",
+        "limitDefault": "每月 {{limit, number}} 美元（默认）"
+      }
+    },
+    "lambda_concurrency": {
+      "title": "Lambda 并发",
+      "note": "这是平台所有函数可同时处理的请求总数。",
+      "readings": {
+        "concurrency": "{{limit, number}} 个并发执行",
+        "unknown": "未知"
+      }
+    }
+  },
+  "smsSandbox": {
+    "status": {
+      "sandbox": "沙盒中",
+      "production": "已开通生产权限",
+      "unknown": "状态未知"
+    },
+    "numberStatus": {
+      "verified": "已验证",
+      "pending": "待验证"
+    },
+    "statusFailed": "无法读取该账户的短信沙盒状态。",
+    "outOfSandboxTitle": "该账户已退出短信沙盒",
+    "outOfSandboxDescription": "短信可发送至任意手机号，目标号码无需再验证，此处无需管理。",
+    "listFailed": "无法加载沙盒目标号码。",
+    "emptyHeading": "暂无目标号码",
+    "emptyDescription": "请在下方添加，然后确认 AWS 发送到该号码的验证码。",
+    "columnPhoneNumber": "目标号码",
+    "columnActions": "操作",
+    "verify": "验证",
+    "verifySubmit": "确认",
+    "oneTimePasswordLabel": "一次性验证码",
+    "oneTimePasswordPlaceholder": "123456",
+    "delete": "移除号码",
+    "deleteTitle": "移除目标号码",
+    "deleteDescription": "{{phoneNumber}} 将不再接收来自此部署的短信。您可以重新添加该号码，并用新验证码完成验证。",
+    "previousPage": "上一页",
+    "nextPage": "下一页",
+    "phoneNumberLabel": "添加目标号码",
+    "phoneNumberPlaceholder": "+15551234567",
+    "phoneNumberHint": "请使用 E.164 格式，例如 +15551234567",
+    "errors": {
+      "invalidPhoneNumber": "请使用 E.164 格式输入号码，例如 +15551234567。",
+      "invalidOneTimePassword": "请输入短信中的 6 位验证码。",
+      "optedOut": "该号码已退订此 AWS 账户的短信，需先取消退订才能验证。",
+      "throttled": "AWS 正在限制这些请求的频率。请稍等片刻后重试。",
+      "verification": "验证码错误或已过期。请移除该号码并重新添加以获取新验证码。",
+      "notFound": "该号码已不在沙盒中。请重新加载列表；如仍需要，请重新添加。",
+      "limitExceeded": "沙盒已达到 10 个目标号码的上限。请先移除一个再添加。",
+      "generic": "请求失败。请重试；若持续失败，请检查该部署的 SNS 权限配置。",
+      "staleCredentials": "本次会话的 AWS 凭证已失效，这通常发生在重新部署之后。请刷新页面以获取新凭证。",
+      "notPermitted": "该部署的凭证不允许执行此调用。请部署最新的后端，然后刷新页面。"
+    },
+    "resendCode": "重新发送验证码",
+    "resendCodeTooltip": "添加号码时 AWS 会发送验证码；此操作会发送一条新的验证码（24 小时内最多 5 次）。",
+    "codeResent": "新的验证码已发送至 {{phoneNumber}}，可能需要一分钟才能收到。"
+  }
+}

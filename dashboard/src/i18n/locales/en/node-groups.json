@@ -1,0 +1,179 @@
+{
+  "awsThingsList": {
+    "searchPlaceholder": "Search by node ID",
+    "noResults": {
+      "title": "No nodes",
+      "description": "No nodes match your search."
+    },
+    "error": {
+      "title": "Failed to load nodes"
+    }
+  },
+  "pageTitle": "Node Groups",
+  "heading": "Node Groups",
+  "breadcrumbs": {
+    "new": "Create new group",
+    "nodes": "Nodes",
+    "otaJobs": "OTA Jobs"
+  },
+  "new": {
+    "pageTitle": "Create node group",
+    "backToGroups": "Back to node groups",
+    "submitButton": "Create node group",
+    "sections": {
+      "basicDetails": {
+        "label": "Basic details",
+        "description": "Name this group and describe what it is for."
+      },
+      "subgroup": {
+        "label": "Create as sub-group",
+        "description": "Optionally nest this group under a parent group."
+      },
+      "dynamic": {
+        "label": "Create as dynamic group",
+        "description": "Optionally populate this group automatically from matching rules."
+      }
+    },
+    "fields": {
+      "name": {
+        "label": "Group name",
+        "placeholder": "Enter a name for this group"
+      },
+      "description": {
+        "label": "Description",
+        "placeholder": "Optional description"
+      }
+    },
+    "subgroup": {
+      "card": {
+        "label": "Create as sub-group",
+        "description": "Nest this group under an existing parent group."
+      },
+      "info": "Pick a parent group below to nest this group. A sub-group cannot also be a dynamic group.",
+      "parent": {
+        "label": "Parent group",
+        "placeholder": "Select a parent group"
+      }
+    },
+    "dynamic": {
+      "card": {
+        "label": "Create as dynamic group",
+        "description": "Automatically include every node that matches your rules."
+      },
+      "info": "Nodes matching these rules join the group automatically. This cannot be combined with sub-group creation."
+    },
+    "errors": {
+      "nameRequired": "Group name is required.",
+      "nameTooLong": "Group name must be at most 128 characters.",
+      "nameInvalid": "Group name can only contain letters, numbers, colons, underscores and hyphens.",
+      "parentRequired": "Select a parent group for this sub-group.",
+      "rulesRequired": "Add at least one rule for a dynamic group."
+    },
+    "status": {
+      "dialogTitle": "Node group creation status",
+      "submitting": "Creating…",
+      "creatingTitle": "Creating node group",
+      "creatingDescription": "This may take a while. Do not close this window.",
+      "successTitle": "Node group created successfully.",
+      "successDescription": "Your node group is ready. Open its details to add nodes or start an OTA job.",
+      "viewDetails": "View node group details",
+      "errorTitle": "Failed to create node group.",
+      "errorDescription": "Please try again.",
+      "duplicateError": "A node group with this name already exists."
+    }
+  },
+  "createNodeGroupButton": "Create Node Group",
+  "search": {
+    "groupName": {
+      "placeholder": "Search by name"
+    },
+    "description": {
+      "label": "Description",
+      "placeholder": "Search by description"
+    }
+  },
+  "columns": {
+    "description": "Description"
+  },
+  "subgroup": {
+    "label": "Sub-group",
+    "parentsHeading": "Parent groups"
+  },
+  "deleteNodeGroup": {
+    "confirmTitle": "Delete node group",
+    "confirmDescription": "Are you sure you want to delete this node group?",
+    "aria": "Delete node group {{groupName}}"
+  },
+  "noResults": "No results.",
+  "noResultsDescription": "No node groups found. Try adjusting your search.",
+  "loading": "Loading node groups...",
+  "error": {
+    "title": "Failed to load node groups",
+    "description": "An unexpected error occurred while loading node groups. Please try again later."
+  },
+  "details": {
+    "backToGroups": "Back to node groups list",
+    "backToGroupsList": "Back to node groups list",
+    "resourceLabel": "Node Group ID",
+    "errorTitle": "Sorry, we can't load this node group's details",
+    "type": {
+      "static": "Static",
+      "dynamic": "Dynamic",
+      "viewQueryAriaLabel": "View dynamic group query rules"
+    },
+    "status": {
+      "ACTIVE": "Active",
+      "BUILDING": "Building",
+      "REBUILDING": "Rebuilding"
+    },
+    "tabs": {
+      "nodes": "Nodes",
+      "otaJobs": "OTA Jobs"
+    },
+    "nodes": {
+      "title": "Nodes in this group",
+      "description": "Nodes assigned to this group, including sub-groups.",
+      "addNodes": "Add nodes to this group",
+      "noResults": {
+        "title": "No nodes",
+        "description": "There are no nodes in this group yet."
+      },
+      "error": {
+        "title": "Failed to load nodes"
+      },
+      "add": {
+        "success": "Node \"{{thingName}}\" added to this group.",
+        "error": "Could not add \"{{thingName}}\" to this group."
+      },
+      "remove": {
+        "confirmTitle": "Remove node from group",
+        "confirmDescription": "Are you sure you want to remove this node from this group?",
+        "success": "Node \"{{thingName}}\" removed from this group.",
+        "error": "Could not remove \"{{thingName}}\" from this group."
+      },
+      "dynamicNotice": {
+        "title": "Membership is managed automatically",
+        "description": "Nodes join and leave this group automatically based on its query rules, so they can't be added or removed manually.",
+        "viewRules": "View rules"
+      }
+    },
+    "otaJobs": {
+      "title": "OTA jobs for this group",
+      "description": "OTA jobs targeting this node group.",
+      "noResults": {
+        "title": "No OTA jobs",
+        "description": "There are no OTA jobs for this group yet."
+      },
+      "error": {
+        "title": "Failed to load OTA jobs"
+      }
+    },
+    "delete": {
+      "button": "Delete group",
+      "title": "Delete node group",
+      "description": "This permanently deletes this node group. This action cannot be undone.",
+      "success": "Node group deleted successfully.",
+      "error": "Failed to delete node group."
+    }
+  }
+}

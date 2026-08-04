@@ -1,0 +1,205 @@
+# SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+#
+# SPDX-License-Identifier: Apache-2.0
+
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Superseded pushes to the same PR are pointless work; a push to main is not.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Kept in lockstep with go.mod and misc/docker/Dockerfile. A ginkgo CLI newer
+  # than the library it drives produces confusing failures — bump all together.
+  GINKGO_VERSION: v2.28.3
+  GOMEGA_VERSION: v1.40.0
+  GOCOVER_COBERTURA_VERSION: v1.5.0
+  # Matches misc/docker/Dockerfile's NODE_VERSION: Node 24 bundles the npm major
+  # that resolved the committed package-lock.json.
+  NODE_VERSION: "24"
+  # The Lambda runtime target (see misc/docker/Dockerfile).
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # Ginkgo across all three go.work modules. `make test` delegates to each
+  # submodule's own `make test` (TEST_SUBMODULES) because ginkgo's package
+  # discovery stops at Go module boundaries.
+  unittest:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install test tooling
+        run: |
+          go install github.com/onsi/ginkgo/v2/ginkgo@${GINKGO_VERSION}
+          go install github.com/onsi/gomega/...@${GOMEGA_VERSION}
+          go install github.com/boumenot/gocover-cobertura@${GOCOVER_COBERTURA_VERSION}
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - run: make test
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            coverage.xml
+            build/tests/
+          if-no-files-found: ignore
+
+  # govulncheck, scanned per module because it does not cross go.work boundaries.
+  # Blocking, same as GitLab's go_vulncheck.
+  vulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make vulncheck
+
+  # The only gate on Python and CDK changes. Synth needs no AWS credentials —
+  # there are no from_lookup calls and CDK_PUBLISH makes the templates
+  # region-agnostic. DASHBOARD_SKIP avoids requiring built frontend assets; the
+  # dashboard job below covers those.
+  cdk_synth:
+    name: CDK synth
+    runs-on: ubuntu-latest
+    env:
+      CDK_PUBLISH: "true"
+      DASHBOARD_SKIP: "1"
+      AWS_REGION: ap-south-1
+      CDK_DEFAULT_REGION: ap-south-1
+      RMNG_REGION: ap-south-1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: make go_build
+      - name: Synth every app
+        run: |
+          CDK_OUTDIR=cdk.out.rmng    python3 cdk/apps/rmng.py
+          CDK_OUTDIR=cdk.out.espuser python3 cdk/apps/espuser.py
+          CDK_OUTDIR=cdk.out.alexa   python3 cdk/apps/alexa.py
+      - name: Upload cloud assemblies
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloud-assemblies
+          path: cdk.out.*
+          retention-days: 7
+
+  # Nothing else builds or tests the frontend. `make admin-dashboard-build` is
+  # reused for the npm ci + build so the build invocation stays in one place.
+  dashboard:
+    name: Admin dashboard
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/admin/dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: src/admin/dashboard/package-lock.json
+      - name: Build
+        working-directory: .
+        run: make admin-dashboard-build
+      - run: npm run typecheck
+      - run: npm test
+      # eslint --max-warnings 0 plus the en/zh i18n key-parity check.
+      - run: npm run lint
+
+  # Schema validation for the published API definitions.
+  api_docs:
+    name: API definitions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Validate OpenAPI
+        run: |
+          npx --yes @apidevtools/swagger-cli validate misc/swagger/Api_Swagger.yaml
+          npx --yes @apidevtools/swagger-cli validate misc/swagger/User_Api_Swagger.yaml
+      - name: Validate AsyncAPI
+        run: |
+          npx --yes @asyncapi/cli validate misc/swagger/MQTT_Node.yaml
+          npx --yes @asyncapi/cli validate misc/swagger/MQTT_User.yaml
+          npx --yes @asyncapi/cli validate misc/swagger/Push_User.yaml
+
+  # Working-tree secret scan, configured by .gitleaks.toml.
+  #
+  # `gitleaks dir`, not `gitleaks git`: this scans the checked-out files only. A
+  # history scan would fail on any branch that still carries the pre-publish
+  # commit record. History coverage is GitHub secret scanning + push protection.
+  #
+  # The binary is downloaded rather than using gitleaks/gitleaks-action, which
+  # requires a GITLEAKS_LICENSE for organization-owned repos. The version is
+  # pinned so the gate is deterministic; bump it deliberately.
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_VERSION: 8.28.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install gitleaks
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+      - run: gitleaks dir . --no-banner --redact
+
+  # Dependency advisories for the two ecosystems govulncheck does not cover.
+  deps_audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      # Production dependencies only. The dev tree currently carries a critical
+      # and a high advisory in the vite / vitest / vite-node / @vitest/mocker
+      # chain, which ships to nobody — a full-tree audit would be red on every
+      # run until vitest is bumped, so this is scoped rather than silenced.
+      # Widen it to the full tree once that bump lands.
+      - name: npm audit (dashboard, prod deps)
+        working-directory: src/admin/dashboard
+        run: npm audit --omit=dev --audit-level=high
+      - name: pip-audit
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt

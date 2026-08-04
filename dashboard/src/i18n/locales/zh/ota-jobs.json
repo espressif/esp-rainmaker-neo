@@ -1,0 +1,207 @@
+{
+  "thingSelector": {
+    "label": "设备",
+    "placeholder": "选择设备",
+    "emptyText": "未找到设备。",
+    "searchPlaceholder": "搜索设备..."
+  },
+  "s3ListObjectsSelector": {
+    "label": "对象",
+    "placeholder": "选择一个对象",
+    "emptyText": "未找到对象。",
+    "searchPlaceholder": "搜索对象..."
+  },
+  "pageTitle": "OTA 作业",
+  "heading": "OTA 作业",
+  "breadcrumbs": {
+    "jobs": "OTA 作业",
+    "new": "开始 OTA",
+    "overview": "概览",
+    "nodes": "节点",
+    "newJob": "创建 OTA 任务"
+  },
+  "details": {
+    "jobIdLabel": "作业 ID",
+    "statusUpdatedPrefix": "更新于",
+    "backToJobs": "返回 OTA 作业",
+    "backToJobsList": "返回 OTA 作业列表",
+    "errorTitle": "抱歉，无法加载此 OTA 作业的详情",
+    "tabs": {
+      "overview": "概览",
+      "nodes": "节点"
+    },
+    "overview": {
+      "target": {
+        "title": "目标",
+        "description": "此 OTA 作业的目标。",
+        "empty": "此作业没有目标。",
+        "type": {
+          "thing": "节点",
+          "thinggroup": "节点组"
+        }
+      },
+      "activity": {
+        "title": "动态",
+        "description": "此 OTA 作业的时间线。",
+        "lastUpdatedAt": "最后更新",
+        "completedAt": "完成于"
+      },
+      "completionSummary": {
+        "heading": "状态摘要",
+        "details": "详情",
+        "progressLabel": "成功节点 {{succeeded}}/{{total}}",
+        "total": "总计",
+        "succeeded": "成功",
+        "viewMore": "查看更多",
+        "viewLess": "收起"
+      }
+    },
+    "nodes": {
+      "statusSummary": {
+        "heading": "状态摘要",
+        "subtitle": "按 OTA 下发状态统计本作业的节点数量。",
+        "legendItem": "{{count}} {{name}}",
+        "empty": "暂无可汇总的节点执行记录。"
+      },
+      "executions": {
+        "title": "节点执行",
+        "subtitle": "本作业各节点的 OTA 下发状态。",
+        "columns": {
+          "nodeId": "节点 ID"
+        },
+        "noResultsHeading": "暂无节点执行",
+        "noResultsDescription": "本作业暂无节点执行记录。",
+        "error": {
+          "title": "加载节点执行失败",
+          "description": "加载节点执行时发生意外错误，请稍后重试。"
+        }
+      },
+      "executionDetail": {
+        "title": "节点执行详情",
+        "contextInfo": "正在显示 OTA 作业 <strong>{{jobId}}</strong> 中节点 <strong>{{nodeId}}</strong> 的执行详情。",
+        "fields": {
+          "executionNumber": "执行编号",
+          "versionNumber": "版本号",
+          "queuedAt": "排队时间",
+          "startedAt": "开始时间",
+          "lastUpdatedAt": "最近更新时间"
+        },
+        "viewDetails": "查看节点详情",
+        "empty": "未找到该节点的执行详情。",
+        "error": {
+          "title": "加载执行详情失败",
+          "description": "加载该节点执行详情时发生意外错误，请稍后重试。"
+        }
+      }
+    }
+  },
+  "createOtaJobButton": "创建 OTA 作业",
+  "loading": "加载 OTA 作业中...",
+  "error": {
+    "title": "加载 OTA 作业失败",
+    "description": "加载 OTA 作业时发生意外错误，请稍后重试。"
+  },
+  "noResults": "无结果",
+  "noResultsDescription": "未找到 OTA 作业。",
+  "targetSelection": {
+    "CONTINUOUS": "持续",
+    "SNAPSHOT": "快照"
+  },
+  "filters": {
+    "targetSelectionTrigger": "任务模式",
+    "groupLabel": "设备组",
+    "groupModalTitle": "按设备组筛选",
+    "groupModalDescription": "仅显示以所选设备组为目标的 OTA 任务。",
+    "groupModalApply": "应用",
+    "groupSearchPlaceholder": "搜索设备组…",
+    "groupEmptyText": "未找到设备组",
+    "groupLoadError": "无法加载设备组。请检查网络连接后重试。"
+  },
+  "cancelOtaJob": {
+    "confirmTitle": "取消 OTA 作业",
+    "confirmDescription": "确定要取消 OTA 作业 “{{jobId}}” 吗？取消后将不再向新的节点下发，已在进行中的节点不受影响。",
+    "confirmButton": "取消作业",
+    "cancelButton": "返回",
+    "aria": "取消 OTA 作业 {{jobId}}"
+  },
+  "deleteOtaJob": {
+    "confirmTitle": "删除 OTA 作业",
+    "confirmDescription": "确定要删除 OTA 作业 “{{jobId}}” 吗？关联的流以及 AWS IoT 作业也会一并删除。",
+    "aria": "删除 OTA 作业 {{jobId}}"
+  },
+  "createOtaJobPage": {
+    "pageTitle": "创建 OTA 任务",
+    "backToJobs": "返回 OTA 任务",
+    "submitButton": "创建 OTA 任务",
+    "status": {
+      "dialogTitle": "OTA 任务创建状态",
+      "submitting": "正在创建…",
+      "creatingTitle": "正在创建 OTA 任务",
+      "creatingDescription": "这可能需要一些时间。请勿关闭此窗口。",
+      "successTitle": "OTA 任务创建成功。",
+      "successDescription": "推送已开始。可在任务详情中跟踪其进度。",
+      "viewJobDetails": "查看 OTA 任务详情",
+      "errorTitle": "创建 OTA 任务失败。",
+      "errorDescription": "请重试。",
+      "duplicateError": "已存在同名的 OTA 任务。"
+    },
+    "sections": {
+      "basicDetails": {
+        "label": "基本信息",
+        "description": "为该任务命名并选择要推送的固件镜像。"
+      },
+      "targetDetails": {
+        "label": "目标信息",
+        "description": "选择该任务的目标及其推送方式。"
+      }
+    },
+    "name": {
+      "placeholder": "输入该 OTA 任务的名称"
+    },
+    "firmware": {
+      "label": "固件镜像",
+      "placeholder": "选择固件镜像"
+    },
+    "type": {
+      "label": "类型",
+      "group": {
+        "label": "节点组",
+        "description": "推送至节点组的成员。"
+      },
+      "node": {
+        "label": "节点",
+        "description": "推送至单个节点。"
+      }
+    },
+    "nodeGroup": {
+      "label": "节点组",
+      "placeholder": "选择节点组"
+    },
+    "continuous": {
+      "label": "持续推送",
+      "description": "匹配目标的新节点将自动接收该更新。"
+    },
+    "source": {
+      "label": "来源",
+      "existing": {
+        "label": "现有组",
+        "description": "以所选节点组的当前成员为目标。"
+      },
+      "rules": {
+        "label": "定义规则",
+        "description": "以匹配一组规则的节点为目标。"
+      }
+    },
+    "node": {
+      "label": "节点",
+      "placeholder": "选择节点"
+    },
+    "errors": {
+      "nameRequired": "名称为必填项。",
+      "nameTooLong": "名称最多 128 个字符。",
+      "nameInvalid": "名称只能包含字母、数字、下划线和连字符。",
+      "firmwareRequired": "固件镜像为必填项。",
+      "targetRequired": "目标为必填项。"
+    }
+  }
+}

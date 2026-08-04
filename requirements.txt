@@ -1,0 +1,98 @@
+# Python 3.12.3 compatible versions
+
+# AWS CDK
+aws-cdk-lib==2.262.1
+aws-cdk-cli==2.1133.0
+constructs==10.7.1
+
+# AWS SDK
+boto3==1.43.57
+botocore==1.43.57
+awscrt==0.36.1
+awsiotsdk==1.31.0
+s3transfer==0.19.2
+iam-rolesanywhere-session==2.3.0
+
+# Alexa Skill Automation (src/scripts/alexa_setup.py — SMAPI setup via ask-smapi-sdk)
+ask-smapi-sdk==1.0.0
+ask-smapi-model==1.36.0
+ask-sdk-model-runtime==1.0.1
+
+# Security & Crypto
+cryptography==50.0.0
+PyJWT==2.13.0
+cffi==2.1.0
+
+# BLE Provisioning (esp_prov — app_sim `prov` command)
+# protobuf is deliberately held on 6.x and must NOT be moved to 7.x:
+# esp_rmaker_chal_resp_pb2.py was generated with protoc (libprotoc 32.x → gen
+# runtime 6.32) and the IDF python env ships protobuf 6.x. 6.33.6 is the newest
+# 6.x; 7.35.1 exists but would break the generated _pb2 modules.
+bleak==3.0.2
+protobuf==6.33.6
+
+# HTTP & Networking
+requests==2.34.2
+urllib3==2.7.0
+certifi==2026.7.22
+charset-normalizer==3.4.9
+idna==3.18
+
+# Testing
+pytest==9.1.1
+pytest-html==4.2.0
+pytest-metadata==3.1.1
+pytest-rerunfailures==16.4
+pluggy==1.6.0
+iniconfig==2.3.0
+
+# Optional: Additional testing tools (not in Jenkins base)
+pytest-xdist==3.8.0
+pytest-subtests==0.15.0
+fastmcp==3.4.5
+playwright==1.55.0
+pytest-playwright==0.8.0
+
+# CLI & Terminal
+prompt_toolkit==3.0.53
+Pygments==2.20.0
+wcwidth==0.8.2
+
+# Optional: SSH/SCP tools (not in Jenkins base)
+paramiko==5.0.0
+scp==0.16.0
+PyNaCl==1.6.2
+
+# Optional: CLI & formatting tools (not in Jenkins base)
+click==8.4.2
+rich==15.0.0
+
+# Templates & Serialization
+Jinja2==3.1.6
+MarkupSafe==3.0.3
+PyYAML==6.0.3
+
+# QR Code
+segno==1.6.6
+
+# Utilities
+attrs==26.1.0
+cattrs==26.1.0
+packaging==26.2
+python-dateutil==2.9.0.post0
+six==1.17.0
+typeguard==2.13.3
+typing_extensions==4.16.0
+jmespath==1.1.0
+pycparser==3.0
+publication==0.0.3
+
+# CDK Dependencies
+# Transitive deps of aws-cdk-lib. Pin only to versions aws-cdk-lib actually
+# resolves to — these are NOT the newest on PyPI (aws-cdk-lib 2.262.1 caps
+# asset-awscli-v1 at 2.2.282 while 2.2.290 exists). Re-read them from
+# `pip freeze` after every aws-cdk-lib bump rather than bumping by hand.
+aws-cdk.asset-awscli-v1==2.2.282
+aws-cdk.asset-node-proxy-agent-v6==2.1.2
+aws-cdk.cloud-assembly-schema==54.14.0
+jsii==1.139.0

@@ -1,0 +1,45 @@
+pipeline {
+    agent {
+        label "PN-QA_Services-executor"
+    }
+
+    options {
+        timestamps()
+
+        // Ensures only one build runs at a time (prevents overlap/race conditions)
+        // NOTE: Remove this if parallel builds are acceptable
+        disableConcurrentBuilds()
+    }
+
+    environment {
+        DOWNSTREAM_JOB = 'QA_Services/rmng/rmng_callback'
+    }
+
+    stages {
+        stage('Trigger QA Hook Job') {
+            when {
+                expression {
+                    // Run this stage ONLY if the build has actual SCM changes
+                    // Prevents triggering downstream job on:
+                    // - Initial branch indexing
+                    // - Manual builds without changes
+                    return currentBuild.changeSets.size() > 0
+                }
+            }
+            steps {
+                script {
+                    echo "Branch : ${env.BRANCH_NAME}"
+                    echo "Commit : ${env.GIT_COMMIT}"
+
+                    build job: "${env.DOWNSTREAM_JOB}",
+                          parameters: [
+                              string(name: 'BRANCH_NAME', value: env.BRANCH_NAME ?: ''),
+                              string(name: 'GIT_COMMIT', value: env.GIT_COMMIT ?: '')
+                          ],
+                          wait: false,
+                          propagate: false
+                }
+            }
+        }
+    }
+}

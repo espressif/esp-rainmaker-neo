@@ -1,0 +1,14 @@
+{
+  "title": "登录页面预览",
+  "description": "通过用户实际看到的登录页面进行登录的结果。",
+  "checking": "正在检查登录结果……",
+  "successTitle": "登录已完成",
+  "successMessage": "登录页面运行正常，登录已成功完成。未请求任何令牌 —— 这只是预览，因此授权码已被丢弃。",
+  "rejectedTitle": "登录未完成",
+  "rejectedMessage": "登录页面报告该请求已被取消或拒绝。",
+  "stateMismatchTitle": "无法验证响应",
+  "stateMismatchMessage": "此响应与发起预览的请求不匹配，因此已被丢弃。请在控制台中重新开始预览。",
+  "noCodeTitle": "未返回登录结果",
+  "noCodeMessage": "登录页面返回时未携带授权码，因此登录未完成。",
+  "closeHint": "您可以关闭此标签页并返回控制台。"
+}

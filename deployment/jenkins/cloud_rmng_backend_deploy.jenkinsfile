@@ -1,0 +1,110 @@
+// SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+//
+// SPDX-License-Identifier: Apache-2.0
+
+pipeline {
+    agent {
+        docker {
+            label 'cloud'
+            // Registry coordinates come from Jenkins global environment variables, not credentials: the agent block is evaluated before any credential binding (or this pipeline's own environment block) exists.
+            image "${env.JENKINS_RAINMAKER_NEO_DOCKER_IMAGE_PATH}/rmng:go1.26.5_node24"
+            registryUrl "${env.JENKINS_DOCKER_REGISTRY_URL}"
+            registryCredentialsId 'JENKINS_GITLAB_USER_CREDENTIALS_APP_FRAMEWORKS'
+            alwaysPull true
+        }
+    }
+    options {
+        timeout(time: 2, unit: 'HOURS')
+    }
+    environment {
+        GIT_APPFW = credentials('JENKINS_GITLAB_USER_CREDENTIALS_APP_FRAMEWORKS')
+        // Repo hosts are secret-text credentials, so they can only be bound here (not in the agent block); every sh step that clones reads them from the environment and Jenkins masks them in the log.
+        JENKINS_RMNG_REPO_URL = credentials('JENKINS_RMNG_REPO_URL')
+        JENKINS_RMNG_CLOUD_COMPONENTS_REPO_URL = credentials('JENKINS_RMNG_CLOUD_COMPONENTS_REPO_URL')
+    }
+    parameters {
+        text(name: 'AWS_ENV_CREDS',  description: 'Set AWS Environment Credentials')
+        string(name: 'BRANCH', defaultValue: 'main', description: '(Optional)Git branch to checkout and deploy')
+        string(name: 'AWS_REGION', defaultValue: 'ap-south-1', description: 'AWS Region for deployment')
+        choice(name: 'DEPLOY_MODE', choices: ['Upgrade deployment', 'New deployment', 'Don\'t deploy'], description: 'Deployment mode')
+        text(name: 'RMNG_OUTPUTS_JSON', description: '(Optional) rmng-outputs.json content - use when Don\'t deploy is selected')
+        string(name: 'RMNG_ADMIN_EMAILS', defaultValue: '', description: '(Optional) Comma-separated admin emails to register on deploy')
+        booleanParam(name: 'RUN_TEST', defaultValue: false, description: 'Run Pytest post deployment if checked')
+    }
+    stages {
+        stage('Initialization') {
+            steps {
+                script {
+                    cloud_utils = load "${WORKSPACE}/deployment/jenkins/utils.groovy"
+                    cloud_utils.setup_aws_credentials()
+                    currentBuild.displayName = "${BUILD_NUMBER} - ${env.ACCOUNT_ID} - ${params.AWS_REGION}"
+                    currentBuild.description = "Branch: ${params.BRANCH ?: 'main'} | Mode: ${params.DEPLOY_MODE}"
+                    sh '''
+                    echo "Workspace is ${WORKSPACE}"
+                    echo "Deploy Mode: ${DEPLOY_MODE}"
+                    echo "AWS Region: ${AWS_REGION}"
+                    '''
+                }
+            }
+        }
+        stage('Setup') {
+            steps {
+                script {
+                    cloud_utils.show_build_env_details()
+                    cloud_utils.setup_git()
+                    if (params.RMNG_OUTPUTS_JSON?.trim()) {
+                        cloud_utils.setup_cdk_outputs(env.ACCOUNT_ID, params.AWS_REGION)
+                    }
+                }
+            }
+        }
+        stage('Deploy') {
+            when {
+                expression { params.DEPLOY_MODE != "Don't deploy" }
+            }
+            steps {
+                script {
+                    cloud_utils.build_and_deploy()
+                }
+            }
+        }
+        stage('Test') {
+            steps {
+                catchError() {
+                    script {
+                        cloud_utils.deploy_test()
+                    }
+                }
+            }
+            post {
+                success {
+                    echo 'Deploy tests success'
+                }
+                failure {
+                    echo 'Deploy tests failure'
+                }
+            }
+        }
+        stage('Artifacts') {
+            steps {
+                script {
+                    sh 'cp /root/esp-rainmaker-neo/rmng-outputs.json .'
+                    sh 'ls -l'
+                    sh 'pwd'
+                    archiveArtifacts artifacts: 'rmng-outputs.json'
+                    if (params.RUN_TEST) {
+                        sh 'cp /root/esp-rainmaker-neo/report.html .'
+                        archiveArtifacts artifacts: 'report.html'
+                    }
+                    echo 'Artifacts archived'
+                }
+            }
+        }
+    }
+    post {
+        always {
+            echo 'Cleanup post'
+            cleanWs()
+        }
+    }
+}

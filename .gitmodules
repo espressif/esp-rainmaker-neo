@@ -1,0 +1,3 @@
+[submodule "src/esp-cloud-common"]
+	path = src/esp-cloud-common
+	url = ../esp-cloud-common.git

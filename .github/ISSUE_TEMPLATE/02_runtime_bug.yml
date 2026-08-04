@@ -1,0 +1,79 @@
+name: Runtime bug
+description: A deployed stack misbehaves — API errors, wrong or buggy behavior, device connectivity
+labels: ["Type: Bug"]
+body:
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Answers checklist
+      options:
+        - label: I have read the relevant spec under `docs/en/specs/` and the behavior I'm seeing contradicts it (or isn't specified).
+          required: true
+        - label: I have searched existing issues and this is not a duplicate.
+          required: true
+        - label: This is not a security vulnerability (those go through SECURITY.md, never a public issue).
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Include the API called, the response received, and relevant CloudWatch log lines. Redact account IDs, tokens, and user data.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+      description: >-
+        Link the spec section that defines the expected behavior
+        (`docs/en/specs/...`), or the OpenAPI/AsyncAPI definition in
+        `misc/swagger/` for API-contract issues. If the behavior isn't
+        specified anywhere, say so — that's useful too: it may be a spec gap
+        rather than a code bug.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Deploy with `make deploy REGION=...`
+        2. Call `POST /v1/...` with `...`
+        3. Observe `...`
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs at trace level
+      description: >-
+        Set the affected lambda's log level to trace so we get maximum
+        detail — `python tools/drx.py set-log trace --function NAME` (or
+        `--all`; you can narrow the volume with `--user USERNAME` /
+        `--node NODEID`) — reproduce the issue, and paste the CloudWatch
+        output here (`aws logs tail /aws/lambda/NAME --follow`). Reset
+        afterwards with `python tools/drx.py set-log --reset --all`.
+        **Redact sensitive info**: account IDs, tokens, certificates, emails,
+        and secrets.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: failing-test
+    attributes:
+      label: Failing test (optional, but the best reproduction)
+      description: >-
+        If you can express the failure as a test, paste it here — a pytest
+        itest under `test/itest/` reusing the fixtures from
+        `test/itest/conftest.py`, runnable with
+        `make itest ITEST_ARGS='-k your_test'`. A failing test gets your bug
+        confirmed and fixed fastest, and becomes the regression test for the fix.
+      render: python
+    validations:
+      required: false

@@ -1,0 +1,28 @@
+/*
+ * SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+@import "@espressif/dashboard-ui-components/styles";
+
+/* View Transitions API (document.startViewTransition) — used when navigating */
+@layer base {
+  @media (prefers-reduced-motion: no-preference) {
+    ::view-transition-old(root),
+    ::view-transition-new(root) {
+      animation-duration: 280ms;
+      animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
+    }
+  }
+}
+
+/*
+ * Bold the current-page crumb in the WorkspaceLayout breadcrumb. The library
+ * renders the last item with `aria-current="page"` and a `font-normal` utility;
+ * scoping to `nav[aria-label="breadcrumb"]` gives us specificity (0,2,1) which
+ * beats the utility class (0,1,0) without needing `!important`.
+ */
+nav[aria-label="breadcrumb"] [aria-current="page"] {
+  font-weight: 600;
+}

@@ -1,0 +1,11 @@
+/*
+ * SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+export { default } from "./post-deployment-sections";
+export {
+  buildPostDeploymentSections,
+  type PostDeploymentSectionConfig,
+} from "./post-deployment-sections.config";

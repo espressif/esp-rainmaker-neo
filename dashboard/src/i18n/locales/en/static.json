@@ -1,0 +1,17 @@
+{
+  "sidebar": {
+    "adminDashboard": "Admin dashboard"
+  },
+  "docs": {
+    "termsOfUse": {
+      "title": "Terms of Use"
+    },
+    "privacyPolicy": {
+      "title": "Privacy Policy"
+    }
+  },
+  "unavailable": {
+    "title": "Content not available",
+    "message": "This document is not available yet. Please check back later."
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "title": "Sign-in preview",
+  "description": "The result of signing in through the page your users see.",
+  "checking": "Checking the sign-in result…",
+  "successTitle": "Sign-in completed",
+  "successMessage": "The sign-in page worked and the login finished successfully. No tokens were requested — this is a preview, so the authorization code was discarded.",
+  "rejectedTitle": "Sign-in was not completed",
+  "rejectedMessage": "The sign-in page reported that the request was cancelled or refused.",
+  "stateMismatchTitle": "Response could not be verified",
+  "stateMismatchMessage": "This response does not match the request that started the preview, so it was discarded. Start the preview again from the dashboard.",
+  "noCodeTitle": "No sign-in result returned",
+  "noCodeMessage": "The sign-in page came back without an authorization code, so the login did not finish.",
+  "closeHint": "You can close this tab and return to the dashboard."
+}

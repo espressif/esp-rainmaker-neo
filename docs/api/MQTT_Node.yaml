@@ -1,0 +1,2134 @@
+# SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+#
+# SPDX-License-Identifier: Apache-2.0
+
+asyncapi: 3.1.0
+info:
+  title: ESP RainMaker Neo Node MQTT API
+  version: "0.8.0"
+  description: |
+    MQTT API definitions for ESP RainMaker Neo platform for nodes.
+
+    This spec documents every MQTT topic a node publishes to or subscribes to, including
+    AWS IoT Core managed topics.
+
+    ## Boot Sequence
+
+    1. MQTT connect
+    2. Subscribe `from_cloud` (required before reporting `online = true`)
+    3. Subscribe shadow update-accepted topics as needed
+    4. Publish `to_cloud` with events: `getGroupInfo`, `getAlexaEn`, `getGVAEn`, `getSchedVer`, `getTriggerVer` (optionally `getTimeSync` for a fast coarse clock sync while SNTP converges)
+    5. Receive `from_cloud` response → derive `{groupInfoStr}`
+    6. Subscribe control topics:
+       - Unicast params: `user/params-{groupInfoStr}/params`
+       - Group broadcast (device-type addressed): `groups/{groupId}/control` and per-subgroup `groups/{groupId}/subgroups/{subgroupId}/control`
+    7. If config changed → publish `setNodeConfig` via `to_cloud`
+    8. When **all** prerequisites hold (node registered, MQTT connected, `from_cloud` subscribed, params topic(s) subscribed) → report `online: true` to **both** shadows
+    9. Report full reported state to both shadows
+
+    **Online flag:** Node sets `online = true` only after the above; cloud sets `online = false` when the device disconnects (e.g. presence). The node does not publish `online = false`; it may clear local online state on disconnect.
+
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+  contact:
+    email: esp-rainmaker-support@espressif.com
+    url: https://rainmaker.espressif.com
+
+servers:
+  production:
+    host: "{iot-endpoint}-ats.iot.{region}.amazonaws.com"
+    protocol: mqtt
+    description: AWS IoT Core endpoint (region-specific, TLS mutual auth)
+    security:
+      - $ref: "#/components/securitySchemes/X509"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# OPERATIONS
+# ──────────────────────────────────────────────────────────────────────────────
+operations:
+  # ── Connectivity (AWS IoT Presence, system-generated) ──────────────────────
+  onPresenceConnected:
+    action: send
+    channel:
+      $ref: "#/channels/presenceConnected"
+    summary: AWS IoT Core lifecycle event — node connected
+
+  onPresenceDisconnected:
+    action: send
+    channel:
+      $ref: "#/channels/presenceDisconnected"
+    summary: AWS IoT Core lifecycle event — node disconnected
+
+  # ── Node ↔ Cloud events ──────────────────────────────────────────────────
+  publishToCloud:
+    action: send
+    channel:
+      $ref: "#/channels/toCloud"
+    summary: Node publishes event requests to the cloud
+    description: |
+      Node sends one or more named events (get/set) to the cloud.
+
+  subscribeFromCloud:
+    action: receive
+    channel:
+      $ref: "#/channels/fromCloud"
+    summary: Node receives event responses and unsolicited pushes from the cloud
+    description: |
+      Cloud sends event responses (e.g. group info, schedule details) and
+      unsolicited pushes (e.g. updated schedule/trigger versions) to the node.
+
+  # ── Parameter control (unicast) ────────────────────────────────────────────
+  subscribeUserParams:
+    action: receive
+    channel:
+      $ref: "#/channels/userParams"
+    summary: Node receives user-initiated parameter control commands (unicast)
+
+  # ── Group / subgroup control (addressed by device type) ────────────────────
+  subscribeGroupControl:
+    action: receive
+    channel:
+      $ref: "#/channels/groupControlBroadcast"
+    summary: Node receives device-type-addressed control commands for the group
+
+  subscribeSubgroupControlBroadcast:
+    action: receive
+    channel:
+      $ref: "#/channels/subgroupControlBroadcast"
+    summary:
+      Node receives device-type-addressed control commands for a specific
+      subgroup
+
+  # ── Named shadow ───────────────────────────────────────────────────────────
+  publishNamedShadowUpdate:
+    action: send
+    channel:
+      $ref: "#/channels/namedShadowUpdate"
+    summary: Node reports full/delta state to the named (group-scoped) shadow
+
+  publishNamedShadowDelete:
+    action: send
+    channel:
+      $ref: "#/channels/namedShadowDelete"
+    summary: Node deletes old named shadow during group migration
+
+  # ── Named shadow feedback (subscribe) ──────────────────────────────────────
+  # A node subscribes to these to detect cloud-driven desired state and to
+  # confirm/inspect its own updates. The publish-only operations above cover
+  # reporting; these cover the receive side of the shadow round-trip.
+  subscribeNamedShadowUpdateDelta:
+    action: receive
+    channel:
+      $ref: "#/channels/namedShadowUpdateDelta"
+    summary: Node receives desired-vs-reported delta for the named shadow
+
+  subscribeNamedShadowUpdateAccepted:
+    action: receive
+    channel:
+      $ref: "#/channels/namedShadowUpdateAccepted"
+    summary: Node receives confirmation that a shadow update was accepted
+
+  subscribeNamedShadowUpdateRejected:
+    action: receive
+    channel:
+      $ref: "#/channels/namedShadowUpdateRejected"
+    summary: Node receives notification that a shadow update was rejected
+
+  publishNamedShadowGet:
+    action: send
+    channel:
+      $ref: "#/channels/namedShadowGet"
+    summary:
+      Node requests the current named shadow document (response on get/accepted)
+
+  subscribeNamedShadowGetAccepted:
+    action: receive
+    channel:
+      $ref: "#/channels/namedShadowGetAccepted"
+    summary: Node receives the current named shadow document
+
+  # ── Indexed shadow ─────────────────────────────────────────────────────────
+  publishIndexedShadowUpdate:
+    action: send
+    channel:
+      $ref: "#/channels/indexedShadowUpdate"
+    summary: Node reports indexed parameters and tags to the iparams shadow
+
+  # ── Timeseries ─────────────────────────────────────────────────────────────
+  publishTimeseries:
+    action: send
+    channel:
+      $ref: "#/channels/timeseries"
+    summary: Node publishes timestamped sensor/telemetry data
+
+  # ── Notifications ──────────────────────────────────────────────────────────
+  publishNotification:
+    action: send
+    channel:
+      $ref: "#/channels/notification"
+    summary: Node publishes direct notifications (e.g. automation trigger state)
+
+  # ── AWS IoT Jobs (OTA) ─────────────────────────────────────────────────────
+  subscribeJobNotifyNext:
+    action: receive
+    channel:
+      $ref: "#/channels/jobsNotifyNext"
+    summary: Node subscribes to next pending job notification (OTA)
+
+  publishJobGet:
+    action: send
+    channel:
+      $ref: "#/channels/jobsGet"
+    summary: Node requests full job document for a specific job
+
+  subscribeJobGetAccepted:
+    action: receive
+    channel:
+      $ref: "#/channels/jobsGetAccepted"
+    summary: Node receives job document
+
+  publishJobUpdate:
+    action: send
+    channel:
+      $ref: "#/channels/jobsUpdate"
+    summary: Node reports job execution status (IN_PROGRESS, SUCCEEDED, FAILED)
+
+  # ── AWS IoT Streams (OTA file transfer via MQTT) ──────────────────────────
+  publishStreamRequest:
+    action: send
+    channel:
+      $ref: "#/channels/streamsRequest"
+    summary: Node publishes GetStream requests (`…/get/{dataType}`)
+
+  subscribeStreamData:
+    action: receive
+    channel:
+      $ref: "#/channels/streamsData"
+    summary: Node receives file blocks (`…/data/{dataType}`)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CHANNELS
+# ──────────────────────────────────────────────────────────────────────────────
+channels:
+  # ── Connectivity (AWS IoT Presence) ────────────────────────────────────────
+  presenceConnected:
+    address: "$aws/events/presence/connected/{nodeId}"
+    description: |
+      **[AWS IoT Core → Cloud]** Node connection lifecycle event (auto-generated).
+    parameters:
+      nodeId:
+        $ref: "#/components/parameters/nodeId"
+    messages:
+      connected:
+        $ref: "#/components/messages/presenceConnectedMessage"
+
+  presenceDisconnected:
+    address: "$aws/events/presence/disconnected/{nodeId}"
+    description: |
+      **[AWS IoT Core → Cloud]** Node disconnection lifecycle event (auto-generated).
+    parameters:
+      nodeId:
+        $ref: "#/components/parameters/nodeId"
+    messages:
+      disconnected:
+        $ref: "#/components/messages/presenceDisconnectedMessage"
+
+  # ── Node ↔ Cloud ─────────────────────────────────────────────────────────
+  toCloud:
+    address: "rainmaker/nodes/{nodeId}/to_cloud"
+    description: |
+      **[Node → Cloud]** Unified channel for all node-initiated events.
+      <div class="success" style="background-color: #d1e7dd; padding: 10px; border-left: 4px solid #198754; margin: 10px 0;">
+      <strong>Note:</strong> Use Basic Ingest topic <code>$aws/rules/node_to_cloud_rule/rainmaker/nodes/&lt;node_id&gt;/to_cloud</code> to save costs.
+      </div>
+    parameters:
+      nodeId:
+        $ref: "#/components/parameters/nodeId"
+    messages:
+      deviceEvent:
+        $ref: "#/components/messages/toCloudMessage"
+
+  fromCloud:
+    address: "rainmaker/nodes/{nodeId}/from_cloud"
+    description: |
+      **[Cloud → Node]** Unified channel for cloud responses and unsolicited events.
+      Subscribed immediately after MQTT connect (first subscription).
+    parameters:
+      nodeId:
+        $ref: "#/components/parameters/nodeId"
+    messages:
+      cloudEvent:
+        $ref: "#/components/messages/fromCloudMessage"
+
+  # ── Parameter control ──────────────────────────────────────────────────────
+  userParams:
+    address: "rainmaker/nodes/{nodeId}/user/params-{groupInfoStr}/params"
+    description: |
+      **[Cloud → Node]** Unicast parameter control.
+      Subscribed after group info is received. User/app-initiated commands.
+    parameters:
+      nodeId:
+        $ref: "#/components/parameters/nodeId"
+      groupInfoStr:
+        $ref: "#/components/parameters/groupInfoStr"
+    messages:
+      paramControl:
+        $ref: "#/components/messages/paramControlMessage"
+
+  groupControlBroadcast:
+    address: "rainmaker/nodes/groups/{groupId}/control"
+    description: |
+      **[Cloud → Node]** Group broadcast control (device-type addressed).
+      All nodes in the group receive this message; each node applies the payload
+      only to its own devices whose type matches a top-level key.
+    parameters:
+      groupId:
+        $ref: "#/components/parameters/groupId"
+    messages:
+      groupControlBroadcast:
+        $ref: "#/components/messages/groupControlBroadcastMessage"
+
+  subgroupControlBroadcast:
+    address: "rainmaker/nodes/groups/{groupId}/subgroups/{subgroupId}/control"
+    description: |
+      **[Cloud → Node]** Subgroup-specific control (device-type addressed).
+      One subscription per subgroup the node belongs to.
+    parameters:
+      groupId:
+        $ref: "#/components/parameters/groupId"
+      subgroupId:
+        $ref: "#/components/parameters/subgroupId"
+    messages:
+      subgroupControlBroadcast:
+        $ref: "#/components/messages/groupControlBroadcastMessage"
+
+  # ── Node Shadows ─────────────────────────────────────────────────────────
+  namedShadowUpdate:
+    address: "$aws/things/{nodeId}/shadow/name/params-{groupInfoStr}/update"
+    description: |
+      **[Node → AWS IoT Shadow]** Named shadow update (group-scoped).
+      Contains full reported state of all node parameters, online status, config version, and notify settings.
+      Shadow name: `params-{groupInfoStr}`.
+    parameters:
+      nodeId:
+        $ref: "#/components/parameters/nodeId"
+      groupInfoStr:
+        $ref: "#/components/parameters/groupInfoStr"
+    messages:
+      shadowUpdate:
+        $ref: "#/components/messages/namedShadowUpdateMessage"
+
+  namedShadowDelete:
+    address: "$aws/things/{nodeId}/shadow/name/params-{groupInfoStr}/delete"
+    description: |
+      **[Node → AWS IoT Shadow]** Delete old named shadow during group migration.
+      When group info changes, the old shadow is deleted before creating a new one.
+    parameters:
+      nodeId:
+        $ref: "#/components/parameters/nodeId"
+      groupInfoStr:
+        $ref: "#/components/parameters/groupInfoStr"
+    messages:
+      shadowDelete:
+        payload:
+          type: object
+          description: Empty or minimal JSON
+          example: {}
+
+  namedShadowUpdateDelta:
+    address: "$aws/things/{nodeId}/shadow/name/params-{groupInfoStr}/update/delta"
+    description: |
+      **[AWS IoT Shadow → Node]** Delta between desired and reported state for the
+      group-scoped named shadow. Delivered when the cloud sets desired state
+      (e.g. an app or automation writes params). This is how a node learns of
+      cloud-driven parameter changes.
+    parameters:
+      nodeId:
+        $ref: "#/components/parameters/nodeId"
+      groupInfoStr:
+        $ref: "#/components/parameters/groupInfoStr"
+    messages:
+      shadowDelta:
+        payload:
+          type: object
+          description:
+            "{ state, metadata, version, timestamp } — state carries the desired
+            delta"
+          example: {}
+
+  namedShadowUpdateAccepted:
+    address: "$aws/things/{nodeId}/shadow/name/params-{groupInfoStr}/update/accepted"
+    description: |
+      **[AWS IoT Shadow → Node]** Confirmation that a shadow update was accepted,
+      carrying the resulting shadow document.
+    parameters:
+      nodeId:
+        $ref: "#/components/parameters/nodeId"
+      groupInfoStr:
+        $ref: "#/components/parameters/groupInfoStr"
+    messages:
+      shadowAccepted:
+        payload:
+          type: object
+          description:
+            "Full shadow document { state: { reported, desired }, metadata,
+            version, timestamp }"
+          example: {}
+
+  namedShadowUpdateRejected:
+    address: "$aws/things/{nodeId}/shadow/name/params-{groupInfoStr}/update/rejected"
+    description: |
+      **[AWS IoT Shadow → Node]** Notification that a shadow update was rejected
+      (e.g. version conflict), so the node can retry or re-sync.
+    parameters:
+      nodeId:
+        $ref: "#/components/parameters/nodeId"
+      groupInfoStr:
+        $ref: "#/components/parameters/groupInfoStr"
+    messages:
+      shadowRejected:
+        payload:
+          type: object
+          description: "{ code, message, timestamp }"
+          example: {}
+
+  namedShadowGet:
+    address: "$aws/things/{nodeId}/shadow/name/params-{groupInfoStr}/get"
+    description: |
+      **[Node → AWS IoT Shadow]** Request the current named shadow document
+      (typically on connect/reconnect). The document is returned on
+      `.../get/accepted`.
+    parameters:
+      nodeId:
+        $ref: "#/components/parameters/nodeId"
+      groupInfoStr:
+        $ref: "#/components/parameters/groupInfoStr"
+    messages:
+      shadowGet:
+        payload:
+          type: object
+          description: Empty JSON
+          example: {}
+
+  namedShadowGetAccepted:
+    address: "$aws/things/{nodeId}/shadow/name/params-{groupInfoStr}/get/accepted"
+    description: |
+      **[AWS IoT Shadow → Node]** Current named shadow document returned in
+      response to a get request.
+    parameters:
+      nodeId:
+        $ref: "#/components/parameters/nodeId"
+      groupInfoStr:
+        $ref: "#/components/parameters/groupInfoStr"
+    messages:
+      shadowGetAccepted:
+        payload:
+          type: object
+          description:
+            "Full shadow document { state: { reported, desired }, metadata,
+            version, timestamp }"
+          example: {}
+
+  indexedShadowUpdate:
+    address: "$aws/things/{nodeId}/shadow/name/iparams/update"
+    description: |
+      **[Node → AWS IoT Shadow]** Indexed shadow update.
+      Contains only `indexed` parameters and node tags for fleet indexing.
+      Shadow name is always `iparams` (static, not group-scoped).
+    parameters:
+      nodeId:
+        $ref: "#/components/parameters/nodeId"
+    messages:
+      indexedUpdate:
+        $ref: "#/components/messages/indexedShadowUpdateMessage"
+
+  # ── Timeseries ─────────────────────────────────────────────────────────────
+  timeseries:
+    address: "rainmaker/nodes/{nodeId}/ts/{groupInfoStr}"
+    description: |
+      **[Node → Cloud]** Timeseries data.
+      <div class="success" style="background-color: #d1e7dd; padding: 10px; border-left: 4px solid #198754; margin: 10px 0;">
+      <strong>Note:</strong> Use Basic Ingest topic <code>$aws/rules/node_ts_rule/rainmaker/nodes/&lt;node_id&gt;/ts/&lt;group_info_str&gt;</code> to save costs.
+      </div>
+    parameters:
+      nodeId:
+        $ref: "#/components/parameters/nodeId"
+      groupInfoStr:
+        $ref: "#/components/parameters/groupInfoStr"
+    messages:
+      tsData:
+        $ref: "#/components/messages/timeseriesMessage"
+
+  # ── Notifications ──────────────────────────────────────────────────────────
+  notification:
+    address: "rainmaker/nodes/{nodeId}/notify/{groupInfoStr}"
+    description: |
+      **[Node → Cloud]** Direct notifications.
+      <div class="success" style="background-color: #d1e7dd; padding: 10px; border-left: 4px solid #198754; margin: 10px 0;">
+      <strong>Note:</strong> Use Basic Ingest topic <code>$aws/rules/node_notify_rule/rainmaker/nodes/&lt;node_id&gt;/notify/&lt;group_info_str&gt;</code> to save costs.
+      </div>
+    parameters:
+      nodeId:
+        $ref: "#/components/parameters/nodeId"
+      groupInfoStr:
+        $ref: "#/components/parameters/groupInfoStr"
+    messages:
+      notifyData:
+        $ref: "#/components/messages/notificationMessage"
+
+  # ── AWS IoT Jobs (OTA) ─────────────────────────────────────────────────────
+  jobsNotifyNext:
+    address: "$aws/things/{nodeId}/jobs/notify-next"
+    description: |
+      **[AWS IoT Jobs → Node]** Notification of next pending job.
+      Node subscribes on startup to receive OTA job notifications.
+    parameters:
+      nodeId:
+        $ref: "#/components/parameters/nodeId"
+    messages:
+      jobNotify:
+        $ref: "#/components/messages/jobNotifyNextMessage"
+
+  jobsGet:
+    address: "$aws/things/{nodeId}/jobs/{jobId}/get"
+    description: |
+      **[Node → AWS IoT Jobs]** Request full job document.
+    parameters:
+      nodeId:
+        $ref: "#/components/parameters/nodeId"
+      jobId:
+        $ref: "#/components/parameters/jobId"
+    messages:
+      jobGetRequest:
+        payload:
+          type: object
+          description: Empty object to request job document
+          example: {}
+
+  jobsGetAccepted:
+    address: "$aws/things/{nodeId}/jobs/{jobId}/get/accepted"
+    description: |
+      **[AWS IoT Jobs → Node]** Job document response.
+    parameters:
+      nodeId:
+        $ref: "#/components/parameters/nodeId"
+      jobId:
+        $ref: "#/components/parameters/jobId"
+    messages:
+      jobDocument:
+        $ref: "#/components/messages/jobDocumentMessage"
+
+  jobsUpdate:
+    address: "$aws/things/{nodeId}/jobs/{jobId}/update"
+    description: |
+      **[Node → AWS IoT Jobs]** Report job execution status.
+    parameters:
+      nodeId:
+        $ref: "#/components/parameters/nodeId"
+      jobId:
+        $ref: "#/components/parameters/jobId"
+    messages:
+      jobStatus:
+        $ref: "#/components/messages/jobUpdateMessage"
+
+  # ── AWS IoT Streams (OTA file transfer) ────────────────────────────────────
+  streamsRequest:
+    address: "$aws/things/{nodeId}/streams/{streamName}/get/{dataType}"
+    description: |
+      **[Node → AWS IoT Streams]** GetStream request. `data_type` is `json` or `cbor`; body encoding must match. Use the same `data_type` on `streamsData` for block delivery.
+
+      **Reference:** [AWS IoT — MQTT-based file delivery in devices](https://docs.aws.amazon.com/iot/latest/developerguide/mqtt-based-file-delivery-in-devices.html) (GetStream request fields, limits, optional bitmap).
+    parameters:
+      nodeId:
+        $ref: "#/components/parameters/nodeId"
+      streamName:
+        $ref: "#/components/parameters/streamName"
+      dataType:
+        $ref: "#/components/parameters/dataType"
+    messages:
+      streamReq:
+        payload:
+          type: object
+          description: |
+            AWS GetStream request body. Field names and rules: [AWS IoT — MQTT-based file delivery in devices](https://docs.aws.amazon.com/iot/latest/developerguide/mqtt-based-file-delivery-in-devices.html).
+          additionalProperties: true
+
+  streamsData:
+    address: "$aws/things/{nodeId}/streams/{streamName}/data/{dataType}"
+    description: |
+      **[AWS IoT Streams → Node]** GetStream response — file blocks. `data_type` must match the paired `…/get/{dataType}` topic.
+
+      **Reference:** [AWS IoT — MQTT-based file delivery in devices](https://docs.aws.amazon.com/iot/latest/developerguide/mqtt-based-file-delivery-in-devices.html) (GetStream response shape, Base64 vs CBOR).
+    parameters:
+      nodeId:
+        $ref: "#/components/parameters/nodeId"
+      streamName:
+        $ref: "#/components/parameters/streamName"
+      dataType:
+        $ref: "#/components/parameters/dataType"
+    messages:
+      streamBlock:
+        payload:
+          type: string
+          format: binary
+          description: |
+            GetStream response payload: JSON with Base64 `p` when `data_type` = `json`, or CBOR when `data_type` = `cbor`. [AWS IoT — MQTT-based file delivery in devices](https://docs.aws.amazon.com/iot/latest/developerguide/mqtt-based-file-delivery-in-devices.html).
+
+# ──────────────────────────────────────────────────────────────────────────────
+# COMPONENTS
+# ──────────────────────────────────────────────────────────────────────────────
+components:
+  # ── Messages ───────────────────────────────────────────────────────────────
+  messages:
+    # ── to_cloud ─────────────────────────────────────────────────────────────
+    toCloudMessage:
+      name: ToCloud
+      summary: Node-to-cloud event request
+      description: |
+        The node publishes one or more named events. `set` events carry a payload;
+        `get` events are name-only (the cloud returns the data in `from_cloud`).
+      payload:
+        type: object
+        required:
+          - event
+        properties:
+          event:
+            type: array
+            description: Array of event names to request
+            items:
+              type: string
+              enum:
+                - getGroupInfo
+                - hello
+                - setNodeConfig
+                - getAlexaEn
+                - getGVAEn
+                - getSchedVer
+                - getSchedDetails
+                - getTriggerVer
+                - getTriggerDetails
+                - getTimeSync
+                - getServerConfig
+          hello:
+            type: object
+            description: Hello handshake data (when event contains `hello`)
+            properties:
+              id:
+                type: string
+                description: Hello request ID (echoed back by cloud)
+                example: "hello-001"
+          setNodeConfig:
+            $ref: "#/components/schemas/nodeConfig"
+      examples:
+        - name: Startup handshake
+          summary: Typical first message after MQTT connect
+          payload:
+            event:
+              - getGroupInfo
+              - getAlexaEn
+              - getGVAEn
+              - getSchedVer
+              - getTriggerVer
+              - getTimeSync
+        - name: Config update
+          summary: Node reports changed node configuration
+          payload:
+            event:
+              - setNodeConfig
+            setNodeConfig:
+              node_id: "ABCDEF1234567890"
+              config:
+                data_model: "default"
+                devices:
+                  - id: "Light"
+                    type: "esp.device.lightbulb"
+                    primary: "Power"
+                    params:
+                      - id: "Power"
+                        type: "esp.param.power"
+                        data_type: "bool"
+                        ui_type: "esp.ui.toggle"
+                        properties: ["read", "write"]
+                      - id: "Brightness"
+                        type: "esp.param.brightness"
+                        data_type: "int"
+                        ui_type: "esp.ui.slider"
+                        properties: ["read", "write", "time_series", "indexed"]
+                        bounds:
+                          min: 0
+                          max: 100
+                          step: 1
+                services: []
+                info:
+                  name: "Smart Light"
+                  type: "esp.node.light"
+                  fw_version: "2.1.0"
+                  model: "LED_Smart_v2"
+        - name: Matter config update
+          summary: |
+            Node reports a Matter node config. `i` (indexed) and `ts`
+            (timeseries) may overlap — attr `0x0` below is both. `v` holds
+            config-only values; `a` lists remaining plain attributes and is
+            omitted for clusters exposing only config-only attrs (cluster `0x1d`).
+          payload:
+            event:
+              - setNodeConfig
+            setNodeConfig:
+              node_id: "62356B4758474E74"
+              config:
+                data_model: "matter"
+                endpoints:
+                  "0x1":
+                    c:
+                      s:
+                        "0x6":
+                          a: ["0xfffc", "0xfffd"]
+                          i: ["0x0", "0x4000"]
+                          ts: ["0x0"]
+                          v:
+                            "0x10": 42
+                        "0x1d":
+                          v:
+                            "0x0": 7
+                info:
+                  type: "smartlight-mtr-app"
+                  fw_version: "1.0.0"
+        - name: Hello with schedule version check
+          summary: Hello handshake combined with schedule check
+          payload:
+            event:
+              - hello
+              - getSchedVer
+              - getTriggerVer
+            hello:
+              id: "hello-001"
+
+    # ── from_cloud ───────────────────────────────────────────────────────────
+    fromCloudMessage:
+      name: FromCloud
+      summary: Cloud-to-node event response
+      description: |
+        Cloud returns event payloads keyed by event name.
+        `set` events return `{ "status": "success" }` or `{ "status": "error", "message": "..." }`.
+        `get` events return event-specific data.
+        Events may arrive unsolicited (e.g. schedule push after user edits).
+      payload:
+        type: object
+        required:
+          - event
+        properties:
+          event:
+            type: array
+            description: Event names included in this response
+            items:
+              type: string
+          getGroupInfo:
+            type: object
+            description: Group membership info
+            properties:
+              pgrp:
+                type: string
+                description: Group ID
+                example: "grp_abc123"
+              subgrps:
+                type: array
+                description:
+                  Subgroup IDs (not necessarily sorted — node must sort)
+                items:
+                  type: string
+                example: ["sub_room1", "sub_floor2"]
+          hello:
+            type: object
+            description: Echo of hello request
+            properties:
+              id:
+                type: string
+                example: "hello-001"
+          setNodeConfig:
+            type: object
+            description: Acknowledgement for setNodeConfig
+            properties:
+              status:
+                type: string
+                enum: ["success", "error"]
+                example: "success"
+              message:
+                type: string
+                description: Error message (only when status is not 'success')
+                example: "Invalid config format"
+          getAlexaEn:
+            type: object
+            properties:
+              enabled:
+                type: boolean
+                example: true
+          getGVAEn:
+            type: object
+            properties:
+              enabled:
+                type: boolean
+                example: false
+          getSchedVer:
+            type: object
+            properties:
+              version:
+                type: integer
+                example: 3
+          getSchedDetails:
+            type: object
+            properties:
+              version:
+                description: Same version as `getSchedVer`
+                type: integer
+                example: 3
+              Schedules:
+                type: array
+                description:
+                  Full schedule array (replaces all schedules on node)
+                items:
+                  $ref: "#/components/schemas/scheduleObject"
+          getTriggerVer:
+            type: object
+            properties:
+              version:
+                type: integer
+                example: 2
+          getTriggerDetails:
+            type: object
+            properties:
+              version:
+                description: Same version as `getTriggerVer`
+                type: integer
+                example: 2
+              triggers:
+                type: array
+                description: Full automation trigger array
+                items:
+                  $ref: "#/components/schemas/triggerObject"
+          getTimeSync:
+            type: object
+            description: |
+              Current server wall-clock time, taken when the cloud builds
+              the response. Lets the node set its clock immediately over
+              the existing MQTT connection instead of waiting for SNTP;
+              accuracy is bounded by one-way delivery latency (larger when
+              the deployment runs the to_cloud rule in SQS mode).
+            properties:
+              time:
+                type: integer
+                format: int64
+                description: Server time in epoch milliseconds (UTC)
+                example: 1768464000912
+          getServerConfig:
+            type: object
+            additionalProperties: true
+            description: |
+              The backend deployments configuration with commonly required
+              IDs and ARNs are available in a public S3 bucket for clients
+              to read. Make this available to firmware easily through this
+              option. The example below shows a representative subset.
+            example:
+              rmng-base:
+                IoTEndpointUrl: "<iot-endpoint-prefix>-ats.iot.<region>.amazonaws.com"
+                ApiGatewayUrl: "https://<api-id>.execute-api.<region>.amazonaws.com/prod/"
+                UserPoolId: "<region>_XXXXXXXXX"
+                IdentityPoolId: "<region>:00000000-0000-0000-0000-000000000000"
+                CredentialProviderEndpoint: "<credential-provider-prefix>.credentials.iot.<region>.amazonaws.com"
+                NodeFileRoleAliases: "rmng-node-file-role-v1"
+                NodeVideoRoleAliases: "rmng-node-video-role-v1"
+      examples:
+        - name: Startup response
+          summary: Cloud responds to node startup handshake
+          payload:
+            event:
+              - getGroupInfo
+              - getAlexaEn
+              - getGVAEn
+              - getSchedVer
+              - getTriggerVer
+              - getTimeSync
+            getGroupInfo:
+              pgrp: "grp_abc123"
+              subgrps: ["sub_room1", "sub_floor2"]
+            getAlexaEn:
+              enabled: true
+            getGVAEn:
+              enabled: false
+            getSchedVer:
+              version: 3
+            getTriggerVer:
+              version: 2
+            getTimeSync:
+              time: 1768464000912
+        - name: Schedule details push
+          summary: Cloud pushes updated schedule details (may be unsolicited)
+          payload:
+            event:
+              - getSchedDetails
+            getSchedDetails:
+              version: 3
+              Schedules:
+                - name: "MorningLights"
+                  enabled: true
+                  triggers:
+                    - m: 420
+                      d: 31
+                  action:
+                    Light:
+                      Power: true
+                      Brightness: 80
+                  validity:
+                    start: 1704067200
+                    end: 1735689600
+                # Matter schedule: action is a parameter-control payload, same
+                # shape as the unicast ParamControl message — endpoint → c → s →
+                # cluster → c → { command hex → TLV hex }. Here: Endpoint 0x1,
+                # OnOff server cluster 0x6, On command 0x1. A command with no
+                # fields is the empty TLV struct, encoded as "0x1518".
+                - name: "MatterMorning"
+                  enabled: true
+                  triggers:
+                    - m: 420
+                      d: 31
+                  action:
+                    "0x1":
+                      c:
+                        s:
+                          "0x6":
+                            c:
+                              "0x1": "0x1518"
+        - name: Trigger details push
+          summary: Cloud pushes automation triggers
+          payload:
+            event:
+              - getTriggerDetails
+            getTriggerDetails:
+              version: 2
+              triggers:
+                - id: "node~temp-high"
+                  enabled: true
+                  path: "Sensor.Temperature"
+                  operator: "gt"
+                  value: 30
+                - id: "node~light-on"
+                  path: "Light.Power"
+                  operator: "eq"
+                  value: true
+                - id: "node~matter-light-on"
+                  path: "0x1.c.s.0x6.a.0x0"
+                  operator: "eq"
+                  value: true
+        - name: Server config response
+          summary: Cloud returns the sanitized server config fetched from S3
+          payload:
+            event:
+              - getServerConfig
+            getServerConfig:
+              rmng-base:
+                IoTEndpointUrl: "<iot-endpoint-prefix>-ats.iot.<region>.amazonaws.com"
+                ApiGatewayUrl: "https://<api-id>.execute-api.<region>.amazonaws.com/prod/"
+                UserPoolId: "<region>_XXXXXXXXX"
+                IdentityPoolId: "<region>:00000000-0000-0000-0000-000000000000"
+                CredentialProviderEndpoint: "<credential-provider-prefix>.credentials.iot.<region>.amazonaws.com"
+                NodeFileRoleAliases: "rmng-node-file-role-v1"
+                NodeVideoRoleAliases: "rmng-node-video-role-v1"
+
+    # ── Parameter control (unicast) ──────────────────────────────────────────
+    paramControlMessage:
+      name: ParamControl
+      summary: Unicast parameter update command to node
+      description: |
+        User/app-initiated parameter changes delivered to a single node.
+
+        **Default data model**: device name → { param name → value }.
+
+        **Matter data model**: endpoint hex → { c → { s|c → { cluster hex → { c → { command hex → TLV hex } } } } }.
+      payload:
+        type: object
+        additionalProperties: true
+      examples:
+        - name: Default data model — light control
+          payload:
+            Light:
+              Power: true
+              Brightness: 75
+        - name:
+            Matter data model — command invocation (Endpoint 0x1, OnOff server
+            cluster 0x6, toggle command 0x2)
+          payload:
+            "0x1":
+              c:
+                s:
+                  "0x6":
+                    c:
+                      "0x2": "0x1518"
+
+    # ── Group / subgroup control ─────────────────────────────────────────────
+    groupControlBroadcastMessage:
+      name: GroupControl
+      summary: Control command broadcast to all nodes in a group or subgroup
+      description: |
+        Control payload broadcast on `rainmaker/nodes/groups/{groupId}/control` (group)
+        or `rainmaker/nodes/groups/{groupId}/subgroups/{subgroupId}/control` (subgroup).
+
+        **Default data model**: top-level keys are device types (e.g.
+        `esp.device.light`). Each device's value is an object that holds nested
+        sub-keys describing what to apply — currently only `params` is defined,
+        with room for additional sub-keys (e.g. `cmd`, `meta`) in future without
+        another topic rename. Nodes apply the payload only to their own devices
+        that match the listed device types; other devices are ignored.
+
+        **Matter data model**: command invocations only. Same nested structure as
+        the unicast ParamControl message, except the top-level endpoint key is the
+        wildcard endpoint `"0xffff"` (not a specific endpoint): `0xffff` → c →
+        s|c → cluster → c → { command hex → TLV hex }. Each node invokes the
+        command on every endpoint that supports the addressed cluster + command,
+        resolved from its own support list.
+      payload:
+        type: object
+        description: |
+          Default: map of device type → control envelope.
+          Matter: the unicast ParamControl command structure.
+        additionalProperties: true
+      examples:
+        - name: Turn on all lights in the group
+          payload:
+            esp.device.light:
+              params:
+                esp.param.power: true
+        - name: Multiple device types
+          payload:
+            esp.device.light:
+              params:
+                esp.param.power: true
+                esp.param.brightness: 75
+            esp.device.fan:
+              params:
+                esp.param.power: false
+        - name: Apply to all devices (wildcard)
+          payload:
+            "*":
+              params:
+                esp.param.power: false
+        - name:
+            Matter command — toggle OnOff on all applicable endpoints (wildcard
+            endpoint 0xffff, cluster 0x6, command 0x2)
+          payload:
+            "0xffff":
+              c:
+                s:
+                  "0x6":
+                    c:
+                      "0x2": "0x1518"
+
+    # ── Named shadow ─────────────────────────────────────────────────────────
+    namedShadowUpdateMessage:
+      name: NamedShadowUpdate
+      summary: Node reports state to named shadow
+      description: |
+        Shadow name: `params-{groupInfoStr}`.
+        Contains reported node params, online status, config version, and notify metadata.
+        Delta updates (only changed params) except on reconnection (full state).
+      payload:
+        type: object
+        required:
+          - state
+        properties:
+          state:
+            type: object
+            required:
+              - reported
+            properties:
+              reported:
+                type: object
+                properties:
+                  params:
+                    type: object
+                    description: |
+                      Default: `{ "<device_name>": { "<param>": <value> } }`.
+
+                      Matter: `{ "<endpoint_hex>": { "c": { "s": { "<cluster_hex>": { "a": { "<attr_hex>": <value> } } } } } }`.
+                    additionalProperties: true
+                    properties:
+                      notify:
+                        type: object
+                        description: |
+                          Notification metadata. Lives inside `params` (shadow name is `params-{groupInfoStr}`).
+                          Cloud IoT Rule keys notification dispatch off `notify.version` changes.
+                        properties:
+                          version:
+                            type: integer
+                            description: |
+                              **Required.** Monotonic counter (UNIX ms / 100); republishing the same version is a no-op.
+                            example: 17436565837
+                          alexa:
+                            type: boolean
+                            description: Flag to dispatch Alexa notification
+                            example: true
+                          gva:
+                            type: boolean
+                            description:
+                              Flag to dispatch Google Voice Assistant
+                              notification
+                            example: true
+                          push:
+                            description:
+                              Flag to trigger mobile push (value ignored by
+                              backend)
+                            example: true
+                        additionalProperties:
+                          description: |
+                            `webhook_<platform>` keys (e.g. `webhook_mock`, `webhook_zapier`) route to their configured webhook service. Value is forwarded as the webhook body.
+                    example:
+                      Light:
+                        Power: true
+                        Brightness: 75
+                      notify:
+                        version: 17436565837
+                        alexa: true
+                  online:
+                    type: boolean
+                    description:
+                      "`true` when all subscriptions complete. Cloud sets
+                      `false` on disconnect."
+                    example: true
+                  ncfg_ver:
+                    type: integer
+                    description:
+                      Unix timestamp of current node configuration version
+                    example: 1743656583
+      examples:
+        - name: Full state on startup
+          payload:
+            state:
+              reported:
+                params:
+                  Light:
+                    Power: false
+                    Brightness: 50
+                  notify:
+                    version: 17436565837
+                    alexa: true
+                online: true
+                ncfg_ver: 1743656583
+        - name: Delta update — brightness change
+          payload:
+            state:
+              reported:
+                params:
+                  Light:
+                    Brightness: 80
+        - name: Matter data model — reported attribute values
+          summary: |
+            Matter node reports attribute values nested as
+            `<endpoint>.c.s.<cluster>.a.<attribute>`. Config-only attributes
+            (declared under a cluster's `v` in node config) are never reported
+            here.
+          payload:
+            state:
+              reported:
+                params:
+                  "0x1":
+                    c:
+                      s:
+                        "0x6":
+                          a:
+                            "0x0": true
+                        "0x300":
+                          a:
+                            "0x0": 130
+                            "0x1": 128
+                  notify:
+                    version: 17436565838
+                online: true
+                ncfg_ver: 1743656583
+
+    # ── Indexed shadow ───────────────────────────────────────────────────────
+    indexedShadowUpdateMessage:
+      name: IndexedShadowUpdate
+      summary: Node reports indexed params and tags to iparams shadow
+      description: |
+        Shadow name: `iparams` (static, not group-scoped). Same `state.reported` wrapper as the named shadow: optional `data` (tags), `params` (only parameters with the `indexed` config property), `online`, `ncfg_ver`, `notify`.
+
+        **Tags:** `state.reported.data.<who>.t` with `<who>` ∈ `admin` | `device` | `user`. Firmware should update **`device`** tags only.
+
+        **Matter:** Same nested reporting shape as the named shadow for `params`, filtered to indexed attributes.
+      payload:
+        type: object
+        required:
+          - state
+        properties:
+          state:
+            type: object
+            required:
+              - reported
+            properties:
+              reported:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    description: |
+                      Tag buckets under `data.<who>.t` for `<who>` ∈ `admin` | `device` | `user`.
+                      Only `device` is shown; `admin` / `user` follow the same `t` map shape when present.
+                    properties:
+                      device:
+                        type: object
+                        properties:
+                          t:
+                            type: object
+                            description:
+                              Tags set by the node (firmware updates this
+                              bucket)
+                            additionalProperties: true
+                            example:
+                              type: "Light"
+                              model: "LED_Smart"
+                              fw_version: "2.1.0"
+                  params:
+                    type: object
+                    description:
+                      Only parameters with the `indexed` property in node
+                      configuration
+                    additionalProperties: true
+                    example:
+                      Light:
+                        Brightness: 75
+                  online:
+                    type: boolean
+                    example: true
+                  ncfg_ver:
+                    type: integer
+                    example: 1743656583
+      examples:
+        - name: Full indexed state on startup
+          payload:
+            state:
+              reported:
+                data:
+                  device:
+                    t:
+                      type: "Light"
+                      model: "LED_Smart"
+                      fw_version: "2.1.0"
+                params:
+                  Light:
+                    Brightness: 50
+                online: true
+                ncfg_ver: 1743656583
+
+    # ── Timeseries ───────────────────────────────────────────────────────────
+    timeseriesMessage:
+      name: TimeseriesData
+      summary: Timestamped sensor/telemetry data point
+      payload:
+        type: object
+        required:
+          - k
+          - dt
+          - t
+          - v
+        properties:
+          k:
+            type: string
+            description: |
+              Data point key — within-node identifier of the data point. Node is implicit (from MQTT topic).
+
+              Default data model: `<device id>.<param id>`, e.g. `"Light.Brightness"`. A bare
+              `<param id>` is also accepted when the node has a single device.
+
+              Matter data model: the full dotted key chain `"0x<endpoint>.c.s.0x<cluster>.a.0x<attribute>"`, e.g. `"0x1.c.s.0x402.a.0x0"`.
+            example: "Light.Brightness"
+          dt:
+            type: string
+            description: Data type of the value
+            enum: ["bool", "int", "float", "string"]
+            example: "float"
+          t:
+            type: integer
+            description: Unix timestamp in seconds (UTC)
+            example: 1743656583
+          v:
+            description: Parameter value (type matches `dt` field)
+            example: 25.5
+          cumulative:
+            type: boolean
+            description:
+              Whether the value is cumulative (e.g. energy meter total kWh)
+            default: false
+            example: false
+          tz:
+            type: string
+            description:
+              Timezone identifier (IANA name, e.g. "UTC", "Asia/Kolkata") for
+              timestamp context
+            example: "Asia/Kolkata"
+      examples:
+        - name: Temperature reading (default — device.param)
+          payload:
+            k: "Sensor.Temperature"
+            dt: "float"
+            t: 1743656583
+            v: 25.5
+            tz: "Asia/Kolkata"
+        - name: Energy meter (cumulative, default — device.param)
+          payload:
+            k: "Meter.Energy"
+            dt: "float"
+            t: 1743656583
+            v: 1523.7
+            cumulative: true
+            tz: "UTC"
+        - name: Matter attribute timeseries (endpoint/cluster/attribute)
+          payload:
+            k: "0x1.c.s.0x402.a.0x0"
+            dt: "int"
+            t: 1743656583
+            v: 2500
+            tz: "UTC"
+
+    # ── Notifications ────────────────────────────────────────────────────────
+    notificationMessage:
+      name: NotificationData
+      summary: Direct notification from node
+      description: |
+        Notification payload grouped by notification type. The top-level `notify` object is an
+        open map: each key selects a backend notification service that consumes the value.
+
+        **Built-in service keys**:
+        - `automation` — Automation trigger state updates
+        - `push` — Mobile push notifications
+        - `node_reset` — Node reports a self factory-reset; backend notifies group members and disassociates the node
+        - `webhook_<platform>` — Configured webhook service, keyed by platform name
+
+        For `push`, `automation`, and `node_reset`, the value under the key is a flag — the payload content is ignored by the backend; the service derives its message from notification metadata (node ID, shadow delta, trigger state). For `webhook_<platform>`, the value is forwarded to the configured webhook.
+
+        The same `notify` object structure is reused inside `state.reported.params.notify` on the named shadow update — dispatch logic is identical for both paths.
+      payload:
+        type: object
+        required:
+          - notify
+        properties:
+          notify:
+            type: object
+            description: Notification groups
+            properties:
+              automation:
+                type: object
+                description: Automation trigger state updates
+                properties:
+                  trigger:
+                    type: array
+                    description: Trigger states to report
+                    items:
+                      type: object
+                      required:
+                        - id
+                        - value
+                      properties:
+                        id:
+                          type: string
+                          description: Trigger ID
+                          example: "node~temp-high"
+                        value:
+                          type: boolean
+                          description:
+                            Whether trigger condition is currently met
+                          example: true
+              push:
+                description: |
+                  Flag to trigger mobile push notifications.
+                  Value is ignored by the backend; the push message is derived from notification metadata (node ID).
+                  Typically set to `true`.
+              node_reset:
+                description: |
+                  Flag indicating the node has factory-reset itself and is no longer valid.
+                  Value is ignored by the backend; on receipt the backend notifies all group members
+                  (so their apps evict the node from cache via `event_data.type == "node_reset"`) and then
+                  disassociates the node from its group along with the async data cleanup.
+                  Typically set to `true`.
+            additionalProperties:
+              description: |
+                `webhook_<platform>` keys (e.g. `webhook_mock`, `webhook_zapier`) route to their configured webhook service. Value is forwarded as the webhook body.
+      examples:
+        - name: Automation trigger fired
+          payload:
+            notify:
+              automation:
+                trigger:
+                  - id: "node~temp-high"
+                    value: true
+                  - id: "node~light-on"
+                    value: false
+        - name: Mobile push notification
+          summary:
+            Flag-only key — triggers mobile push; value is ignored by the
+            backend
+          payload:
+            notify:
+              push: true
+        - name: Node self factory-reset
+          summary:
+            Flag-only key — node reports it reset itself; backend notifies group
+            members and disassociates the node
+          payload:
+            notify:
+              node_reset: true
+        - name: Webhook notification
+          summary:
+            Custom key `webhook_<platform>` routed to a configured webhook
+            service
+          payload:
+            notify:
+              webhook_mock:
+                event: "door_opened"
+                location: "front_door"
+                timestamp: 1743656583
+        - name: Combined notification
+          summary:
+            Multiple services triggered from a single notification publish
+          payload:
+            notify:
+              automation:
+                trigger:
+                  - id: "node~motion-detected"
+                    value: true
+              push: true
+
+    # ── Presence ─────────────────────────────────────────────────────────────
+    presenceConnectedMessage:
+      name: PresenceConnected
+      summary: AWS IoT Core connection lifecycle event
+      payload:
+        type: object
+        required:
+          - clientId
+          - eventType
+          - principalIdentifier
+          - sessionIdentifier
+          - timestamp
+          - versionNumber
+        properties:
+          clientId:
+            type: string
+            description: Node ID (MQTT client ID)
+            example: "ABCDEF1234567890"
+          eventType:
+            type: string
+            enum: ["connected"]
+            example: "connected"
+          principalIdentifier:
+            type: string
+            description: X.509 certificate hash
+            example: "6cf12df543fe301f65b52632c8a59b743467db17bae30ce74120663e96736ff3"
+          sessionIdentifier:
+            type: string
+            description: Unique session ID for this connection
+            example: "adecf6af-2abd-4f23-8309-cf9257de3fa0"
+          timestamp:
+            type: integer
+            description: Unix timestamp in milliseconds
+            example: 1743656583784
+          versionNumber:
+            type: integer
+            description: Event version
+            example: 0
+          ipAddress:
+            type: string
+            description: Node IP address (optional)
+            example: "203.0.113.42"
+
+    presenceDisconnectedMessage:
+      name: PresenceDisconnected
+      summary: AWS IoT Core disconnection lifecycle event
+      payload:
+        type: object
+        required:
+          - clientId
+          - eventType
+          - principalIdentifier
+          - sessionIdentifier
+          - timestamp
+          - versionNumber
+          - disconnectReason
+        properties:
+          clientId:
+            type: string
+            example: "ABCDEF1234567890"
+          eventType:
+            type: string
+            enum: ["disconnected"]
+            example: "disconnected"
+          principalIdentifier:
+            type: string
+            example: "6cf12df543fe301f65b52632c8a59b743467db17bae30ce74120663e96736ff3"
+          sessionIdentifier:
+            type: string
+            example: "adecf6af-2abd-4f23-8309-cf9257de3fa0"
+          timestamp:
+            type: integer
+            example: 1743656583784
+          versionNumber:
+            type: integer
+            example: 0
+          disconnectReason:
+            type: string
+            description: Reason for disconnection
+            enum:
+              - CLIENT_INITIATED_DISCONNECT
+              - CONNECTION_LOST
+              - DUPLICATE_CLIENTID
+              - MQTT_KEEP_ALIVE_TIMEOUT
+            example: "CLIENT_INITIATED_DISCONNECT"
+
+    # ── AWS IoT Jobs / OTA ───────────────────────────────────────────────────
+    jobNotifyNextMessage:
+      name: JobNotifyNext
+      summary: Next pending job notification
+      payload:
+        type: object
+        properties:
+          timestamp:
+            type: integer
+            description: Unix timestamp (seconds)
+            example: 1743656583
+          execution:
+            type: object
+            properties:
+              jobId:
+                type: string
+                example: "AFR_OTA-ota_job_20240115"
+              status:
+                type: string
+                enum:
+                  ["QUEUED", "IN_PROGRESS", "SUCCEEDED", "FAILED", "REJECTED"]
+                example: "QUEUED"
+              queuedAt:
+                type: integer
+                example: 1743656583
+              lastUpdatedAt:
+                type: integer
+                example: 1743656583
+              versionNumber:
+                type: integer
+                example: 1
+              executionNumber:
+                type: integer
+                example: 1
+              jobDocument:
+                $ref: "#/components/schemas/otaJobDocument"
+
+    jobDocumentMessage:
+      name: JobDocument
+      summary: Full job document response
+      payload:
+        type: object
+        properties:
+          execution:
+            type: object
+            properties:
+              jobId:
+                type: string
+                example: "AFR_OTA-ota_job_20240115"
+              status:
+                type: string
+                example: "IN_PROGRESS"
+              jobDocument:
+                $ref: "#/components/schemas/otaJobDocument"
+
+    jobUpdateMessage:
+      name: JobUpdate
+      summary: Node reports job execution status
+      payload:
+        type: object
+        required:
+          - status
+        properties:
+          status:
+            type: string
+            enum: ["IN_PROGRESS", "SUCCEEDED", "FAILED", "REJECTED"]
+            example: "IN_PROGRESS"
+          statusDetails:
+            type: object
+            additionalProperties: true
+            example:
+              progress: "50%"
+              reason: "Downloading firmware"
+          expectedVersion:
+            type: integer
+            description: Expected version for optimistic locking
+            example: 1
+      examples:
+        - name: OTA in progress
+          payload:
+            status: "IN_PROGRESS"
+            statusDetails:
+              downloaded_bytes: 5000000
+              total_bytes: 10000000
+            expectedVersion: 1
+        - name: OTA succeeded
+          payload:
+            status: "SUCCEEDED"
+            statusDetails:
+              fw_version: "2.1.0"
+            expectedVersion: 2
+        - name: OTA failed
+          payload:
+            status: "FAILED"
+            statusDetails:
+              reason: "Post download checks failed"
+            expectedVersion: 2
+        - name: OTA rejected
+          payload:
+            status: "REJECTED"
+            statusDetails:
+              reason: "Unsupported firmware version"
+            expectedVersion: 2
+
+  # ── Schemas ────────────────────────────────────────────────────────────────
+  schemas:
+    nodeConfig:
+      type: object
+      description: Node configuration payload (sent via setNodeConfig event)
+      properties:
+        node_id:
+          type: string
+          description: Node ID / thing name
+          example: "ABCDEF1234567890"
+        config:
+          type: object
+          properties:
+            data_model:
+              type: string
+              description: Data model type
+              enum: ["default", "matter"]
+              example: "default"
+            devices:
+              type: array
+              description: List of logical devices (default data model)
+              items:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    example: "Light"
+                  type:
+                    type: string
+                    example: "esp.device.lightbulb"
+                  primary:
+                    type: string
+                    description: Primary parameter id (optional)
+                    example: "Power"
+                  params:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/paramDefinition"
+                  attributes:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                          example: "mac"
+                        value:
+                          type: string
+                          example: "AA:BB:CC:DD:EE:FF"
+            endpoints:
+              type: object
+              description:
+                Matter endpoints (matter data model only); keys are endpoint IDs
+                in hex
+              additionalProperties:
+                type: object
+                properties:
+                  dt:
+                    type: string
+                    description: Device type ID (hex)
+                    example: "0100"
+                  c:
+                    $ref: "#/components/schemas/matterEndpointClusters"
+            services:
+              type: array
+              description: List of services (same format as devices)
+              items:
+                type: object
+                additionalProperties: true
+            info:
+              type: object
+              properties:
+                name:
+                  type: string
+                  example: "Smart Light"
+                type:
+                  type: string
+                  example: "esp.node.light"
+                fw_version:
+                  type: string
+                  example: "2.1.0"
+                model:
+                  type: string
+                  example: "LED_Smart_v2"
+                manufacturer:
+                  type: string
+                  description: |
+                    Brand the node reports for itself. Optional, and absent on most
+                    firmware. When present it overrides the brand configured for the
+                    deployment in voice-assistant integrations (see
+                    misc/specs/alexa.md), so one firmware image can ship under several
+                    brands. Report it only if the OEM deliberately enables doing so.
+                  example: "Espressif"
+
+    matterEndpointClusters:
+      type: object
+      description: |
+        Clusters on this endpoint. `s` = server-side clusters; inner `c` = client-side clusters.
+        Cluster map keys are cluster IDs in lowercase hex (e.g., `0x3d`).
+      properties:
+        s:
+          type: object
+          description: Server clusters for this endpoint (if any)
+          additionalProperties:
+            $ref: "#/components/schemas/matterServerCluster"
+        c:
+          type: object
+          description: Client clusters for this endpoint (if any)
+          additionalProperties:
+            $ref: "#/components/schemas/matterClientCluster"
+
+    matterServerCluster:
+      type: object
+      description: >-
+        Server cluster — exposed attributes, events, accepted commands, indexed,
+        timeseries and config-only attributes.
+
+        `i` (indexed) and `ts` (timeseries) are independent property sets and
+        may overlap — an attribute that is both indexed and timeseries appears
+        in both arrays. `v` holds config-only attribute values (reported in node
+        config only, never in state). `a` lists the remaining plain attribute
+        IDs and is omitted when empty.
+      properties:
+        a:
+          type: array
+          description:
+            Plain attribute IDs (hex) — not indexed, timeseries, or config-only.
+            Omitted when empty.
+          items:
+            type: string
+        e:
+          type: array
+          description: Available event IDs (hex)
+          items:
+            type: string
+        c:
+          type: array
+          description: Available accepted command IDs (hex)
+          items:
+            type: string
+        i:
+          type: array
+          description: Indexed attribute IDs (hex)
+          items:
+            type: string
+        ts:
+          type: array
+          description: Timeseries attribute IDs (hex)
+          items:
+            type: string
+        v:
+          type: object
+          additionalProperties: true
+          description: >-
+            Config-only attribute values, keyed by attribute ID (hex). These
+            attributes are reported in node config only and are excluded from
+            shadow params/state updates.
+          example:
+            "0x10": 42
+
+    matterClientCluster:
+      type: object
+      description: Client cluster — available generated commands
+      properties:
+        c:
+          type: array
+          description: Available generated command IDs (hex)
+          items:
+            type: string
+
+    paramDefinition:
+      type: object
+      description: Parameter definition within node config
+      properties:
+        id:
+          type: string
+          example: "Brightness"
+        type:
+          type: string
+          example: "esp.param.brightness"
+        data_type:
+          type: string
+          enum: ["bool", "int", "float", "string"]
+          example: "int"
+        ui_type:
+          type: string
+          example: "esp.ui.slider"
+        properties:
+          type: array
+          description: Parameter capabilities
+          items:
+            type: string
+            enum: ["read", "write", "time_series", "indexed"]
+          example: ["read", "write", "time_series", "indexed"]
+        bounds:
+          type: object
+          properties:
+            min:
+              type: number
+              example: 0
+            max:
+              type: number
+              example: 100
+            step:
+              type: number
+              example: 1
+
+    scheduleObject:
+      type: object
+      description: Schedule definition
+      required:
+        - name
+        - enabled
+        - triggers
+        - action
+      properties:
+        name:
+          type: string
+          description: Unique name (max 16 chars, used as NVS key)
+          example: "MorningLights"
+        enabled:
+          type: boolean
+          example: true
+        triggers:
+          type: array
+          description:
+            One or more trigger conditions (schedule fires when ANY is met)
+          items:
+            oneOf:
+              - $ref: "#/components/schemas/triggerDateBased"
+              - $ref: "#/components/schemas/triggerSolar"
+              - $ref: "#/components/schemas/triggerOneShot"
+        action:
+          type: object
+          description:
+            Parameter update payload to apply (same format as param control)
+          additionalProperties: true
+          example:
+            Light:
+              Power: true
+              Brightness: 80
+        validity:
+          type: object
+          description: Optional validity window
+          properties:
+            start:
+              type: integer
+              description: Start Unix timestamp
+              example: 1704067200
+            end:
+              type: integer
+              description: End Unix timestamp
+              example: 1735689600
+
+    triggerDateBased:
+      type: object
+      description: "Date-based schedule trigger"
+      required:
+        - m
+      properties:
+        m:
+          type: integer
+          description: Minutes since midnight (0–1439)
+          example: 420
+        d:
+          type: integer
+          description: "Day-of-week bitmask: bits 7→1 = Sun/Sat/.../Mon"
+          example: 31
+        dd:
+          type: integer
+          description: Day of month (1–31)
+          example: 15
+        mm:
+          type: integer
+          description: "Month bitmask: bits 12→1 = Dec/Nov/.../Jan"
+          example: 15
+        yy:
+          type: integer
+          description: Specific calendar year (0 = every year)
+          example: 2026
+
+    triggerSolar:
+      type: object
+      description: Solar (sunrise/sunset) schedule trigger
+      required:
+        - lat
+        - lon
+      properties:
+        lat:
+          type: number
+          description: Latitude in decimal degrees (positive=North)
+          example: 40.7128
+        lon:
+          type: number
+          description: Longitude in decimal degrees (positive=East)
+          example: -74.006
+        sr:
+          type: integer
+          description: Offset minutes from sunrise (negative=before)
+          example: 0
+        ss:
+          type: integer
+          description: Offset minutes from sunset (negative=before)
+          example: -30
+        d:
+          type: integer
+          description: Day-of-week bitmask (same as date-based)
+        dd:
+          type: integer
+          description: Day of month
+        mm:
+          type: integer
+          description: Month bitmask
+        yy:
+          type: integer
+          description: Specific year
+
+    triggerOneShot:
+      type: object
+      description: One-shot relative trigger (fires once, N seconds from now)
+      required:
+        - rsec
+      properties:
+        rsec:
+          type: integer
+          description: Seconds after current time
+          example: 3600
+
+    triggerObject:
+      type: object
+      description: Automation trigger definition
+      required:
+        - id
+        - operator
+        - value
+      properties:
+        id:
+          type: string
+          description: Unique trigger ID
+          example: "node~temp-high"
+        enabled:
+          type: boolean
+          description: Whether trigger is active (default true if missing)
+          default: true
+        path:
+          type: string
+          description: |
+            Within-node identifier of the parameter/attribute the trigger watches.
+
+            Default data model: `<device id>.<param id>` (e.g. `"Sensor.Temperature"`).
+
+            Matter data model: the full dotted key chain `"0x<endpoint>.c.s.0x<cluster>.a.0x<attribute>"` (e.g. `"0x1.c.s.0x402.a.0x0"`).
+          example: "Sensor.Temperature"
+        operator:
+          type: string
+          description: Comparison operator
+          enum: ["eq", "ne", "lt", "le", "gt", "ge"]
+          example: "gt"
+        value:
+          description: Expected value for comparison
+          example: 30
+
+    otaJobDocument:
+      type: object
+      description: ESP RainMaker Neo OTA job document (extends AFR-OTA format)
+      properties:
+        afr_ota:
+          type: object
+          description: Standard AFR-OTA section
+          required:
+            - protocols
+            - files
+          properties:
+            protocols:
+              type: array
+              items:
+                type: string
+                enum: ["MQTT", "HTTP"]
+              example: ["MQTT", "HTTP"]
+            streamname:
+              type: string
+              description: AWS IoT stream name (required if MQTT protocol)
+              example: "AFR_OTA-stream-1234567890"
+            files:
+              type: array
+              items:
+                type: object
+                required:
+                  - filepath
+                  - filesize
+                  - fileid
+                properties:
+                  filepath:
+                    type: string
+                    example: "/firmware.bin"
+                  filesize:
+                    type: integer
+                    example: 1048576
+                  fileid:
+                    type: string
+                    example: "firmware_v2.1.0"
+                  certfile:
+                    type: string
+                    example: "/ota-test-cert"
+                  update_data_url:
+                    type: string
+                    description: Pre-signed S3 URL (Required if HTTP protocol)
+                  auth_scheme:
+                    type: string
+                    description:
+                      Authentication scheme (Required if HTTP protocol)
+                  sig-sha256-ecdsa:
+                    type: string
+                    description: ECDSA signature
+                    example: "MEQCIG...signature..."
+        rmng_ota:
+          type: object
+          description: ESP RainMaker Neo-specific OTA configuration
+          properties:
+            filetype:
+              type: string
+              description: Custom filetype identifier
+            fw_version:
+              type: string
+              description:
+                Target firmware version (required if `min_fw_version` is
+                present)
+              example: "2.1.0"
+            min_fw_version:
+              type: string
+              description: Minimum firmware version required
+              example: "1.0.0"
+            metadata:
+              type: object
+              additionalProperties: true
+              example:
+                release_notes: "Bug fixes and performance improvements"
+                priority: "high"
+            download_window:
+              type: object
+              properties:
+                validity:
+                  type: object
+                  properties:
+                    start:
+                      type: integer
+                      description: Start Unix timestamp
+                      example: 1704067200
+                    end:
+                      type: integer
+                      description: End Unix timestamp
+                      example: 1706745600
+                daily:
+                  type: object
+                  properties:
+                    start:
+                      type: integer
+                      description: Daily start (minutes since midnight)
+                      example: 60
+                    end:
+                      type: integer
+                      description: Daily end (minutes since midnight)
+                      example: 360
+      examples:
+        - name: MQTT+HTTP OTA with download window
+          payload:
+            afr_ota:
+              protocols: ["MQTT", "HTTP"]
+              streamname: "AFR_OTA-stream-1234567890"
+              files:
+                - filepath: "/firmware.bin"
+                  filesize: 1048576
+                  fileid: "firmware_v2.1.0"
+                  certfile: "/ota-test-cert"
+                  sig-sha256-ecdsa: "MEQCIG...signature..."
+            rmng_ota:
+              fw_version: "2.1.0"
+              min_fw_version: "1.0.0"
+              metadata:
+                release_notes: "Bug fixes and performance improvements"
+              download_window:
+                validity:
+                  start: 1704067200
+                  end: 1706745600
+                daily:
+                  start: 60
+                  end: 360
+
+  # ── Parameters ─────────────────────────────────────────────────────────────
+  parameters:
+    nodeId:
+      description:
+        Unique node identifier (Thing Name / Node ID / MQTT Client ID)
+      examples:
+        - "ABCDEF1234567890"
+        - "ESP32_Light_001"
+
+    groupInfoStr:
+      description: |
+        Group info string: `<group_id>[-<sub1>-<sub2>-…]` with subgroups sorted alphabetically.
+        Empty string if node is unassociated (e.g. shadow name becomes `params-`).
+      examples:
+        - "a1bc2d"
+        - "a1bc2d-sg1-sg2"
+        - ""
+
+    groupId:
+      description: 6-character alphanumeric primary group ID
+      examples:
+        - "a1bc2d"
+
+    subgroupId:
+      description: 3-character alphanumeric individual subgroup ID
+      examples:
+        - "sg1"
+        - "sg2"
+
+    jobId:
+      description: AWS IoT Jobs job ID
+      examples:
+        - "AFR_OTA-ota_job_20240115"
+
+    streamName:
+      description:
+        AWS IoT Streams stream name (for MQTT-based OTA file transfer)
+      examples:
+        - "AFR_OTA-stream-1234567890"
+
+    dataType:
+      description: |
+        Message encoding suffix for MQTT-based file delivery: `json` or `cbor`. Must match across the paired `…/get/{dataType}` publish and `…/data/{dataType}` subscription.
+      examples:
+        - json
+        - cbor
+
+  # ── Security ───────────────────────────────────────────────────────────────
+  securitySchemes:
+    X509:
+      type: X509
+      description: |
+        X.509 certificate-based mutual TLS authentication with AWS IoT Core.
+        Each node has a unique certificate issued and registered by the ESP RainMaker Neo platform.
+        The IoT policy restricts topics to `${iot:Connection.Thing.ThingName}` and
+        `${iot:Connection.Thing.Attributes[group_id]}` for group control.
+
+        Devices connect using TLS mutual authentication.

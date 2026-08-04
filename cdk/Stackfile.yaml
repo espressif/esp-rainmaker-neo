@@ -1,0 +1,364 @@
+# SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+#
+# SPDX-License-Identifier: Apache-2.0
+
+version: "1.0.0"
+
+# ---------------------------------------------------------------------------
+# Global defaults -- any field here can be overridden per stack
+# ---------------------------------------------------------------------------
+defaults:
+  region_mode: all # all | explicit
+
+# ---------------------------------------------------------------------------
+# Stack definitions
+# Business/presentation layer (read-only; ignored by the deploy engine).
+# Containment is declared top-down: Package -> Group -> Stack. Group membership
+# and `mandatory` live here, NOT on the stack entries.
+# ---------------------------------------------------------------------------
+packages:
+  rainmaker-neo:
+    friendly_name: "ESP RainMaker Neo"
+    is_paid: false
+    description:
+      "Opensource and fundamental modules for building and launching your own
+      IoT Cloud"
+    groups:
+      - espuser
+      - rmng
+      - alexa
+      - claim
+
+  enterprise:
+    friendly_name: "Enterprise Plan"
+    is_paid: true
+    description: "Enterprise paid modules for advanced features and support"
+    groups:
+      - support
+      - espuser-pro
+      - bridge
+      - insights
+      - private-agents
+
+groups:
+  espuser:
+    friendly_name: "ESP RainMaker Neo Identity"
+    description: "Standalone Identity management system"
+    mandatory: true
+    stacks:
+      - espuser-base
+      - espuser-core
+
+  rmng:
+    friendly_name: "ESP RainMaker Neo"
+    description: "Core IoT Cloud"
+    mandatory: true
+    stacks:
+      - rmng-base
+      - rmng-core
+      - rmng-admin-dashboard
+
+  claim:
+    friendly_name: "Assisted Claiming"
+    description: "Cloud-signed node onboarding (CA in KMS)."
+    mandatory: false
+    stacks:
+      - rmng-claim-base
+      - rmng-claim-core
+
+  alexa:
+    friendly_name: "Voice Assistants"
+    description: "Control your ESP RainMaker Neo devices with Alexa and Google Home"
+    mandatory: true
+    stacks:
+      - rmng-alexa-core
+
+  espuser-pro:
+    friendly_name: "ESP RainMaker Neo Identity Pro"
+    description:
+      "Enterprise Identity add-on for advanced features and integrations"
+    mandatory: false
+    stacks:
+      - espuser-pro-base
+      - espuser-pro-core
+
+  bridge:
+    friendly_name: "ESP Bridge"
+    description: "Bridge and Controller device type support"
+    mandatory: false
+    stacks:
+      - rmng-bridge-base
+      - rmng-bridge-core
+
+  insights:
+    friendly_name: "ESP Insights"
+    description:
+      "Remote diagnostics and observability for ESP devices in the field"
+    mandatory: false
+    stacks: []
+
+  private-agents:
+    friendly_name: "ESP Private Agents"
+    description:
+      "Platform for building private text and voice AI agents for your connected
+      devices and apps"
+    mandatory: false
+    stacks: []
+
+  support:
+    friendly_name: "Support SLA"
+    description:
+      "Guaranteed enterprise grade support by Espressif engineers who deliver
+      rapid SLA responses, deep-level issue resolution, and system reliability"
+    mandatory: false
+    stacks: []
+
+# ---------------------------------------------------------------------------
+# Infrastructure layer (the deploy engine reads this). Each stack declares its
+# friendly name; its group and `mandatory` are derived from the `groups:` layer.
+#
+# Dependency graph:
+#   espuser-base  -->  espuser-core  -->  espuser-pro-core
+#                  -->  espuser-pro-base  -->  espuser-pro-core
+#                  -->  rmng-base  -->  rmng-core
+#                                  -->  rmng-bridge
+#                                  -->  rmng-admin-dashboard
+#                                  -->  rmng-alexa-core
+#                                  -->  rmng-claim-base  -->  rmng-claim-core
+# ---------------------------------------------------------------------------
+stacks:
+  espuser-base:
+    friendly_name: "ESP User Base"
+    stack_name: espuser-base
+    template: espuser-base.template.json
+    regions:
+      mode: all
+      explicit: []
+    parameters: {}
+
+  espuser-core:
+    friendly_name: "ESP User Core"
+    stack_name: espuser-core
+    template: espuser-core.template.json
+    depends_on:
+      - espuser-base
+    regions:
+      mode: all
+      explicit: []
+    parameters:
+      AdminEmails:
+        prompt: true
+        description:
+          "Comma-separated list of admin email addresses to register as admin
+          users"
+
+  espuser-pro-base:
+    friendly_name: "ESP User Pro Base"
+    stack_name: espuser-pro-base
+    template: espuser-pro-base.template.json
+    depends_on:
+      - espuser-base
+    regions:
+      mode: all
+      explicit: []
+    parameters: {}
+
+  espuser-pro-core:
+    friendly_name: "ESP User Pro Core"
+    stack_name: espuser-pro-core
+    template: espuser-pro-core.template.json
+    depends_on:
+      - espuser-pro-base
+      - espuser-core
+    regions:
+      mode: all
+      explicit: []
+    parameters: {}
+
+  rmng-base:
+    friendly_name: "RainMaker Base"
+    stack_name: rmng-base
+    template: rmng-base.template.json
+    depends_on:
+      - espuser-base
+    regions:
+      mode: all
+      explicit: []
+    parameters:
+      EspUserIssuer:
+        value: ${espuser-base.outputs.EspUserIssuer}
+        prompt: false
+        configurable: false
+        description: "ESP User OAuth issuer URL (leave empty to read from SSM)"
+      EspUserClientId:
+        value: ${espuser-base.outputs.EspUserClientId}
+        prompt: false
+        configurable: false
+        description: "ESP User Client ID (leave empty to read from SSM)"
+      EspMcpClientId:
+        value: ${espuser-base.outputs.EspMcpClientId}
+        prompt: false
+        configurable: false
+        description:
+          "ESP User MCP OAuth Client ID (leave empty to read from SSM)"
+      EspMcpClientSecret:
+        value: ${espuser-base.outputs.EspMcpClientSecret}
+        prompt: false
+        configurable: false
+        description:
+          "ESP User MCP OAuth Client Secret (leave empty to read from SSM)"
+      EspUserVaClientId:
+        value: ${espuser-base.outputs.EspVaClientId}
+        prompt: false
+        description: "ESP User VA Client ID (leave empty to read from SSM)"
+      EspUserVaClientSecret:
+        value: ${espuser-base.outputs.EspVaClientSecret}
+        prompt: false
+        description: "ESP User VA Client Secret (leave empty to read from SSM)"
+      EspAdminUserPoolId:
+        value: ${espuser-base.outputs.EspAdminUserPoolId}
+        prompt: false
+        configurable: false
+        description: "ESP Admin User Pool ID (leave empty to read from SSM)"
+      EspAdminUserPoolClientId:
+        value: ${espuser-base.outputs.EspAdminUserPoolClientId}
+        prompt: false
+        configurable: false
+        description:
+          "ESP Admin User Pool Client ID (leave empty to read from SSM)"
+      EspUserJwks:
+        value: ${espuser-base.outputs.EspUserJWKSParameter}
+        prompt: false
+        configurable: false
+        description:
+          "ESP User JWKS SSM parameter name (leave empty to read from SSM)"
+      EspAdminUserPoolJwks:
+        value: ${espuser-base.outputs.EspAdminUserPoolJWKSParameter}
+        prompt: false
+        configurable: false
+        description:
+          "ESP Admin User Pool JWKS SSM parameter name (leave empty to read from
+          SSM)"
+
+  rmng-core:
+    friendly_name: "RainMaker Core"
+    stack_name: rmng-core
+    template: rmng-core.template.json
+    depends_on:
+      - rmng-base
+    regions:
+      mode: all
+      explicit: []
+    parameters: {}
+
+  rmng-admin-dashboard:
+    friendly_name: "RainMaker Admin Dashboard"
+    stack_name: rmng-admin-dashboard
+    template: rmng-admin-dashboard.template.json
+    depends_on:
+      - rmng-base
+    regions:
+      mode: all
+      explicit: []
+    parameters: {}
+
+  rmng-bridge-base:
+    friendly_name: "RainMaker Bridge Base"
+    stack_name: rmng-bridge-base
+    template: rmng-bridge-base.template.json
+    depends_on:
+      - rmng-base
+    regions:
+      mode: all
+      explicit: []
+    parameters: {}
+
+  rmng-bridge-core:
+    friendly_name: "RainMaker Bridge Core"
+    stack_name: rmng-bridge-core
+    template: rmng-bridge-core.template.json
+    depends_on:
+      - rmng-bridge-base
+    regions:
+      mode: all
+      explicit: []
+    parameters: {}
+
+  rmng-claim-base:
+    friendly_name: "RainMaker Claim Base"
+    stack_name: rmng-claim-base
+    template: rmng-claim-base.template.json
+    depends_on:
+      - rmng-base
+    regions:
+      mode: all
+      explicit: []
+    parameters: {}
+
+  rmng-claim-core:
+    friendly_name: "RainMaker Claim Core"
+    stack_name: rmng-claim-core
+    template: rmng-claim-core.template.json
+    depends_on:
+      - rmng-claim-base
+    regions:
+      mode: all
+      explicit: []
+    parameters: {}
+
+  rmng-alexa-core:
+    friendly_name: "RainMaker Alexa Core"
+    stack_name: rmng-alexa-core-${APP_REGION}
+    template: rmng-alexa-core.template.json
+    depends_on:
+      - rmng-base
+    regions:
+      mode: explicit
+      explicit:
+        us-east-1: mandatory
+        eu-west-1: mandatory
+        us-west-2: mandatory
+    parameters:
+      RmngRegion:
+        value: ${rmng-base.outputs.StackRegion}
+        prompt: false
+        description: "Region where the rmng stack is deployed"
+      EspUserIssuer:
+        value: ${rmng-base.inputs.EspUserIssuer}
+        prompt: false
+        description: "ESP User OAuth issuer URL"
+      EspUserClientId:
+        value: ${rmng-base.inputs.EspUserClientId}
+        prompt: false
+        description: "ESP User Client ID"
+      EspAdminUserPoolId:
+        value: ${rmng-base.inputs.EspAdminUserPoolId}
+        prompt: false
+        description: "ESP Admin User Pool ID"
+      EspAdminUserPoolClientId:
+        value: ${rmng-base.inputs.EspAdminUserPoolClientId}
+        prompt: false
+        description: "ESP Admin User Pool Client ID"
+      EspUserJwks:
+        value: ${rmng-base.inputs.EspUserJwks}
+        prompt: false
+        description: "ESP User JWKS SSM parameter name"
+      EspAdminUserPoolJwks:
+        value: ${rmng-base.inputs.EspAdminUserPoolJwks}
+        prompt: false
+        description: "ESP Admin User Pool JWKS SSM parameter name"
+      IdentityPoolId:
+        value: ${rmng-base.outputs.IdentityPoolId}
+        prompt: false
+        description: "Cognito Identity Pool ID"
+
+  rmng-support:
+    friendly_name: "Support SLA"
+    stack_name: rmng-support
+    template: rmng-support.template.json
+    depends_on:
+      - rmng-base
+    regions:
+      mode: all
+      explicit: []
+    parameters: {}

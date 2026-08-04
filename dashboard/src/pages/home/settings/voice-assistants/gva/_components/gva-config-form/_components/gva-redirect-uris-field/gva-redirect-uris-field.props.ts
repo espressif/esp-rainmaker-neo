@@ -1,0 +1,10 @@
+/*
+ * SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+export interface GvaRedirectUrisFieldProps {
+  /** Server-computed redirect URIs shown read-only; empty for a new config. */
+  uris: string[];
+}

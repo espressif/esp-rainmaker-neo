@@ -1,0 +1,61 @@
+// SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+//
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package rmaker_ch_resp;
+
+enum RMakerChRespStatus {
+    Success = 0;
+    Fail = 1;
+    InvalidParam = 2;
+    Disabled = 3;
+}
+
+message CmdCRPayload {
+    bytes payload = 1;
+}
+
+message RespCRPayload {
+    bytes payload = 1;
+    string node_id = 2;
+}
+
+message CmdGetNodeIDPayload {
+    /* Empty payload */
+}
+
+message RespGetNodeIDPayload {
+    string node_id = 1;
+}
+
+message CmdDisableChalRespPayload {
+    /* Empty payload - command to disable challenge-response */
+}
+
+message RespDisableChalRespPayload {
+    /* Response contains only status in the parent message */
+}
+
+enum RMakerChRespMsgType {
+    TypeCmdChallengeResponse = 0;
+    TypeRespChallengeResponse = 1;
+    TypeCmdGetNodeID = 2;
+    TypeRespGetNodeID = 3;
+    TypeCmdDisableChalResp = 4;
+    TypeRespDisableChalResp = 5;
+}
+
+message RMakerChRespPayload {
+    RMakerChRespMsgType msg = 1;
+    RMakerChRespStatus status = 2;
+    oneof payload {
+        CmdCRPayload cmdChallengeResponsePayload = 10;
+        RespCRPayload respChallengeResponsePayload = 11;
+        CmdGetNodeIDPayload cmdGetNodeIDPayload = 12;
+        RespGetNodeIDPayload respGetNodeIDPayload = 13;
+        CmdDisableChalRespPayload cmdDisableChalRespPayload = 14;
+        RespDisableChalRespPayload respDisableChalRespPayload = 15;
+    }
+}

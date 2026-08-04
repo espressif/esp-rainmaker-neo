@@ -1,0 +1,83 @@
+{
+  "breadcrumbs": {
+    "images": "OTA Images",
+    "new": "Upload OTA Image"
+  },
+  "error": {
+    "title": "Failed to load OTA images",
+    "description": "An unexpected error occurred while loading OTA images. Please try again later."
+  },
+  "heading": "OTA Images",
+  "uploadButton": "Upload OTA Image",
+  "noResults": "No OTA images",
+  "noResultsDescription": "No OTA images have been uploaded yet.",
+  "search": {
+    "placeholder": "Search by name prefix",
+    "noResults": "No matching OTA images",
+    "noResultsDescription": "No image name starts with \"{{query}}\". Search matches the start of the file name and is case-sensitive."
+  },
+  "columns": {
+    "nameMd5": "Name / MD5",
+    "fwVersion": "FW Version",
+    "typeModel": "Type / Model",
+    "platform": "Platform",
+    "lastModified": "Last Modified",
+    "startOta": "Start OTA"
+  },
+  "pageTitle": "Upload OTA Image",
+  "backToImages": "Back to OTA Images",
+  "sections": {
+    "selectImage": "Select OTA Image",
+    "firmwareDetails": "Add firmware details",
+    "otherDetails": "Other details"
+  },
+  "fields": {
+    "firmwareFile": {
+      "label": "Firmware file",
+      "title": "Drop your firmware file here",
+      "description": "Supported file types: .bin, .elf, .img, .hex, .ota."
+    },
+    "name": {
+      "label": "Firmware name",
+      "placeholder": "e.g. light-sensor"
+    },
+    "version": {
+      "label": "Firmware version",
+      "placeholder": "e.g. 1.0.0"
+    },
+    "type": {
+      "label": "Firmware type",
+      "placeholder": "e.g. Light, Switch"
+    },
+    "model": {
+      "label": "Target model",
+      "placeholder": "e.g. 3C_DL, WS2812_STRIP, 1SOCK"
+    },
+    "platform": {
+      "label": "Platform",
+      "placeholder": "e.g. esp32, esp32c3, esp32s3"
+    }
+  },
+  "errors": {
+    "firmwareFileRequired": "Please select a firmware file.",
+    "firmwareFileInvalidType": "Supported file types: .bin, .elf, .img, .hex, .ota.",
+    "nameRequired": "Firmware name is required.",
+    "nameInvalid": "Only letters, numbers, dots, underscores and hyphens are allowed.",
+    "versionRequired": "Firmware version is required."
+  },
+  "form": {
+    "submit": "Upload OTA Image",
+    "submitting": "Uploading…"
+  },
+  "upload": {
+    "dialogTitle": "OTA image upload status",
+    "uploadingTitle": "Uploading OTA image",
+    "uploadingDescription": "This may take a while. Do not close this window.",
+    "successTitle": "OTA Image uploaded successfully.",
+    "successDescription": "You can now use this OTA image to update your devices.",
+    "createOtaWithImage": "Create OTA with this image",
+    "errorTitle": "Failed to upload OTA image.",
+    "errorDescription": "Please try again.",
+    "duplicateError": "An OTA image with this name already exists."
+  }
+}

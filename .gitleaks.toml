@@ -1,0 +1,73 @@
+# SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# gitleaks configuration for the `secrets` job in .github/workflows/ci.yml.
+#
+# The job is a blocking gate, and this file is what keeps it blocking: on a clean
+# tree the default ruleset reports 20 findings, every one an example payload or a
+# unit-test fixture. A gate that is red by default is a gate nobody reads.
+#
+# Each allowlist is attached to a specific rule id and a specific set of path
+# patterns. Nothing here is a blanket exemption — the rules stay active everywhere
+# else in the tree, and rules other than the two named below stay active even in
+# these paths. When adding an entry, name the file and say why it is not a secret.
+#
+# Note for maintainers: the `targetRules` key documented for top-level
+# `[[allowlists]]` is silently ignored by gitleaks 8.28.0 (the allowlist then
+# applies globally, to every rule). The `[[rules]]` + `[[rules.allowlists]]` form
+# below is what actually scopes an exemption to one rule; keep using it.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "private-key"
+
+  [[rules.allowlists]]
+  description = """
+  Go unit-test fixtures. Ginkgo specs embed literal PEM blocks and fake
+  service-account JSON to exercise certificate parsing and credential redaction —
+  src/notification/push/sns_platforms_test.go asserts that private_key is stripped
+  from a stored Google service-account blob, so the fixture has to contain one
+  (its value is the literal string "secret"). Also src/group/matter_utils_test.go,
+  src/integration/integration_main_test.go, src/node/associate/node_assoc_main_test.go
+  and src/user/gva_action/gva_cfg/gva_cfg_main_test.go.
+  """
+  paths = ['''_test\.go$''']
+
+  [[rules.allowlists]]
+  description = """
+  Sphinx spec docs and the OpenAPI definition, which carry request/response
+  examples containing sample PEM chains: docs/en/specs/gva.md,
+  docs/en/specs/notifications-push.md, misc/swagger/Api_Swagger.yaml.
+  """
+  paths = [
+    '''^docs/en/specs/.*\.md$''',
+    '''^misc/swagger/.*\.ya?ml$''',
+  ]
+
+  [[rules.allowlists]]
+  description = """
+  Connectivity Standards Alliance CHIP test credentials (test vendor id FFF2,
+  product 8001) — the certificates and keys the CSA publishes for Matter
+  development, used by the admin dashboard's matter-gen to mint test device
+  attestation material. Public by design, not Espressif's, and cannot sign
+  production devices.
+  """
+  paths = ['''chip-test-credentials\.ts$''']
+
+[[rules]]
+id = "generic-api-key"
+
+  [[rules.allowlists]]
+  description = """
+  High-entropy strings in API examples and auth-flow docs that are not keys:
+  misc/swagger/Api_Swagger.yaml's `next_key` values are base64-encoded DynamoDB
+  pagination cursors, and src_esp_user/misc/specs/auth-flows.md uses truncated
+  placeholder tokens ("a1b2c3d4.9f8e7d6c...") in its form-encoded request samples.
+  """
+  paths = [
+    '''^misc/swagger/.*\.ya?ml$''',
+    '''^src_esp_user/misc/specs/.*\.md$''',
+  ]

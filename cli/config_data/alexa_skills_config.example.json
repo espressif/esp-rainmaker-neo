@@ -1,0 +1,5 @@
+{
+  "smapi_client_id": "amzn1.application-oa2-client.REPLACE_ME",
+  "smapi_client_secret": "REPLACE_ME",
+  "skill_name": "ESP RainMaker"
+}

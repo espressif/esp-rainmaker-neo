@@ -1,0 +1,131 @@
+{
+  "breadcrumbs": {
+    "jobs": "Registration jobs",
+    "new": "Register nodes"
+  },
+  "heading": "Registration",
+  "downloadError": "Could not download CSV",
+  "downloadFailed": "Download failed",
+  "fileUnavailable": "This file is no longer available. It may have been removed from storage.",
+  "columns": {
+    "fileRequestId": "File / Request ID",
+    "progress": "Progress",
+    "lastUpdated": "Last updated"
+  },
+  "details": {
+    "adminGroups": "Admin groups",
+    "noAdminGroups": "No admin groups"
+  },
+  "error": {
+    "title": "Failed to load registration jobs",
+    "description": "Something went wrong while loading registration jobs."
+  },
+  "noResults": "No registration jobs found",
+  "noResultsDescription": "Try adjusting the status filter or register new nodes.",
+  "registerNodesButton": "Register nodes",
+  "unknownFile": "Registration job",
+  "status": {
+    "requested": "Requested",
+    "started": "Started",
+    "dataLoaded": "Data loaded",
+    "completed": "Completed"
+  },
+  "new": {
+    "pageTitle": "Register nodes",
+    "backToRegistrationJobs": "Back to registration jobs",
+    "sections": {
+      "basicDetails": "Basic details",
+      "capabilities": "Choose capabilities",
+      "tags": "Add tags"
+    },
+    "fields": {
+      "certificateFile": {
+        "label": "Node certificate file",
+        "title": "Drop your certificate CSV here",
+        "description": "Only CSV files are supported."
+      },
+      "nodeGroup": {
+        "label": "Choose node group",
+        "description": "Optional. Registered nodes will be added to this group (and subgroup if selected)."
+      }
+    },
+    "capabilities": {
+      "ariaLabel": "Choose capabilities",
+      "s3": {
+        "label": "File Storage (S3)",
+        "description": "Enable S3-backed file storage on the device."
+      },
+      "kvs": {
+        "label": "Camera Streaming (KVS)",
+        "description": "Enable Kinesis Video Streams for camera nodes."
+      },
+      "bridge": {
+        "label": "Bridge",
+        "description": "Enable bridge behavior for gateway nodes."
+      }
+    },
+    "tags": {
+      "label": "Tags",
+      "placeholder": "key:value and press Enter",
+      "hint": "Format: key:value (no spaces).",
+      "autoTagTitle": "Some tags will be added automatically",
+      "autoTagNotice": "The following tags will be added automatically: registered_from:dashboard, batch:<timestamp>. You can override them by adding tags with the same key above."
+    },
+    "form": {
+      "submit": "Register",
+      "submitting": "Registering…"
+    },
+    "progress": {
+      "dialogTitle": "Registration progress",
+      "notStarted": "Not started yet",
+      "initiateTitle": "Initiate registration",
+      "initiateInProgress": "Requesting a secure upload URL…",
+      "initiateSuccess": "Registration initiated",
+      "initiateError": "Could not initiate registration",
+      "uploadTitle": "Upload certificate file",
+      "uploadInProgress": "Uploading certificate CSV…",
+      "uploadSuccess": "Certificate file uploaded",
+      "uploadError": "Could not upload certificate file",
+      "createTitle": "Create registration request",
+      "createInProgress": "Submitting registration request…",
+      "createSuccess": "Registration request created",
+      "createError": "Could not create registration request",
+      "completedTitle": "Registration completed",
+      "completedInProgress": "Registering nodes… this can take a moment",
+      "completedSuccess": "All nodes registered",
+      "completedWithFailures": "{{failedCount}} of {{totalNodes}} nodes failed to register",
+      "completedError": "Registration failed",
+      "backToJobs": "Back to Registration jobs",
+      "registerMore": "Register more nodes",
+      "completedAllFailed": "No nodes were registered",
+      "completedWithUnknownFailures": "Some nodes failed to register",
+      "completedStatusUnavailable": "Could not check registration status",
+      "resultAlert": {
+        "successTitle": "All nodes registered successfully",
+        "successDescription": "All {{totalNodes}} nodes were registered and are ready to use.",
+        "successDescriptionUnknownTotal": "Every node in the certificate file was registered and is ready to use.",
+        "partialTitle": "Some nodes could not be registered",
+        "partialDescription": "{{successCount}} of {{totalNodes}} nodes were registered. {{failedCount}} failed.",
+        "partialDescriptionWithFile": "{{successCount}} of {{totalNodes}} nodes were registered. {{failedCount}} failed — download the failed nodes file to see why.",
+        "partialDescriptionUnknownCounts": "Some nodes could not be registered. Download the failed nodes file to see which ones, and why.",
+        "allFailedTitle": "Failed to register nodes",
+        "allFailedDescription": "None of the {{totalNodes}} nodes could be registered. Open the job in Registration jobs for details.",
+        "allFailedDescriptionWithFile": "None of the {{totalNodes}} nodes could be registered. Download the failed nodes file to see why.",
+        "jobErrorTitle": "Registration job failed",
+        "jobErrorDescription": "The registration job stopped before it finished. Open it in Registration jobs for details.",
+        "statusErrorTitle": "Could not check registration status",
+        "statusErrorDescription": "We could not read the registration job status. The job may still be running — check Registration jobs.",
+        "downloadFailedNodes": "Download failed nodes",
+        "downloadErrorTitle": "Could not download the failed nodes file"
+      }
+    },
+    "errors": {
+      "certificateFileRequired": "Please upload a node certificate CSV.",
+      "certificateFileCsvOnly": "Only CSV files are supported."
+    }
+  },
+  "title": "Register Nodes",
+  "description": "Upload a CSV file with node certificates to register them in the system.",
+  "progress": "Submitting",
+  "submit": "Register"
+}

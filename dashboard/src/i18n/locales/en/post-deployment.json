@@ -1,0 +1,115 @@
+{
+  "heading": "Post-Deployment",
+  "productionNote": "If you intend to go to production, you need to raise the limits for Email and SMS sending. Also, you would need to request production access for SES and SMS, so unverified identities can receive the signup code. Please contact AWS support.",
+  "currentValue": "Current",
+  "raisingThisLimit": "Raising this limit",
+  "credsError": "Could not obtain scoped AWS credentials",
+  "credsErrorDescription": "The deployment could not vend read-only credentials for this account. Reload the page, and check the deployment's permissions if it keeps failing.",
+  "readFailed": "Could not read this value",
+  "awsErrors": {
+    "staleCredentials": "This session's AWS credentials are no longer valid, which happens after a deployment. Reload the page to get new ones.",
+    "notPermitted": "This deployment's credentials do not permit that call. Deploy the latest backend, then reload.",
+    "throttled": "AWS is rate limiting these requests. Wait a moment and try again.",
+    "generic": "The request failed. Try again, and check the deployment's AWS permissions if it keeps failing."
+  },
+  "sesAccessStatus": {
+    "production": "Production access enabled",
+    "sandbox": "In sandbox",
+    "reviewPending": "In sandbox — production access under review",
+    "reviewDenied": "In sandbox — production access denied",
+    "reviewFailed": "In sandbox — production access failed"
+  },
+  "sections": {
+    "ses": {
+      "title": "Email sending (SES)",
+      "description": "How the platform sends email, and who can receive it today."
+    },
+    "sns": {
+      "title": "SMS sending (SNS)",
+      "description": "How the platform sends SMS, and which destination numbers are reachable."
+    },
+    "lambda": {
+      "title": "Compute (Lambda)",
+      "description": "The account limit on how much traffic the platform can serve at once."
+    }
+  },
+  "values": {
+    "cognito_email_cap": {
+      "title": "Emails per day",
+      "note": "Sign-up confirmation and password-reset codes are sent by Cognito's own built-in sender, not by SES, and it is capped at 50 messages per day for the whole AWS account. The cap cannot be raised.",
+      "readings": {
+        "cap": "{{cap, number}} emails / day per AWS account"
+      }
+    },
+    "ses_sandbox": {
+      "title": "SES production access",
+      "note": "This is required for higher email sending limits. For production, exit the sandbox."
+    },
+    "sns_sms_sandbox": {
+      "title": "SMS production access",
+      "note": "In the SMS sandbox only phone numbers you have verified receive messages — up to 10. For production, exit the sandbox."
+    },
+    "sns_monthly_spend": {
+      "title": "SMS monthly spend",
+      "note": "The account has a $1/month spend limit. For production, raise the monthly spend limit.",
+      "readings": {
+        "limit": "${{limit, number}} / month",
+        "limitDefault": "${{limit, number}} / month (default)"
+      }
+    },
+    "lambda_concurrency": {
+      "title": "Lambda concurrency",
+      "note": "This is how many requests the platform can serve at once across every function.",
+      "readings": {
+        "concurrency": "{{limit, number}} concurrent executions",
+        "unknown": "Unknown"
+      }
+    }
+  },
+  "smsSandbox": {
+    "status": {
+      "sandbox": "In sandbox",
+      "production": "Production access enabled",
+      "unknown": "Status unknown"
+    },
+    "numberStatus": {
+      "verified": "Verified",
+      "pending": "Pending"
+    },
+    "statusFailed": "Could not read the SMS sandbox status for this account.",
+    "outOfSandboxTitle": "This account is out of the SMS sandbox",
+    "outOfSandboxDescription": "SMS reaches any phone number, so destination numbers no longer need to be verified. There is nothing to manage here.",
+    "listFailed": "Could not load the sandbox destination numbers.",
+    "emptyHeading": "No destination numbers yet",
+    "emptyDescription": "Add one below, then confirm the code AWS texts to it.",
+    "columnPhoneNumber": "Destination number",
+    "columnActions": "Actions",
+    "verify": "Verify",
+    "verifySubmit": "Confirm",
+    "oneTimePasswordLabel": "One-time code",
+    "oneTimePasswordPlaceholder": "123456",
+    "delete": "Remove number",
+    "deleteTitle": "Remove destination number",
+    "deleteDescription": "{{phoneNumber}} will stop receiving SMS from this deployment. You can add it again and verify it with a new code.",
+    "previousPage": "Previous",
+    "nextPage": "Next",
+    "phoneNumberLabel": "Add a destination number",
+    "phoneNumberPlaceholder": "+15551234567",
+    "phoneNumberHint": "Use E.164 format, for example +15551234567",
+    "errors": {
+      "invalidPhoneNumber": "Enter the number in E.164 format, for example +15551234567.",
+      "invalidOneTimePassword": "Enter the 6-digit code from the SMS.",
+      "optedOut": "This number has opted out of SMS from this AWS account and cannot be verified until the opt-out is removed.",
+      "throttled": "AWS is rate limiting these requests. Wait a moment and try again.",
+      "verification": "That code is wrong or has expired. Remove the number and add it again to get a new code.",
+      "notFound": "This number is no longer in the sandbox. Reload the list and add it again if you still need it.",
+      "limitExceeded": "The sandbox already holds the maximum of 10 destination numbers. Remove one before adding another.",
+      "generic": "The request failed. Try again, and check the deployment's SNS permissions if it keeps failing.",
+      "staleCredentials": "This session's AWS credentials are no longer valid, which happens after a deployment. Reload the page to get new ones.",
+      "notPermitted": "This deployment's credentials do not permit that call. Deploy the latest backend, then reload."
+    },
+    "resendCode": "Resend code",
+    "resendCodeTooltip": "AWS texts the code when a number is added; this sends a fresh one (up to 5 times in 24 hours).",
+    "codeResent": "A new code has been sent to {{phoneNumber}}. It can take a minute to arrive."
+  }
+}

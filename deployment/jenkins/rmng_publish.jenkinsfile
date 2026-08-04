@@ -1,0 +1,136 @@
+// SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Prod publish for rmng application assets: builds and publishes ALL stack groups
+// (the installer's Stackfile spans every group) plus the Stackfile itself into a
+// named prod bucket, gated by a human approval input. Guard rails: version-exists
+// pre-flight unless ALLOW_VERSION_OVERWRITE; automated no-creds runs end green as
+// reminders. Existing pipelines (cloud_rmng_backend_deploy, qahook) are untouched;
+// utils.groovy is loaded read-only for its credential/env helpers.
+pipeline {
+    agent {
+        docker {
+            label 'cloud'
+            // Registry coordinates come from Jenkins global environment variables, not credentials: the agent block is evaluated before any credential binding (or this pipeline's own environment block) exists.
+            image "${env.JENKINS_RAINMAKER_NEO_DOCKER_IMAGE_PATH}/rmng:go1.26.5_node24"
+            registryUrl "${env.JENKINS_DOCKER_REGISTRY_URL}"
+            registryCredentialsId 'JENKINS_GITLAB_USER_CREDENTIALS_APP_FRAMEWORKS'
+            alwaysPull true
+        }
+    }
+    options {
+        timestamps()
+        // Long timeout on purpose: it covers the human approval wait.
+        timeout(time: 24, unit: 'HOURS')
+        disableConcurrentBuilds()
+    }
+    environment {
+        GIT_APPFW = credentials('JENKINS_GITLAB_USER_CREDENTIALS_APP_FRAMEWORKS')
+        // Repo hosts are secret-text credentials, so they can only be bound here (not in the agent block); checkout_branch/setup_submodules read them from the environment and Jenkins masks them in the log.
+        JENKINS_RMNG_REPO_URL = credentials('JENKINS_RMNG_REPO_URL')
+        JENKINS_RMNG_CLOUD_COMPONENTS_REPO_URL = credentials('JENKINS_RMNG_CLOUD_COMPONENTS_REPO_URL')
+        AWS_REGION = 'us-east-1'
+    }
+    parameters {
+        // Pasted-creds model shared with the rmng backend deploy job: export lines per run (supports AWS_SESSION_TOKEN / short-lived SSO creds; nothing stored in Jenkins). utils.groovy's setup_aws_credentials writes them to ./aws_creds and every AWS-touching sh block sources that file.
+        text(name: 'AWS_ENV_CREDS',
+            description: 'AWS credentials as export lines: export AWS_ACCESS_KEY_ID=... / export AWS_SECRET_ACCESS_KEY=... / optional export AWS_SESSION_TOKEN=... (prefer short-lived session creds)')
+        string(name: 'BRANCH', defaultValue: 'main',
+            description: 'Git branch to check out and publish (defaults to main)')
+        booleanParam(name: 'ALLOW_VERSION_OVERWRITE', defaultValue: false,
+            description: 'Republish an existing version (bypasses the version-exists guard)')
+        string(name: 'APPLICATION_PUBLISHER_BUCKET', defaultValue: '',
+            description: 'Full prod application publisher bucket name (required)')
+    }
+    stages {
+        stage('Initialization') {
+            // Multibranch enforces main; a plain Pipeline-from-SCM job (e.g. a standalone test job pointing at a feature branch) has no BRANCH_NAME, so allow it — creating such a job is a deliberate act by a Jenkins admin.
+            when {
+                anyOf {
+                    branch 'main'
+                    expression { env.BRANCH_NAME == null }
+                }
+            }
+            steps {
+                script {
+                    cloud_utils = load "${WORKSPACE}/deployment/jenkins/utils.groovy"
+                    publish_utils = load "${WORKSPACE}/deployment/jenkins/publish_utils.groovy"
+                    // Resolve once so checkout and the manifest always agree; an unset BRANCH param defaults to main.
+                    env.PUBLISH_BRANCH = params.BRANCH ?: 'main'
+                    // Publish the operator-selected branch, not just whatever Jenkins indexed; must run before VERSION is read and before submodules init so the version and published assets reflect this branch.
+                    publish_utils.checkout_branch(env.PUBLISH_BRANCH)
+                    // Publish only for real merges or human-started runs; never for
+                    // branch-indexing/no-change automated builds (qahook lesson).
+                    def humanRun = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause').size() > 0
+                    def credsProvided = params.AWS_ENV_CREDS?.trim()
+                    env.RMNG_VERSION = readFile('VERSION').trim()
+                    // Pasted-creds model: a merge-triggered build has an empty AWS_ENV_CREDS and cannot publish — it ends green as a reminder; the real publish is a 'Build with Parameters' run. A human-started run without creds is a mistake, so it fails loudly.
+                    if (humanRun && !credsProvided) {
+                        error('AWS_ENV_CREDS is required — use Build with Parameters and paste the export lines.')
+                    }
+                    env.RUN_PUBLISH = ((currentBuild.changeSets.size() > 0 || humanRun) && credsProvided) ? 'true' : 'false'
+                    currentBuild.displayName = "${BUILD_NUMBER} - prod - v${env.RMNG_VERSION}"
+                    currentBuild.description = "RUN_PUBLISH=${env.RUN_PUBLISH} | overwrite=${params.ALLOW_VERSION_OVERWRITE}"
+                    if (env.RUN_PUBLISH == 'true') {
+                        cloud_utils.show_build_env_details()
+                        cloud_utils.setup_aws_credentials()
+                        publish_utils.setup_submodules()
+                        currentBuild.displayName = "${BUILD_NUMBER} - ${env.ACCOUNT_ID} - v${env.RMNG_VERSION}"
+                    } else if (currentBuild.changeSets.size() > 0) {
+                        currentBuild.description = "merge to main detected — run 'Build with Parameters' (paste AWS_ENV_CREDS) to publish v${env.RMNG_VERSION}"
+                    }
+                }
+            }
+        }
+        stage('Approve') {
+            when {
+                anyOf {
+                    branch 'main'
+                    expression { env.BRANCH_NAME == null }
+                }
+                environment name: 'RUN_PUBLISH', value: 'true'
+            }
+            steps {
+                input message: "Publish rmng v${env.RMNG_VERSION} to s3://${params.APPLICATION_PUBLISHER_BUCKET}?", ok: 'Publish'
+            }
+        }
+        stage('Publish') {
+            when {
+                anyOf {
+                    branch 'main'
+                    expression { env.BRANCH_NAME == null }
+                }
+                environment name: 'RUN_PUBLISH', value: 'true'
+            }
+            steps {
+                script {
+                    publish_utils.prod_publish()
+                }
+            }
+        }
+        stage('Artifacts') {
+            when {
+                anyOf {
+                    branch 'main'
+                    expression { env.BRANCH_NAME == null }
+                }
+                environment name: 'RUN_PUBLISH', value: 'true'
+            }
+            steps {
+                // Publish already shipped to prod in the prior stage; a manifest/archival hiccup must not fail the build (which would prompt a needless re-publish). Mark UNSTABLE instead.
+                warnError('build manifest step failed after a successful publish') {
+                    script {
+                        publish_utils.write_build_manifest()
+                        archiveArtifacts artifacts: 'publish-manifest.json'
+                    }
+                }
+            }
+        }
+    }
+    post {
+        always {
+            cleanWs()
+        }
+    }
+}

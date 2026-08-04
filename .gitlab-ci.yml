@@ -1,0 +1,505 @@
+# SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+#
+# SPDX-License-Identifier: Apache-2.0
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: "$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS"
+      when: never
+    - if: "$CI_COMMIT_BRANCH"
+
+variables:
+  GIT_SUBMODULE_STRATEGY: recursive
+  # RMNG_RESOURCE_POOL (internal resource-pool base URL) is a CI/CD variable, not a value in this file. Keep it unprotected — the deploy jobs run as manual MR-pipeline jobs on unprotected branches and would otherwise curl an empty URL.
+  # Docs toolchain image, used by the docs deploy jobs.
+  ESP_DOCS_ENV_IMAGE: "$CI_DOCKER_REGISTRY/esp-idf-doc-env-v5.4:1-1"
+
+default:
+  # Pinned to the go.mod toolchain. :latest silently follows new Go releases, so a
+  # jump to the next minor would land in CI before the codebase is ready for it.
+  # The security job below deliberately keeps a floating :1.26 instead — see there.
+  image: golang:1.26.5
+  tags:
+    - rmng
+
+stages:
+  - lint
+  - security
+  - unittest
+  - docker
+  - deploy
+  - swagger
+  - docs
+
+validate_swagger:
+  stage: lint
+  image: node:22-alpine
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - docs/api/**/*
+  script:
+    - npx --yes @apidevtools/swagger-cli validate docs/api/Api_Swagger.yaml
+    - "npx --yes @apidevtools/swagger-cli validate
+      docs/api/User_Api_Swagger.yaml"
+
+validate_mqtt:
+  stage: lint
+  image: node:22-alpine
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - docs/api/MQTT_*.yaml
+        - docs/api/Push_*.yaml
+  script:
+    - npx --yes @asyncapi/cli validate docs/api/MQTT_Node.yaml
+    - npx --yes @asyncapi/cli validate docs/api/MQTT_User.yaml
+    - npx --yes @asyncapi/cli validate docs/api/Push_User.yaml
+
+go_lint:
+  stage: lint
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "**/*.go"
+        - go.mod
+        - go.sum
+  script:
+    - make lint
+  allow_failure: true
+
+# -------------------------
+# CDK synth check — the only gate on Python and dependency changes.
+# Every other job filters on **/*.go or docs/api/**, so a requirements.txt, cdk.json
+# or stack.py change previously produced a pipeline with nothing in it. Synth needs no AWS
+# credentials (there are no from_lookup calls) and the stacks are environment-agnostic.
+# DASHBOARD_SKIP avoids requiring a built frontend; dashboard_check covers that instead.
+# -------------------------
+cdk_synth:
+  stage: lint
+  # Registry path from the predefined project variable; only the tag is pinned here.
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.5_node24
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "**/*.py"
+        - requirements.txt
+        - cdk.json
+        - Stackfile.yaml
+        - deployment/docker/Dockerfile
+        - Makefile
+  variables:
+    CDK_PUBLISH: "true"
+    DASHBOARD_SKIP: "1"
+    AWS_REGION: ap-south-1
+    CDK_DEFAULT_REGION: ap-south-1
+    RMNG_REGION: ap-south-1
+  before_script:
+    - pip3 install -r requirements.txt
+  script:
+    - make go_build
+    - CDK_OUTDIR=cdk.out.rmng python3 cdk/apps/rmng.py
+    - CDK_OUTDIR=cdk.out.espuser python3 cdk/apps/espuser.py
+    - CDK_OUTDIR=cdk.out.alexa python3 cdk/apps/alexa.py
+  artifacts:
+    when: on_failure
+    expire_in: 1 week
+    paths:
+      - cdk.out.rmng
+      - cdk.out.espuser
+      - cdk.out.alexa
+
+# -------------------------
+# Dashboard check — nothing else builds or tests the frontend, so a broken typecheck or
+# failing vitest suite could previously reach a deploy. `make admin-dashboard-build` is
+# reused for the npm ci + build so the registry token logic stays in one place.
+# -------------------------
+dashboard_check:
+  stage: lint
+  image: node:22-alpine
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - dashboard/**/*
+  before_script:
+    - apk add --no-cache make
+  script:
+    - make admin-dashboard-build
+    - cd dashboard
+    - npm run typecheck
+    - npm test
+    # eslint --max-warnings 0 plus the en/zh i18n key-parity check.
+    - npm run lint
+
+# -------------------------
+# Vulnerability scanning (govulncheck) — blocking gate across all go.work modules
+# -------------------------
+go_vulncheck:
+  stage: security
+  # Pinned (not the default golang:latest): a blocking stdlib vulnerability gate must
+  # be deterministic. The floating minor tag keeps picking up stdlib security patches
+  # (e.g. the go1.26.5 crypto/tls fix) without an unpredictable jump to a new
+  # major/minor that :latest would bring. Bump this when the codebase moves to a newer
+  # Go line. Relies on the global GIT_SUBMODULE_STRATEGY: recursive so src/esp-cloud-common
+  # is checked out for scanning.
+  image: golang:1.26
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "**/*.go"
+        - "**/go.mod"
+        - "**/go.sum"
+        - go.work
+        - go.work.sum
+        - src/esp-cloud-common
+  script:
+    - make vulncheck
+
+unittest:
+  stage: unittest
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "**/*.go"
+        - go.mod
+        - go.sum
+        - Makefile
+  before_script:
+    # Pinned to the versions in go.mod and deployment/docker/Dockerfile — a ginkgo CLI newer
+    # than the library it drives produces confusing failures. Bump all three together.
+    - go install github.com/onsi/ginkgo/v2/ginkgo@v2.28.3
+    - go install github.com/onsi/gomega/...@v1.40.0
+    - go install github.com/boumenot/gocover-cobertura@v1.5.0
+  script:
+    - make test
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: build/coverage/coverage.xml
+    paths:
+      - build/coverage/coverage.xml
+
+# -------------------------
+# Template for AWS deploy
+# -------------------------
+.deploy_template:
+  stage: deploy
+  # Registry path from the predefined project variable; only the tag is pinned here.
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.5_node24
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: manual
+      allow_failure: true
+  artifacts:
+    paths:
+      - build/tests/report.html
+      - build/cdk/cdk-outputs.json
+    when: always
+  before_script:
+    - pip3 install -r requirements.txt
+    - curl -o resource-pool-cli.py ${RMNG_RESOURCE_POOL}/download-cli
+    - python3 resource-pool-cli.py status
+    - python3 resource-pool-cli.py grab --user-id ${CI_JOB_ID} --resource-type
+      rmng_aws_account_${AWS_REGION} --wait-time 3600 --timeout 3600
+    - access_key=$(python3 -c "import glob, json; f =
+      glob.glob('/root/.resource-pool/rmng_aws_account*.json')[0];
+      print(json.load(open(f))['data']['aws_access_key_id'])")
+    - secret_access_key=$(python3 -c "import glob, json; f =
+      glob.glob('/root/.resource-pool/rmng_aws_account*.json')[0];
+      print(json.load(open(f))['data']['aws_secret_access_key'])")
+    - session_token=$(python3 -c "import glob, json; f =
+      glob.glob('/root/.resource-pool/rmng_aws_account*.json')[0];
+      print(json.load(open(f))['data']['aws_session_token'])")
+    - export AWS_ACCESS_KEY_ID=${access_key}
+    - export AWS_SECRET_ACCESS_KEY=${secret_access_key}
+    - export AWS_SESSION_TOKEN=${session_token}
+    - python3 -u tools/aws_cleanup.py --access-key ${AWS_ACCESS_KEY_ID}
+      --secret-key ${AWS_SECRET_ACCESS_KEY} --session-token
+      "${AWS_SESSION_TOKEN}" --region ${AWS_REGION}
+  script:
+    - mkdir -p /root/.aws
+    - echo "[default]" > /root/.aws/config
+    - echo region = ${AWS_REGION} >> /root/.aws/config
+    - echo output = json >> /root/.aws/config
+    - aws s3 ls
+    - git submodule update --init --recursive
+    # make deploy gathers Stackfile prompt inputs (e.g. AdminEmails) from the environment.
+    - export RMNG_ADMIN_EMAILS="${RMNG_ADMIN_EMAILS}"
+    # itest creds as single JSON blobs (masked CI/CD variables): Mailosaur + APNs/Firebase push.
+    - export RMNG_ITEST_CONFIG_JSON="${RMNG_ITEST_CONFIG_JSON}"
+    - export RMNG_NOTIFY_DATA_JSON="${RMNG_NOTIFY_DATA_JSON}"
+    - make setup
+    - make deploy
+    - make itest ITEST_ARGS='-n auto --dist=loadgroup --reruns 3 --reruns-delay
+      5'
+  after_script:
+    - python3 resource-pool-cli.py release-all --user-id ${CI_JOB_ID}
+
+# -------------------------
+# Region-specific jobs
+# -------------------------
+deploy_us-east-1:
+  extends: .deploy_template
+  variables:
+    AWS_REGION: us-east-1
+
+deploy_eu-west-1:
+  extends: .deploy_template
+  variables:
+    AWS_REGION: eu-west-1
+
+# -------------------------
+# Docker build
+# -------------------------
+.build_docker_template:
+  stage: docker
+  image: espressif/dind:1
+  tags:
+    - dind
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+  variables:
+    NODE_VERSION: "24"
+    GO_VERSION: "1.26.5"
+    DOCKER_IMAGE_REGISTRY: "$CI_REGISTRY"
+    DOCKER_IMAGE_VERSION: "go${GO_VERSION}_node${NODE_VERSION}"
+    DOCKER_IMAGE_NAME: "${CI_REGISTRY_IMAGE}/rmng:${DOCKER_IMAGE_VERSION}"
+    # No GitLab credentials are passed in: the image installs only public
+    # toolchains, and every npm dependency resolves from public npm (there is no
+    # .npmrc anywhere in the tree). The four GITLAB_*_APP_FRAMEWORKS/RAINMAKER
+    # build args this used to forward were never referenced in the Dockerfile.
+    DOCKER_BUILD_ARGS:
+      "--build-arg VERSION=${DOCKER_IMAGE_VERSION} --build-arg
+      NODE_VERSION=${NODE_VERSION} --build-arg GO_VERSION=${GO_VERSION}"
+    REPOS_PATH: "/root"
+  script:
+    - echo ${CI_GITLAB_PASSWORD_APP_FRAMEWORKS_DOCKER_PUSH} | docker login
+      --username ${CI_GITLAB_USERNAME_APP_FRAMEWORKS_DOCKER_PUSH}
+      --password-stdin ${DOCKER_IMAGE_REGISTRY}
+    - docker build -f deployment/docker/Dockerfile --no-cache ${DOCKER_BUILD_ARGS}
+      --tag ${DOCKER_IMAGE_NAME} .
+    - docker push ${DOCKER_IMAGE_NAME}
+
+build_docker:
+  extends: .build_docker_template
+
+# -------------------------
+# Swagger sync to S3
+# -------------------------
+sync_swagger:
+  stage: swagger
+  # Publishing docs consumes nothing the earlier stages produce. Without needs: []
+  # the job waits out the whole pipeline and gets skipped when an unrelated docker
+  # or deploy job fails, so a swagger change silently never reaches S3.
+  needs: []
+  image:
+    name: amazon/aws-cli:latest
+    entrypoint: [""]
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      changes:
+        # Whole folder, not a hand-maintained list: index.html, index.css, the
+        # favicons and LICENSE/NOTICE are part of the published site too, and under
+        # a narrower list an edit to one of them silently never reached S3 — it rode
+        # along with whatever unrelated spec change came next. The MQTT/Push specs
+        # ride along too — their raw YAML is served from this bucket (see below),
+        # so a commit touching only those is a real sync, not a no-op.
+        - docs/api/**/*
+  variables:
+    AWS_DEFAULT_REGION: us-east-1
+  script:
+    - export AWS_ACCESS_KEY_ID=${RMNG_PROD_ACCESS_KEY}
+    - export AWS_SECRET_ACCESS_KEY=${RMNG_PROD_SECRET_ACCESS_KEY}
+    - aws s3 sync docs/api/ s3://esp-rainmaker-neo-api/ --delete --exclude
+      "MQTT_*.yaml" --exclude "mqtt_*" --exclude "Push_*.yaml"
+    - aws cloudfront create-invalidation --distribution-id E3F6AIL6K7W45G --paths "/*"
+    - 'echo "HTTP APIs site: https://api.docs.neo.rainmaker.espressif.com"'
+
+# -------------------------
+# MQTT AsyncAPI sync to S3
+# -------------------------
+sync_mqtt:
+  stage: swagger
+  # Same reasoning as sync_swagger — no dependency on the build or deploy stages.
+  needs: []
+  image:
+    name: node:22-alpine
+    entrypoint: [""]
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      changes:
+        - docs/api/MQTT_*.yaml
+        - docs/api/mqtt_index.html
+  variables:
+    AWS_DEFAULT_REGION: us-east-1
+  before_script:
+    - apk add --no-cache aws-cli
+    # Pin CLI + template to a verified-compatible pair.
+    # CLI 4.1.1 bundles @asyncapi/generator 1.17.25; html-template@2.3.0 is the last
+    # template release compatible with generator 1.x (declares generator >=1.15.0 <2.0.0).
+    # Newer template majors (3.x) need generator 2.x, which no published CLI bundles.
+    - npm install -g @asyncapi/cli@4.1.1
+  script:
+    - export AWS_ACCESS_KEY_ID=${RMNG_PROD_ACCESS_KEY}
+    - export AWS_SECRET_ACCESS_KEY=${RMNG_PROD_SECRET_ACCESS_KEY}
+    - "asyncapi generate fromTemplate docs/api/MQTT_Node.yaml
+      @asyncapi/html-template@2.3.0 -o dist/node --force-write"
+    - "asyncapi generate fromTemplate docs/api/MQTT_User.yaml
+      @asyncapi/html-template@2.3.0 -o dist/user --force-write"
+    - aws s3 sync dist/node/ s3://esp-rainmaker-neo-mqtt/node/ --delete
+    - aws s3 sync dist/user/ s3://esp-rainmaker-neo-mqtt/user/ --delete
+    # Push payloads moved to sync_events (events.docs.neo); drop the stale copy.
+    - aws s3 rm s3://esp-rainmaker-neo-mqtt/push/ --recursive
+    - aws s3 cp docs/api/mqtt_index.html
+      s3://esp-rainmaker-neo-mqtt/index.html
+    # Raw specs alongside their renderings, for codegen and diffing. Safe at the
+    # bucket root: the --delete syncs above are scoped to node/ and user/.
+    - aws s3 cp docs/api/MQTT_Node.yaml s3://esp-rainmaker-neo-mqtt/MQTT_Node.yaml
+    - aws s3 cp docs/api/MQTT_User.yaml s3://esp-rainmaker-neo-mqtt/MQTT_User.yaml
+    - aws cloudfront create-invalidation --distribution-id E3Q0BLMA5KBDH0 --paths "/*"
+    - 'echo "MQTT Reference site: https://mqtt.docs.neo.rainmaker.espressif.com"'
+    - 'echo "  Node: https://mqtt.docs.neo.rainmaker.espressif.com/node/"'
+    - 'echo "  User: https://mqtt.docs.neo.rainmaker.espressif.com/user/"'
+
+# -------------------------
+# Notification/event payloads (AsyncAPI) sync to S3
+# -------------------------
+sync_events:
+  stage: swagger
+  # Same reasoning as sync_swagger — no dependency on the build or deploy stages.
+  needs: []
+  image:
+    name: node:22-alpine
+    entrypoint: [""]
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      changes:
+        - docs/api/Push_*.yaml
+  variables:
+    AWS_DEFAULT_REGION: us-east-1
+  before_script:
+    - apk add --no-cache aws-cli
+    # Same pinned CLI/template pair as sync_mqtt — see the comment there.
+    - npm install -g @asyncapi/cli@4.1.1
+  script:
+    - export AWS_ACCESS_KEY_ID=${RMNG_PROD_ACCESS_KEY}
+    - export AWS_SECRET_ACCESS_KEY=${RMNG_PROD_SECRET_ACCESS_KEY}
+    - "asyncapi generate fromTemplate docs/api/Push_User.yaml
+      @asyncapi/html-template@2.3.0 -o dist/events --force-write"
+    # Unlike sync_mqtt this sync targets the bucket root, so --delete would remove
+    # the raw spec copied below on every run; --exclude keeps it out of scope.
+    - aws s3 sync dist/events/ s3://esp-rainmaker-neo-events/ --delete --exclude
+      "Push_User.yaml"
+    # Raw spec alongside its rendering, for codegen and diffing.
+    - aws s3 cp docs/api/Push_User.yaml s3://esp-rainmaker-neo-events/Push_User.yaml
+    # Distribution for events.docs.neo.rainmaker.espressif.com — update the ID
+    # if it is recreated.
+    - aws cloudfront create-invalidation --distribution-id E270IBMQ3EC88Q --paths "/*"
+    - 'echo "Events payloads site: https://events.docs.neo.rainmaker.espressif.com"'
+
+# -------------------------
+# Cloud specification docs (Sphinx) -> Espressif doc server
+# -------------------------
+# See docs/README.md.
+.docs_template:
+  stage: docs
+  variables:
+    GIT_SUBMODULE_STRATEGY: none
+    GIT_DEPTH: "1"
+    # esp-docs labels this branch "latest"; it defaults to master.
+    ESP_DOCS_LATEST_BRANCH_NAME: "main"
+
+.docs_changes: &docs_changes
+  - docs/**/*
+  - .gitlab-ci.yml
+
+# main carries "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" rather than
+# "$CI_COMMIT_BRANCH": while an MR from main is open, the workflow rules
+# suppress branch pipelines on it, so main only ever appears as an MR pipeline.
+.if_main:
+  &if_main '$CI_COMMIT_BRANCH == "main" || $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME
+  == "main"'
+
+build_docs:
+  extends: .docs_template
+  image: python:3.12
+  interruptible: true
+  needs: []
+  rules:
+    - if:
+        '$CI_PIPELINE_SOURCE == "merge_request_event" || $CI_COMMIT_BRANCH ==
+        "main"'
+      changes: *docs_changes
+  artifacts:
+    when: always
+    paths:
+      - docs/_build/*/*/*.txt
+      - docs/_build/*/*/html
+    expire_in: 1 week
+  script:
+    - cd docs
+    - pip install -r requirements.txt
+    - build-docs -l en -pp $CI_PROJECT_DIR
+
+# deploy-docs ships build_docs' artifacts over ssh/scp, which python:3.12 lacks.
+# It renders nothing, so esp-docs alone is enough.
+.deploy_docs_template:
+  extends: .docs_template
+  image: $ESP_DOCS_ENV_IMAGE
+  tags: [deploy_docs]
+  needs: [build_docs]
+  variables:
+    DOCS_BUILD_DIR: "$CI_PROJECT_DIR/docs/_build/"
+  script:
+    - source $CI_PROJECT_DIR/docs/utils.sh
+    - add_doc_server_ssh_keys $DOCS_DEPLOY_PRIVATEKEY $DOCS_DEPLOY_SERVER
+      $DOCS_DEPLOY_SERVER_USER
+    - export GIT_VER=$(git describe --always)
+    - pip install "$(grep '^esp-docs==' $CI_PROJECT_DIR/docs/requirements.txt)"
+    - deploy-docs
+
+deploy_docs_preview:
+  extends: .deploy_docs_template
+  variables:
+    TYPE: "preview"
+    DOCS_DEPLOY_PRIVATEKEY: "$DOCS_PREVIEW_PRIVATEKEY"
+    DOCS_DEPLOY_SERVER: "$DOCS_PREVIEW_SERVER"
+    DOCS_DEPLOY_SERVER_USER: "$DOCS_PREVIEW_SERVER_USER"
+    DOCS_DEPLOY_PATH: "$DOCS_PREVIEW_PATH"
+    DOCS_DEPLOY_URL_BASE: "$DOCS_PREVIEW_URL_BASE"
+  rules:
+    - if: *if_main
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes: *docs_changes
+
+deploy_docs_production:
+  extends: .deploy_docs_template
+  variables:
+    TYPE: "production"
+    DOCS_DEPLOY_PRIVATEKEY: "$DOCS_PROD_PRIVATEKEY"
+    DOCS_DEPLOY_SERVER: "$DOCS_PROD_SERVER"
+    DOCS_DEPLOY_SERVER_USER: "$DOCS_PROD_SERVER_USER"
+    DOCS_DEPLOY_PATH: "$DOCS_PROD_PATH"
+    DOCS_DEPLOY_URL_BASE: "$DOCS_PROD_URL_BASE"
+  # allow_failure keeps this non-blocking: under rules: a manual job defaults to
+  # blocking, and the project requires a green pipeline to merge.
+  allow_failure: true
+  # The changes: filter must mirror build_docs': this job needs: it, and a
+  # pipeline that creates the deploy without the build is a YAML error.
+  rules:
+    - if: *if_main
+      changes: *docs_changes
+      when: manual

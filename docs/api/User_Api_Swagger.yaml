@@ -1,0 +1,1574 @@
+# SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+#
+# SPDX-License-Identifier: Apache-2.0
+
+openapi: 3.0.0
+info:
+  title: ESP RainMaker Neo Auth & Accounts API
+  version: 0.8.0
+  description: |
+    Sign-in and account management for the ESP RainMaker Neo cloud.
+    Anything that produces or rotates an access token lives here; once
+    you have a token, the rest of the platform lives in the
+    **ESP RainMaker Neo Platform API**
+
+    ESP User is the platform's own OAuth 2.1 / OIDC issuer: every token a client
+    holds is minted here, regardless of how the user proved their identity.
+    Admins authenticate directly against their AWS Cognito user pool.
+
+    Login methods (all end in OUR tokens; upstream credentials never reach clients):
+
+    - **Federated login (default)**: `GET /oauth2/authorize` starts a browser
+      authorization-code + PKCE flow. With a single enabled identity provider the
+      user is auto-redirected to it; the
+      broker exchanges the upstream code server-side and issues OUR authorization
+      code at the client's `redirect_uri`.
+    - **Native password APIs** (`/v1/user/auth/*`): the main-era
+      native surface. Credentials are verified against the bundled Cognito pool server-side and converted to our tokens.
+
+    Token lifecycle after login:
+
+    1. `POST /oauth2/token` (`grant_type=refresh_token`) - rotate the token set
+       (native `/v1/user/auth/token/refresh` is reuse-tolerant instead).
+    2. Send `access_token` as a `Bearer` `Authorization` header on subsequent
+       calls. To call the platform API you must first exchange the token for AWS
+       credentials at `POST /v1/user/credentials` and SigV4-sign every request.
+       A token this IdP issued is exchanged on its own; a token issued directly by
+       the Cognito provider must also carry its `id_token` in the body, and the two
+       must come from the same sign-in.
+  termsOfService: http://swagger.io/terms/
+  contact:
+    email: esp-rainmaker-support@espressif.com
+    url: https://rainmaker.espressif.com
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+
+# A `servers:` block lets Swagger UI (and the docusaurus-openapi-docs
+# Try-it-out panel) populate a base URL. Replace `{deployment}` with
+# your stack's API Gateway hostname; `{stage}` is the API Gateway stage,
+# which every RMNG deployment creates as `prod`.
+servers:
+  - url: https://{deployment}/{stage}
+    description: Your ESP RainMaker Neo deployment's API Gateway base URL
+    variables:
+      deployment:
+        default: api.example.com
+        description: Replace with your API Gateway hostname.
+      stage:
+        default: prod
+        description: API Gateway stage name.
+
+# Top-level tag declarations control rendering order in Swagger UI
+# and in the docs-site sidebar.
+tags:
+  - name: OIDC Discovery
+    description:
+      Public OpenID Connect discovery documents. Fetch these before starting an
+      auth request.
+  - name: OAuth2 / OIDC Core
+    description:
+      Token issuance/rotation, userinfo, revocation, and user lookup — the
+      endpoints every login method converges on.
+  - name: Federated Login
+    description:
+      Browser authorization-code + PKCE login brokered to an upstream identity
+      provider (Cognito hosted UI in the open-source deployment). Clients only
+      ever receive ESP User tokens.
+  - name: User Auth
+    description:
+      The main-era native `/v1/user/auth/*` password surface, kept
+      request/response compatible. Credentials verify against the bundled
+      Cognito pool server-side; every token returned is an ESP User token.
+  - name: Admin Clients
+    description: Superadmin-only OAuth client registry
+  - name: Admin Creds
+    description:
+      Scoped AWS credentials the dashboard uses to run seevral admin steps
+
+paths:
+  # ==========================================
+  # OIDC Discovery (public, static)
+  # ==========================================
+
+  /.well-known/openid-configuration:
+    get:
+      summary: OpenID Provider metadata
+      description:
+        OIDC discovery document — endpoint URLs and the `jwks_uri`. Public and
+        cacheable.
+      tags:
+        - OIDC Discovery
+      security: []
+      responses:
+        "200":
+          description: Discovery metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpenIDConfiguration"
+
+  /.well-known/oauth-authorization-server:
+    get:
+      summary: OAuth 2.0 Authorization Server metadata
+      description:
+        OAuth 2.0 authorization server metadata for non-OIDC clients. Public and
+        cacheable.
+      tags:
+        - OIDC Discovery
+      security: []
+      responses:
+        "200":
+          description: Authorization Server metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthorizationServerMetadata"
+
+  /.well-known/jwks.json:
+    get:
+      summary: JSON Web Key Set
+      description:
+        Public keys for verifying issued tokens. Public and cacheable.
+      tags:
+        - OIDC Discovery
+      security: []
+      responses:
+        "200":
+          description: JWK Set
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JWKS"
+
+  /oauth2/authorize:
+    get:
+      summary: Start browser login (authorization code + PKCE)
+      description: |
+        Begins the OAuth 2.1 / OIDC authorization-code flow. Validates the
+        client, `redirect_uri` (exact match), and PKCE, writes an internal login
+        flow record, sets an opaque `flow_id` session cookie, and routes the
+        login surface by the enabled identity providers: with exactly one OIDC
+        provider (the open-source Cognito case) the browser is `302`d straight
+        to `/oauth2/federation/start`; an OTP-only deployment deep-links to its
+        login page; otherwise the built-in login page is served. After login the
+        browser is redirected to the client's `redirect_uri` with a single-use
+        `code` (and `state`). PKCE (`S256`) is required for every client. See
+        specs `authorize-code-flow.md` and `federation.md`.
+      tags:
+        - Federated Login
+      security: []
+      parameters:
+        - name: response_type
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: ["code"]
+        - name: client_id
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: redirect_uri
+          in: query
+          required: true
+          description:
+            Must exactly match a registered redirect URI for the client.
+          schema:
+            type: string
+        - name: scope
+          in: query
+          required: false
+          description:
+            Optional (RFC 6749 §4.1.1), space-delimited; include `openid` for an
+            id_token. Each requested scope must be within the client's allowed
+            scopes.
+          schema:
+            type: string
+            example: "openid email"
+        - name: code_challenge
+          in: query
+          required: false
+          description:
+            PKCE code challenge (RFC 7636). Required for clients registered with
+            `require_pkce` (always the case for public clients); optional
+            otherwise.
+          schema:
+            type: string
+        - name: code_challenge_method
+          in: query
+          required: false
+          description: Must be `S256` when a `code_challenge` is provided.
+          schema:
+            type: string
+            enum: ["S256"]
+        - name: state
+          in: query
+          required: false
+          description:
+            Opaque value echoed back on the redirect (client CSRF token).
+          schema:
+            type: string
+      responses:
+        "302":
+          description: |
+            Redirect to the login UI (with a `flow_id` session cookie). A
+            post-validation error instead redirects to
+            `redirect_uri?error=<code>&state=<state>`.
+          headers:
+            Location:
+              schema:
+                type: string
+            Set-Cookie:
+              description:
+                Short-lived HttpOnly Secure SameSite=Lax flow_id cookie.
+              schema:
+                type: string
+        "400":
+          description: |
+            invalid_request / unsupported_response_type / invalid client or
+            redirect_uri — rendered on the service error page (not redirected).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+
+  /oauth2/federation/start:
+    get:
+      summary: Redirect to an upstream identity provider
+      description: |
+        Federation leg of the browser login: reads the `esp_flow_id` cookie set
+        by `/oauth2/authorize`, mints an upstream-only `state` (HMAC-bound to the
+        flow), `nonce`, and PKCE verifier, persists them on the flow record, and
+        `302`s the browser to the provider's hosted login (Cognito hosted UI in
+        the open-source deployment). The upstream leg is private to the broker —
+        it never mixes with the client's own PKCE/state. See spec `federation.md`.
+      tags:
+        - Federated Login
+      security: []
+      parameters:
+        - name: provider
+          in: query
+          required: true
+          description:
+            Provider name from the identity-provider registry (e.g. `cognito`).
+          schema:
+            type: string
+        - name: esp_flow_id
+          in: cookie
+          required: true
+          description: Login-flow session cookie set by `/oauth2/authorize`.
+          schema:
+            type: string
+      responses:
+        "302":
+          description: Redirect to the provider's hosted login page.
+          headers:
+            Location:
+              schema:
+                type: string
+        "400":
+          description:
+            Missing/expired flow or unknown provider (HTML error page).
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /oauth2/federation/callback:
+    get:
+      summary: Upstream provider callback
+      description: |
+        The provider redirects here after the user authenticates. The broker
+        verifies the HMAC `state` against the flow, exchanges the upstream
+        `code` server-side, validates the upstream `id_token`
+        (`iss`/`aud`/`nonce`/`exp`/signature), resolves the verified contact to
+        an ESP User account (JIT-creating it on first login), and `302`s the
+        browser to the client's `redirect_uri` with OUR single-use authorization
+        `code`. Upstream tokens are discarded — refresh never touches the
+        provider.
+      tags:
+        - Federated Login
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: true
+          description: Upstream authorization code.
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: true
+          description: The broker's own HMAC-bound state (not the client's).
+          schema:
+            type: string
+      responses:
+        "302":
+          description:
+            Redirect to the client's `redirect_uri` with `code` (+ `state`).
+          headers:
+            Location:
+              schema:
+                type: string
+        "400":
+          description:
+            State/flow mismatch or upstream validation failure (HTML error
+            page).
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /oauth2/token:
+    post:
+      summary: OAuth token endpoint
+      description: |
+        Standard OAuth 2.0 token endpoint, selected by `grant_type`. Supports
+        `authorization_code` (exchange a browser-login code + PKCE verifier for a
+        token set) and `refresh_token` (exchange a refresh token for a fresh set,
+        rotating the refresh token). Other grant types return
+        `unsupported_grant_type`.
+
+        Client authentication is HTTP Basic (RFC 6749 §2.3.1): confidential
+        clients MUST present `base64(client_id:secret)` (bad/missing → `401
+        invalid_client`); public clients send `client_id` (Basic or form body)
+        with no secret and rely on PKCE / rotation.
+      tags:
+        - OAuth2 / OIDC Core
+      security:
+        - clientBasicAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              oneOf:
+                - $ref: "#/components/schemas/TokenCodeRequest"
+                - $ref: "#/components/schemas/TokenRefreshRequest"
+              discriminator:
+                propertyName: grant_type
+      responses:
+        "200":
+          description: A fresh token set, including a new refresh token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenSet"
+        "400":
+          description: invalid_request / invalid_grant / unsupported_grant_type
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+        "401":
+          description: invalid_client
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+
+  /oauth2/userinfo:
+    get:
+      summary: OIDC UserInfo endpoint
+      description: |
+        Returns the signed-in user's profile claims for the presented access
+        token. `sub` is always included; `email` is included only if the token
+        was granted the `email`/`profile` scope, and `phone_number` only with
+        the `phone` scope. The endpoint also accepts POST.
+      tags:
+        - OAuth2 / OIDC Core
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The subject's scope-authorized claims
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserinfoResponse"
+        "401":
+          description: |
+            invalid_token — the access token is missing, expired, or invalid.
+            Carries a `WWW-Authenticate: Bearer error="invalid_token"` header.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+    post:
+      summary: OIDC UserInfo endpoint (POST variant)
+      description: |
+        The POST form of the UserInfo endpoint. Same behavior as GET; the access
+        token may be sent in the `Authorization: Bearer` header or as the
+        `access_token` field of a form-encoded body.
+      tags:
+        - OAuth2 / OIDC Core
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                access_token:
+                  type: string
+                  description:
+                    The access token, when not sent in the Authorization header.
+                  example: "eyJhbGciOiJSUzI1Ni..."
+      responses:
+        "200":
+          description: The subject's scope-authorized claims
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserinfoResponse"
+        "401":
+          description:
+            invalid_token — the access token is missing, expired, or invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+
+  /oauth2/revoke:
+    post:
+      summary: OAuth token revocation endpoint
+      description: |
+        Revokes the given refresh token. Only that one token is invalidated, not
+        the other tokens from the same login. A presented access token is
+        accepted and ignored. Always returns `200`, even if the token is unknown.
+
+        The client must identify itself (RFC 7009 §5): a confidential client via
+        HTTP Basic `base64(client_id:secret)`; a public client via the `client_id`
+        form parameter (no secret). Neither present → `400 invalid_request`; bad
+        secret / unknown client → `401 invalid_client`.
+      tags:
+        - OAuth2 / OIDC Core
+      security:
+        - clientBasicAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/RevokeRequest"
+      responses:
+        "200":
+          description: The token (if any) has been revoked. Empty body.
+        "400":
+          description:
+            invalid_request — the `token` is missing, or neither Basic nor
+            `client_id` was supplied.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+        "401":
+          description:
+            invalid_client — unknown client, or a confidential client with a
+            bad/missing secret.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+
+  # ==========================================
+  # GROUP 4: Authenticated User Profile
+  # ==========================================
+
+  # ==========================================
+  # Native auth (/v1/user/auth/*)
+  # Main-era request/response shapes; Cognito verified server-side, OUR tokens returned.
+  # ==========================================
+  /v1/user/auth/token:
+    post:
+      summary: Password sign-in
+      description: |
+        Verifies `username`/`password` against the bundled Cognito pool
+        server-side and returns an ESP User token set. All failures collapse to
+        a uniform `401` (no account-existence oracle).
+      tags:
+        - User Auth
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LegacyTokenRequest"
+      responses:
+        "200":
+          description: ESP User token set.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenSet"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/user/auth/token/refresh:
+    post:
+      summary: Refresh tokens
+      description: |
+        Redeems a refresh token issued by this surface for a fresh token set.
+        The refresh token is **rotated**: the response carries a new one and the
+        presented token is spent. Replaying a spent token is treated as theft and
+        terminates the login, so clients must persist the token from each response.
+      tags:
+        - User Auth
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LegacyRefreshRequest"
+      responses:
+        "200":
+          description: ESP User token set.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenSet"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/user/auth/signup:
+    post:
+      summary: Create an account
+      description: |
+        Creates the user in the bundled Cognito pool with exactly one of
+        `email` or `phone_number` plus a `password`; Cognito emails/texts the
+        verification code confirmed at `signup/verify`.
+      tags:
+        - User Auth
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LegacySignupRequest"
+      responses:
+        "201":
+          description: Account created; verification required.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user_id:
+                    type: string
+                  requires_verification:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example:
+                      Verification code sent. Existing RainMaker users should
+                      log in instead
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /v1/user/auth/signup/verify:
+    post:
+      summary: Confirm signup
+      tags:
+        - User Auth
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                email:
+                  type: string
+                phone_number:
+                  type: string
+                code:
+                  type: string
+                  description: Verification code Cognito delivered at signup.
+      responses:
+        "200":
+          description: Account verified.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /v1/user/auth/password-recovery:
+    post:
+      summary: Start password recovery
+      tags:
+        - User Auth
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username]
+              properties:
+                username:
+                  type: string
+                  description: The account email or phone number.
+      responses:
+        "200":
+          description: Reset code sent.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: If your account exists, you will receive a code
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /v1/user/auth/password-recovery/confirmation:
+    post:
+      summary: Confirm password recovery
+      tags:
+        - User Auth
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, code, new_password]
+              properties:
+                username:
+                  type: string
+                code:
+                  type: string
+                new_password:
+                  type: string
+      responses:
+        "200":
+          description: Password reset.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /v1/user/auth/password:
+    post:
+      summary: Change password
+      description: |
+        Changes the caller's password. The caller presents this issuer's access token, which is
+        verified before anything else because it identifies whose password is being changed, plus the
+        current password. All-device sign-out is not offered; see the signout route.
+      tags:
+        - User Auth
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [access_token, old_password, new_password]
+              properties:
+                access_token:
+                  type: string
+                  description: Access token issued by this service.
+                old_password:
+                  type: string
+                new_password:
+                  type: string
+      responses:
+        "200":
+          description: Password changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "400":
+          description: Missing field.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/user/auth/signout:
+    post:
+      summary: Sign out
+      description: |
+        Revokes the presented refresh token's family, signing out every device fed by it.
+
+        `global: "true"` is rejected with `400`. Sessions here are this issuer's own refresh
+        families, which a provider-side sign-out does not touch, so an all-devices request cannot be
+        honoured and is refused rather than answered with a success that ended nothing. Sign out each
+        session with its own refresh token.
+      tags:
+        - User Auth
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token:
+                  type: string
+                global:
+                  type: string
+                  description:
+                    Accepted for compatibility; `"true"` is rejected with `400`.
+      responses:
+        "200":
+          description: Signed out.
+        "400":
+          description:
+            Refresh token missing, or an all-devices signout was requested.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/users/{userId}:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        description:
+          The user's id, or `me` for the currently authenticated user.
+        schema:
+          type: string
+    get:
+      summary: Get user details
+      description: |
+        Returns the profile of the user. Use `me` as the userId to get details
+        for the currently authenticated user. The endpoint has no API Gateway
+        authorizer (authorizer type NONE); the OIDC access token is presented as
+        a `Bearer` token and validated in-handler against the provider's public keys.
+      tags:
+        - OAuth2 / OIDC Core
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: User profile retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetUserResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # ==========================================
+  # Admin — OAuth Client Registry (superadmin)
+  # ==========================================
+
+  /v1/admin/clients:
+    post:
+      summary: Create OAuth client
+      description: |
+        Registers a new OAuth/OIDC client. Superadmin only. `redirect_uris` must
+        be exact matches (no wildcards); `implicit` and `password` grants are not
+        allowed; public clients must use PKCE. For confidential clients a secret
+        is generated and its plaintext is returned **once** in this response.
+      tags:
+        - Admin Clients
+      security:
+        - CognitoAuthorizer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClientCreateRequest"
+      responses:
+        "201":
+          description:
+            Client created; client_secret present only for confidential, only
+            here.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClientCreateResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    get:
+      summary: List OAuth clients
+      description: |
+        Lists every registered client. By default the secret is omitted; pass
+        `get_secret=true` to include each confidential client's plaintext secret
+        (this is how a lost secret is recovered — there is no rotate endpoint).
+        Whether a client has a secret is implied by `client_type`. Superadmin only.
+      tags:
+        - Admin Clients
+      security:
+        - CognitoAuthorizer: []
+      parameters:
+        - name: get_secret
+          in: query
+          required: false
+          description:
+            If true, include each confidential client's plaintext client_secret.
+          schema:
+            type: boolean
+            default: false
+        - name: page_size
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: The registered clients
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  clients:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Client"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /v1/admin/clients/{client_id}:
+    parameters:
+      - name: client_id
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      summary: Update OAuth client
+      description: |
+        Replaces a client's mutable fields with the request body (full update — omitted
+        fields reset to empty/default). `client_id`, `client_type`, and the secret cannot
+        be changed. The same validation rules as create are applied. Superadmin only.
+      tags:
+        - Admin Clients
+      security:
+        - CognitoAuthorizer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClientUpdateRequest"
+      responses:
+        "200":
+          description: The updated client
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Client"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      summary: Delete OAuth client
+      description: |
+        Permanently deletes the client. Already-issued tokens keep working until
+        they expire, but the client can no longer authorize, exchange, or use OTP.
+        Superadmin only.
+      tags:
+        - Admin Clients
+      security:
+        - CognitoAuthorizer: []
+      responses:
+        "200":
+          description: Client deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/admin/credentials:
+    post:
+      summary: Get espuser-scoped AWS credentials (superadmin)
+      description: |
+        Returns short-lived STS credentials whose session policy is scoped to the
+        espuser-owned post-deployment actions the dashboard performs itself: SNS SMS
+        sandbox status, the SMS monthly spend limit, and ServiceQuotas reads and
+        increase requests.
+      tags:
+        - Admin Creds
+      security:
+        - CognitoAuthorizer: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CredsRequest"
+      responses:
+        "200":
+          description: Scoped credentials issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CredsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          description: Failed to assume the admin-creds role
+
+components:
+  schemas:
+    CredsRequest:
+      type: object
+      properties:
+        session_suffix:
+          type: string
+          maxLength: 32
+          pattern: "^[a-zA-Z0-9]*$"
+          description:
+            Optional alphanumeric suffix appended to the STS role session name,
+            so concurrent admin sessions are distinguishable in CloudTrail.
+          example: "dash01"
+    CredsResponse:
+      type: object
+      required:
+        - access_key
+        - secret_key
+        - session_token
+      properties:
+        access_key:
+          type: string
+          description: Temporary AWS access key ID.
+        secret_key:
+          type: string
+          description: Temporary AWS secret access key.
+        session_token:
+          type: string
+          description: Temporary AWS session token.
+        expiration:
+          type: integer
+          nullable: true
+          description:
+            Unix timestamp at which the credentials expire, 1 hour from now.
+          example: 1767225600
+    OpenIDConfiguration:
+      type: object
+      description:
+        OIDC provider metadata. The live document may include more fields.
+      required:
+        - issuer
+        - authorization_endpoint
+        - token_endpoint
+        - jwks_uri
+        - response_types_supported
+        - subject_types_supported
+        - id_token_signing_alg_values_supported
+      properties:
+        issuer:
+          type: string
+          format: uri
+          description:
+            This provider's issuer identifier (the deployment base URL).
+          example: "https://auth.customer.com"
+        authorization_endpoint:
+          type: string
+          format: uri
+          example: "https://auth.customer.com/oauth2/authorize"
+        token_endpoint:
+          type: string
+          format: uri
+          example: "https://auth.customer.com/oauth2/token"
+        jwks_uri:
+          type: string
+          format: uri
+          description: URL of the JSON Web Key Set used to verify issued tokens.
+          example: "https://auth.customer.com/.well-known/jwks.json"
+        response_types_supported:
+          type: array
+          items:
+            type: string
+            enum: [code]
+          example: ["code"]
+        subject_types_supported:
+          type: array
+          items:
+            type: string
+            enum: [public]
+          example: ["public"]
+        id_token_signing_alg_values_supported:
+          type: array
+          items:
+            type: string
+            enum: [RS256]
+          example: ["RS256"]
+
+    AuthorizationServerMetadata:
+      type: object
+      description:
+        OAuth 2.0 authorization server metadata. The live document may include
+        more fields.
+      required:
+        - issuer
+        - response_types_supported
+        - authorization_endpoint
+        - token_endpoint
+      properties:
+        issuer:
+          type: string
+          format: uri
+          description: This authorization server's issuer identifier.
+          example: "https://auth.customer.com"
+        authorization_endpoint:
+          type: string
+          format: uri
+          example: "https://auth.customer.com/oauth2/authorize"
+        token_endpoint:
+          type: string
+          format: uri
+          example: "https://auth.customer.com/oauth2/token"
+        jwks_uri:
+          type: string
+          format: uri
+          description: URL of the JSON Web Key Set used to verify issued tokens.
+          example: "https://auth.customer.com/.well-known/jwks.json"
+        response_types_supported:
+          type: array
+          items:
+            type: string
+            enum: [code]
+          example: ["code"]
+        grant_types_supported:
+          type: array
+          items:
+            type: string
+            enum: [authorization_code, refresh_token]
+          example: ["authorization_code", "refresh_token"]
+        code_challenge_methods_supported:
+          type: array
+          items:
+            type: string
+            enum: [S256]
+          example: ["S256"]
+
+    JWKS:
+      type: object
+      description: JSON Web Key Set. Public signing keys only.
+      required:
+        - keys
+      properties:
+        keys:
+          type: array
+          items:
+            $ref: "#/components/schemas/JWK"
+
+    JWK:
+      type: object
+      description: A single RSA public signing key.
+      required:
+        - kty
+        - kid
+        - use
+        - alg
+        - n
+        - e
+      properties:
+        kty:
+          type: string
+          enum: [RSA]
+          description: Key type.
+          example: "RSA"
+        kid:
+          type: string
+          description: Key ID; matched against the JWT header `kid`.
+          example: "2026-06-a"
+        use:
+          type: string
+          enum: [sig]
+          description: Public key use; `sig` for signature verification.
+          example: "sig"
+        alg:
+          type: string
+          enum: [RS256]
+          description: Algorithm this key is bound to.
+          example: "RS256"
+        n:
+          type: string
+          description: RSA modulus, base64url-encoded.
+          example: "0vx7agoebGcQSuuPiLJXZptN..."
+        e:
+          type: string
+          description: RSA public exponent, base64url-encoded.
+          example: "AQAB"
+
+    LegacyTokenRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          description: The account email or phone number.
+        password:
+          type: string
+          format: password
+
+    LegacyRefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+          description: Refresh token from this surface; spent once redeemed.
+
+    LegacySignupRequest:
+      type: object
+      required: [password]
+      properties:
+        email:
+          type: string
+          description: Exactly one of email or phone_number.
+        phone_number:
+          type: string
+          description: E.164; exactly one of email or phone_number.
+        password:
+          type: string
+          format: password
+
+    TokenSet:
+      type: object
+      description: The issued ESP User token set.
+      properties:
+        access_token:
+          type: string
+          description: The access token.
+        token_type:
+          type: string
+          example: "Bearer"
+        expires_in:
+          type: integer
+          example: 3600
+        refresh_token:
+          type: string
+          description: Refresh token; rotated on each use.
+        id_token:
+          type: string
+          description: Present only if `openid` was requested.
+
+    OAuthError:
+      type: object
+      description:
+        OAuth 2.0 error response. Distinct from the API's generic `{message}`
+        errors.
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          enum:
+            - invalid_request
+            - invalid_client
+            - invalid_grant
+            - unauthorized_client
+            - unsupported_grant_type
+            - invalid_scope
+            - invalid_token
+          example: "invalid_grant"
+        error_description:
+          type: string
+          description:
+            Human-readable detail. Does not distinguish why the token was
+            rejected.
+          example: "The refresh token is invalid, expired, or revoked."
+
+    TokenCodeRequest:
+      type: object
+      description: |
+        Exchange a browser-login authorization code for tokens. `code_verifier`
+        is required iff the code was issued with a PKCE challenge (always, for
+        public clients); `client_id` and `redirect_uri` must match those used at
+        `/oauth2/authorize`.
+      required:
+        - grant_type
+        - code
+        - client_id
+        - redirect_uri
+      properties:
+        grant_type:
+          type: string
+          enum: ["authorization_code"]
+          description: Must be `authorization_code`.
+          example: "authorization_code"
+        code:
+          type: string
+          description: The single-use authorization code from the redirect.
+          example: "ac_7f2b9c..."
+        code_verifier:
+          type: string
+          description:
+            PKCE verifier whose S256 hash equals the challenge sent at
+            authorize. Required iff the code was bound to a challenge.
+          example: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+        client_id:
+          type: string
+          description: Must equal the client that started the flow.
+          example: "user-pool-client"
+        redirect_uri:
+          type: string
+          description: Must equal the redirect_uri used at authorize.
+          example: "com.example://callback"
+
+    TokenRefreshRequest:
+      type: object
+      required:
+        - grant_type
+        - refresh_token
+        - client_id
+      properties:
+        grant_type:
+          type: string
+          enum: ["refresh_token"]
+          description: Must be `refresh_token`.
+          example: "refresh_token"
+        refresh_token:
+          type: string
+          description:
+            The current refresh token; it is replaced with a new one on use.
+          example: "a1b2c3d4.9f8e7d6c..."
+        client_id:
+          type: string
+          description: The client the token was issued to. Required.
+          example: "rm_mobile"
+
+    UserinfoResponse:
+      type: object
+      description: |
+        UserInfo claims. `sub` is always present; `email` / `phone_number`
+        appear only when the access token's scope allows them and the user has them set.
+      required:
+        - sub
+      properties:
+        sub:
+          type: string
+          description: The user's immutable user id (the token subject).
+          example: "9aXb7cD..."
+        email:
+          type: string
+          description: Present only with `email` / `profile` scope.
+          example: "user@example.com"
+        phone_number:
+          type: string
+          description: Present only with `phone` scope.
+          example: "+15551234567"
+
+    RevokeRequest:
+      type: object
+      required:
+        - token
+      properties:
+        token:
+          type: string
+          description:
+            The refresh token to revoke. Only this one token is invalidated, not
+            the other tokens from the same login. An access token here has no
+            effect.
+          example: "a1b2c3d4.9f8e7d6c..."
+        token_type_hint:
+          type: string
+          description: Optional hint; ignored.
+          enum: ["refresh_token", "access_token"]
+          example: "refresh_token"
+        client_id:
+          type: string
+          description:
+            Public client identifier (RFC 6749 §3.2.1) when not using the Basic
+            header. A confidential client authenticates via Basic instead.
+          example: "user-pool-client"
+
+    GetUserResponse:
+      type: object
+      required:
+        - user_id
+      properties:
+        user_id:
+          type: string
+          description:
+            The user's opaque identifier, minted by this issuer (the token `sub`
+            claim).
+          example: "8f3e9c1a-2b4d-4f6e-9a8c-1d2e3f4a5b6c"
+        email:
+          type: string
+          format: email
+          description: User's email address, if signed up with email.
+          example: "user@example.com"
+        phone_number:
+          type: string
+          description:
+            User's phone number in E.164 format, if signed up with phone.
+          example: "+1234567890"
+
+    Client:
+      type: object
+      description: |
+        A registered OAuth/OIDC client as returned by List. `client_secret` is
+        included only when the list request passed `get_secret=true` (confidential
+        clients only).
+      properties:
+        client_id:
+          type: string
+          example: "rm_mobile"
+        client_name:
+          type: string
+          example: "RainMaker Mobile"
+        client_type:
+          type: string
+          enum: ["public", "confidential"]
+        redirect_uris:
+          type: array
+          items:
+            type: string
+          description: Exact-match callback URLs (no wildcards).
+        grant_types:
+          type: array
+          items:
+            type: string
+            enum: ["authorization_code", "refresh_token"]
+          description: implicit and password grants are not allowed.
+        scopes:
+          type: array
+          items:
+            type: string
+            enum: ["openid", "email", "profile", "phone"]
+          example: ["openid", "profile", "email", "phone"]
+        require_pkce:
+          type: boolean
+          description: Always true for public clients.
+        client_secret:
+          type: string
+          description:
+            Plaintext secret; present only when the list request set
+            get_secret=true (confidential clients).
+        created_at:
+          type: integer
+        updated_at:
+          type: integer
+
+    ClientCreateRequest:
+      type: object
+      required:
+        - client_name
+        - client_type
+      properties:
+        client_id:
+          type: string
+          description:
+            Supply to pin a stable id (e.g. rm_mobile); omit to auto-generate
+            one (rm_<random>).
+        client_name:
+          type: string
+          description: Human-readable display name.
+        client_type:
+          type: string
+          enum: ["public", "confidential"]
+        redirect_uris:
+          type: array
+          description: Exact-match callback URLs (no wildcards).
+          items:
+            type: string
+          default: []
+        grant_types:
+          type: array
+          description: implicit/password are rejected.
+          items:
+            type: string
+            enum: ["authorization_code", "refresh_token"]
+          default: ["authorization_code", "refresh_token"]
+        scopes:
+          type: array
+          description:
+            Allowed scopes for this client. Not yet enforced (the authorize
+            slice will validate requested ⊆ this list), so an empty list has no
+            effect today.
+          items:
+            type: string
+            enum: ["openid", "email", "profile", "phone"]
+          default: []
+        require_pkce:
+          type: boolean
+          description:
+            Always true for public clients (forced server-side); applies to
+            confidential clients as sent.
+          default: false
+
+    ClientUpdateRequest:
+      type: object
+      description: |
+        Full replacement of a client's mutable fields (client_id / client_type / secret are
+        immutable). The body is the complete desired state; an omitted field resets to
+        empty/default.
+      required:
+        - client_name
+      properties:
+        client_name:
+          type: string
+        redirect_uris:
+          type: array
+          items:
+            type: string
+        grant_types:
+          type: array
+          items:
+            type: string
+            enum: ["authorization_code", "refresh_token"]
+        scopes:
+          type: array
+          items:
+            type: string
+            enum: ["openid", "email", "profile", "phone"]
+        require_pkce:
+          type: boolean
+
+    ClientCreateResponse:
+      type: object
+      description: |
+        Returned by Create. client_secret is present only for confidential clients;
+        it is also retrievable later via List with get_secret=true.
+      required:
+        - client_id
+        - client_type
+      properties:
+        client_id:
+          type: string
+          example: "rm_mobile"
+        client_secret:
+          type: string
+          description: Plaintext secret (confidential clients only).
+        client_type:
+          type: string
+          enum: ["public", "confidential"]
+
+    Error:
+      type: object
+      properties:
+        message:
+          type: string
+          description: Detailed error message
+          example: "Invalid request"
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    Unauthorized:
+      description: Unauthorized - Invalid or missing authentication
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            message: "Unauthorized"
+
+    NotFound:
+      description: The requested resource does not exist
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            message: "Not found"
+
+    Forbidden:
+      description:
+        Forbidden - User does not have permission to access the resource
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    InternalServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            message: "Internal server error"
+
+    TooManyRequests:
+      description: Rate limit exceeded
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            message: "Too many requests"
+
+  securitySchemes:
+    CognitoAuthorizer:
+      type: apiKey
+      name: Authorization
+      in: header
+      description: |
+        Admin Cognito User Pool JWT, for the superadmin APIs (`/v1/admin/*`).
+        End-user routes take an ESP User token instead — see `bearerAuth`.
+      x-amazon-apigateway-authtype: cognito_user_pools
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        An ESP User access token, sent as a Bearer token. The token is verified
+        against the provider's published public keys.
+    clientBasicAuth:
+      type: http
+      scheme: basic
+      description: |
+        OAuth client authentication (RFC 6749 §2.3.1) as HTTP Basic
+        `base64(client_id:client_secret)`. A confidential client sends its secret;
+        a public client sends its client_id with an empty secret.
+
+security: []

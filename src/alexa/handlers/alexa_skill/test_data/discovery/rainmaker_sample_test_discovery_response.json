@@ -1,0 +1,131 @@
+{
+  "event": {
+    "header": {
+      "namespace": "Alexa.Discovery",
+      "name": "Discover.Response",
+      "payloadVersion": "3",
+      "messageId": "test-message-id"
+    },
+    "payload": {
+      "endpoints": [
+        {
+          "endpointId": "test-node1#Switch",
+          "manufacturerName": "Espressif",
+          "friendlyName": "Switch",
+          "description": "Espressif smart home device",
+          "displayCategories": [
+            "SWITCH"
+          ],
+          "cookie": {
+            "paramMap_PowerController": "power"
+          },
+          "capabilities": [
+            {
+              "type": "AlexaInterface",
+              "interface": "Alexa.PowerController",
+              "version": "3",
+              "properties": {
+                "supported": [
+                  {
+                    "name": "powerState"
+                  }
+                ],
+                "proactivelyReported": true,
+                "retrievable": true
+              }
+            },
+            {
+              "type": "AlexaInterface",
+              "interface": "Alexa",
+              "version": "3"
+            },
+            {
+              "type": "AlexaInterface",
+              "interface": "Alexa.EndpointHealth",
+              "version": "3.1",
+              "properties": {
+                "supported": [
+                  {
+                    "name": "connectivity"
+                  }
+                ],
+                "proactivelyReported": true,
+                "retrievable": true
+              }
+            }
+          ],
+          "additionalAttributes": {
+            "manufacturer": "Espressif",
+            "firmwareVersion": "1.0"
+          }
+        },
+        {
+          "endpointId": "test-node1#Light",
+          "manufacturerName": "Espressif",
+          "friendlyName": "Light",
+          "description": "Espressif smart home device",
+          "displayCategories": [
+            "LIGHT"
+          ],
+          "cookie": {
+            "paramMap_BrightnessController": "brightness",
+            "paramMap_PowerController": "power"
+          },
+          "capabilities": [
+            {
+              "type": "AlexaInterface",
+              "interface": "Alexa.PowerController",
+              "version": "3",
+              "properties": {
+                "supported": [
+                  {
+                    "name": "powerState"
+                  }
+                ],
+                "proactivelyReported": true,
+                "retrievable": true
+              }
+            },
+            {
+              "type": "AlexaInterface",
+              "interface": "Alexa.BrightnessController",
+              "version": "3",
+              "properties": {
+                "supported": [
+                  {
+                    "name": "brightness"
+                  }
+                ],
+                "proactivelyReported": true,
+                "retrievable": true
+              }
+            },
+            {
+              "type": "AlexaInterface",
+              "interface": "Alexa",
+              "version": "3"
+            },
+            {
+              "type": "AlexaInterface",
+              "interface": "Alexa.EndpointHealth",
+              "version": "3.1",
+              "properties": {
+                "supported": [
+                  {
+                    "name": "connectivity"
+                  }
+                ],
+                "proactivelyReported": true,
+                "retrievable": true
+              }
+            }
+          ],
+          "additionalAttributes": {
+            "manufacturer": "Espressif",
+            "firmwareVersion": "1.0"
+          }
+        }
+      ]
+    }
+  }
+}

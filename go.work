@@ -1,0 +1,7 @@
+go 1.26.5
+
+use (
+	.
+	./src/esp-cloud-common
+	./src/mcp/proxy
+)

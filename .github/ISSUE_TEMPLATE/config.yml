@@ -1,0 +1,15 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/espressif/esp-rainmaker-neo/blob/main/SECURITY.md
+    about:
+      Never report vulnerabilities in a public issue — this is the private
+      reporting process.
+  - name: Documentation
+    url: https://docs.neo.rainmaker.espressif.com/
+    about: The cloud specification, deployment guide, and API references.
+  - name: Question / discussion
+    url: https://github.com/espressif/esp-rainmaker-neo/discussions
+    about:
+      Ask questions and discuss ideas that aren't bug reports or feature
+      requests.

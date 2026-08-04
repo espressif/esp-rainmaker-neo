@@ -1,0 +1,165 @@
+{
+  "advancedIndicesSearch": {
+    "searchBarContent": {
+      "selectFieldPlaceholder": "Select a field...",
+      "pickOperator": "pick operator",
+      "pickValue": "pick value ↓",
+      "addFilterFirst": "Click to add a search filter...",
+      "addAnotherFilter": "Add another filter...",
+      "typeValuePlaceholder": "Type a value...",
+      "maxFiltersReached": "Max filters reached",
+      "suggestedValues": "Suggested values"
+    },
+    "fieldSelector": {
+      "loadingFields": "Loading fields...",
+      "noFieldsMatch": "No fields match \"{{query}}\"",
+      "searchByCustomTag": "Search by custom tag \"{{query}}\"",
+      "tagSources": {
+        "admin": "Admin Tag",
+        "device": "Device Tag",
+        "user": "User Tag"
+      }
+    }
+  },
+  "pageTitle": "Nodes",
+  "heading": "Nodes",
+  "breadcrumbs": {
+    "overview": "Overview",
+    "tags": "Tags",
+    "attributes": "Attributes",
+    "otaJobs": "OTA Jobs"
+  },
+  "details": {
+    "backToNodes": "Back to nodes list",
+    "backToNodesList": "Back to nodes list",
+    "errorTitle": "Sorry, we can't load this node's details",
+    "thingNameLabel": "Node ID",
+    "firmwareVersion": "Firmware Version",
+    "statusUpdatedPrefix": "updated",
+    "tabs": {
+      "overview": "Overview",
+      "tags": "Tags",
+      "attributes": "Attributes",
+      "otaJobs": "OTA Jobs"
+    },
+    "overview": {
+      "deviceInfo": {
+        "type": "Type",
+        "model": "Model",
+        "version": "Version"
+      },
+      "groups": "Groups",
+      "noGroups": "No groups",
+      "tagsSection": "Tags",
+      "manageAllTags": "Manage all tags",
+      "adminTags": "Admin Tags",
+      "userTags": "User Tags",
+      "deviceTags": "Device Tags",
+      "noAdminTags": "No admin tags",
+      "noUserTags": "No user tags",
+      "noDeviceTags": "No device tags",
+      "tagsError": "Failed to load tags"
+    },
+    "otaJobs": {
+      "columns": {
+        "queuedAt": "Queued At",
+        "startedAt": "Started At"
+      },
+      "noResultsHeading": "No OTA jobs",
+      "noResultsDescription": "This node has no OTA jobs yet.",
+      "error": {
+        "title": "Failed to load OTA jobs",
+        "description": "An unexpected error occurred while loading OTA jobs. Please try again later."
+      }
+    }
+  },
+  "loading": "Loading nodes...",
+  "columns": {
+    "typeModel": "Type / Model",
+    "fwVersion": "FW Version"
+  },
+  "searchByNodeId": "Search by Node ID",
+  "clearAllFilters": "Clear all filters",
+  "typeModelFilterTrigger": "Type/Model",
+  "typeModelTypeRequired": "Type is required",
+  "typeModelFieldType": "Type",
+  "typeModelFieldTypePlaceholder": "Type",
+  "typeModelFieldModel": "Model",
+  "typeModelFieldModelPlaceholder": "Model (optional)",
+  "firmwareVersionFilterTrigger": "Firmware version",
+  "firmwareVersionRequired": "Firmware version is required",
+  "firmwareVersionFieldLabel": "Firmware version",
+  "firmwareVersionFieldPlaceholder": "Enter firmware version",
+  "totalClaimedNodes": "{{total}} / {{quota}} nodes registered",
+  "quotaDetails": {
+    "percentClaimed": "{{percent}}% Claimed",
+    "percentValue": "{{percent}}%",
+    "nodesClaimed": "nodes claimed",
+    "quotaLabel": "Quota",
+    "claimedLabel": "Claimed"
+  },
+  "advancedSearch": {
+    "clear": "Clear advanced search"
+  },
+  "noSearchResults": {
+    "title": "No nodes found",
+    "description": "Try adjusting your search or filter to find the node you're looking for."
+  },
+  "error": {
+    "title": "Failed to load nodes",
+    "description": "An unexpected error occurred while loading nodes. Please try again later."
+  },
+  "tags": {
+    "addTag": "Add tag",
+    "editTag": "Edit tag",
+    "deleteTag": "Delete tag",
+    "viewMore": "View {{count}} more",
+    "errorLoading": "Failed to load tags",
+    "sections": {
+      "admin": {
+        "title": "Admin tags",
+        "description": "Tags managed by admins.",
+        "emptyHeading": "No admin tags yet",
+        "emptyDescription": "Add an admin tag to categorize this node."
+      },
+      "user": {
+        "title": "User tags",
+        "description": "Tags added by end users.",
+        "emptyHeading": "No user tags yet",
+        "emptyDescription": "End users have not added tags for this node."
+      },
+      "device": {
+        "title": "Device tags",
+        "description": "Tags reported by the device (read-only).",
+        "emptyHeading": "No device tags reported",
+        "emptyDescription": "This device has not reported any tags."
+      }
+    },
+    "columns": {
+      "tag": "Tag",
+      "key": "Key"
+    },
+    "form": {
+      "keyLabel": "Key",
+      "keyPlaceholder": "e.g. environment",
+      "valuePlaceholder": "e.g. production",
+      "keyRequired": "Key is required",
+      "valueRequired": "Value is required",
+      "keyFormat": "Key cannot contain spaces or colons",
+      "keyExists": "A tag with this key already exists",
+      "noChange": "Enter a new value to save",
+      "saveError": "Failed to save tag",
+      "save": "Save"
+    },
+    "delete": {
+      "title": "Delete tag",
+      "description": "Are you sure you want to delete the tag \"{{key}}\"? This cannot be undone."
+    }
+  },
+  "attributes": {
+    "title": "Attributes",
+    "description": "AWS IoT Thing attributes for this node.",
+    "emptyDescription": "This node has no AWS IoT Thing attributes.",
+    "errorLoading": "Failed to load attributes"
+  }
+}

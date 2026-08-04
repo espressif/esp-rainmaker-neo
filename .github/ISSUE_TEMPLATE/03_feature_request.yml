@@ -1,0 +1,52 @@
+name: Feature request
+description: Suggest a new feature or improvement
+labels: ["Type: Feature Request"]
+body:
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Answers checklist
+      options:
+        - label: I have searched existing issues and discussions and this is not a duplicate.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: What problem does this feature address? Who benefits?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How should it work? API sketches welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: spec-sketch
+    attributes:
+      label: Spec sketch (optional, but speeds things up)
+      description: >-
+        Every accepted feature ends up as a spec page under `docs/en/specs/`
+        before it's implemented. Sketch yours in the same terms the existing
+        specs use: the data model (what's stored, where), the API surface
+        (endpoints, payloads — OpenAPI for HTTP, AsyncAPI for MQTT), the
+        access control (who can call it: user, admin, node), and any
+        contracts with nodes or apps. Even a rough outline helps the
+        discussion converge much faster.
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I'm willing to submit a pull request for this feature.
+          required: false

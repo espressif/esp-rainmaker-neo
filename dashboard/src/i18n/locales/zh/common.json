@@ -1,0 +1,234 @@
+{
+  "queryRuleBuilder": {
+    "label": "规则",
+    "description": "添加规则以动态匹配目标节点。",
+    "addRule": "添加规则",
+    "typeLabel": "类型",
+    "typePlaceholder": "选择类型",
+    "valuePlaceholderSelect": "选择一个值",
+    "valuePlaceholderText": "输入一个值",
+    "valueLoading": "正在加载值…",
+    "emptyState": "尚未添加规则",
+    "table": {
+      "type": "类型",
+      "action": "操作",
+      "deleteAriaLabel": "删除规则"
+    },
+    "errors": {
+      "typeRequired": "类型为必填项。",
+      "valueRequired": "值为必填项。"
+    }
+  },
+  "queryRulesList": {
+    "title": "查询规则",
+    "emptyState": "未定义查询规则",
+    "matchAll": "必须满足以下所有条件",
+    "matchAny": "满足以下任一条件即可",
+    "copyQueryString": "复制查询字符串",
+    "copySuccess": "查询字符串已复制到剪贴板",
+    "copyError": "复制查询字符串失败",
+    "booleanTrue": "是",
+    "booleanFalse": "否",
+    "online": "在线",
+    "offline": "离线",
+    "operators": {
+      "eq": "=",
+      "neq": "!=",
+      "starts_with": "开头为",
+      "gt": ">",
+      "gte": ">=",
+      "lt": "<",
+      "lte": "<=",
+      "exists": "任意值"
+    }
+  },
+  "thingGroupSelector": {
+    "label": "父组（可选）",
+    "placeholder": "选择父组（可选）",
+    "emptyText": "未找到设备组。",
+    "searchPlaceholder": "搜索设备组...",
+    "addToSubgroup": "添加到子组",
+    "subgroupLabel": "子组",
+    "subgroupPlaceholder": "选择子组",
+    "subgroupSearchPlaceholder": "搜索子组…",
+    "subgroupEmptyText": "未找到子组"
+  },
+  "bootstrap": {
+    "errorTitle": "无法启动仪表板",
+    "errorMessage": "我们无法加载应用配置。请检查您的网络连接并重试。"
+  },
+  "goodbye": "再见",
+  "seeYou": "回头见",
+  "errorTitle": "出错了",
+  "errorMessage": "发生了意外错误。请稍后再试。",
+  "logoutRecommendation": "如果问题仍然存在，可能是您的会话出现了临时问题。请退出登录后重试。",
+  "goHome": "返回首页",
+  "edit": "编辑",
+  "arn": "ARN",
+  "created": "创建于",
+  "clearAllFilters": "清除所有筛选",
+  "home": "首页",
+  "account": "账户",
+  "profile": "个人资料",
+  "colorTheme": "颜色主题",
+  "light": "浅色",
+  "dark": "深色",
+  "language": "语言",
+  "logout": "退出登录",
+  "advancedSearch": "高级搜索",
+  "verifyingCredentials": "正在验证凭据...",
+  "expiredCredentials": {
+    "title": "您的会话已过期",
+    "message": "为了保障您的账户安全，您的登录状态已失效。请重新登录以继续之前的操作。",
+    "action": "返回登录"
+  },
+  "signingOut": "正在退出登录...",
+  "languages": {
+    "en": "English",
+    "zh": "中文"
+  },
+  "breadcrumbs": {
+    "home": "首页"
+  },
+  "sidebar": {
+    "nodeManagement": "节点管理",
+    "nodes": "节点",
+    "nodeGroups": "节点组",
+    "registerNodes": "注册节点",
+    "generateNodes": "生成节点",
+    "ota": "OTA",
+    "otaImages": "镜像",
+    "otaJobs": "作业",
+    "settings": "设置",
+    "voiceAssistants": "语音助手",
+    "alexa": "Alexa",
+    "gva": "GVA",
+    "pushNotifications": "推送通知",
+    "postDeployment": "部署后配置"
+  },
+  "deploymentQr": {
+    "showButton": "显示部署二维码",
+    "title": "部署详情二维码",
+    "infoMessage": "扫描或下载此二维码，以使用本部署的连接详情配置客户端。",
+    "loadingLabel": "正在生成二维码...",
+    "imageAlt": "部署详情二维码",
+    "error": "无法生成二维码，请稍后重试。"
+  },
+  "createMenu": {
+    "title": "新建",
+    "nodeGroup": "节点组",
+    "registerNodes": "注册节点",
+    "otaImage": "上传 OTA 镜像",
+    "otaJob": "OTA 作业"
+  },
+  "dataTable": {
+    "page": "第 {{current}} 页",
+    "previous": "上一页",
+    "next": "下一页",
+    "rowsPerPage": "每页行数",
+    "columnVisibility": {
+      "label": "列"
+    }
+  },
+  "toast": {
+    "listRefreshNote": "列表将在几秒后自动刷新。"
+  },
+  "backToSignin": "返回登录",
+  "passwordPolicy": {
+    "minLength": "密码长度至少为 8 个字符",
+    "uppercase": "必须包含一个大写字母",
+    "lowercase": "必须包含一个小写字母",
+    "digit": "必须包含一个数字",
+    "specialCharacter": "必须包含一个特殊字符"
+  },
+  "passwordErrors": {
+    "incorrectCurrentPassword": "当前密码不正确，请重试。",
+    "sessionExpired": "您的会话已过期，请重新登录后再修改密码。",
+    "invalidRequest": "该请求无法处理，请检查输入后重试。"
+  },
+  "resetPasswordErrors": {
+    "generic": "发生错误，请稍后重试。",
+    "rateLimited": "尝试次数过多。每小时仅允许约 5 次重置请求，请稍后再试。",
+    "codeMismatch": "验证码不正确，请检查后重试。",
+    "codeExpired": "验证码已过期，请重新获取。",
+    "invalidPassword": "该密码不符合密码策略，请更换其他密码。",
+    "cannotReset": "此地址无法自动重置密码，请联系您的管理员。"
+  },
+  "nodeStatus": {
+    "online": "在线",
+    "offline": "离线",
+    "since": "自 {{date}}"
+  },
+  "otaJobStatus": {
+    "IN_PROGRESS": "进行中",
+    "SCHEDULED": "已排定",
+    "COMPLETED": "已完成",
+    "CANCELED": "已取消",
+    "DELETION_IN_PROGRESS": "正在删除",
+    "SUCCEEDED": "成功",
+    "FAILED": "失败",
+    "QUEUED": "排队中",
+    "REJECTED": "已拒绝",
+    "REMOVED": "已移除",
+    "TIMED_OUT": "已超时"
+  },
+  "searchOperators": {
+    "eq": "等于",
+    "neq": "不等于",
+    "startsWith": "开头为",
+    "gt": "大于",
+    "gte": "大于或等于",
+    "lt": "小于",
+    "lte": "小于或等于",
+    "exists": "字段存在",
+    "labels": {
+      "startsWith": "开头为",
+      "exists": "存在"
+    }
+  },
+  "searchFields": {
+    "deviceType": "设备类型",
+    "deviceModel": "设备型号",
+    "firmwareVersion": "固件版本",
+    "onlineStatus": "在线状态",
+    "createdBy": "创建者",
+    "registeredFrom": "注册来源",
+    "registrationBatch": "注册批次",
+    "room": "房间",
+    "userLocation": "用户位置"
+  },
+  "authErrors": {
+    "emailRequired": "请输入邮箱",
+    "emailInvalid": "请输入有效的邮箱地址",
+    "passwordRequired": "请输入密码",
+    "currentPasswordRequired": "请输入当前密码",
+    "confirmPasswordRequired": "请确认新密码",
+    "passwordsDoNotMatch": "两次输入的密码不一致",
+    "codeRequired": "请输入验证码",
+    "codeInvalid": "请输入收到的 6 位验证码"
+  },
+  "dashboard": "控制台",
+  "actions": {
+    "cancel": "取消",
+    "delete": "删除",
+    "add": "添加",
+    "remove": "移除",
+    "retry": "重试",
+    "tryAgain": "重试",
+    "browse": "浏览",
+    "editAndRetry": "编辑并重试",
+    "download": "下载",
+    "clear": "清除",
+    "submit": "提交",
+    "close": "关闭"
+  },
+  "columns": {
+    "status": "状态",
+    "nameId": "名称 / ID",
+    "name": "名称",
+    "value": "值",
+    "createdAt": "创建时间",
+    "lastUpdatedAt": "最后更新时间"
+  },
+  "logoAlt": "标志"
+}

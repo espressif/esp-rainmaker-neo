@@ -1,0 +1,234 @@
+{
+  "queryRuleBuilder": {
+    "label": "Rules",
+    "description": "Add rules to dynamically match the nodes this targets.",
+    "addRule": "Add rule",
+    "typeLabel": "Type",
+    "typePlaceholder": "Select a type",
+    "valuePlaceholderSelect": "Select a value",
+    "valuePlaceholderText": "Enter a value",
+    "valueLoading": "Loading values…",
+    "emptyState": "No rules added yet",
+    "table": {
+      "type": "Type",
+      "action": "Action",
+      "deleteAriaLabel": "Delete rule"
+    },
+    "errors": {
+      "typeRequired": "Type is required.",
+      "valueRequired": "Value is required."
+    }
+  },
+  "queryRulesList": {
+    "title": "Query rules",
+    "emptyState": "No query rules defined",
+    "matchAll": "All of the following must match",
+    "matchAny": "Any of the following must match",
+    "copyQueryString": "Copy query string",
+    "copySuccess": "Query string copied to clipboard",
+    "copyError": "Failed to copy query string",
+    "booleanTrue": "True",
+    "booleanFalse": "False",
+    "online": "Online",
+    "offline": "Offline",
+    "operators": {
+      "eq": "=",
+      "neq": "!=",
+      "starts_with": "starts with",
+      "gt": ">",
+      "gte": ">=",
+      "lt": "<",
+      "lte": "<=",
+      "exists": "Any value"
+    }
+  },
+  "thingGroupSelector": {
+    "label": "Parent Group (optional)",
+    "placeholder": "Select parent group (optional)",
+    "emptyText": "No node groups found.",
+    "searchPlaceholder": "Search node groups...",
+    "addToSubgroup": "Add to a subgroup",
+    "subgroupLabel": "Subgroup",
+    "subgroupPlaceholder": "Select a subgroup",
+    "subgroupSearchPlaceholder": "Search subgroups…",
+    "subgroupEmptyText": "No subgroups found"
+  },
+  "bootstrap": {
+    "errorTitle": "Unable to start the dashboard",
+    "errorMessage": "We could not load the app configuration. Check your connection and try again."
+  },
+  "goodbye": "Good Bye",
+  "seeYou": "See you",
+  "errorTitle": "Something went wrong",
+  "errorMessage": "An unexpected error occurred. Please try again later.",
+  "logoutRecommendation": "If the problem persists, it could be due to a temporary issue with your session. Please logout and try again.",
+  "goHome": "Go Home",
+  "edit": "Edit",
+  "arn": "ARN",
+  "created": "Created",
+  "clearAllFilters": "Clear all filters",
+  "home": "Home",
+  "account": "Account",
+  "profile": "Profile",
+  "colorTheme": "Color theme",
+  "light": "Light",
+  "dark": "Dark",
+  "language": "Language",
+  "logout": "Logout",
+  "advancedSearch": "Advanced Search",
+  "verifyingCredentials": "Verifying credentials...",
+  "expiredCredentials": {
+    "title": "Your session has expired",
+    "message": "For your security you've been signed out because your session is no longer valid. Sign in again to pick up where you left off.",
+    "action": "Back to login"
+  },
+  "signingOut": "Signing out...",
+  "languages": {
+    "en": "English",
+    "zh": "Chinese"
+  },
+  "breadcrumbs": {
+    "home": "Home"
+  },
+  "sidebar": {
+    "nodeManagement": "Node management",
+    "nodes": "Nodes",
+    "nodeGroups": "Node groups",
+    "registerNodes": "Register nodes",
+    "generateNodes": "Generate nodes",
+    "ota": "OTA",
+    "otaImages": "Images",
+    "otaJobs": "Jobs",
+    "settings": "Settings",
+    "voiceAssistants": "Voice assistants",
+    "alexa": "Alexa",
+    "gva": "GVA",
+    "pushNotifications": "Push notifications",
+    "postDeployment": "Post-Deployment"
+  },
+  "deploymentQr": {
+    "showButton": "Show deployment QR code",
+    "title": "Deployment Details QR Code",
+    "infoMessage": "Scan or download this QR code to configure a client with the connection details for this deployment.",
+    "loadingLabel": "Preparing QR code...",
+    "imageAlt": "Deployment details QR code",
+    "error": "Could not generate the QR code. Try again later."
+  },
+  "createMenu": {
+    "title": "Create new",
+    "nodeGroup": "Node group",
+    "registerNodes": "Register nodes",
+    "otaImage": "Upload OTA Image",
+    "otaJob": "OTA Job"
+  },
+  "dataTable": {
+    "page": "Page {{current}}",
+    "previous": "Previous",
+    "next": "Next",
+    "rowsPerPage": "rows per page",
+    "columnVisibility": {
+      "label": "Columns"
+    }
+  },
+  "toast": {
+    "listRefreshNote": "The list updates automatically in a few seconds."
+  },
+  "backToSignin": "Back to sign in",
+  "passwordPolicy": {
+    "minLength": "Password must be at least 8 characters",
+    "uppercase": "Must contain an uppercase letter",
+    "lowercase": "Must contain a lowercase letter",
+    "digit": "Must contain a digit",
+    "specialCharacter": "Must contain a special character"
+  },
+  "passwordErrors": {
+    "incorrectCurrentPassword": "Your current password is not correct. Try again.",
+    "sessionExpired": "Your session has expired. Sign in again to change your password.",
+    "invalidRequest": "That request could not be processed. Check your input and retry."
+  },
+  "resetPasswordErrors": {
+    "generic": "Something went wrong. Please try again later.",
+    "rateLimited": "Too many attempts. Only about 5 reset requests per hour are allowed — wait a while before trying again.",
+    "codeMismatch": "That code is not correct. Check the code and try again.",
+    "codeExpired": "That code has expired. Request a new one.",
+    "invalidPassword": "That password does not meet the password policy. Choose a different one.",
+    "cannotReset": "This address cannot be reset automatically. Contact your administrator."
+  },
+  "nodeStatus": {
+    "online": "Online",
+    "offline": "Offline",
+    "since": "since {{date}}"
+  },
+  "otaJobStatus": {
+    "IN_PROGRESS": "In progress",
+    "SCHEDULED": "Scheduled",
+    "COMPLETED": "Completed",
+    "CANCELED": "Canceled",
+    "DELETION_IN_PROGRESS": "Deleting",
+    "SUCCEEDED": "Succeeded",
+    "FAILED": "Failed",
+    "QUEUED": "Queued",
+    "REJECTED": "Rejected",
+    "REMOVED": "Removed",
+    "TIMED_OUT": "Timed out"
+  },
+  "searchOperators": {
+    "eq": "equals",
+    "neq": "not equals",
+    "startsWith": "starts with",
+    "gt": "greater than",
+    "gte": "greater or equal",
+    "lt": "less than",
+    "lte": "less or equal",
+    "exists": "field exists",
+    "labels": {
+      "startsWith": "starts with",
+      "exists": "exists"
+    }
+  },
+  "searchFields": {
+    "deviceType": "Device Type",
+    "deviceModel": "Device Model",
+    "firmwareVersion": "Firmware Version",
+    "onlineStatus": "Online Status",
+    "createdBy": "Created By",
+    "registeredFrom": "Registered From",
+    "registrationBatch": "Registration Batch",
+    "room": "Room",
+    "userLocation": "User Location"
+  },
+  "authErrors": {
+    "emailRequired": "Email is required",
+    "emailInvalid": "Please enter a valid email address",
+    "passwordRequired": "Password is required",
+    "currentPasswordRequired": "Current password is required",
+    "confirmPasswordRequired": "Please confirm your new password",
+    "passwordsDoNotMatch": "Passwords do not match",
+    "codeRequired": "Confirmation code is required",
+    "codeInvalid": "Enter the 6-digit code you received"
+  },
+  "dashboard": "Dashboard",
+  "actions": {
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "add": "Add",
+    "remove": "Remove",
+    "retry": "Retry",
+    "tryAgain": "Try again",
+    "browse": "Browse",
+    "editAndRetry": "Edit & Retry",
+    "download": "Download",
+    "clear": "Clear",
+    "submit": "Submit",
+    "close": "Close"
+  },
+  "columns": {
+    "status": "Status",
+    "nameId": "Name / ID",
+    "name": "Name",
+    "value": "Value",
+    "createdAt": "Created At",
+    "lastUpdatedAt": "Last Updated At"
+  },
+  "logoAlt": "Logo"
+}

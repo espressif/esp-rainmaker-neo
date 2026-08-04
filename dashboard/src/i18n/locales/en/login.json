@@ -1,0 +1,15 @@
+{
+  "title": "Sign in",
+  "description": "Enter your credentials to access your account",
+  "errorTitle": "Unable to login",
+  "invalidCredentials": "Invalid username or password",
+  "usernameLabel": "Username",
+  "usernamePlaceholder": "Enter your username",
+  "passwordLabel": "Password",
+  "passwordPlaceholder": "Enter your password",
+  "keepSignedInLabel": "Keep me signed in",
+  "submit": "Sign in",
+  "forgotPasswordLink": "Forgot password?",
+  "resetSuccessTitle": "Password updated",
+  "resetSuccessMessage": "Your password has been updated. Sign in with your new password."
+}

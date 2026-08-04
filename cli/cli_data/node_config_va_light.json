@@ -1,0 +1,25 @@
+{
+  "devices": [
+    {
+      "id": "Light1",
+      "type": "esp.device.lightbulb",
+      "params": [
+        {
+          "id": "Power",
+          "type": "esp.param.power",
+          "data_type": "bool",
+          "properties": ["read", "write", "time_series", "indexed"]
+        },
+        {
+          "id": "Brightness",
+          "type": "esp.param.brightness",
+          "data_type": "int",
+          "properties": ["read", "write", "time_series", "indexed"]
+        }
+      ]
+    }
+  ],
+  "info": {
+    "fw_version": "1.1.0"
+  }
+}

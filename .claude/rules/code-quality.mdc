@@ -1,0 +1,25 @@
+---
+description: Code Quality Guidelines
+alwaysApply: true
+---
+# Code Quality Guidelines
+
+## Verify Information
+Always verify information before presenting it. Do not make assumptions or speculate without clear evidence.
+
+## Structure
+Structure code consistently. Suggest improvements if you see inconsistencies. Group code by feature when it improves clarity and cohesion. Keep logic decoupled from framework-specific code.
+
+## Maintainability
+Write maintainable code. Avoid code duplication — refactor when the same logic appears more than once.
+
+## Parallelise
+Parallelise wherever possible (Use util/parallel.go).
+
+## Industry Standards & AI-Friendly Code
+Follow industry-standard patterns. Keep code AI-compatible: self-documenting names, small focused functions, explicit types, predictable structure.
+
+## Commenting
+Remove comments if unnecessary. Only comment the *why* when it is non-obvious. Keep the comments readable and rich.
+Be crisp. Say the non-obvious point in as few words as it takes and stop; no restating the code, no hedging, no filler. A tight one-sentence *why* beats a paragraph.
+Do not hard-wrap comments. Editors have word-wrap on, so write each comment as one logical line and let it wrap; never insert manual line breaks to fit a column width.

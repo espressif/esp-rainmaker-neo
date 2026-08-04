@@ -1,0 +1,179 @@
+{
+  "awsThingsList": {
+    "searchPlaceholder": "按设备 ID 搜索",
+    "noResults": {
+      "title": "无设备",
+      "description": "没有符合搜索条件的设备。"
+    },
+    "error": {
+      "title": "加载设备失败"
+    }
+  },
+  "pageTitle": "设备组",
+  "heading": "设备组",
+  "breadcrumbs": {
+    "new": "创建新分组",
+    "nodes": "节点",
+    "otaJobs": "OTA 任务"
+  },
+  "new": {
+    "pageTitle": "创建设备组",
+    "backToGroups": "返回设备组",
+    "submitButton": "创建设备组",
+    "sections": {
+      "basicDetails": {
+        "label": "基本信息",
+        "description": "为此分组命名并说明其用途。"
+      },
+      "subgroup": {
+        "label": "创建为子分组",
+        "description": "可选：将此分组嵌套在父分组下。"
+      },
+      "dynamic": {
+        "label": "创建为动态分组",
+        "description": "可选：根据匹配规则自动填充此分组。"
+      }
+    },
+    "fields": {
+      "name": {
+        "label": "分组名称",
+        "placeholder": "请输入分组名称"
+      },
+      "description": {
+        "label": "描述",
+        "placeholder": "可选描述"
+      }
+    },
+    "subgroup": {
+      "card": {
+        "label": "创建为子分组",
+        "description": "将此分组嵌套在已有的父分组下。"
+      },
+      "info": "在下方选择一个父分组以嵌套此分组。子分组不能同时作为动态分组。",
+      "parent": {
+        "label": "父分组",
+        "placeholder": "选择父分组"
+      }
+    },
+    "dynamic": {
+      "card": {
+        "label": "创建为动态分组",
+        "description": "自动包含所有匹配规则的节点。"
+      },
+      "info": "符合这些规则的节点将自动加入分组。此项不能与子分组创建同时使用。"
+    },
+    "errors": {
+      "nameRequired": "分组名称为必填项。",
+      "nameTooLong": "分组名称最多 128 个字符。",
+      "nameInvalid": "分组名称只能包含字母、数字、冒号、下划线和连字符。",
+      "parentRequired": "请为此子分组选择一个父分组。",
+      "rulesRequired": "请为动态分组至少添加一条规则。"
+    },
+    "status": {
+      "dialogTitle": "设备组创建状态",
+      "submitting": "创建中…",
+      "creatingTitle": "正在创建设备组",
+      "creatingDescription": "这可能需要一些时间。请勿关闭此窗口。",
+      "successTitle": "设备组创建成功。",
+      "successDescription": "您的设备组已就绪。打开其详情以添加节点或启动 OTA 任务。",
+      "viewDetails": "查看设备组详情",
+      "errorTitle": "创建设备组失败。",
+      "errorDescription": "请重试。",
+      "duplicateError": "已存在同名的设备组。"
+    }
+  },
+  "createNodeGroupButton": "创建设备组",
+  "search": {
+    "groupName": {
+      "placeholder": "按名称搜索"
+    },
+    "description": {
+      "label": "描述",
+      "placeholder": "按描述搜索"
+    }
+  },
+  "columns": {
+    "description": "描述"
+  },
+  "subgroup": {
+    "label": "子分组",
+    "parentsHeading": "父级分组"
+  },
+  "deleteNodeGroup": {
+    "confirmTitle": "删除设备组",
+    "confirmDescription": "确定要删除该设备组吗?",
+    "aria": "删除设备组 {{groupName}}"
+  },
+  "noResults": "无结果。",
+  "noResultsDescription": "未找到设备组。请尝试调整搜索条件。",
+  "loading": "加载设备组中...",
+  "error": {
+    "title": "加载设备组失败",
+    "description": "加载设备组时出现意外错误。请稍后再试。"
+  },
+  "details": {
+    "backToGroups": "返回设备组列表",
+    "backToGroupsList": "返回设备组列表",
+    "resourceLabel": "设备组 ID",
+    "errorTitle": "无法加载该设备组的详情",
+    "type": {
+      "static": "静态",
+      "dynamic": "动态",
+      "viewQueryAriaLabel": "查看动态分组查询规则"
+    },
+    "status": {
+      "ACTIVE": "已就绪",
+      "BUILDING": "构建中",
+      "REBUILDING": "重新构建中"
+    },
+    "tabs": {
+      "nodes": "节点",
+      "otaJobs": "OTA 任务"
+    },
+    "nodes": {
+      "title": "该分组的节点",
+      "description": "属于该分组(包括子分组)的节点。",
+      "addNodes": "向该分组添加节点",
+      "noResults": {
+        "title": "暂无节点",
+        "description": "该分组中还没有节点。"
+      },
+      "error": {
+        "title": "加载节点失败"
+      },
+      "add": {
+        "success": "节点 \"{{thingName}}\" 已添加到该分组。",
+        "error": "无法将节点 \"{{thingName}}\" 添加到该分组。"
+      },
+      "remove": {
+        "confirmTitle": "从分组中移除节点",
+        "confirmDescription": "确定要将该节点从该分组中移除吗?",
+        "success": "节点 \"{{thingName}}\" 已从该分组移除。",
+        "error": "无法将节点 \"{{thingName}}\" 从该分组移除。"
+      },
+      "dynamicNotice": {
+        "title": "分组成员由系统自动管理",
+        "description": "节点会根据该分组的查询规则自动加入或离开,因此无法手动添加或移除。",
+        "viewRules": "查看规则"
+      }
+    },
+    "otaJobs": {
+      "title": "该分组的 OTA 任务",
+      "description": "以该设备组为目标的 OTA 任务。",
+      "noResults": {
+        "title": "暂无 OTA 任务",
+        "description": "该分组还没有 OTA 任务。"
+      },
+      "error": {
+        "title": "加载 OTA 任务失败"
+      }
+    },
+    "delete": {
+      "button": "删除分组",
+      "title": "删除设备组",
+      "description": "该操作将永久删除此设备组,且无法撤销。",
+      "success": "设备组删除成功。",
+      "error": "删除设备组失败。"
+    }
+  }
+}

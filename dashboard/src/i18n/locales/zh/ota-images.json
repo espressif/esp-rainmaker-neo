@@ -1,0 +1,83 @@
+{
+  "breadcrumbs": {
+    "images": "OTA 镜像",
+    "new": "上传 OTA 镜像"
+  },
+  "error": {
+    "title": "加载 OTA 镜像失败",
+    "description": "加载 OTA 镜像时发生意外错误，请稍后重试。"
+  },
+  "heading": "OTA 镜像",
+  "uploadButton": "上传 OTA 镜像",
+  "noResults": "暂无 OTA 镜像",
+  "noResultsDescription": "尚未上传任何 OTA 镜像。",
+  "search": {
+    "placeholder": "按名称前缀搜索",
+    "noResults": "未找到匹配的 OTA 镜像",
+    "noResultsDescription": "没有以“{{query}}”开头的镜像名称。搜索仅匹配文件名开头，且区分大小写。"
+  },
+  "columns": {
+    "nameMd5": "名称 / MD5",
+    "fwVersion": "固件版本",
+    "typeModel": "类型 / 型号",
+    "platform": "平台",
+    "lastModified": "最后修改时间",
+    "startOta": "开始 OTA"
+  },
+  "pageTitle": "上传 OTA 镜像",
+  "backToImages": "返回 OTA 镜像",
+  "sections": {
+    "selectImage": "选择 OTA 镜像",
+    "firmwareDetails": "添加固件详情",
+    "otherDetails": "其他详情"
+  },
+  "fields": {
+    "firmwareFile": {
+      "label": "固件文件",
+      "title": "将固件文件拖放到此处",
+      "description": "支持的文件类型：.bin、.elf、.img、.hex、.ota。"
+    },
+    "name": {
+      "label": "固件名称",
+      "placeholder": "例如 light-sensor"
+    },
+    "version": {
+      "label": "固件版本",
+      "placeholder": "例如 1.0.0"
+    },
+    "type": {
+      "label": "固件类型",
+      "placeholder": "例如 Light, Switch"
+    },
+    "model": {
+      "label": "目标型号",
+      "placeholder": "例如 3C_DL, WS2812_STRIP, 1SOCK"
+    },
+    "platform": {
+      "label": "平台",
+      "placeholder": "例如 esp32, esp32c3, esp32s3"
+    }
+  },
+  "errors": {
+    "firmwareFileRequired": "请选择一个固件文件。",
+    "firmwareFileInvalidType": "支持的文件类型：.bin、.elf、.img、.hex、.ota。",
+    "nameRequired": "固件名称为必填项。",
+    "nameInvalid": "仅允许字母、数字、点、下划线和连字符。",
+    "versionRequired": "固件版本为必填项。"
+  },
+  "form": {
+    "submit": "上传 OTA 镜像",
+    "submitting": "上传中…"
+  },
+  "upload": {
+    "dialogTitle": "OTA 镜像上传状态",
+    "uploadingTitle": "正在上传 OTA 镜像",
+    "uploadingDescription": "这可能需要一些时间。请勿关闭此窗口。",
+    "successTitle": "OTA 镜像上传成功。",
+    "successDescription": "您现在可以使用此 OTA 镜像来更新您的设备。",
+    "createOtaWithImage": "使用此镜像创建 OTA",
+    "errorTitle": "OTA 镜像上传失败。",
+    "errorDescription": "请重试。",
+    "duplicateError": "已存在同名的 OTA 镜像。"
+  }
+}

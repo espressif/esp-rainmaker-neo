@@ -1,0 +1,209 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+
+## Resource naming
+
+### Stack-family prefixes
+A resource's physical-name prefix IS the construct ID of the stack that owns it:
+
+| Owning stack | Prefix |
+|---|---|
+| `rmng-base` / `rmng-core` / `rmng-admin-dashboard` | `rmng-` |
+| `rmng-alexa-core` | `rmng-alexa-` |
+| `espuser-base` / `espuser-core` | `espuser-` |
+
+### Casing
+- **Kebab-case everywhere AWS allows it** (lowercase letters, digits, hyphens). Applies to DDB tables and GSIs, SSM paths, Lambda function names, IAM role/policy names, KMS aliases, API Gateway names, stack IDs, SQS, SNS, Kinesis, IoT policies, CloudWatch log groups.
+- **Forced exceptions:**
+  - Env vars: SCREAMING_SNAKE.
+  - Go exported identifiers: PascalCase.
+  - **`AWS::IoT::TopicRule` names: snake_case** — AWS requires `^[a-zA-Z0-9_]+$`. Kebab is forbidden by the service.
+
+- **Acronym casing for PascalCase construct IDs:** preserve original — `IoT`, `OTA`, `ESP`, `GVA`, `MQTT`, `URL`, `DDB`, `SNS`, `SQS`, `KMS`. Examples: `IoTNodeRole`, `OTAServiceRole`, `ESPUserPool`, `GVAFulfillmentURL`, `DDBStreamHandler`.
+
+### Singular vs plural
+| Resource | Number |
+|---|---|
+| DDB tables, S3 buckets (collections), SQS/SNS, Kinesis streams | Plural |
+| Cognito user pool, API Gateway, IAM role, KMS alias, stack ID, Lambda (default) | Singular |
+| Lambda | Plural ONLY when it's the front-door for collection ops (`admin-files`, `node-tags`, `admin-node-groups`) |
+
+### Region suffix policy
+- **Mandatory** only where AWS forces collision: IAM (account-global), Cognito user pool domain prefix, Route 53, CloudFront/ACM, WAFv2 CLOUDFRONT scope.
+- **NOT applied** to region-scoped resources: DDB, Lambda, SSM, KMS alias, API Gateway, Kinesis, SQS, IoT policies and rules. Per-region namespace already handles uniqueness.
+- Region token (when used): via `Stack.of(scope).region` or `Aws.REGION`.
+
+### Per-Lambda IAM role pattern
+`{prefix}<purpose>-role-<region>` — handled automatically by [`create_base_lambda_role`](../../cdk/utils/app_common.py) when you pass `common_resources`. Construct ID stays `<purpose>_lambda_role` (no token allowed in construct ID since region is a CFN token).
+
+### Bespoke IAM roles
+For IoT rule roles, Shadow update roles, ECS task/exec roles, error roles, etc., still set an explicit `role_name=f"rmng-<purpose>-role-{self.region}"` so the deployed name is predictable. Don't rely on CDK auto-naming.
+
+### S3 buckets (general-purpose)
+Opt into S3 Account-Regional Namespace via [`create_s3_bucket`](../../cdk/utils/app_common.py). Set `BucketNamePrefix` + `BucketNamespace=account-regional` (currently via L1 escape hatch — see helper). AWS resolves to `<prefix>-<account>-<region>-an`. For IAM ARNs that need the resolved name at synth time (constructed before the bucket L2 exists), use `get_s3_bucket_resolved_name(prefix, region)` from `arn_utils`.
+
+### Lambda physical name from purpose
+- Lambda `function_name=` arg is the snake-case purpose (e.g. `"admin_files"`). `create_lambda_function` kebabs it (`admin-files`) and prepends the prefix.
+- The Go `<purpose>_main.go` filename drives the Makefile build path (`build/<purpose>/bootstrap`); keep them in lockstep.
+- Within a stack file, extract `function_name = "..."` once and pass it to both `create_base_lambda_role` and `create_lambda_function` — don't hardcode the same string twice.
+
+### SSM paths
+Kebab path segments under family roots: `/rmng/base/...`, `/espuser/base/...`, `/rmng-alexa/...`. No region in the path — SSM is regional.
+
+### Glossary terms (canonical spellings)
+See [docs/GLOSSARY.md](docs/GLOSSARY.md).
+
+## CDK Resource Creation
+
+### Layout and imports
+The CDK entry points live in `cdk/apps/` (one per `--stack-group`: `rmng`, `espuser`, `claim`, `alexa`, plus `test_infra`), and the shared helper library in `cdk/utils/`. Each app's first statement is `import _bootstrap`, which puts the repo root, `cdk/utils`, the `src/esp-cloud-common/cdk_go` submodule and the add-on parent dir on `sys.path`. Because `cdk/utils` is on the path, helpers are imported by bare module name — `from app_common import ...`, `from arn_utils import ...` — from anywhere in the tree; do **not** write `from cdk.libs.app_common import ...`. Keeping these import names stable is what lets the separately-distributed `addon_modules/` packages consume the library unchanged.
+
+- Create reusable functions with standard defaults in [app_common.py](../../cdk/utils/app_common.py) for resources — always prefer extending `app_common.py` over duplicating CDK boilerplate across stacks
+- Use high level constructs for resources wherever possible
+- Add stateful resources like Storage, DB, etc. in the corresponding `base.py` files. Services: DynamoDB, S3 buckets, KMS keys, Things, Thing policies, Secrets Manager, SSM Parameter Store, API Gateway, Networking resources. These abstractions will need to be further added to <stackname>-base_stack.py
+- Add stateless resources like Compute, API, etc. in the corresponding `core.py` files. Services: Lambda, Container services, API resources, SNS Topics, SQS Queues, CloudWatch Log Group, Step functions, CloudWatch Alarms. These abstractions will need to be further added to <stackname>-core_stack.py
+- Add lambdas to a folder and have a **dedicated `stack.py` per lambda**. The main file should be called <lambda_name>_main.go. The corresponding unit test file should be called <lambda_name>_main_test.go.
+- Multiple lambdas can be clubbed logically in a single folder with it's base.py and core.py files.
+
+### Stable logical IDs and "Resource already exists"
+
+CFN identifies each resource by its **logical ID** (CDK derives this from the construct path). On rename, CFN runs **Create-new + Delete-old, in that order**. Three things can go wrong:
+
+1. **Hard CFN conflict** — Create-new fails (`ResourceAlreadyExists` / `EntityAlreadyExists` / `ResourceConflictException` / `ResourceInUseException`). Deploy rolls back, old resource intact. Survivable but stuck.
+2. **Silent deletion** — AWS's `Create*` API is idempotent on identical attributes (returns the existing resource). Create-new "succeeds" → Delete-old then removes the shared physical resource. Deploy reports SUCCESS; data/resource is gone.
+3. **Silent identity churn** — the physical name isn't unique, so Create-new mints a new AWS-allocated ID. Deploy succeeds; every external consumer caching the old ID (JWTs, mobile builds, firmware-baked aliases, invoke URLs) breaks.
+
+Every resource in this repo is classified into one of two tables. The **Decision rule** below picks the table; the **What NOT to do** list calls out the most common ways to bypass the discipline by accident.
+
+Audit baseline: `make synth` on `rename/res` (all apps under `cdk/apps/`) produces zero path-derived logical IDs for any resource that belongs in Table 1. Only two CDK stack-root singletons (`Custom::LogRetention`, `Custom::VpcRestrictDefaultSG`) are intentionally left at their CDK class-version-hashed logical IDs — they don't drift on user refactors, and renaming them would force a destructive one-time migration.
+
+#### CDK construct levels (used in the **CDK level** column)
+
+- **L1** (`Cfn*`) — 1:1 wrapper over a single CFN resource. We use L1 when no L2 exists (most IoT), when the L2 forces unwanted defaults, or to avoid cyclic deps (api-method/resource helpers).
+- **L2** — curated construct: **main CFN resource + zero or more auxiliary L1s** as side effects. E.g. `lambda.Function` emits the Function plus `Lambda::Permission`s and possibly `LogRetention`; `s3.Bucket(auto_delete_objects=True)` emits Bucket + BucketPolicy + S3AutoDeleteObjects + handler role/lambda.
+- **L3** — pattern construct composing multiple L2s/L1s. Only `s3deploy.BucketDeployment` in this repo.
+- **"aux L1"** — a CFN resource an L2/L3 emits with a CDK-path-derived logical ID. The L2's *main* resource we stabilise via the helper; aux L1s stay path-derived unless they hit a Table 1 criterion (then we pin them at the helper too).
+
+When the L2's main child is pinned, only its main CFN resource has a stable logical ID — aux L1s rename when the L2 moves. Table 2 documents why each aux type survives that rename.
+
+#### Table 1 — Stable-ID resources (MUST use `stable_logical_id`)
+
+A row lands here when ANY of:
+1. AWS rejects duplicate names with a hard error (`Lambda::Function`, `IAM::Role`, `DDB::Table`, `Logs`, `IoT::*`, `SSM`, etc.).
+2. AWS's `Create*`/`Put*` API is idempotent → rename produces **silent deletion** (`SQS::Queue`, `ECS::Cluster`, `GatewayResponse`, `BucketPolicy`, `QueuePolicy`, `IdentityPoolRoleAttachment`, `S3AutoDeleteObjects`).
+3. Rename mints a fresh AWS-allocated ID that consumers cache externally (`UserPool`, `UserPoolClient`, `IdentityPool`, `RestApi`, `ApiV2`, `Authorizer`, `Distribution`, `SecurityGroup`).
+4. Identity is a composite key with a fixed component (`Stage`, `Route`, `Resource`, `Method`, `UserPoolDomain`).
+5. The resource is a Custom resource (`Custom::*`, `AwsCustomResource`) — pinned defensively; Delete-handler behaviour can change in CDK upgrades.
+
+**Failure mode** column = exact AWS error / cascade on logical-ID drift. **Aux L1s** column = path-derived children the helper deliberately leaves alone (explained in Table 2).
+
+| CFN type | CDK level | Physical-name field | Identity scope | Failure mode on rename (Why not safe) | Helper / callsite | Aux L1s left CDK-path-derived (see Table 2) |
+|---|---|---|---|---|---|---|
+| `AWS::Lambda::Function` | L2 | `FunctionName` | account-region | **CFN conflict.** `ResourceConflictException: Function already exist`. Deploy rolls back, old function intact | `create_lambda_function` | `Lambda::Permission`, `Lambda::EventSourceMapping`, CDK-internal `LogRetention*` |
+| `AWS::Lambda::LayerVersion` | L2 | `LayerName` (helper sets it via `layer_version_name=`) | account-region | **No conflict, but consumer rebind.** AWS allows duplicate `LayerName` (creates new version), but a logical-ID rename changes the helper-derived `LayerName` itself → consumers' `Layers: [<arn>]` flips to a brand-new ARN | `create_lambda_layer` | none |
+| `AWS::IAM::Role` | L2 | `RoleName` | account-**global** | **CFN conflict.** `EntityAlreadyExists`. Worst blast radius — IAM is global per account, collisions span stacks | `create_base_lambda_role` / `create_iot_rule_role` / inline in `create_container` | `IAM::Policy` DefaultPolicy |
+| `AWS::DynamoDB::Table` | L2 | `TableName` | account-region | **CFN conflict.** `ResourceInUseException`. No data risk — CFN never reaches DELETE-old | `ManagedTable` (cloud-components `gsi_infra`) — **standard for all new tables**, not `create_dynamodb_table`. Pins its own logical ID to `stable_logical_id("DDBTable", table_name)` and requires an explicit `table_name` (raises if absent) | `Custom::GsiIndex` per GSI — each pinned to `stable_logical_id("GsiIndex", "<table_name>-<index_name>")`, **not** inlined into the table's CFN resource |
+| `AWS::S3::Bucket` (Account-Regional Namespace) | L2 with L1 override | `BucketNamePrefix` (AN resolves to `<prefix>-<account>-<region>-an`) | account-region (via AN) | **CFN conflict.** `BucketAlreadyOwnedByYou`. CFN rolls back; old bucket untouched — no data loss on this path, but deploy is stuck | `create_s3_bucket` | `NotificationsHandler` ServiceRole. Companion `Custom::S3AutoDeleteObjects` + `S3::BucketPolicy` pinned by the helper (own rows) |
+| `Custom::S3AutoDeleteObjects` (companion of `auto_delete_objects=True`) | aux L1 of L2 | `s3.Bucket(auto_delete_objects=True)` — every bucket via `create_s3_bucket` | account-region (per bucket) | **SILENT DATA LOSS.** On rename: Create-new is a no-op; Delete-old's Lambda checks the live `aws-cdk:auto-delete-objects: true` tag on the surviving bucket and walks it, deleting every object. Bucket survives, contents do not | pinned inside `create_s3_bucket` (`bucket.node.try_find_child("AutoDeleteObjectsCustomResource")`) | none — Provider Role/Handler are CDK stack-root singletons |
+| `AWS::S3::BucketPolicy` | aux L1 of L2 | `bucket.grant_*()` / `add_to_resource_policy()` / OAC wiring; also auto-created by `auto_delete_objects=True` | per-bucket (one policy per bucket; `PutBucketPolicy` idempotent) | **Silent deletion.** Put-then-Delete asymmetry: Create-new overwrites, Delete-old fires `DeleteBucketPolicy` → bucket loses its policy → OAC / cross-account producers break silently | pinned inside `create_s3_bucket`; for dashboard's directly-constructed bucket, pinned after `create_cloudfront_distribution` | none |
+| `AWS::SQS::QueuePolicy` | aux L1 of L2 | `queue.add_to_resource_policy(...)` | per-queue (`SetQueueAttributes` idempotent) | **Silent deletion.** Create-new sets the Policy attribute; Delete-old clears it → cross-account SNS/event-source loses publish access silently | pinned inline at its callsite | none |
+| `AWS::Cognito::IdentityPoolRoleAttachment` | L1 | `cognito.CfnIdentityPoolRoleAttachment` in `rmng_base_stack.py` | per-pool (`SetIdentityPoolRoles` idempotent) | **Silent deletion.** Create-new sets roles; Delete-old clears them → every device's `GetCredentialsForIdentity` silently returns no role | pinned inline | none |
+| `Custom::CDKBucketDeployment` | aux L1 of L3 | `s3deploy.BucketDeployment` — `src/admin_dashboard_stack.py:152` | per-deployment | **Defensive pin — no current data risk.** With `retain_on_delete=True` (default) Delete is a no-op; today's only effect is wasted re-upload + CloudFront invalidation. Pinned because a CDK upgrade or `retain_on_delete=False` flip would turn it destructive | pinned inline | none |
+| `Custom::DescribeCognitoUserPoolClient` | aux L1 of L2 | created lazily when `cognito.UserPoolClient.user_pool_client_secret` is accessed | per-client | **Defensive pin — no current data risk.** Read-only handler, Delete is a no-op. Pinned to eliminate the invocation pair and future-proof against CDK adding Delete-time side effects | pinned inline (the L2 wraps another L2 inside; need `.node.default_child.node.default_child`) | none |
+| `Custom::AWS` (`AwsCustomResource`) | L2 | 5 callsites: IoTEndpoint, FleetIndexing, IoTCredentialProvider, ApiGatewayDeploy, UpdateIoTUserRoleAssumePolicy | per-callsite | **Defensive pin.** None of the 5 callsites set `on_delete=` today, so Delete is a no-op. A future edit adding `on_delete=AwsSdkCall(...)` would fire that call on every rename → silent data loss | each callsite pins via `.node.default_child.node.default_child.override_logical_id(stable_logical_id("CustomAwsSdk", "<purpose>"))` | none |
+| `AWS::SQS::Queue` | L2 | `QueueName` | account-region | **CFN conflict or silent deletion.** `CreateQueue` is idempotent on identical attributes (helper-created queues do match → silent deletion path); on attribute mismatch returns `QueueNameExists` (rollback) | `create_sqs_queue_with_dlq` / `setup_sqs_lambda_infra` | none — companion `QueuePolicy` pinned at its callsite |
+| `AWS::Logs::LogGroup` | L2 | `LogGroupName` | account-region | **CFN conflict.** `ResourceAlreadyExistsException`. Historical log streams stay attached to the old group name even if eventually renamed | `create_iot_rule_log_group` / inline in `create_container` + `setup_sqs_lambda_infra` | none |
+| `AWS::IoT::TopicRule` | L1 | `RuleName` (snake_case) | account-region | **CFN conflict.** `ResourceAlreadyExistsException`. Old rule keeps matching messages on the failure path | `create_iot_topic_rule` | none |
+| `AWS::IoT::Policy` | L1 | `PolicyName` | account-region | **CFN conflict.** `ResourceAlreadyExistsException`. Cert attachments tied to the old PolicyName | inline `stable_logical_id("IoTPolicy", ...)` (3 callsites in `rmng_base_stack.py`) | none |
+| `AWS::IoT::RoleAlias` | L1 | `RoleAlias` (firmware-visible) | account-region | **CFN conflict** (`ResourceAlreadyExistsException`). Alias string is a fielded contract — devices reference it at runtime, manual rename would invalidate every shipped device | `create_iot_role_alias` | none |
+| `AWS::SSM::Parameter` | L2 | `Name` (SSM path) | account-region | **CFN conflict.** `ParameterAlreadyExists`. Cold-start consumers unaffected — CFN rolls back before old param is removed | `create_ssm_string_parameter` | none |
+| `AWS::Cognito::UserPool` | L2 | `UserPoolName` (display-only, NOT unique) | n/a | **NOT a conflict — silent identity churn.** Rename mints a fresh `UserPoolId`. Every issued JWT / refresh token / device session validates against old keys and silently fails | `create_cognito_user_pool` | `UserPool::Group`, smsRole if configured |
+| `AWS::Cognito::UserPoolClient` | L2 | `ClientName` (display-only, NOT unique) | n/a | **NOT a conflict — silent identity churn.** New `ClientId`; every SPA/mobile build shipped with the old client_id stops working until re-released | `create_cognito_user_pool_client` | none |
+| `AWS::Cognito::UserPoolDomain` | L2 (`add_domain`) | `Domain` (hosted-UI prefix) | **region-global** within Cognito's prefix namespace | **CFN conflict.** `InvalidParameterException: Domain already associated with another user pool`. Widest collision surface — competes across accounts in the same region | `create_cognito_user_pool_domain` | Cognito-internal `CloudFront::Distribution` (not in our template) |
+| `AWS::Cognito::IdentityPool` | L1 | `IdentityPoolName` (display-only, NOT unique) | n/a | **NOT a conflict — silent identity churn.** New `IdentityPoolId`; every device's cached credentials stop working | inline `stable_logical_id("IdPool", ...)` in `rmng_base_stack.py` | none — companion `IdentityPoolRoleAttachment` pinned (own row) |
+| `AWS::ApiGateway::RestApi` | L2 | `Name` (display-only, NOT unique) | n/a | **NOT a conflict — silent identity churn.** New `RestApiId`; invoke URL `https://<id>.execute-api...` changes; every Method/Resource/Stage/Authorizer below rebuilds. SDK clients with cached URL break | `create_rest_api` | `CfnGatewayResponse` × 3, Stage, Deployment — all overridden inside helper |
+| `AWS::ApiGateway::Stage` | L2 (auto via `RestApi(deploy=True)`) | composite `(RestApi, StageName="prod")` | per-RestApi | **CFN conflict.** `ConflictException: Stage already exists`. `StageName="prod"` is fixed | inside `create_rest_api` | none |
+| `AWS::ApiGateway::Deployment` | L2 (auto via `RestApi(deploy=True)`) | none; pinned for diff stability | n/a | **No conflict** — Deployments are immutable snapshots. Pinning keeps the Stage's `DeploymentId` `Ref` stable across refactors | inside `create_rest_api` | none |
+| `AWS::ApiGateway::Authorizer` | L1 | `Name` (NOT enforced unique within RestApi) | n/a | **NOT a conflict — silent identity churn.** New `AuthorizerId`; pinning keeps it stable so Methods don't need to coordinate `AuthorizerId` flips | `create_cognito_authorizer` | none |
+| `AWS::ApiGateway::Resource` | L1 | composite `(RestApi, ParentId, PathPart)` | per-RestApi | **CFN conflict.** `ConflictException` — can't have two `/v1/groups` under the same parent | `get_or_create_api_resource` → `_create_cfn_api_resource` (ID = full URL path) | none |
+| `AWS::ApiGateway::Method` | L1 | composite `(Resource, HttpMethod)` | per-Resource | **CFN conflict.** `PutMethod` returns `ConflictException` on duplicate `(Resource, HttpMethod)` | `create_cfn_api_method` / `add_cors_options` (ID = `<url-path>-<verb>`) | none |
+| `AWS::ApiGateway::GatewayResponse` | L1 | composite `(RestApi, ResponseType)` | per-RestApi | **Silent deletion.** `PutGatewayResponse` idempotent → Create-new overwrites, Delete-old removes the shared row. CORS headers on 4xx/5xx vanish → browsers see opaque CORS failures | inside `create_rest_api` | none |
+| `AWS::ApiGatewayV2::Api` | L2 | `Name` (display-only, NOT unique) | n/a | **NOT a conflict — silent identity churn.** New `ApiId`, new invoke URL; same cascade as v1 RestApi | `create_http_api` | `$default` Stage overridden inside helper |
+| `AWS::ApiGatewayV2::Stage` | L2 (auto via `HttpApi`) | composite `(Api, StageName="$default")` | per-Api | **CFN conflict.** Same as v1 Stage — `$default` is fixed by AWS | inside `create_http_api` | none |
+| `AWS::ApiGatewayV2::Route` | L2 (via `add_routes`) | composite `(Api, RouteKey="<METHOD> <path>")` | per-Api | **CFN conflict.** `CreateRoute` returns `ConflictException` on duplicate `RouteKey` | `add_http_api_routes` (ID = `<path>-<verb>`) | `ApiGatewayV2::Integration` (Table 2) |
+| `AWS::ECS::Cluster` | L2 | `ClusterName` | account-region | **Silent deletion.** `CreateCluster` is idempotent — Create-new returns the existing cluster, Delete-old fires `DeleteCluster`. Running Fargate tasks die without graceful drain | inside `create_container` | none |
+| `AWS::ECS::TaskDefinition` | L2 | `Family` | account-region | **No conflict, but rollback history loss.** Rename changes the Family → ECS starts a new Family at revision 1; previous revisions lose rollback target | inside `create_container` | container definitions are inlined |
+| `AWS::EC2::VPC` | L2 | none; pinned for downstream-ID stability | n/a | **Cascading delete-create that almost always fails.** Subnets/IGW/RouteTables (also renamed) can't be deleted while ENIs from running Fargate tasks exist → `UPDATE_ROLLBACK_FAILED`. Best case: every task terminated without drain, all subnet/SG IDs change | inside `create_container` | `EC2::{Subnet,RouteTable,IGW,Route,*Association,SecurityGroup}` aux L1s (Table 2) — safe only because **this** row stays stable |
+| `AWS::EC2::SecurityGroup` | L2 (standalone) | none; pinned to keep `GroupId` stable | n/a | **No conflict — silent identity churn.** New `GroupId`; every cross-stack ref / console-pasted ID dangles | inside `create_container` | none |
+| `AWS::CloudFront::Distribution` | L2 | none; pinned to keep `DistributionId` (and `<id>.cloudfront.net`) stable | n/a | **No conflict — silent identity churn.** New `DistributionId`; bookmarks, mobile apps with the URL embedded, custom DNS CNAMEs all dangle. `CfnOutput` updates direct CFN consumers atomically but anything outside CFN is stuck on the deleted domain | `create_cloudfront_distribution` | `S3::BucketPolicy` on origin bucket (Table 1) |
+
+#### Table 2 — CDK path-based resources (logical ID stays path-derived)
+
+A row lands here when ALL of: no physical name (or name auto-derived from logical ID), Create/Put isn't idempotent-with-side-effect (either AWS allows duplicates, or the resource is content-versioned, or identity is composite on a stable parent with no Delete-time action), and no externally-cached AWS-allocated ID. Rename produces at worst a brief deploy gap or a regenerated AWS-side ID — no CFN conflict, no silent deletion, no consumer-visible breakage.
+
+**AWS identity mechanism** column = the actual unique key AWS uses. **Why safe** column = why rename doesn't conflict. **Rename caveat** column = secondary effects (regenerated IDs, cascading refs) that aren't CFN errors but are observable.
+
+| CFN type | CDK level | Source / callsite | AWS identity mechanism | Why safe (no rename conflict) | Rename caveat |
+|---|---|---|---|---|---|
+| `AWS::IAM::Policy` (inline `DefaultPolicy`) | aux L1 | `Role.add_to_policy()` | `PolicyName` per role; CDK sets `PolicyName == LogicalId` | Renames lockstep with the logical ID — never two CFN policies wanting the same `PolicyName` on the same role. Scoped to a single `Roles: [...]` | none |
+| `AWS::IAM::Policy` (standalone L2, no `policy_name=`) | L2 | `iam.Policy(self, ...)` — `src/nodeadmin/bulk_container_main/stack.py:15` | Same mechanism as DefaultPolicy | Identical to DefaultPolicy. Becomes Table 1 if a `policy_name=` is added | none |
+| `AWS::Lambda::Permission` | aux L1 | `Lambda.add_permission()` / API Gateway wiring | `(FunctionName, StatementId)` — AWS allows multiple permissions per function | `StatementId` path-derived; transient overlap during rename produces no conflict | none |
+| `AWS::Lambda::EventSourceMapping` | aux L1 | `Lambda.add_event_source(SqsEventSource(...))` etc. | Auto-allocated UUID; AWS allows multiple mappings per `(EventSourceArn, FunctionName)` | Fresh UUID on rename, old one torn down after CREATE | SQS-specific: old + new mapping briefly split queue throughput (no duplicate delivery) |
+| `AWS::EC2::{Subnet,RouteTable,IGW,Route,VPCGatewayAttachment,SubnetRouteTableAssociation}` | aux L1 | `ec2.Vpc` L2 inside `create_container` | Auto-allocated AWS IDs; composite types collide only on `(parent, target)` which CDK never duplicates | No physical-name field on any of these | AWS-side IDs (`subnet-…`, `rtb-…`) regenerate on rename. The parent VPC's pinning (Table 1) is what prevents this cascade |
+| `AWS::ApiGatewayV2::Integration` | aux L1 | `apigwv2_integrations.HttpLambdaIntegration` — `mcp/proxy/cdk/mcp_oauth_construct.py:182,254` | Auto-allocated `IntegrationId`; AWS allows multiple integrations per API | No physical name | `IntegrationId` regenerates on rename; routes re-link via `Ref` in the same deploy |
+| `AWS::ApiGateway::Method` / `Resource` (OPTIONS from `default_cors_preflight_options=`) | aux L1 | **hypothetical** — not used today (our CORS uses `add_cors_options`, which is in Table 1) | Composite `(RestApi, parent, "OPTIONS")` | **Transitive safety**: parent RestApi is pinned in Table 1; path-derived children never rename in isolation. Would become Table 1 if the parent ever moved | If `default_cors_preflight_options=` is introduced AND the RestApi moves without re-pinning, becomes Table 1 |
+| `AWS::CloudFront::Distribution` (Cognito-managed only) | hidden L1 | Cognito-created for `UserPoolDomain` — lives outside our CFN template | Auto-allocated `DistributionId` (`E…`) | Not in our synth output; we can't pin it. Cognito re-binds it automatically on UserPoolDomain rename | n/a — not ours to manage. Our own dashboard distribution is Table 1 via `create_cloudfront_distribution` |
+| `AWS::IAM::Role` (CDK-internal: `BucketDeployment*ServiceRole`, `LogRetention*ServiceRole`, `JWKSFetcherLambda/ServiceRole`, `Custom::S3AutoDeleteObjects*ServiceRole`) | aux L1 of L3s | CDK custom-resource L3s | No `RoleName` set; IAM auto-allocates `<stack>-<logical-id>-<random>` | Auto-allocated names differ per logical ID → no `EntityAlreadyExists` on rename. Distinct from our application roles which set `RoleName` (Table 1) | none |
+| `AWS::Lambda::Function` (CDK-internal: same custom-resource L3s) | aux L1 of L3s | CDK custom-resource L3s | No `FunctionName` set; Lambda auto-allocates | Rename mints a new auto-named function — no collision. Distinct from our application lambdas (Table 1) | none |
+| `AWS::Lambda::LayerVersion` (CDK-internal `AwsCliLayer`) | aux L1 of L3s | `BucketDeployment` / `Custom::CDKBucketDeployment` | Auto-allocated layer-version ARN; LayerVersions are immutable, content-versioned | CFN never overwrites an existing version; consumer (same custom resource) swaps the ARN in the same deploy | none |
+| `s3_assets.Asset` (CDK manifest entry, **not** a CFN resource) | L2 | `app_common.create_container` (Fargate binary), `lambda.Code.from_asset(...)`, `lambda.Code.from_inline(...)` | Content-hash key in CDK asset manifest (`cdk.out/*.assets.json`) | Not a CFN resource — uploaded to staging by `cdk deploy` before CFN runs. Same hash → same upload; rename of consumer doesn't touch it | none |
+| `Custom::LogRetention` | aux L1 (CDK stack-root singleton) | `lambda.Function(log_retention=...)` — 6 callsites | Logical ID **fixed** by CDK class-version hash (`LogRetentionaae0aa3c…`), not path | Singleton key is stable across user refactors regardless of where the lambdas live | CDK **upgrades** can change the hash → Delete handler resets every log group's retention to "never expire". Watch for it on CDK version bumps |
+| `Custom::VpcRestrictDefaultSG` | aux L1 (CDK stack-root singleton) | `ec2.Vpc(restrict_default_security_group=True)` (CDK 2.198 default) | CDK class-version hash, not path | Singleton key is stable across user refactors. Delete handler would restore default SG rules but doesn't re-fire | none on user-driven path |
+| `s3deploy.BucketDeployment` (L3 — not a CFN type) | L3 | `src/admin_dashboard_stack.py:152` | n/a — composite of the rows above | All children individually safe / pinned. Destination bucket and CloudFront distribution are Table 1 | S3 upload re-executes on rename; CloudFront cache re-invalidated |
+
+Table 2 callsites carry an inline one-liner: `# <Type> has no physical name → safe to move`. Helpers that emit known aux L1s list them in the helper docstring.
+
+#### Custom resources: return a STABLE `PhysicalResourceId`
+
+Separate from logical-ID stability, and it applies to **every** custom resource regardless of language or packaging (inline `Code.from_inline`, an asset, or the `AwsCustomResource` L2). If a custom resource returns a **different `PhysicalResourceId` between invocations**, CloudFormation reads the change on `Update` as a **replacement**, then sends a `Delete` for the old physical resource carrying the *old* `ResourceProperties`. This is non-intuitive and leads to incorrect deletions. If the handler then reads a property the old version didn't have, it errors before responding and the stack hangs in `*_IN_PROGRESS` until the ~1-hour custom-resource timeout.
+
+
+The simplest correct pattern: **echo the incoming `PhysicalResourceId` back**, which is `None`/empty only on `Create` (there's nothing to echo yet — the response assigns the first one). Do this on every path:
+
+- **Python inline (`cfnresponse`)** — `physical_id = event.get('PhysicalResourceId')`, then pass it as the 5th arg to **every** `cfnresponse.send` (success, delete, failure).
+- **Go handler** — return the incoming `event.PhysicalResourceID` on every event type (empty on Create is fine); never vary it between Create/Update.
+- **`AwsCustomResource`** — set `physical_resource_id=cr.PhysicalResourceId.of("<stable-id>")` on every `on_create`/`on_update`/`on_delete` (this L2 has no incoming value to echo, so use a fixed string). A timestamped ID is correct ONLY when per-deploy replacement is intended (e.g. API Gateway `createDeployment`, IoT-event-mode reapply).
+
+Additional rules:
+- **Log the raw event first**, before anything that can fail (Python `print("CR_EVENT " + json.dumps(event))`; Go log the marshalled event with the same `CR_EVENT ` prefix). The event carries the pre-signed `ResponseURL`; if the handler later hangs, this is the ONLY way to recover it — CloudFormation does not re-invoke once Lambda's async retries are exhausted, it just polls that URL until the ~1h timeout.
+- Read `ResourceProperties` defensively — never index a required key before checking the request type; a `Delete` of an older version may not carry newer keys.
+- The `Delete` path must always respond SUCCESS and must not depend on any property.
+- Ensure no code path ends without sending a response (send FAILED on error) — an un-responded invocation hangs CFN for the full hour.
+
+If a stack is already stuck this way, `scripts/unstick_custom_resource.py --function <name>` recovers the `ResponseURL` from the handler's `CR_EVENT` log line and PUTs a SUCCESS response for the stuck request. This only works if the handler logged `CR_EVENT` — hence the rule above.
+
+#### Decision rule for new resource types
+
+Walk in order — first "yes" wins.
+
+1. **AWS rejects duplicate names with a hard error?** (Lambda, IAM, DDB, Logs, IoT, SSM.) → **Table 1**. CFN conflict → rollback.
+2. **`Create*`/`Put*` is idempotent on identical attributes?** (SQS, ECS, ApiGW `Put*`.) → **Table 1**. Silent deletion: Create-new "succeeds", Delete-old wipes the shared resource.
+3. **Composite-key identity with a fixed component?** (`Stage(RestApi,"prod")`, `Route(Api,"GET /foo")`, etc.) → **Table 1**.
+4. **Rename mints a fresh AWS-allocated ID consumers cache externally?** (`UserPoolId`, `ClientId`, `IdentityPoolId`, `RestApiId`, `DistributionId`, `RoleAlias`, invoke URLs, `GroupId`.) → **Table 1**. Silent identity churn — hardest to debug.
+5. **Custom resource (`Custom::*`, `AwsCustomResource`)?** → **Table 1, defensively.** Delete-handler behaviour can flip destructive on CDK upgrade or `on_delete=`/`retain_on_delete=` change. Exception: CDK stack-root singletons (`Custom::LogRetention`, `Custom::VpcRestrictDefaultSG`) — leave alone. ALSO follow "Custom resources: return a STABLE `PhysicalResourceId`" above — logical-ID stability alone does not prevent replacement-on-update.
+6. **Otherwise** → **Table 2**.
+
+#### Verification checklist before adding a row
+
+1. **AWS API reference** for the relevant `Create*`/`Put*` call. Read the `Errors` section — exact error code goes in the Failure-mode column.
+2. **Grep CDK source** (`node_modules/aws-cdk-lib/aws-<service>/`) to check if the L2 sets a physical-name property by default. CDK's behaviour overrides AWS-doc assumptions.
+3. **Helper coverage** in [app_common.py](../../cdk/utils/app_common.py). No helper → write one before adding the row.
+4. **`make synth`** and grep template for `<LogicalId>"`. Correct when the ID does NOT end with an 8-char hex hash.
+5. **Construct-tree refs** — if rename forces adjacent resources to rename too, enumerate them in the Aux L1s column.
+
+## IAM permissions
+- Use `base_res_constants.py` to get the resource names and arns.
+- **Whenever a new AWS SDK call is added to a lambda**, grant the matching IAM permission on that lambda's role in the same change — never defer IAM updates to a later PR.

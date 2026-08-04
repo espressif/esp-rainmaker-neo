@@ -1,0 +1,207 @@
+{
+  "thingSelector": {
+    "label": "Node",
+    "placeholder": "Select a node",
+    "emptyText": "No nodes found.",
+    "searchPlaceholder": "Search nodes..."
+  },
+  "s3ListObjectsSelector": {
+    "label": "Object",
+    "placeholder": "Select an object",
+    "emptyText": "No objects found.",
+    "searchPlaceholder": "Search objects..."
+  },
+  "pageTitle": "OTA Jobs",
+  "heading": "OTA Jobs",
+  "breadcrumbs": {
+    "jobs": "OTA Jobs",
+    "new": "Start OTA",
+    "overview": "Overview",
+    "nodes": "Nodes",
+    "newJob": "Create OTA Job"
+  },
+  "details": {
+    "jobIdLabel": "Job ID",
+    "statusUpdatedPrefix": "updated",
+    "backToJobs": "Back to OTA Jobs",
+    "backToJobsList": "Back to OTA Jobs list",
+    "errorTitle": "Sorry, we can't load this OTA job's details",
+    "tabs": {
+      "overview": "Overview",
+      "nodes": "Nodes"
+    },
+    "overview": {
+      "target": {
+        "title": "Target",
+        "description": "The target of the OTA job.",
+        "empty": "This job has no targets.",
+        "type": {
+          "thing": "Node",
+          "thinggroup": "Node group"
+        }
+      },
+      "activity": {
+        "title": "Activity",
+        "description": "Timeline of this OTA job.",
+        "lastUpdatedAt": "Last updated",
+        "completedAt": "Completed"
+      },
+      "completionSummary": {
+        "heading": "Status summary",
+        "details": "Details",
+        "progressLabel": "Succeeded nodes {{succeeded}}/{{total}}",
+        "total": "Total",
+        "succeeded": "Succeeded",
+        "viewMore": "View more",
+        "viewLess": "View less"
+      }
+    },
+    "nodes": {
+      "statusSummary": {
+        "heading": "Status summary",
+        "subtitle": "Node counts by OTA delivery status for this job.",
+        "legendItem": "{{count}} {{name}}",
+        "empty": "No node executions to summarize yet."
+      },
+      "executions": {
+        "title": "Node executions",
+        "subtitle": "Per-node OTA delivery status for this job.",
+        "columns": {
+          "nodeId": "Node ID"
+        },
+        "noResultsHeading": "No node executions",
+        "noResultsDescription": "This job has no node executions yet.",
+        "error": {
+          "title": "Failed to load node executions",
+          "description": "An unexpected error occurred while loading node executions. Please try again later."
+        }
+      },
+      "executionDetail": {
+        "title": "Node execution details",
+        "contextInfo": "Showing execution details for node <strong>{{nodeId}}</strong> in OTA job <strong>{{jobId}}</strong>.",
+        "fields": {
+          "executionNumber": "Execution number",
+          "versionNumber": "Version number",
+          "queuedAt": "Queued at",
+          "startedAt": "Started at",
+          "lastUpdatedAt": "Last updated at"
+        },
+        "viewDetails": "View node details",
+        "empty": "No execution details found for this node.",
+        "error": {
+          "title": "Failed to load execution details",
+          "description": "An unexpected error occurred while loading this node's execution details. Please try again later."
+        }
+      }
+    }
+  },
+  "createOtaJobButton": "Create OTA Job",
+  "loading": "Loading OTA jobs...",
+  "error": {
+    "title": "Failed to load OTA jobs",
+    "description": "An unexpected error occurred while loading OTA jobs. Please try again later."
+  },
+  "noResults": "No results",
+  "noResultsDescription": "No OTA jobs found.",
+  "targetSelection": {
+    "CONTINUOUS": "Continuous",
+    "SNAPSHOT": "Snapshot"
+  },
+  "filters": {
+    "targetSelectionTrigger": "Job Mode",
+    "groupLabel": "Node group",
+    "groupModalTitle": "Filter by node group",
+    "groupModalDescription": "Show only OTA jobs targeting the selected node group.",
+    "groupModalApply": "Apply",
+    "groupSearchPlaceholder": "Search groups…",
+    "groupEmptyText": "No groups found",
+    "groupLoadError": "Could not load node groups. Check your connection and try again."
+  },
+  "cancelOtaJob": {
+    "confirmTitle": "Cancel OTA job",
+    "confirmDescription": "Are you sure you want to cancel OTA job \"{{jobId}}\"? This will stop the job from being sent to more nodes. Nodes already in progress will not be affected.",
+    "confirmButton": "Cancel Job",
+    "cancelButton": "Go Back",
+    "aria": "Cancel OTA job {{jobId}}"
+  },
+  "deleteOtaJob": {
+    "confirmTitle": "Delete OTA job",
+    "confirmDescription": "Are you sure you want to delete OTA job \"{{jobId}}\"? This will also delete the associated stream and AWS IoT job.",
+    "aria": "Delete OTA job {{jobId}}"
+  },
+  "createOtaJobPage": {
+    "pageTitle": "Create OTA Job",
+    "backToJobs": "Back to OTA Jobs",
+    "submitButton": "Create OTA Job",
+    "status": {
+      "dialogTitle": "OTA job creation status",
+      "submitting": "Creating…",
+      "creatingTitle": "Creating OTA job",
+      "creatingDescription": "This may take a while. Do not close this window.",
+      "successTitle": "OTA job created successfully.",
+      "successDescription": "The rollout has started. Track its progress from the job details.",
+      "viewJobDetails": "View OTA job details",
+      "errorTitle": "Failed to create OTA job.",
+      "errorDescription": "Please try again.",
+      "duplicateError": "An OTA job with this name already exists."
+    },
+    "sections": {
+      "basicDetails": {
+        "label": "Basic details",
+        "description": "Name this job and choose the firmware image to roll out."
+      },
+      "targetDetails": {
+        "label": "Target details",
+        "description": "Choose what this job targets and how it is delivered."
+      }
+    },
+    "name": {
+      "placeholder": "Enter a name for this OTA job"
+    },
+    "firmware": {
+      "label": "Firmware Image",
+      "placeholder": "Select a firmware image"
+    },
+    "type": {
+      "label": "Type",
+      "group": {
+        "label": "Node group",
+        "description": "Roll out to the members of a node group."
+      },
+      "node": {
+        "label": "Node",
+        "description": "Roll out to a single node."
+      }
+    },
+    "nodeGroup": {
+      "label": "Node group",
+      "placeholder": "Select a node group"
+    },
+    "continuous": {
+      "label": "Continuous",
+      "description": "New nodes that match the target will automatically receive this update."
+    },
+    "source": {
+      "label": "Source",
+      "existing": {
+        "label": "Existing groups",
+        "description": "Target the current members of the selected node group."
+      },
+      "rules": {
+        "label": "Define rules",
+        "description": "Target nodes that match a set of rules."
+      }
+    },
+    "node": {
+      "label": "Node",
+      "placeholder": "Select a node"
+    },
+    "errors": {
+      "nameRequired": "Name is required.",
+      "nameTooLong": "Name must be at most 128 characters.",
+      "nameInvalid": "Name can only contain letters, numbers, underscores and hyphens.",
+      "firmwareRequired": "Firmware image is required.",
+      "targetRequired": "Target is required."
+    }
+  }
+}

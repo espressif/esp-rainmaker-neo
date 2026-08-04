@@ -1,0 +1,11 @@
+{
+    "data": {
+        "device": {
+            "t": {
+                "type": "Light",
+                "model": "Led",
+                "fwver": "1.0.0"
+            }
+        }
+    }
+}

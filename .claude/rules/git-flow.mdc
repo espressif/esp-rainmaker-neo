@@ -1,0 +1,36 @@
+---
+description: Gitflow Workflow Rules
+globs: 
+alwaysApply: false
+---
+
+# Git Workflow
+
+## Branches
+- **main**: Production-ready code only. No direct commits. No force pushes. No deletions.
+- **feat/**: Branch from main, merge to main. Format: `feat/descriptive-name`
+- **hotfix/**: Urgent production fixes. Format: `hotfix/*`
+- Delete feature/hotfix branches after merge
+
+## Commits
+Format: `type(scope): description`
+- `feat`: New feature
+- `fix`: Bug fix  
+- `docs`: Documentation
+- `refactor`: Code refactoring
+- `test`: Adding tests
+- `chore`: Maintenance tasks
+- Don't break lines in the commit message. You can logically break into list/paragraph breaks if needed.
+
+## Versioning
+Semantic versioning: MAJOR.MINOR.PATCH
+- MAJOR: Breaking API changes
+- MINOR: Backwards-compatible features
+- PATCH: Backwards-compatible fixes
+
+## Pull Requests
+- All changes via PRs
+- Minimum 1 approval required
+- CI checks must pass
+- Branch must be up-to-date
+- No direct commits to main

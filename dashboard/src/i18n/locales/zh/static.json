@@ -1,0 +1,17 @@
+{
+  "sidebar": {
+    "adminDashboard": "管理控制台"
+  },
+  "docs": {
+    "termsOfUse": {
+      "title": "使用条款"
+    },
+    "privacyPolicy": {
+      "title": "隐私政策"
+    }
+  },
+  "unavailable": {
+    "title": "内容不可用",
+    "message": "此文档尚未提供，请稍后再查看。"
+  }
+}

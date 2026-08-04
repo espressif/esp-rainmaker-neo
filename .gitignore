@@ -1,0 +1,51 @@
+build/
+cdk/cdk.out*
+docs/_build/
+__pycache__/
+cdk.out/
+cdk.out*
+cdk-outputs*
+rmng-outputs*
+cdk-output.yaml
+rmng-outputs.json
+cli/config_data/bot-iam-user-credentials.json
+coverage.out*
+coverage.xml
+.DS_Store
+.vscode
+myenv/
+.envrc
+cli/.app_sim.command_history
+cli/.device_sim.command_history
+cli/.user.command_history
+cli/.device.command_history
+*.txt
+# Exempt from the *.txt rule above; the docs build needs it tracked.
+!docs/requirements.txt
+.sim/
+*.test
+node_modules/
+.vite/
+agent/
+.claude/settings*json
+rmng-inputs.json
+dist/
+src/admin/dashboard/outputs/
+misc/plans/IMPLEMENTATION_PLAN.md
+
+
+# Alexa setup config (holds LWA secret) — copy from alexa_skills_config.example.json
+config_data/alexa_skills_config.json
+
+cli/test_config.json
+test/itest/itest_config.json
+test_config.json
+
+# Local secret configs — provisioned per developer, never committed (see scripts/dev_env.example.sh)
+config_data/gva_config.json
+config_data/alexa_config.json
+scripts/dev_env.sh
+test/test_data/notify_data.json
+
+# Dashboard build-time env (may hold account-specific URLs); .env.development.local is npm-run-dev derived
+dashboard/.env.development.local

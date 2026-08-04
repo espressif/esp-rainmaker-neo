@@ -1,0 +1,68 @@
+---
+description: Go coding standards and best practices for the rmng project
+globs: *.go
+alwaysApply: false
+---
+
+# Go Standards for ESP RainMaker Neo
+
+## Naming
+- **Files**: snake_case (`main_exec.go`)
+- **Functions/Variables**: camelCase
+- **Constants**: UPPERCASE_SNAKE_CASE
+- **AWS SDK**: Named exports (acmpcatypes "github.com/aws/
+aws-sdk-go-v2/service/acmpca/types")
+
+## Dependencies
+- `go mod tidy` to update go.mod
+- `go get` for new packages
+
+## Error Handling and Logging
+- Always wrap errors with `NewRMError()` and don't just return the error
+- If generating a new error (nothing to wrap), start by creating your own with `Errorf`
+- Log error once at outermost level (lambda function handler) and never log Error in internal functions
+- Don't add log Info/Debug/Trace unnecessarily, let the developer add them manually
+- Always log Warnings. When errors are not returned, they are logged as Warnings
+
+## Memory Management
+- Pass/return by value to avoid mutations
+- Slices and maps contain pointers to underlying data. Be aware of scenarios when they need to be copied or passed/returned by functions. (Ref: https://medium.com/@diko/go-reference-type-slices-vs-maps-fa6ae612607a)
+- Defer resource cleanup to avoid leaks
+- Use **goroutines safely**; guard shared state with channels or sync primitives
+
+## Code Structure
+- Prefer early returns over nested if-else
+- Keep code flat and readable
+
+## Testing
+- Use **Ginkgo** (BDD-style) for unit tests
+- Table-driven tests with parallel execution
+- Test coverage for all exported functions
+- Test edge cases and error conditions — always include **negative cases** (invalid input, missing resource, AWS error paths)
+- Keep tests readable and maintainable
+- Add DynamoDB read and write profiles to important unit tests using the mock.Profile struct and print them after suite using test_utils.CreateCommonSummaryFile()
+
+## Style Guide
+- Follow **[Effective Go](https://go.dev/doc/effective_go)** for idiomatic Go — naming, interfaces, embedding, concurrency patterns, and error conventions
+- Follow the **[Uber Go Style Guide](https://github.com/uber-go/guide/blob/master/style.md)** for all Go code
+
+## AWS SDK Integration
+- Define AWS SDK interfaces in [util/aws_interfaces.go](util/aws_interfaces.go)
+- Initialise concrete clients in [util/clients.go](util/clients.go) and in [test/testutil/test_setup.go](test/testutil/test_setup.go) for tests
+- For new AWS SDK functions: add them under `util/` in a package prefixed `aws` (create the package if it does not exist), add the mocker under `test/mock/`, and add unit tests
+
+## DynamoDB Access
+- Single item: if the item doesn't exist, return an error.
+- Multiple items: if there are no items, return an empty list instead of an error.
+- Always create separate DB structs for each table, with a `dynamodbav:""` tag on each field.
+- Always use `attributevalue.UnmarshalMap()` and `attributevalue.MarshalMap()` for unmarshalling/marshalling items to and from the database.
+- Always use the expression builder for building all DynamoDB operations.
+
+## RBAC / Authorization
+- **Checks live in the DB layer, not the caller.** Every DB helper performs its own `IsAuthorized` check; callers do not re-check before calling. A caller adds an explicit check only when the DB layer cannot express the constraint (rare).
+- **Never use `*All` wildcards in `IsAuthorized` or `SetAllow`.** Use the most specific action in `utils/actions.go`. For grants that need several actions, use `SetAllowMultiple`. Wildcards are reserved for constructing fully-trusted accessors at process boundaries.
+- **Grant the minimum a downstream chain needs.** When a function grants permissions for its caller's next step, grant the union of what that chain actually checks — not the convenience wildcard. Over-granting is a privilege escalation (a secondary user gains rights their primary's restrictions deny).
+
+## Documentation
+- Format using `go fmt`, `goimports`, `golangci-lint`
+-  Avoid unnecessary comments for functions, variables, structs, handlers. Cut the crap. Keep the comments crisp, add them only for exceptions where the code is not self explanatory or something the developer should keep in mind. Also, the comments should not break lines (most editors have wrapped lines) as it is not readable.

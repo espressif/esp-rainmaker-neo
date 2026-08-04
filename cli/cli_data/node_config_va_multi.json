@@ -1,0 +1,264 @@
+{
+  "devices": [
+    {
+      "id": "Colour Light",
+      "type": "esp.device.lightbulb",
+      "primary": "Power",
+      "params": [
+        {
+          "id": "Power",
+          "type": "esp.param.power",
+          "data_type": "bool",
+          "properties": ["read", "write", "time_series", "indexed"],
+          "ui_type": "esp.ui.toggle"
+        },
+        {
+          "data_type": "string",
+          "id": "Name",
+          "properties": ["read", "write", "persist"],
+          "type": "esp.param.name"
+        },
+        {
+          "bounds": {
+            "max": 360,
+            "min": 0,
+            "step": 1
+          },
+          "data_type": "int",
+          "id": "H",
+          "properties": ["read", "write"],
+          "type": "esp.param.hue",
+          "ui_type": "esp.ui.hue-slider"
+        },
+        {
+          "bounds": {
+            "max": 100,
+            "min": 0,
+            "step": 1
+          },
+          "data_type": "int",
+          "id": "S",
+          "properties": ["read", "write"],
+          "type": "esp.param.saturation",
+          "ui_type": "esp.ui.slider"
+        },
+        {
+          "bounds": {
+            "max": 100,
+            "min": 0,
+            "step": 1
+          },
+          "data_type": "int",
+          "id": "V",
+          "properties": ["read", "write", "time_series", "indexed"],
+          "type": "esp.param.brightness",
+          "ui_type": "esp.ui.slider"
+        }
+      ]
+    },
+    {
+      "id": "CCT Light",
+      "type": "esp.device.lightbulb",
+      "primary": "Power",
+      "params": [
+        {
+          "id": "Power",
+          "type": "esp.param.power",
+          "data_type": "bool",
+          "properties": ["read", "write", "time_series", "indexed"],
+          "ui_type": "esp.ui.toggle"
+        },
+        {
+          "data_type": "string",
+          "id": "Name",
+          "properties": ["read", "write", "persist"],
+          "type": "esp.param.name"
+        },
+        {
+          "bounds": {
+            "max": 100,
+            "min": 0,
+            "step": 1
+          },
+          "data_type": "int",
+          "id": "Brightness",
+          "properties": ["read", "write", "time_series", "indexed"],
+          "type": "esp.param.brightness",
+          "ui_type": "esp.ui.slider"
+        },
+        {
+          "bounds": {
+            "max": 6500,
+            "min": 2700,
+            "step": 100
+          },
+          "data_type": "int",
+          "id": "CCT",
+          "properties": ["read", "write"],
+          "type": "esp.param.cct",
+          "ui_type": "esp.ui.slider"
+        }
+      ]
+    },
+    {
+      "id": "On Off Light",
+      "type": "esp.device.lightbulb",
+      "params": [
+        {
+          "id": "Power",
+          "type": "esp.param.power",
+          "data_type": "bool",
+          "properties": ["read", "write", "time_series", "indexed"],
+          "ui_type": "esp.ui.toggle"
+        }
+      ]
+    },
+    {
+      "id": "Colour CCT Mode Light",
+      "type": "esp.device.lightbulb",
+      "primary": "Power",
+      "params": [
+        {
+          "data_type": "string",
+          "id": "Name",
+          "properties": ["read", "write", "persist"],
+          "type": "esp.param.name"
+        },
+        {
+          "data_type": "bool",
+          "id": "Power",
+          "properties": ["read", "write"],
+          "type": "esp.param.power",
+          "ui_type": "esp.ui.toggle"
+        },
+        {
+          "bounds": {
+            "max": 360,
+            "min": 0,
+            "step": 1
+          },
+          "data_type": "int",
+          "id": "Hue",
+          "properties": ["read", "write"],
+          "type": "esp.param.hue",
+          "ui_type": "esp.ui.hue-slider"
+        },
+        {
+          "bounds": {
+            "max": 100,
+            "min": 0,
+            "step": 1
+          },
+          "data_type": "int",
+          "id": "Saturation",
+          "properties": ["read", "write"],
+          "type": "esp.param.saturation",
+          "ui_type": "esp.ui.slider"
+        },
+        {
+          "bounds": {
+            "max": 100,
+            "min": 0,
+            "step": 1
+          },
+          "data_type": "int",
+          "id": "Brightness",
+          "properties": ["read", "write"],
+          "type": "esp.param.brightness",
+          "ui_type": "esp.ui.slider"
+        },
+        {
+          "bounds": {
+            "max": 6500,
+            "min": 2700,
+            "step": 100
+          },
+          "data_type": "int",
+          "id": "CCT",
+          "properties": ["read", "write"],
+          "type": "esp.param.cct",
+          "ui_type": "esp.ui.slider"
+        },
+        {
+          "bounds": {
+            "max": 2,
+            "min": 1,
+            "step": 1
+          },
+          "data_type": "int",
+          "id": "Light Mode",
+          "properties": ["read", "write"],
+          "type": "esp.param.light-mode",
+          "ui_type": "esp.ui.dropdown"
+        }
+      ]
+    }
+  ],
+  "info": {
+    "fw_version": "1.0.0",
+    "name": "Light",
+    "type": "light"
+  },
+  "services": [
+    {
+      "id": "Local Control",
+      "params": [
+        {
+          "data_type": "int",
+          "id": "Type",
+          "properties": ["read"],
+          "type": "esp.param.local_control_type"
+        },
+        {
+          "data_type": "string",
+          "id": "POP",
+          "properties": ["read"],
+          "type": "esp.param.local_control_pop"
+        }
+      ],
+      "type": "esp.service.local_control"
+    },
+    {
+      "id": "System",
+      "params": [
+        {
+          "data_type": "bool",
+          "id": "Reboot",
+          "properties": ["read", "write"],
+          "type": "esp.param.reboot"
+        },
+        {
+          "data_type": "bool",
+          "id": "Network-Reset",
+          "properties": ["read", "write"],
+          "type": "esp.param.network-reset"
+        },
+        {
+          "data_type": "bool",
+          "id": "Factory-Reset",
+          "properties": ["read", "write"],
+          "type": "esp.param.factory-reset"
+        }
+      ],
+      "type": "esp.service.system"
+    },
+    {
+      "id": "Time",
+      "params": [
+        {
+          "data_type": "string",
+          "id": "TZ",
+          "properties": ["read", "write"],
+          "type": "esp.param.tz"
+        },
+        {
+          "data_type": "string",
+          "id": "TZ-POSIX",
+          "properties": ["read", "write"],
+          "type": "esp.param.tz_posix"
+        }
+      ],
+      "type": "esp.service.time"
+    }
+  ]
+}

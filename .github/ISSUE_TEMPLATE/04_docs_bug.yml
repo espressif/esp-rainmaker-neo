@@ -1,0 +1,58 @@
+name: Documentation bug
+description: A spec, API reference, or guide is wrong, outdated, unclear, or missing
+labels: ["Type: Bug", "Area: Documentation"]
+body:
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Answers checklist
+      options:
+        - label: I have searched existing issues and this is not a duplicate.
+          required: true
+  - type: input
+    id: location
+    attributes:
+      label: Which document?
+      description: >-
+        Path or URL — a spec page (`docs/en/specs/...`), an API definition
+        (`misc/swagger/...`), the README, or the glossary (`misc/GLOSSARY.md`).
+      placeholder: docs/en/specs/node_assoc.md — section "Claim verification"
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of problem?
+      options:
+        - Incorrect — the docs contradict the actual behavior
+        - Outdated — was true once, the code has moved on
+        - Missing — behavior exists but is not documented
+        - Unclear — technically correct but confusing or ambiguous
+        - Broken link / formatting / build issue
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What does the documentation say, and what is actually true?
+      description: >-
+        Quote the problematic passage. If the docs contradict observed
+        behavior, describe what actually happens — and note which one you
+        believe is right. (If the code is wrong and the spec is right, file a
+        runtime bug instead.)
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested correction (optional)
+      description: How should it read instead? A rough draft is welcome — or open a PR directly.
+    validations:
+      required: false
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I'm willing to submit a pull request to fix this.
+          required: false

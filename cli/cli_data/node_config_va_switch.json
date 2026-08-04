@@ -1,0 +1,19 @@
+{
+  "devices": [
+    {
+      "id": "Switch1",
+      "type": "esp.device.switch",
+      "params": [
+        {
+          "id": "Power",
+          "type": "esp.param.power",
+          "data_type": "bool",
+          "properties": ["read", "write", "time_series", "indexed"]
+        }
+      ]
+    }
+  ],
+  "info": {
+    "fw_version": "1.1.0"
+  }
+}

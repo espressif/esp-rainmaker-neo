@@ -1,0 +1,487 @@
+# SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+#
+# SPDX-License-Identifier: Apache-2.0
+
+openapi: 3.0.3
+info:
+  title: Test Webhook Mock API
+  version: 0.8.0
+  description: >
+    In-cloud test double for the third-party endpoints the notifications flow
+    POSTs to during integration tests (Alexa Smart Home, Google Voice Assistant,
+    and the Matter command relay). Deployed by the rmng test-infra stack as the
+    `test_webhook` Lambda behind API Gateway, backed by the
+    `rmng-test-webhook-table` DynamoDB table with a 24h TTL (`expires_at`).
+
+    Errors use the rmng envelope `{ "message": <text> }`. Token endpoints sign
+    HS256 JWTs (24h expiry) and the capture endpoints verify the Bearer token's
+    signature and expiry.
+
+    External-contract fields (Alexa/GVA/Matter) keep their upstream camelCase
+    (`fabricId`, `agentUserId`, `endpointId`, `payloadType`) verbatim.
+servers:
+  - url: /
+
+tags:
+  - name: Core
+    description: Generic token / data-capture / validate flow
+  - name: Alexa
+    description: Alexa Smart Home capture flow
+  - name: GVA
+    description: Google Voice Assistant capture flow
+  - name: Matter
+    description: Matter endpoint pairing and command relay
+
+# Every /v1 method requires the gateway API key; the data endpoints additionally
+# require the Bearer JWT (declared per-operation).
+security:
+  - apiKeyAuth: []
+
+paths:
+  /v1/token:
+    post:
+      tags: [Core]
+      operationId: issueToken
+      summary: Issue mock access/id tokens
+      description:
+        Echoes the supplied refresh_token and returns fresh opaque access/id
+        tokens.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token:
+                  type: string
+      responses:
+        "200":
+          description: Tokens issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /v1/data:
+    post:
+      tags: [Core]
+      operationId: captureData
+      summary: Capture a payload keyed by uuid
+      description:
+        Requires a Bearer token, then stores the request body (minus uuid) under
+        uuid for 24h. Empty body on success.
+      security:
+        - apiKeyAuth: []
+          bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [uuid]
+              properties:
+                uuid:
+                  type: string
+                  description: Storage key; stripped from the stored payload.
+              additionalProperties: true
+      responses:
+        "200":
+          description: Stored (empty body)
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /v1/validate:
+    get:
+      tags: [Core]
+      operationId: validateData
+      summary: Read back a captured payload
+      parameters:
+        - $ref: "#/components/parameters/UuidQuery"
+      responses:
+        "200":
+          description: Stored payload (returned verbatim)
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "410":
+          $ref: "#/components/responses/Gone"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /v1/alexa/token:
+    post:
+      tags: [Alexa]
+      operationId: issueAlexaToken
+      summary: Issue mock tokens (Alexa)
+      description:
+        Echoes refresh_token and returns fresh opaque tokens. Same shape as
+        /v1/token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token:
+                  type: string
+      responses:
+        "200":
+          description: Tokens issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /v1/alexa/data:
+    post:
+      tags: [Alexa]
+      operationId: captureAlexaData
+      summary: Capture an Alexa payload keyed by X-Alexa-UUID
+      description:
+        "Requires a Bearer token, tags the body with `alexa: true`, and stores
+        it under the Alexa channel for 24h. Empty body on success."
+      security:
+        - apiKeyAuth: []
+          bearerAuth: []
+      parameters:
+        - name: X-Alexa-UUID
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: Stored (empty body)
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /v1/alexa/validate:
+    get:
+      tags: [Alexa]
+      operationId: validateAlexaData
+      summary: Read back a captured Alexa payload
+      parameters:
+        - $ref: "#/components/parameters/UuidQuery"
+      responses:
+        "200":
+          description: "Stored payload (includes `alexa: true`)"
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "410":
+          $ref: "#/components/responses/Gone"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /v1/gva/token:
+    post:
+      tags: [GVA]
+      operationId: issueGvaToken
+      summary: Issue a mock GVA access token
+      description:
+        Returns an opaque Bearer access token. No request body required.
+      responses:
+        "200":
+          description: Token issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GvaTokenResponse"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /v1/gva/data:
+    post:
+      tags: [GVA]
+      operationId: captureGvaData
+      summary: Capture a GVA Report State payload
+      description:
+        "Requires a Bearer token, tags the body with `gva: true`, and stores it
+        under `agentUserId` for 24h. Empty body on success."
+      security:
+        - apiKeyAuth: []
+          bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [agentUserId]
+              properties:
+                agentUserId:
+                  type: string
+                  description: Storage key (GVA Report State agentUserId).
+              additionalProperties: true
+      responses:
+        "200":
+          description: Stored (empty body)
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /v1/gva/validate:
+    get:
+      tags: [GVA]
+      operationId: validateGvaData
+      summary: Read back a captured GVA payload
+      parameters:
+        - $ref: "#/components/parameters/UuidQuery"
+      responses:
+        "200":
+          description: "Stored payload (includes `gva: true`)"
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "410":
+          $ref: "#/components/responses/Gone"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /v1/pair:
+    post:
+      tags: [Matter]
+      operationId: pairEndpoint
+      summary: Derive an endpointId from commissioning parameters
+      description:
+        Concatenates the four fields with hyphens into a deterministic
+        endpointId. No storage.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fabricId, deviceNodeId, adminVendorId, csrNonce]
+              properties:
+                fabricId:
+                  type: string
+                deviceNodeId:
+                  type: string
+                adminVendorId:
+                  type: string
+                csrNonce:
+                  type: string
+      responses:
+        "200":
+          description: Endpoint identifier
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  endpointId:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /v1/{endpointId}/command:
+    parameters:
+      - name: endpointId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Endpoint identifier from /v1/pair.
+    post:
+      tags: [Matter]
+      operationId: enqueueCommand
+      summary: Enqueue a command for an endpoint/topic
+      description: >
+        Parses `payload` (a JSON string) to extract its `topic`, then appends
+        the request body (with endpointId attached) onto a per-endpoint/topic
+        FIFO queue with a 24h TTL. Echoes the stored object.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommandBody"
+      responses:
+        "200":
+          description: Command enqueued (echoed with endpointId)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandRecord"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+    get:
+      tags: [Matter]
+      operationId: dequeueCommand
+      summary: Pop the oldest queued command for an endpoint/topic
+      description:
+        Removes and returns the oldest queued command for the endpoint/topic
+        (FIFO).
+      parameters:
+        - name: topic
+          in: query
+          required: true
+          schema:
+            type: string
+          example: rainmaker/things/<node_id>/from_cloud
+      responses:
+        "200":
+          description: Dequeued command
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandRecord"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description:
+        HS256 JWT issued by the token endpoints; signature and expiry are
+        verified by the Lambda.
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+      description:
+        API Gateway key gating every /v1 method (generated at deploy). Coarse
+        access gate at the gateway, layered with the Lambda's JWT verification.
+
+  parameters:
+    UuidQuery:
+      name: uuid
+      in: query
+      required: true
+      schema:
+        type: string
+
+  schemas:
+    TokenResponse:
+      type: object
+      properties:
+        refresh_token:
+          type: string
+        access_token:
+          type: string
+        id_token:
+          type: string
+        expires_in:
+          type: integer
+          example: 86400
+    GvaTokenResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+        expires_in:
+          type: integer
+          example: 86400
+        token_type:
+          type: string
+          example: Bearer
+    CommandBody:
+      type: object
+      required: [payload]
+      properties:
+        payload:
+          type: string
+          description: JSON-encoded string that must contain a `topic` key.
+          example: '{"topic":"rainmaker/things/<node_id>/from_cloud","payload":{"Light":{"Power":true,"Brightness":80}}}'
+        payloadType:
+          type: integer
+          default: 0
+    CommandRecord:
+      allOf:
+        - $ref: "#/components/schemas/CommandBody"
+        - type: object
+          properties:
+            endpointId:
+              type: string
+    Error:
+      type: object
+      properties:
+        message:
+          type: string
+
+  responses:
+    BadRequest:
+      description: Missing or invalid request parameters
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: Bearer token missing, invalid, or expired
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: No command queued for this endpoint and topic
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Gone:
+      description: Captured data expired or not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    MethodNotAllowed:
+      description: HTTP method not supported for this route
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"

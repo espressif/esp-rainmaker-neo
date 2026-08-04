@@ -1,0 +1,62 @@
+{
+  "heading": "Push Notifications",
+  "noIntegrations": "No push integrations configured yet.",
+  "secondaryText": "Manage push notification integrations (APNS / FCM) used to deliver notifications to your apps.",
+  "addIntegrationButton": "Add Integration",
+  "sandboxBadge": "SANDBOX",
+  "deleteSuccess": "Push integration deleted successfully.",
+  "deleteError": "Failed to delete push integration.",
+  "apnsHowToTitle": "How to get APNS credentials",
+  "gcmHowToTitle": "How to get the service account JSON",
+  "bundleId": "Bundle ID",
+  "bundleIdPlaceholder": "e.g. com.rainmaker.app",
+  "keyId": "Key ID",
+  "keyIdPlaceholder": "e.g. ABC123DEFG",
+  "teamId": "Team ID",
+  "teamIdPlaceholder": "e.g. TEAM123456",
+  "authKey": "Authentication Key (.p8)",
+  "authKeyPlaceholder": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----",
+  "sandbox": "Use APNS sandbox (development builds)",
+  "projectId": "Project ID",
+  "invalidJsonFile": "The selected file is not valid JSON",
+  "invalidJsonFormat": "The JSON file does not contain the required service account fields (project_id, client_email, private_key)",
+  "registerSuccess": "Push integration registered successfully",
+  "registerError": "Failed to register push integration",
+  "deleteConfirmTitle": "Delete integration?",
+  "deleteConfirmDescription": "This will delete {{id}} and its SNS platform application. Devices registered against it will stop receiving notifications.",
+  "fetchError": "Failed to load push integrations",
+  "form": {
+    "sheetTitle": "Add push notification integration",
+    "typeLabel": "Integration type",
+    "typeIosPrimary": "iOS",
+    "typeIosBadge": "APNS",
+    "typeAndroidPrimary": "Android",
+    "typeAndroidBadge": "FCM",
+    "sandboxPrimary": "Use APNS sandbox",
+    "sandboxSecondary": "Enable only for development builds.",
+    "serviceAccountLabel": "Service account JSON",
+    "serviceAccountUploadTitle": "Drop your service account JSON here",
+    "serviceAccountUploadDescription": "Only .json files are accepted.",
+    "submit": "Register integration",
+    "steps": {
+      "ios": {
+        "1": "Log in to <url>https://developer.apple.com/account/resources</url>",
+        "2": "Create an App ID of type <term>App</term>: add the <term>bundle ID</term>, enable Push Notifications, note the <term>Team ID</term>",
+        "3": "Create a Key of type <term>Apple Push Notifications service</term> pointed at that App ID; download the <term>.p8</term> file and note the <term>Key ID</term>"
+      },
+      "android": {
+        "1": "Log in to <url>https://console.firebase.google.com/</url>",
+        "2": "Create or choose a project",
+        "3": "Go to <term>Settings → Service accounts</term>",
+        "4": "On the <term>Firebase Admin SDK</term> tab, click <term>Generate new private key</term>"
+      }
+    },
+    "errors": {
+      "bundleIdRequired": "Bundle ID is required.",
+      "keyIdRequired": "Key ID is required.",
+      "teamIdRequired": "Team ID is required.",
+      "authKeyRequired": "Authentication key is required.",
+      "serviceAccountRequired": "Upload a service account JSON file."
+    }
+  }
+}

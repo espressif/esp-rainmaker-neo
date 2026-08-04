@@ -1,0 +1,61 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["iot:Connect"],
+      "Resource": [
+        "arn:aws:iot:__REGION__:__ACCOUNT__:client/${iot:Connection.Thing.ThingName}"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["iot:Publish", "iot:Receive"],
+      "Resource": [
+        "arn:aws:iot:__REGION__:__ACCOUNT__:topic/$aws/things/${iot:Connection.Thing.ThingName}/shadow/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["iot:Subscribe"],
+      "Resource": [
+        "arn:aws:iot:__REGION__:__ACCOUNT__:topicfilter/$aws/things/${iot:Connection.Thing.ThingName}/shadow/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["iot:Subscribe", "iot:Receive"],
+      "Resource": [
+        "arn:aws:iot:__REGION__:__ACCOUNT__:*/rainmaker/nodes/${iot:Connection.Thing.ThingName}/*",
+        "arn:aws:iot:__REGION__:__ACCOUNT__:*/rainmaker/nodes/${iot:Connection.Thing.ThingName}/*/*/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["iot:Publish"],
+      "Resource": [
+        "arn:aws:iot:__REGION__:__ACCOUNT__:topic/rainmaker/nodes/${iot:Connection.Thing.ThingName}/ts/*",
+        "arn:aws:iot:__REGION__:__ACCOUNT__:topic/$aws/rules/*/rainmaker/nodes/${iot:Connection.Thing.ThingName}/ts/*",
+        "arn:aws:iot:__REGION__:__ACCOUNT__:topic/rainmaker/nodes/${iot:Connection.Thing.ThingName}/to_cloud",
+        "arn:aws:iot:__REGION__:__ACCOUNT__:topic/$aws/rules/*/rainmaker/nodes/${iot:Connection.Thing.ThingName}/to_cloud",
+        "arn:aws:iot:__REGION__:__ACCOUNT__:topic/rainmaker/nodes/${iot:Connection.Thing.ThingName}/notify/*",
+        "arn:aws:iot:__REGION__:__ACCOUNT__:topic/$aws/rules/*/rainmaker/nodes/${iot:Connection.Thing.ThingName}/notify/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["iot:Publish", "iot:Receive", "iot:Subscribe"],
+      "Resource": [
+        "arn:aws:iot:__REGION__:__ACCOUNT__:*/$aws/things/${iot:Connection.Thing.ThingName}/jobs/*",
+        "arn:aws:iot:__REGION__:__ACCOUNT__:*/$aws/things/${iot:Connection.Thing.ThingName}/streams/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["iot:Subscribe", "iot:Receive"],
+      "Resource": [
+        "arn:aws:iot:__REGION__:__ACCOUNT__:*/rainmaker/nodes/groups/${iot:Connection.Thing.Attributes[group_id]}/*control"
+      ]
+    }
+  ]
+}

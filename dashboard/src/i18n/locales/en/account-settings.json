@@ -1,0 +1,82 @@
+{
+  "pageTitle": "Account Settings",
+  "navAriaLabel": "Account settings sections",
+  "navSelect": {
+    "placeholder": "Select a section"
+  },
+  "tabs": {
+    "profile": "Profile",
+    "preferences": "App preferences",
+    "password": "Change password"
+  },
+  "breadcrumbs": {
+    "accountSettings": "Account settings"
+  },
+  "password": {
+    "description": "Choose a password you don't reuse anywhere else.",
+    "currentPasswordLabel": "Current password",
+    "currentPasswordPlaceholder": "Enter your current password",
+    "newPasswordLabel": "New password",
+    "newPasswordPlaceholder": "Enter a new password",
+    "confirmPasswordLabel": "Confirm new password",
+    "confirmPasswordPlaceholder": "Re-enter the new password",
+    "requirementsLabel": "Password requirements",
+    "requirementMet": "Requirement met",
+    "requirementUnmet": "Requirement not met",
+    "submit": "Update password",
+    "errorTitle": "Could not change your password",
+    "success": {
+      "title": "Password updated",
+      "description": "Your password has been changed. You'll be signed out so you can sign in again with the new one.",
+      "countdown": "Signing you out in {{seconds}}s.",
+      "signInAgain": "Sign in again"
+    }
+  },
+  "profile": {
+    "unknownUser": "Unknown user",
+    "details": {
+      "heading": "Profile details",
+      "secondaryText": "Identity information from your current sign-in session.",
+      "labels": {
+        "username": "Username",
+        "email": "Email",
+        "emailVerified": "Email verified",
+        "userId": "User ID",
+        "lastSignIn": "Last sign-in"
+      },
+      "empty": {
+        "heading": "Profile details unavailable",
+        "description": "We couldn't read your session information. Sign in again to refresh it."
+      }
+    }
+  },
+  "preferences": {
+    "scopeNotice": {
+      "title": "Saved on this browser only",
+      "description": "These preferences stay on this browser instead of your account, so they won't carry over if you sign in from another browser or device."
+    },
+    "colorTheme": {
+      "title": "Color theme",
+      "description": "Choose how the dashboard looks on this device.",
+      "light": {
+        "label": "Light",
+        "description": "Bright surfaces with dark text."
+      },
+      "dark": {
+        "label": "Dark",
+        "description": "Dimmed surfaces that are easier on the eyes at night."
+      }
+    },
+    "language": {
+      "description": "Language used across the dashboard.",
+      "changeButton": "Change Language",
+      "sheetTitle": "Change language",
+      "picker": {
+        "title": "Choose a language",
+        "description": "Applies as soon as you pick one.",
+        "searchPlaceholder": "Search languages",
+        "noResults": "No languages match your search."
+      }
+    }
+  }
+}

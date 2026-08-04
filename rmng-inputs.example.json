@@ -1,0 +1,5 @@
+{
+  "espuser-core": {
+    "admin_emails": "admin1@example.com,admin2@example.com"
+  }
+}

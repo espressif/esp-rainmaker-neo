@@ -1,0 +1,85 @@
+---
+description: Backend development expert for Go/AWS systems
+globs: 
+alwaysApply: true
+---
+
+Expert in Go, Python, AWS architecture and clean backend development. Focus on idiomatic, modular, testable code aligned with modern best practices. Axes of focus:
+- Scalability
+- Cost consciousness
+- Security
+- Observability
+- Logging and monitoring
+- Caching
+- Test driven development
+
+## Architecture
+- Apply **Clean Architecture** by structuring code into handlers/controllers, services/use cases, 
+repositories/data access, and domain models.
+- **Interface-driven development** with dependency injection to enhance flexibility and 
+testability.
+- **Composition over inheritance**; small, purpose-specific interfaces
+- **DB helpers operate on one table; cross-service work belongs in handlers.** A `*_db` function touches its own DynamoDB table. IoT Thing ops, Lambda invokes, and shadow writes paired with a DB op belong in the handler/wrapped helpers so rollback and error mapping stay visible.
+- **Pair calls that are always paired — unless an asymmetry is intentional.** If two side-effect calls appear together at every user-flow call site, wrap them. Before folding, audit whether any path intentionally skips one (e.g. system-flow entry points that would otherwise recurse).
+
+## Project Structure
+- `src/db`: database interfaces
+- `src/services`: AWS service implementations  
+- `src/mock`: test mocks for AWS services
+- `src/<feature>`: feature-specific code (group, node, user)
+- `test/`: integration test utilities
+- Group code by feature when it improves clarity and cohesion. Keep logic decoupled from framework-specific code.
+
+## Development Practices
+- Short, focused functions with single responsibility
+- Explicit error handling
+- Meaningful names; named constants over hard-coded values
+- **Extract repeated code** into reusable functions; maintain single sources of truth (DRY principle).
+- **Hide implementation details** through proper encapsulation and clear interfaces.
+- Continuous refactoring and fix technical debt
+
+## Security & Resilience
+- Rigorous input validation and sanitization
+- Secure defaults for JWT, cookies, configuration
+- Isolate sensitive operations with clear **permission boundaries**.
+- Retries, exponential backoff, timeouts on external calls
+- Use **circuit breakers and rate limiting** for service protection.
+
+## Testing
+- Always add unit and integration tests
+- Use the same python functions for CI and client simulators
+- Test-driven development; readable, maintainable tests
+- Unit tests (`_test.go` suffix) with mocks from `src/mock`
+- Integration tests in `test/` folder (Python scripts):
+  - Add **API** integration tests to the feature-specific `test/test_<feature>.py` (e.g. [test/test_user.py](test/test_user.py), [test/test_group.py](test/test_group.py), [test/test_device.py](test/test_device.py))
+  - Add **Simulator** calls to `*_sim.py` files
+- Test edge cases and error conditions (include negative cases)
+- When asserting more than 2 fields, compare the whole struct rather than individual members for readability
+
+## API Handlers
+- When adding a new API:
+  - Add the spec to `docs/api/*_swagger.yaml`
+  - Call `ExtractRequestStruct()` to parse the request
+  - Call `rmlog` in the top-level lambda handler instead of sprinking it throughout the internal code base. Other calls can just wrap the error and return
+  - Return `APIGwRespJSON` **exactly once** (as the last step after the single `rmlog` call)
+
+## MQTT Handlers
+- When adding a new topic:
+  - Add the spec to `docs/api/MQTT_*.yaml`
+
+## Standards
+- Use comments to **explain why** something is done, not what the code does (make code self-documenting).
+- Document APIs, complex algorithms, non-obvious side effects
+- Appropriate log levels; minimal observability overhead
+- Stable, minimal dependencies; version-lock for deterministic builds
+
+## Cloud Deployment
+- AWS Cloud with Python CDK for IaaS
+- DynamoDB with index overloading; minimal indexes
+
+## Key Principles
+1. Prioritize readability, simplicity, maintainability
+2. Design for change; isolate business logic
+3. Clear boundaries and dependency inversion
+4. Observable, testable, documented behavior
+5. Leave code cleaner than found

@@ -1,0 +1,1354 @@
+// SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+//
+// SPDX-License-Identifier: Apache-2.0
+
+package timeseries_test
+
+import (
+	"context"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/processed_ts_db"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/timeseries_db"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
+	"testing"
+	"time"
+
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_details_db"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/timeseries"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
+	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
+	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+)
+
+func TestTimeseries(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Timeseries Suite")
+}
+
+// Configuration Tests
+var _ = Describe("Timeseries Configuration", func() {
+	var originalConfig timeseries.TimeseriesConfig
+
+	BeforeEach(func() {
+		// Save the original config
+		originalConfig = timeseries.GTimeseriesConfig
+	})
+
+	AfterEach(func() {
+		// Restore the original config
+		timeseries.GTimeseriesConfig = originalConfig
+	})
+
+	Describe("LoadTimeseriesConfigFromDefaults", func() {
+		It("should set default values", func() {
+			var config timeseries.TimeseriesConfig
+			timeseries.LoadTimeseriesConfigFromDefaults(&config)
+
+			Expect(config.WeekStart).To(Equal(timeseries.WeekStartMonday))
+		})
+	})
+
+	Describe("GetWeekStartWeekday", func() {
+		It("should return Monday for WeekStartMonday", func() {
+			timeseries.GTimeseriesConfig.WeekStart = timeseries.WeekStartMonday
+			Expect(timeseries.GetWeekStartWeekday()).To(Equal(time.Monday))
+		})
+
+		It("should return Sunday for WeekStartSunday", func() {
+			timeseries.GTimeseriesConfig.WeekStart = timeseries.WeekStartSunday
+			Expect(timeseries.GetWeekStartWeekday()).To(Equal(time.Sunday))
+		})
+
+		It("should return Monday for invalid week start", func() {
+			timeseries.GTimeseriesConfig.WeekStart = timeseries.WeekStart("invalid")
+			Expect(timeseries.GetWeekStartWeekday()).To(Equal(time.Monday))
+		})
+	})
+
+	Describe("IsValidWeekStart", func() {
+		It("should return true for valid week starts", func() {
+			Expect(timeseries.IsValidWeekStart(timeseries.WeekStartMonday)).To(BeTrue())
+			Expect(timeseries.IsValidWeekStart(timeseries.WeekStartSunday)).To(BeTrue())
+		})
+
+		It("should return false for invalid week starts", func() {
+			Expect(timeseries.IsValidWeekStart(timeseries.WeekStart("invalid"))).To(BeFalse())
+			Expect(timeseries.IsValidWeekStart(timeseries.WeekStart("tuesday"))).To(BeFalse())
+		})
+	})
+
+	Describe("GetTimeseriesConfig", func() {
+		It("should return a copy of the current config", func() {
+			timeseries.GTimeseriesConfig.WeekStart = timeseries.WeekStartSunday
+			config := timeseries.GetTimeseriesConfig()
+
+			Expect(config.WeekStart).To(Equal(timeseries.WeekStartSunday))
+		})
+	})
+
+	Describe("GetWeekStart", func() {
+		It("should return the configured week start", func() {
+			timeseries.GTimeseriesConfig.WeekStart = timeseries.WeekStartSunday
+			Expect(timeseries.GetWeekStart()).To(Equal(timeseries.WeekStartSunday))
+
+			timeseries.GTimeseriesConfig.WeekStart = timeseries.WeekStartMonday
+			Expect(timeseries.GetWeekStart()).To(Equal(timeseries.WeekStartMonday))
+		})
+	})
+})
+
+// Service Tests
+var _ = Describe("TimeseriesService", func() {
+	var (
+		timeseriesService *timeseries.TimeseriesService
+		testUser          *user.User
+		rmngCtx           *rmngctx.RmngContext
+		testNodeID        string
+		mockDB            *mock.DynamoDBMock
+	)
+
+	BeforeEach(func() {
+		// Initialize service registry
+		service.Initialize()
+		timeseries.Register()
+
+		test_utils.TestSetup()
+		timeseriesService = timeseries.NewTimeseriesService()
+		testNodeID = "test-node-id"
+
+		testUser = user.NewUser("test-user-id")
+		testUser.Permissions.SetAllow(utils.NodeGet.String(), testNodeID)
+		rmngCtx = rmngctx.NewRmngContext(testUser)
+
+		// Initialize mock DynamoDB and add timeseries tables
+		mockDB = awscommon.GetDynamoDBClient().(*mock.DynamoDBMock)
+		mockDB.AddTable(timeseries_db.RawTSDataTable, "node_key_dt", "ts")
+		mockDB.AddTable(processed_ts_db.ProcessedTSDataTable, "node_key_dt", "interval_key")
+		mockDB.ProfileReset()
+	})
+
+	Describe("Service Properties", func() {
+		It("should have correct service name", func() {
+			Expect(timeseriesService.GetName()).To(Equal("timeseries"))
+		})
+
+		It("should not support versioning", func() {
+			Expect(timeseriesService.HasVersion()).To(BeFalse())
+		})
+
+		It("should be registered as a NodeService", func() {
+			svc, err := service.Registry().GetNodeService("timeseries")
+			Expect(err).To(BeNil())
+			Expect(svc).ToNot(BeNil())
+			Expect(svc.GetName()).To(Equal("timeseries"))
+		})
+	})
+
+	Describe("Get", func() {
+		It("should return information about the timeseries service", func() {
+			data, err := timeseriesService.Get(rmngCtx, testNodeID)
+			Expect(err).To(BeNil())
+
+			dataMap, ok := data.(map[string]interface{})
+			Expect(ok).To(BeTrue())
+			Expect(dataMap).To(HaveKey("service"))
+			Expect(dataMap).To(HaveKey("message"))
+			Expect(dataMap).To(HaveKey("raw_data"))
+			Expect(dataMap).To(HaveKey("aggregates"))
+			Expect(dataMap).To(HaveKey("examples"))
+			Expect(dataMap["service"]).To(Equal("timeseries"))
+
+			// Validate parameters documentation
+			parameters := dataMap["parameters"].(map[string]string)
+			Expect(parameters).To(HaveKey("key"))
+			Expect(parameters).To(HaveKey("data_type"))
+			Expect(parameters).To(HaveKey("type"))
+
+			// Validate raw_data documentation
+			rawData := dataMap["raw_data"].(map[string]string)
+			Expect(rawData).To(HaveKey("start_time"))
+			Expect(rawData).To(HaveKey("end_time"))
+			Expect(rawData).To(HaveKey("page_size"))
+
+			// Validate aggregates documentation
+			aggregates := dataMap["aggregates"].(map[string]string)
+			Expect(aggregates).To(HaveKey("window"))
+			Expect(aggregates).To(HaveKey("date"))
+
+			// Validate examples
+			examples := dataMap["examples"].(map[string]string)
+			Expect(examples).To(HaveKey("raw_data"))
+			Expect(examples).To(HaveKey("latest_data"))
+			Expect(examples).To(HaveKey("current_all"))
+			Expect(examples).To(HaveKey("current_daily"))
+			Expect(examples).To(HaveKey("historical_daily"))
+		})
+	})
+
+	Describe("Put", func() {
+		It("should return error for PUT operations", func() {
+			err := timeseriesService.Put(rmngCtx, testNodeID, map[string]interface{}{})
+			Expect(err).ToNot(BeNil())
+			Expect(err.Error()).To(ContainSubstring("PUT operation not supported for timeseries data"))
+		})
+	})
+
+	Describe("Delete", func() {
+		It("should delete all raw and processed timeseries data for a node", func() {
+			// Grant required permissions
+			testUser.Permissions.SetAllow(utils.NodePutConfig.String(), testNodeID)
+			testUser.Permissions.SetAllow(utils.NodeDeleteConfig.String(), testNodeID)
+
+			// Set up node config with timeseries-enabled parameters
+			configAttr, marshalErr := attributevalue.Marshal(map[string]interface{}{
+				"devices": []interface{}{
+					map[string]interface{}{
+						"id": "Sensor",
+						"params": []interface{}{
+							map[string]interface{}{
+								"id": "Temperature", "data_type": "float",
+								"properties": []interface{}{"time_series"},
+							},
+							map[string]interface{}{
+								"id": "Humidity", "data_type": "int",
+								"properties": []interface{}{"time_series"},
+							},
+						},
+					},
+				},
+			})
+			Expect(marshalErr).To(BeNil())
+			mockDB.PutItem(context.TODO(), &dynamodb.PutItemInput{
+				TableName: aws.String(node_details_db.NodeDetailsTable),
+				Item: map[string]types.AttributeValue{
+					"node_id": &types.AttributeValueMemberS{Value: testNodeID},
+					"config":  configAttr,
+				},
+			})
+
+			// Insert timeseries data using PutTimeseriesData
+			tsDB := timeseries_db.NewTimeseriesDB(rmngCtx)
+			Expect(tsDB.PutTimeseriesData(&timeseries_db.TimeseriesEntry{
+				NodeID: testNodeID, DataKey: "Temperature", DataType: "float",
+				Timestamp: 1000, Value: 25.5,
+			})).To(BeNil())
+			Expect(tsDB.PutTimeseriesData(&timeseries_db.TimeseriesEntry{
+				NodeID: testNodeID, DataKey: "Temperature", DataType: "float",
+				Timestamp: 2000, Value: 26.0,
+			})).To(BeNil())
+			Expect(tsDB.PutTimeseriesData(&timeseries_db.TimeseriesEntry{
+				NodeID: testNodeID, DataKey: "Humidity", DataType: "int",
+				Timestamp: 1000, Value: 60,
+			})).To(BeNil())
+
+			// Verify data exists before delete using service-level GetLatest
+			tempLatest, err := timeseriesService.GetLatest(rmngCtx, testNodeID, "Temperature", "float")
+			Expect(err).To(BeNil())
+			Expect(tempLatest).ToNot(BeNil(), "Pre-condition: Temperature data should exist")
+
+			humidLatest, err := timeseriesService.GetLatest(rmngCtx, testNodeID, "Humidity", "int")
+			Expect(err).To(BeNil())
+			Expect(humidLatest).ToNot(BeNil(), "Pre-condition: Humidity data should exist")
+
+			// Perform delete
+			err = timeseriesService.Delete(rmngCtx, testNodeID)
+			Expect(err).To(BeNil())
+
+			// Verify data deleted using service-level GetLatest — returns error when no data found
+			_, err = timeseriesService.GetLatest(rmngCtx, testNodeID, "Temperature", "float")
+			Expect(err).To(HaveOccurred(), "Temperature timeseries data should be deleted")
+
+			_, err = timeseriesService.GetLatest(rmngCtx, testNodeID, "Humidity", "int")
+			Expect(err).To(HaveOccurred(), "Humidity timeseries data should be deleted")
+		})
+	})
+
+	Describe("Sharing access", func() {
+		var (
+			ownerUser    *user.User
+			ownerCtx     *rmngctx.RmngContext
+			groupID      string
+			ingestNodeID string
+		)
+
+		seedDataPoint := func(nodeID, name, dataType string, ts int64, val interface{}) {
+			tsDB := timeseries_db.NewTimeseriesDB(ownerCtx)
+			Expect(tsDB.PutTimeseriesData(&timeseries_db.TimeseriesEntry{
+				NodeID: nodeID, DataKey: name, DataType: dataType,
+				Timestamp: ts, Value: val,
+			})).To(BeNil())
+		}
+
+		BeforeEach(func() {
+			ingestNodeID = "shared-ts-node"
+
+			ownerUser = user.NewUser("owner-user")
+			ownerUser.Permissions.SetAllow(utils.GroupCreate.String(), "*")
+			ownerCtx = rmngctx.NewRmngContext(ownerUser)
+
+			createdGroup, err := group.CreateGroupForUser(ownerCtx, "Test Group")
+			Expect(err).To(BeNil())
+			Expect(createdGroup).ToNot(BeNil())
+			groupID = createdGroup.GroupID
+
+			test_utils.ManuallyAddNodeToGroup(context.Background(), groupID, ingestNodeID)
+			ownerUser.Permissions.SetAllow(utils.GroupShare.String(), groupID)
+
+			err = user.LoadNodePermissions(ownerCtx, groupID, ingestNodeID)
+			Expect(err).To(BeNil())
+
+			seedDataPoint(ingestNodeID, "Temperature", "float", 1000, 25.5)
+		})
+
+		It("primary access: owner can read latest timeseries via group ownership", func() {
+			point, err := timeseriesService.GetLatest(ownerCtx, ingestNodeID, "Temperature", "float")
+			Expect(err).To(BeNil())
+			Expect(point).ToNot(BeNil())
+			Expect(point.Value).To(Equal(25.5))
+		})
+
+		It("secondary access: full group share grants read then unshare revokes", func() {
+			sharedUser := user.NewUser("shared-ts-user")
+			sharedCtx := rmngctx.NewRmngContext(sharedUser)
+
+			_, err := timeseriesService.GetLatest(sharedCtx, ingestNodeID, "Temperature", "float")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("unauthorized access to node timeseries data"))
+
+			_, err = group.ShareGroup(ownerCtx, groupID, "shared-ts-user", utils.GroupSecondaryAccess, auth.UserInfo{})
+			Expect(err).To(BeNil())
+
+			sharingRequests, err := group.GetMySharingRequests(sharedCtx)
+			Expect(err).To(BeNil())
+			Expect(sharingRequests).To(HaveLen(1))
+			err = group.ApproveSharingRequest(sharedCtx, sharingRequests[0].SharingRequestID)
+			Expect(err).To(BeNil())
+
+			err = user.LoadNodePermissions(sharedCtx, groupID, ingestNodeID)
+			Expect(err).To(BeNil())
+
+			point, err := timeseriesService.GetLatest(sharedCtx, ingestNodeID, "Temperature", "float")
+			Expect(err).To(BeNil())
+			Expect(point).ToNot(BeNil())
+			Expect(point.Value).To(Equal(25.5))
+
+			err = group.UnshareGroup(ownerCtx, groupID, "shared-ts-user")
+			Expect(err).To(BeNil())
+
+			sharedUser = user.NewUser("shared-ts-user")
+			sharedCtx = rmngctx.NewRmngContext(sharedUser)
+
+			_, err = timeseriesService.GetLatest(sharedCtx, ingestNodeID, "Temperature", "float")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("unauthorized access to node timeseries data"))
+		})
+
+		It("subgroup access: subgroup share grants read then unshare revokes", func() {
+			createdSubgroup, err := group.CreateSubGroup(ownerCtx, groupID, "Test Subgroup")
+			Expect(err).To(BeNil())
+			Expect(createdSubgroup).ToNot(BeNil())
+			subgroupID := createdSubgroup.SubGroupID
+
+			_, err = group.UpdateNodeAndSubgroup(ownerCtx, groupID, ingestNodeID, subgroupID, group_node_db.SubGroupOperationTypeAdd)
+			Expect(err).To(BeNil())
+
+			sharedUser := user.NewUser("shared-ts-user")
+			sharedCtx := rmngctx.NewRmngContext(sharedUser)
+
+			_, err = timeseriesService.GetLatest(sharedCtx, ingestNodeID, "Temperature", "float")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("unauthorized access to node timeseries data"))
+
+			_, err = group.ShareSubGroup(ownerCtx, groupID, subgroupID, "shared-ts-user", auth.UserInfo{})
+			Expect(err).To(BeNil())
+
+			sharingRequests, err := group.GetMySharingRequests(sharedCtx)
+			Expect(err).To(BeNil())
+			Expect(sharingRequests).To(HaveLen(1))
+			err = group.ApproveSharingRequest(sharedCtx, sharingRequests[0].SharingRequestID)
+			Expect(err).To(BeNil())
+
+			err = user.LoadNodePermissions(sharedCtx, groupID, ingestNodeID)
+			Expect(err).To(BeNil())
+
+			point, err := timeseriesService.GetLatest(sharedCtx, ingestNodeID, "Temperature", "float")
+			Expect(err).To(BeNil())
+			Expect(point).ToNot(BeNil())
+			Expect(point.Value).To(Equal(25.5))
+
+			err = group.UnshareSubGroup(ownerCtx, groupID, subgroupID, "shared-ts-user")
+			Expect(err).To(BeNil())
+
+			sharedUser = user.NewUser("shared-ts-user")
+			sharedCtx = rmngctx.NewRmngContext(sharedUser)
+
+			_, err = timeseriesService.GetLatest(sharedCtx, ingestNodeID, "Temperature", "float")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("unauthorized access to node timeseries data"))
+		})
+	})
+})
+
+var _ = Describe("TimeseriesDB", func() {
+	var (
+		timeseriesDB *timeseries_db.TimeseriesDB
+		testUser     *user.User
+		rmngCtx      *rmngctx.RmngContext
+		testNodeID   string
+		mockDB       *mock.DynamoDBMock
+	)
+
+	BeforeEach(func() {
+		test_utils.TestSetup()
+		testNodeID = "test-node-id"
+
+		testUser = user.NewUser("test-user-id")
+		testUser.Permissions.SetAllow(utils.NodeGet.String(), testNodeID)
+		rmngCtx = rmngctx.NewRmngContext(testUser)
+		timeseriesDB = timeseries_db.NewTimeseriesDB(rmngCtx)
+
+		// Initialize mock DynamoDB and add timeseries table
+		mockDB = awscommon.GetDynamoDBClient().(*mock.DynamoDBMock)
+		mockDB.AddTable(timeseries_db.RawTSDataTable, "node_key_dt", "ts")
+		mockDB.ProfileReset()
+	})
+
+	Describe("GetTimeseriesData", func() {
+		Context("when no data exists", func() {
+			It("should return empty array", func() {
+				entries, err := timeseriesDB.GetTimeseriesData(testNodeID, "temperature", "float", 0, 0, 10)
+				Expect(err).To(BeNil())
+				Expect(entries).To(HaveLen(0))
+			})
+		})
+
+		Context("when data exists", func() {
+			BeforeEach(func() {
+				// Create system actor context for PutTimeseriesData operations
+				systemActor := utils.NewSystemActor()
+				systemRmngCtx := rmngctx.NewRmngContext(systemActor)
+				systemTimeseriesDB := timeseries_db.NewTimeseriesDB(systemRmngCtx)
+
+				// Add test data to mock database
+				testEntries := []*timeseries_db.TimeseriesEntry{
+					{
+						NodeID:     testNodeID,
+						DataKey:    "temperature",
+						DataType:   "float",
+						Timestamp:  1640995200, // 2022-01-01 00:00:00 UTC
+						TopicName:  "ts-group456",
+						Timezone:   "UTC",
+						Value:      25.5,
+						Cumulative: false,
+					},
+					{
+						NodeID:     testNodeID,
+						DataKey:    "temperature",
+						DataType:   "float",
+						Timestamp:  1640995260, // 2022-01-01 00:01:00 UTC
+						TopicName:  "ts-group456",
+						Timezone:   "UTC",
+						Value:      26.0,
+						Cumulative: false,
+					},
+					{
+						NodeID:     testNodeID,
+						DataKey:    "temperature",
+						DataType:   "float",
+						Timestamp:  1640995320, // 2022-01-01 00:02:00 UTC
+						TopicName:  "ts-group456",
+						Timezone:   "UTC",
+						Value:      24.8,
+						Cumulative: false,
+					},
+				}
+
+				for _, entry := range testEntries {
+					systemTimeseriesDB.PutTimeseriesData(entry)
+				}
+			})
+
+			It("should retrieve all data without time filters", func() {
+				entries, err := timeseriesDB.GetTimeseriesData(testNodeID, "temperature", "float", 0, 0, 0)
+				Expect(err).To(BeNil())
+				Expect(entries).To(HaveLen(3))
+
+				// Should be in descending timestamp order (latest first)
+				Expect(entries[0].Timestamp).To(Equal(int64(1640995320)))
+				Expect(entries[1].Timestamp).To(Equal(int64(1640995260)))
+				Expect(entries[2].Timestamp).To(Equal(int64(1640995200)))
+			})
+
+			It("should respect limit parameter", func() {
+				entries, err := timeseriesDB.GetTimeseriesData(testNodeID, "temperature", "float", 0, 0, 2)
+				Expect(err).To(BeNil())
+				Expect(entries).To(HaveLen(2))
+
+				// Should get the 2 most recent entries
+				Expect(entries[0].Timestamp).To(Equal(int64(1640995320)))
+				Expect(entries[1].Timestamp).To(Equal(int64(1640995260)))
+			})
+
+			It("should filter by start time", func() {
+				startTime := int64(1640995260) // From 00:01:00 onwards
+				entries, err := timeseriesDB.GetTimeseriesData(testNodeID, "temperature", "float", startTime, 0, 0)
+				Expect(err).To(BeNil())
+				Expect(entries).To(HaveLen(2))
+
+				for _, entry := range entries {
+					Expect(entry.Timestamp).To(BeNumerically(">=", startTime))
+				}
+			})
+
+			It("should filter by end time", func() {
+				endTime := int64(1640995260) // Until 00:01:00
+				entries, err := timeseriesDB.GetTimeseriesData(testNodeID, "temperature", "float", 0, endTime, 0)
+				Expect(err).To(BeNil())
+				Expect(entries).To(HaveLen(2))
+
+				for _, entry := range entries {
+					Expect(entry.Timestamp).To(BeNumerically("<=", endTime))
+				}
+			})
+
+			It("should filter by time range", func() {
+				startTime := int64(1640995200) // From 00:00:00
+				endTime := int64(1640995260)   // To 00:01:00
+				entries, err := timeseriesDB.GetTimeseriesData(testNodeID, "temperature", "float", startTime, endTime, 0)
+				Expect(err).To(BeNil())
+				Expect(entries).To(HaveLen(2))
+
+				for _, entry := range entries {
+					Expect(entry.Timestamp).To(BeNumerically(">=", startTime))
+					Expect(entry.Timestamp).To(BeNumerically("<=", endTime))
+				}
+			})
+
+			It("should validate data structure", func() {
+				entries, err := timeseriesDB.GetTimeseriesData(testNodeID, "temperature", "float", 0, 0, 1)
+				Expect(err).To(BeNil())
+				Expect(entries).To(HaveLen(1))
+
+				entry := entries[0]
+				Expect(entry.NodeKeyDt).To(Equal("test-node-id.temperature.float"))
+				Expect(entry.NodeID).To(Equal(testNodeID))
+				Expect(entry.DataKey).To(Equal("temperature"))
+				Expect(entry.DataType).To(Equal("float"))
+				Expect(entry.TopicName).To(Equal("ts-group456"))
+				Expect(entry.Timezone).To(Equal("UTC"))
+				Expect(entry.Cumulative).To(BeFalse())
+			})
+		})
+	})
+
+	Describe("GetLatestTimeseriesData", func() {
+		It("should return error when no data exists", func() {
+			_, err := timeseriesDB.GetLatestTimeseriesData(testNodeID, "temperature", "float")
+			Expect(err).ToNot(BeNil())
+			Expect(err.Error()).To(ContainSubstring("no timeseries data found"))
+		})
+
+		It("should return latest entry when data exists", func() {
+			// Create system actor context for PutTimeseriesData operations
+			systemActor := utils.NewSystemActor()
+			systemRmngCtx := rmngctx.NewRmngContext(systemActor)
+			systemTimeseriesDB := timeseries_db.NewTimeseriesDB(systemRmngCtx)
+
+			// Add test data
+			testEntry := &timeseries_db.TimeseriesEntry{
+				NodeID:    testNodeID,
+				DataKey:   "temperature",
+				DataType:  "float",
+				Timestamp: 1640995200,
+				TopicName: "ts-group456",
+				Value:     25.5,
+			}
+
+			err := systemTimeseriesDB.PutTimeseriesData(testEntry)
+			Expect(err).To(BeNil())
+
+			// Retrieve latest data
+			entry, err := timeseriesDB.GetLatestTimeseriesData(testNodeID, "temperature", "float")
+			Expect(err).To(BeNil())
+			Expect(entry).ToNot(BeNil())
+			Expect(entry.Timestamp).To(Equal(int64(1640995200)))
+			Expect(entry.Value).To(Equal(25.5))
+		})
+	})
+
+	Describe("GetTimeseriesDataByTimeRange", func() {
+		It("should convert time.Time to Unix timestamps", func() {
+			startTime := time.Unix(1640995200, 0) // 2022-01-01 00:00:00 UTC
+			endTime := time.Unix(1640995260, 0)   // 2022-01-01 00:01:00 UTC
+
+			entries, err := timeseriesDB.GetTimeseriesDataByTimeRange(testNodeID, "temperature", "float", startTime, endTime)
+			Expect(err).To(BeNil())
+			Expect(entries).ToNot(BeNil())
+			// Should work without error even with no data
+		})
+	})
+
+	Describe("PutTimeseriesData", func() {
+		It("should store timeseries data successfully", func() {
+			// Create system actor context for PutTimeseriesData operations
+			systemActor := utils.NewSystemActor()
+			systemRmngCtx := rmngctx.NewRmngContext(systemActor)
+			systemTimeseriesDB := timeseries_db.NewTimeseriesDB(systemRmngCtx)
+
+			testEntry := &timeseries_db.TimeseriesEntry{
+				NodeID:     testNodeID,
+				DataKey:    "temperature",
+				DataType:   "float",
+				Timestamp:  1640995200,
+				TopicName:  "ts-group456",
+				Timezone:   "UTC",
+				Value:      25.5,
+				Cumulative: false,
+			}
+
+			err := systemTimeseriesDB.PutTimeseriesData(testEntry)
+			Expect(err).To(BeNil())
+
+			// Verify the partition key was set correctly
+			expectedKey := "test-node-id.temperature.float"
+			Expect(testEntry.NodeKeyDt).To(Equal(expectedKey))
+
+			// Verify data was stored in mock database
+			var storedEntry timeseries_db.TimeseriesEntry
+			err = mockDB.GetDirect(timeseries_db.RawTSDataTable, expectedKey, "1640995200", &storedEntry)
+			Expect(err).To(BeNil())
+			Expect(storedEntry.NodeID).To(Equal(testNodeID))
+			Expect(storedEntry.DataKey).To(Equal("temperature"))
+			Expect(storedEntry.Value).To(Equal(25.5))
+		})
+
+		It("should handle different data types", func() {
+			// Create system actor context for PutTimeseriesData operations
+			systemActor := utils.NewSystemActor()
+			systemRmngCtx := rmngctx.NewRmngContext(systemActor)
+			systemTimeseriesDB := timeseries_db.NewTimeseriesDB(systemRmngCtx)
+
+			entries := []*timeseries_db.TimeseriesEntry{
+				{
+					NodeID:   testNodeID,
+					DataKey:  "power",
+					DataType: "bool",
+					Value:    true,
+				},
+				{
+					NodeID:   testNodeID,
+					DataKey:  "count",
+					DataType: "int",
+					Value:    42,
+				},
+				{
+					NodeID:   testNodeID,
+					DataKey:  "name",
+					DataType: "string",
+					Value:    "test-device",
+				},
+			}
+
+			for _, entry := range entries {
+				err := systemTimeseriesDB.PutTimeseriesData(entry)
+				Expect(err).To(BeNil())
+			}
+		})
+
+		It("should handle cumulative data", func() {
+			// Create system actor context for PutTimeseriesData operations
+			systemActor := utils.NewSystemActor()
+			systemRmngCtx := rmngctx.NewRmngContext(systemActor)
+			systemTimeseriesDB := timeseries_db.NewTimeseriesDB(systemRmngCtx)
+
+			testEntry := &timeseries_db.TimeseriesEntry{
+				NodeID:     testNodeID,
+				DataKey:    "energy",
+				DataType:   "float",
+				Timestamp:  1640995200,
+				Value:      1500.25,
+				Cumulative: true,
+			}
+
+			err := systemTimeseriesDB.PutTimeseriesData(testEntry)
+			Expect(err).To(BeNil())
+
+			// Verify cumulative flag was stored
+			var storedEntry timeseries_db.TimeseriesEntry
+			err = mockDB.GetDirect(timeseries_db.RawTSDataTable, "test-node-id.energy.float", "1640995200", &storedEntry)
+			Expect(err).To(BeNil())
+			Expect(storedEntry.Cumulative).To(BeTrue())
+		})
+	})
+
+	Describe("GetParameterList", func() {
+		It("should return error for unsupported operation", func() {
+			_, err := timeseriesDB.GetParameterList(testNodeID)
+			Expect(err).ToNot(BeNil())
+			Expect(err.Error()).To(ContainSubstring("parameter list query not supported without GSI on node_id"))
+		})
+	})
+
+	Describe("GetTimeseriesDataWithPagination", func() {
+		Context("with paginated data", func() {
+			BeforeEach(func() {
+				// Create system actor context for PutTimeseriesData operations
+				systemActor := utils.NewSystemActor()
+				systemRmngCtx := rmngctx.NewRmngContext(systemActor)
+				systemTimeseriesDB := timeseries_db.NewTimeseriesDB(systemRmngCtx)
+
+				// Add 10 test entries with timestamps 1-10 seconds apart
+				baseTimestamp := int64(1640995200) // 2022-01-01 00:00:00 UTC
+				for i := 0; i < 10; i++ {
+					testEntry := &timeseries_db.TimeseriesEntry{
+						NodeID:     testNodeID,
+						DataKey:    "temperature",
+						DataType:   "float",
+						Timestamp:  baseTimestamp + int64(i),
+						TopicName:  "ts-group456",
+						Timezone:   "UTC",
+						Value:      float64(20 + i), // Values 20.0 to 29.0
+						Cumulative: false,
+					}
+
+					systemTimeseriesDB.PutTimeseriesData(testEntry)
+				}
+			})
+
+			It("should return all data when no limit specified", func() {
+				result, err := timeseriesDB.GetTimeseriesDataWithPagination(testNodeID, "temperature", "float", 0, 0, 0, "")
+				Expect(err).To(BeNil())
+				Expect(result).ToNot(BeNil())
+				Expect(result.Entries).To(HaveLen(10))
+				Expect(result.NextToken).To(BeEmpty())
+
+				// Should be in descending order (latest first)
+				for i := 0; i < 9; i++ {
+					Expect(result.Entries[i].Timestamp).To(BeNumerically(">", result.Entries[i+1].Timestamp))
+				}
+			})
+
+			It("should paginate correctly with limit", func() {
+				// First page
+				result, err := timeseriesDB.GetTimeseriesDataWithPagination(testNodeID, "temperature", "float", 0, 0, 3, "")
+				Expect(err).To(BeNil())
+				Expect(result).ToNot(BeNil())
+				Expect(result.Entries).To(HaveLen(3))
+				Expect(result.NextToken).ToNot(BeEmpty())
+
+				// Verify first page contains latest 3 entries
+				expectedTimestamps := []int64{1640995209, 1640995208, 1640995207}
+				for i, entry := range result.Entries {
+					Expect(entry.Timestamp).To(Equal(expectedTimestamps[i]))
+					Expect(entry.Value).To(Equal(float64(29 - i)))
+				}
+
+				// Second page using next_key
+				nextResult, err := timeseriesDB.GetTimeseriesDataWithPagination(testNodeID, "temperature", "float", 0, 0, 3, result.NextToken)
+				Expect(err).To(BeNil())
+				Expect(nextResult).ToNot(BeNil())
+				Expect(nextResult.Entries).To(HaveLen(3))
+				Expect(nextResult.NextToken).ToNot(BeEmpty())
+
+				// Verify second page contains next 3 entries
+				expectedTimestamps = []int64{1640995206, 1640995205, 1640995204}
+				for i, entry := range nextResult.Entries {
+					Expect(entry.Timestamp).To(Equal(expectedTimestamps[i]))
+					Expect(entry.Value).To(Equal(float64(26 - i)))
+				}
+
+				// Verify pagination tokens are different
+				Expect(result.NextToken).ToNot(Equal(nextResult.NextToken))
+			})
+
+			It("should handle last page correctly", func() {
+				// Get last page with remaining entries
+				firstResult, err := timeseriesDB.GetTimeseriesDataWithPagination(testNodeID, "temperature", "float", 0, 0, 8, "")
+				Expect(err).To(BeNil())
+				Expect(firstResult.NextToken).ToNot(BeEmpty())
+
+				// Get final page
+				lastResult, err := timeseriesDB.GetTimeseriesDataWithPagination(testNodeID, "temperature", "float", 0, 0, 8, firstResult.NextToken)
+				Expect(err).To(BeNil())
+				Expect(lastResult).ToNot(BeNil())
+				Expect(lastResult.Entries).To(HaveLen(2)) // Only 2 remaining entries
+				Expect(lastResult.NextToken).To(BeEmpty())
+			})
+
+			It("should handle time range filtering with pagination", func() {
+				// Filter to middle 5 entries (timestamps 1640995202 to 1640995206)
+				startTime := int64(1640995202)
+				endTime := int64(1640995206)
+
+				result, err := timeseriesDB.GetTimeseriesDataWithPagination(testNodeID, "temperature", "float", startTime, endTime, 3, "")
+				Expect(err).To(BeNil())
+				Expect(result).ToNot(BeNil())
+				Expect(result.Entries).To(HaveLen(3))
+				Expect(result.NextToken).ToNot(BeEmpty())
+
+				// Verify all entries are within time range
+				for _, entry := range result.Entries {
+					Expect(entry.Timestamp).To(BeNumerically(">=", startTime))
+					Expect(entry.Timestamp).To(BeNumerically("<=", endTime))
+				}
+
+				// Get next page
+				nextResult, err := timeseriesDB.GetTimeseriesDataWithPagination(testNodeID, "temperature", "float", startTime, endTime, 3, result.NextToken)
+				Expect(err).To(BeNil())
+				Expect(nextResult.Entries).To(HaveLen(2)) // Remaining 2 entries in range
+				Expect(nextResult.NextToken).To(BeEmpty())
+			})
+		})
+
+		Context("with no data", func() {
+			It("should return empty result", func() {
+				result, err := timeseriesDB.GetTimeseriesDataWithPagination(testNodeID, "temperature", "float", 0, 0, 10, "")
+				Expect(err).To(BeNil())
+				Expect(result).ToNot(BeNil())
+				Expect(result.Entries).To(HaveLen(0))
+				Expect(result.NextToken).To(BeEmpty())
+			})
+		})
+
+		Context("with invalid pagination token", func() {
+			It("should return error for malformed token", func() {
+				_, err := timeseriesDB.GetTimeseriesDataWithPagination(testNodeID, "temperature", "float", 0, 0, 10, "invalid-token")
+				Expect(err).ToNot(BeNil())
+				Expect(err.Error()).To(ContainSubstring("invalid pagination token"))
+			})
+
+			It("should return error for invalid base64", func() {
+				_, err := timeseriesDB.GetTimeseriesDataWithPagination(testNodeID, "temperature", "float", 0, 0, 10, "not-base64!")
+				Expect(err).ToNot(BeNil())
+				Expect(err.Error()).To(ContainSubstring("invalid pagination token"))
+			})
+		})
+	})
+})
+
+var _ = Describe("Timeseries Service Integration", func() {
+	var (
+		timeseriesService *timeseries.TimeseriesService
+		testUser          *user.User
+		unauthorizedUser  *user.User
+		rmngCtx           *rmngctx.RmngContext
+		unauthorizedCtx   *rmngctx.RmngContext
+		testNodeID        string
+	)
+
+	BeforeEach(func() {
+		test_utils.TestSetup()
+		service.Initialize()
+		timeseries.Register()
+
+		timeseriesService = timeseries.NewTimeseriesService()
+		testNodeID = "test-node-id"
+
+		// Create authorized user
+		testUser = user.NewUser("test-user-id")
+		testUser.Permissions.SetAllow(utils.NodeGet.String(), testNodeID)
+		rmngCtx = rmngctx.NewRmngContext(testUser)
+
+		// Create unauthorized user
+		unauthorizedUser = user.NewUser("unauthorized-user")
+		unauthorizedCtx = rmngctx.NewRmngContext(unauthorizedUser)
+
+		// Initialize mock DynamoDB tables for integration tests
+		mockDB := awscommon.GetDynamoDBClient().(*mock.DynamoDBMock)
+		mockDB.AddTable(timeseries_db.RawTSDataTable, "node_key_dt", "ts")
+		mockDB.AddTable(processed_ts_db.ProcessedTSDataTable, "node_key_dt", "interval_key")
+		mockDB.ProfileReset()
+	})
+
+	Describe("Get with query parameters", func() {
+		BeforeEach(func() {
+			// Create system actor context for PutTimeseriesData operations
+			systemActor := utils.NewSystemActor()
+			systemRmngCtx := rmngctx.NewRmngContext(systemActor)
+			systemTimeseriesDB := timeseries_db.NewTimeseriesDB(systemRmngCtx)
+
+			// Add test timeseries data to the mock database for testing
+			testEntries := []*timeseries_db.TimeseriesEntry{
+				{
+					NodeID:     testNodeID,
+					DataKey:    "temperature",
+					DataType:   "float",
+					Timestamp:  1640995200,
+					TopicName:  "ts-test",
+					Timezone:   "UTC",
+					Value:      22.0,
+					Cumulative: false,
+				},
+				{
+					NodeID:     testNodeID,
+					DataKey:    "temperature",
+					DataType:   "float",
+					Timestamp:  1640995202,
+					TopicName:  "ts-test",
+					Timezone:   "UTC",
+					Value:      23.0,
+					Cumulative: false,
+				},
+				{
+					NodeID:     testNodeID,
+					DataKey:    "temperature",
+					DataType:   "float",
+					Timestamp:  1640995204,
+					TopicName:  "ts-test",
+					Timezone:   "UTC",
+					Value:      24.0,
+					Cumulative: false,
+				},
+			}
+
+			for _, entry := range testEntries {
+				systemTimeseriesDB.PutTimeseriesData(entry)
+			}
+		})
+
+		It("should handle /timeseries/latest returning single latest data point", func() {
+			// Request latest data via /timeseries/latest path (timeseries_type in context)
+			queryParams := map[string]string{
+				"key":       "temperature",
+				"data_type": "float",
+			}
+			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+			rmngCtx.Context = context.WithValue(rmngCtx.Context, "timeseries_type", "latest")
+
+			data, err := timeseriesService.Get(rmngCtx, testNodeID)
+			Expect(err).To(BeNil())
+
+			// Latest endpoint returns single object (not array)
+			dataMap, ok := data.(map[string]interface{})
+			Expect(ok).To(BeTrue())
+			Expect(dataMap).To(HaveKey("data"))
+
+			// data is a single map for latest endpoint
+			latestEntry := dataMap["data"].(map[string]interface{})
+			Expect(latestEntry).To(HaveKey("key"))
+			Expect(latestEntry).To(HaveKey("dt"))
+			Expect(latestEntry).To(HaveKey("ts"))
+			Expect(latestEntry).To(HaveKey("value"))
+
+			// Should be the latest entry (highest timestamp)
+			Expect(latestEntry["ts"]).To(Equal(int64(1640995204)))
+			Expect(latestEntry["value"]).To(Equal(24.0))
+		})
+
+		It("should handle missing required parameters", func() {
+			// Missing param
+			queryParams := map[string]string{
+				"data_type": "float",
+			}
+			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+
+			_, err := timeseriesService.Get(rmngCtx, testNodeID)
+			Expect(err).ToNot(BeNil())
+			Expect(err.Error()).To(ContainSubstring("key and data_type query parameters are required"))
+		})
+
+		It("should fall back to default page_size when the value is invalid", func() {
+			queryParams := map[string]string{
+				"key":       "temperature",
+				"data_type": "float",
+				"page_size": "invalid",
+			}
+			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+
+			// Invalid page_size is silently replaced with the default;
+			// the call should succeed rather than surface an error.
+			_, err := timeseriesService.Get(rmngCtx, testNodeID)
+			Expect(err).To(BeNil())
+		})
+
+		It("should enforce authorization", func() {
+			queryParams := map[string]string{
+				"key":       "temperature",
+				"data_type": "float",
+			}
+			unauthorizedCtx.Context = context.WithValue(unauthorizedCtx.Context, "query_params", queryParams)
+
+			_, err := timeseriesService.Get(unauthorizedCtx, testNodeID)
+			Expect(err).ToNot(BeNil())
+			Expect(err.Error()).To(ContainSubstring("unauthorized"))
+		})
+
+		It("should handle type=aggregates parameter", func() {
+			queryParams := map[string]string{
+				"key":       "temperature",
+				"data_type": "float",
+				"type":      "aggregates",
+			}
+			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+
+			data, err := timeseriesService.Get(rmngCtx, testNodeID)
+			Expect(err).To(BeNil())
+
+			// Should return aggregates in array format for consistency
+			dataMap := data.(map[string]interface{})
+			Expect(dataMap).To(HaveKey("aggregates"))
+
+			aggregatesArray := dataMap["aggregates"].([]map[string]interface{})
+			Expect(len(aggregatesArray)).To(Equal(1))
+
+			aggregatesData := aggregatesArray[0]
+			Expect(aggregatesData).To(HaveKey("windows"))
+
+			windows := aggregatesData["windows"].(map[string]interface{})
+			Expect(windows).To(HaveKey("hourly"))
+			Expect(windows).To(HaveKey("daily"))
+			Expect(windows).To(HaveKey("weekly"))
+			Expect(windows).To(HaveKey("monthly"))
+		})
+
+		It("should handle type=aggregates with specific window parameter", func() {
+			queryParams := map[string]string{
+				"key":       "temperature",
+				"data_type": "float",
+				"type":      "aggregates",
+				"window":    "daily",
+			}
+			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+
+			data, err := timeseriesService.Get(rmngCtx, testNodeID)
+			Expect(err).To(BeNil())
+
+			// Should return window-specific data in array format for consistency
+			dataMap := data.(map[string]interface{})
+			Expect(dataMap).To(HaveKey("aggregates"))
+
+			aggregatesArray := dataMap["aggregates"].([]map[string]interface{})
+			Expect(len(aggregatesArray)).To(Equal(1))
+
+			aggregatesData := aggregatesArray[0]
+			Expect(aggregatesData).To(HaveKey("window_type"))
+			Expect(aggregatesData["window_type"]).To(Equal("daily"))
+		})
+
+		It("should return error for invalid window type", func() {
+			queryParams := map[string]string{
+				"key":       "temperature",
+				"data_type": "float",
+				"type":      "aggregates",
+				"window":    "invalid",
+			}
+			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+
+			_, err := timeseriesService.Get(rmngCtx, testNodeID)
+			Expect(err).ToNot(BeNil())
+			Expect(err.Error()).To(ContainSubstring("invalid window type"))
+		})
+
+		It("should return error for invalid type parameter", func() {
+			queryParams := map[string]string{
+				"key":       "temperature",
+				"data_type": "float",
+				"type":      "invalid",
+			}
+			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+
+			_, err := timeseriesService.Get(rmngCtx, testNodeID)
+			Expect(err).ToNot(BeNil())
+			Expect(err.Error()).To(ContainSubstring("invalid type parameter"))
+		})
+
+		It("should handle default type=raw when type parameter is omitted", func() {
+			queryParams := map[string]string{
+				"key":       "temperature",
+				"data_type": "float",
+			}
+			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+
+			data, err := timeseriesService.Get(rmngCtx, testNodeID)
+			Expect(err).To(BeNil())
+
+			// Should return paginated data format
+			dataMap := data.(map[string]interface{})
+			Expect(dataMap).To(HaveKey("data"))
+
+			// Should contain the test data
+			dataArray := dataMap["data"].([]map[string]interface{})
+			Expect(len(dataArray)).To(Equal(3))
+		})
+
+		It("should handle type=raw explicitly", func() {
+			queryParams := map[string]string{
+				"key":       "temperature",
+				"data_type": "float",
+				"type":      "raw",
+			}
+			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+
+			data, err := timeseriesService.Get(rmngCtx, testNodeID)
+			Expect(err).To(BeNil())
+
+			// Should return paginated data format
+			dataMap := data.(map[string]interface{})
+			Expect(dataMap).To(HaveKey("data"))
+
+			// Should contain the test data
+			dataArray := dataMap["data"].([]map[string]interface{})
+			Expect(len(dataArray)).To(Equal(3))
+		})
+
+		It("should handle historical aggregates with date parameter", func() {
+			queryParams := map[string]string{
+				"key":       "temperature",
+				"data_type": "float",
+				"type":      "aggregates",
+				"window":    "daily",
+				"date":      "2025-01-01",
+			}
+			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+
+			data, err := timeseriesService.Get(rmngCtx, testNodeID)
+			Expect(err).To(BeNil())
+
+			// Should return historical aggregates in array format for consistency
+			dataMap := data.(map[string]interface{})
+			Expect(dataMap).To(HaveKey("aggregates"))
+
+			aggregatesArray := dataMap["aggregates"].([]map[string]interface{})
+			Expect(len(aggregatesArray)).To(Equal(1))
+
+			aggregatesData := aggregatesArray[0]
+			Expect(aggregatesData).To(HaveKey("window_type"))
+			Expect(aggregatesData).To(HaveKey("date"))
+			Expect(aggregatesData["window_type"]).To(Equal("daily"))
+			Expect(aggregatesData["date"]).To(Equal("2025-01-01"))
+		})
+
+		It("should return error for historical aggregates without window parameter", func() {
+			queryParams := map[string]string{
+				"key":       "temperature",
+				"data_type": "float",
+				"type":      "aggregates",
+				"date":      "2025-01-01",
+			}
+			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+
+			_, err := timeseriesService.Get(rmngCtx, testNodeID)
+			Expect(err).ToNot(BeNil())
+			Expect(err.Error()).To(ContainSubstring("window parameter is required for historical aggregates"))
+		})
+
+		It("should return error for invalid date format", func() {
+			queryParams := map[string]string{
+				"key":       "temperature",
+				"data_type": "float",
+				"type":      "aggregates",
+				"window":    "daily",
+				"date":      "invalid-date",
+			}
+			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+
+			_, err := timeseriesService.Get(rmngCtx, testNodeID)
+			Expect(err).ToNot(BeNil())
+			Expect(err.Error()).To(ContainSubstring("invalid date format"))
+		})
+
+		It("should handle type=raw with start_time and end_time parameters", func() {
+			queryParams := map[string]string{
+				"key":        "temperature",
+				"data_type":  "float",
+				"type":       "raw",
+				"start_time": "1640995200000", // 2022-01-01 00:00:00 UTC (ms)
+				"end_time":   "1640995260000", // 2022-01-01 00:01:00 UTC (ms)
+			}
+			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+
+			data, err := timeseriesService.Get(rmngCtx, testNodeID)
+			Expect(err).To(BeNil())
+
+			// Should return paginated data format
+			dataMap := data.(map[string]interface{})
+			Expect(dataMap).To(HaveKey("data"))
+
+			// Should contain filtered data (test data has entries at these timestamps)
+			dataArray := dataMap["data"].([]map[string]interface{})
+			Expect(len(dataArray)).To(BeNumerically(">=", 0)) // May be 0 if no test data in that range
+		})
+
+		It("should handle invalid start_time parameter", func() {
+			queryParams := map[string]string{
+				"key":        "temperature",
+				"data_type":  "float",
+				"type":       "raw",
+				"start_time": "invalid_timestamp",
+			}
+			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+
+			_, err := timeseriesService.Get(rmngCtx, testNodeID)
+			Expect(err).ToNot(BeNil())
+			Expect(err.Error()).To(ContainSubstring("invalid start_time parameter"))
+		})
+
+		It("should handle invalid end_time parameter", func() {
+			queryParams := map[string]string{
+				"key":       "temperature",
+				"data_type": "float",
+				"type":      "raw",
+				"end_time":  "invalid_timestamp",
+			}
+			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+
+			_, err := timeseriesService.Get(rmngCtx, testNodeID)
+			Expect(err).ToNot(BeNil())
+			Expect(err.Error()).To(ContainSubstring("invalid end_time parameter"))
+		})
+	})
+
+	Describe("GetLatest", func() {
+		It("should return latest data for authorized user", func() {
+			// Create system actor context for PutTimeseriesData operations
+			systemActor := utils.NewSystemActor()
+			systemRmngCtx := rmngctx.NewRmngContext(systemActor)
+			systemTimeseriesDB := timeseries_db.NewTimeseriesDB(systemRmngCtx)
+
+			// Add test data first
+			testEntry := &timeseries_db.TimeseriesEntry{
+				NodeID:    testNodeID,
+				DataKey:   "temperature",
+				DataType:  "float",
+				Timestamp: 1640995200,
+				Value:     25.5,
+			}
+			err := systemTimeseriesDB.PutTimeseriesData(testEntry)
+			Expect(err).To(BeNil())
+
+			// Get latest data via service
+			dataPoint, err := timeseriesService.GetLatest(rmngCtx, testNodeID, "temperature", "float")
+			Expect(err).To(BeNil())
+			Expect(dataPoint).ToNot(BeNil())
+			Expect(dataPoint.Timestamp).To(Equal(int64(1640995200)))
+			Expect(dataPoint.Value).To(Equal(25.5))
+		})
+
+		It("should return error for unauthorized user", func() {
+			// Get latest data via service with unauthorized user
+			_, err := timeseriesService.GetLatest(unauthorizedCtx, testNodeID, "temperature", "float")
+			Expect(err).ToNot(BeNil())
+			Expect(err.Error()).To(ContainSubstring("unauthorized"))
+		})
+	})
+
+	Describe("GetTimeRange", func() {
+		It("should return data for specified time range", func() {
+			// Create system actor context for PutTimeseriesData operations
+			systemActor := utils.NewSystemActor()
+			systemRmngCtx := rmngctx.NewRmngContext(systemActor)
+			systemTimeseriesDB := timeseries_db.NewTimeseriesDB(systemRmngCtx)
+
+			// Add test data first
+			testEntry := &timeseries_db.TimeseriesEntry{
+				NodeID:    testNodeID,
+				DataKey:   "temperature",
+				DataType:  "float",
+				Timestamp: 1640995200,
+				Value:     25.5,
+			}
+			err := systemTimeseriesDB.PutTimeseriesData(testEntry)
+			Expect(err).To(BeNil())
+
+			// Get data via service
+			startTime := time.Unix(1640995000, 0)
+			endTime := time.Unix(1640995300, 0)
+			response, err := timeseriesService.GetTimeRange(rmngCtx, testNodeID, "temperature", "float", startTime, endTime)
+			Expect(err).To(BeNil())
+			Expect(response).ToNot(BeNil())
+			Expect(response.Data).To(HaveLen(1))
+			Expect(response.Data[0].Timestamp).To(Equal(int64(1640995200)))
+			Expect(response.Data[0].Value).To(Equal(25.5))
+		})
+	})
+
+	Describe("Historical aggregates date formatting with non-UTC timezone", func() {
+		It("should return correct local date in response for positive-offset timezone (Asia/Kolkata)", func() {
+			// Scenario: Node is in Asia/Kolkata (UTC+5:30).
+			// Reading 1: 2026-02-22 23:20 IST → daily window = 2026-02-22
+			// Reading 2: 2026-02-23 00:05 IST → daily window = 2026-02-23 (boundary crossed, historical entry created for 2026-02-22)
+			//
+			// The historical entry for 2026-02-22 has WindowStart = epoch of 2026-02-22 00:00 IST
+			// which is 2026-02-21 18:30 UTC. When the response formats this epoch in UTC,
+			// it incorrectly shows "2026-02-21" instead of "2026-02-22".
+
+			kolkata, err := time.LoadLocation("Asia/Kolkata")
+			Expect(err).To(BeNil())
+
+			// Reading 1: 2026-02-22 23:20:00 IST
+			reading1Time := time.Date(2026, 2, 22, 23, 20, 0, 0, kolkata)
+			// Reading 2: 2026-02-23 00:05:00 IST (crosses daily boundary)
+			reading2Time := time.Date(2026, 2, 23, 0, 5, 0, 0, kolkata)
+
+			// Create system actor context for processing
+			systemActor := utils.NewSystemActor()
+			systemRmngCtx := rmngctx.NewRmngContext(systemActor)
+			processor := timeseries.NewTimeseriesProcessor(systemRmngCtx)
+
+			// Process reading 1
+			rawEntry1 := &timeseries_db.TimeseriesEntry{
+				NodeKeyDt:  testNodeID + ".temperature.float",
+				NodeID:     testNodeID,
+				DataKey:    "temperature",
+				DataType:   "float",
+				Timestamp:  reading1Time.Unix() * 1000, // milliseconds
+				Timezone:   "Asia/Kolkata",
+				Value:      25.0,
+				Cumulative: false,
+			}
+			err = processor.ProcessTimeseriesEntry(rawEntry1)
+			Expect(err).To(BeNil())
+
+			// Process reading 2 (crosses daily boundary, should create historical entry for 2026-02-22)
+			rawEntry2 := &timeseries_db.TimeseriesEntry{
+				NodeKeyDt:  testNodeID + ".temperature.float",
+				NodeID:     testNodeID,
+				DataKey:    "temperature",
+				DataType:   "float",
+				Timestamp:  reading2Time.Unix() * 1000, // milliseconds
+				Timezone:   "Asia/Kolkata",
+				Value:      26.0,
+				Cumulative: false,
+			}
+			err = processor.ProcessTimeseriesEntry(rawEntry2)
+			Expect(err).To(BeNil())
+
+			// Now query for historical daily aggregates for 2026-02-22
+			// The service parses "2026-02-22" using time.Parse which gives UTC
+			queryParams := map[string]string{
+				"key":        "temperature",
+				"data_type":  "float",
+				"type":       "aggregates",
+				"window":     "daily",
+				"start_date": "2026-02-22",
+				"end_date":   "2026-02-22",
+			}
+			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+
+			data, err := timeseriesService.Get(rmngCtx, testNodeID)
+			Expect(err).To(BeNil())
+
+			dataMap := data.(map[string]interface{})
+			aggregates := dataMap["aggregates"].([]map[string]interface{})
+			Expect(len(aggregates)).To(Equal(1), "Expected exactly 1 historical aggregate entry for 2026-02-22")
+
+			// The date field in the response should show "2026-02-22" (the correct local date),
+			// NOT "2026-02-21" (which is what happens when the WindowStart epoch is formatted in UTC)
+			Expect(aggregates[0]["date"]).To(Equal("2026-02-22"),
+				"Response date should reflect the local timezone date, not the UTC interpretation of the window start epoch")
+		})
+	})
+
+})
