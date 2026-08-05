@@ -99,8 +99,10 @@ $(foreach main_go,$(MAIN_FILES),$(eval $(call main_to_target,$(main_go)): $(main
 ## Rule to create the dependencies file for each main file
 ##  build/%/$(BINARY_NAME).deps: %_main.go
 ##      go_deps.sh ...
+# go_deps.sh is a prerequisite as well as the recipe, so changing how dependencies
+# are computed invalidates the .deps files it previously wrote.
 define get_deps
-$(call main_to_target,$(1)).deps: $(1)
+$(call main_to_target,$(1)).deps: $(1) scripts/go_deps.sh
 	@./scripts/go_deps.sh $(1) $(call main_to_target,$(1))
 endef
 
