@@ -233,6 +233,7 @@ class EspUserCoreStack(Stack):
             timeout=Duration.minutes(5),
             code=lambda_.Code.from_inline("""
 import json
+import uuid
 import boto3
 import cfnresponse
 
@@ -260,7 +261,8 @@ def handler(event, context):
         results = []
         for email in emails:
             try:
-                # TemporaryPassword is the fallback credential: if the permanent set below fails the account is still reachable through Cognito's NEW_PASSWORD_REQUIRED challenge rather than locked behind an unknown password.
+                # custom:user_id is what the backend uses as the caller's identity (GetID());
+                # without it every admin API request is rejected as unauthorized.
                 idp.admin_create_user(
                     UserPoolId=pool_id,
                     Username=email,
@@ -269,6 +271,7 @@ def handler(event, context):
                         {'Name': 'email', 'Value': email},
                         {'Name': 'email_verified', 'Value': 'true'},
                         {'Name': 'custom:super_admin', 'Value': 'true'},
+                        {'Name': 'custom:user_id', 'Value': str(uuid.uuid4())},
                     ],
                     MessageAction='SUPPRESS',
                 )
@@ -298,7 +301,12 @@ def handler(event, context):
 """),
         )
         register_fn.add_to_role_policy(iam.PolicyStatement(
-            actions=["cognito-idp:AdminCreateUser", "cognito-idp:AdminSetUserPassword"],
+            actions=[
+                "cognito-idp:AdminCreateUser",
+                "cognito-idp:AdminSetUserPassword",
+                "cognito-idp:AdminGetUser",
+                "cognito-idp:AdminUpdateUserAttributes",
+            ],
             resources=[pool_arn],
         ))
 
@@ -309,6 +317,8 @@ def handler(event, context):
                 "UserPoolId": pool_id,
                 "TempPassword": temp_password,
                 "AdminEmails": admin_emails_prop,
+                # SeedVersion forces an Update even when the email list is unchanged
+                "SeedVersion": "2",
                 "Trigger": admin_emails_prop,  # re-fire when the effective list changes
             },
         )

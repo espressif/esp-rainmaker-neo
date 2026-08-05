@@ -62,7 +62,6 @@ var _ = Describe("OIDC userinfo endpoint", func() {
 			PhoneNumber:  phone,
 			UserType:     user_details_db.UserTypeUser,
 			Provider:     user_details_db.ProviderOIDC,
-			IsSuperAdmin: user_details_db.NonSuperAdmin,
 		})).To(Succeed())
 
 		// Mirror production: the token carries scope-gated contact claims (see resolveTokenContact), which is what userinfo reflects back — no DB read at the userinfo endpoint.

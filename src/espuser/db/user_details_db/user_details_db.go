@@ -11,7 +11,6 @@ Primary Key: user_id (Partition Key)
 Schema:
 - user_id (String): Partition key, unique identifier for the user (from Cognito)
 - email (String): User's email address (unique, indexed)
-- is_super_admin (Bool, optional): Whether the user is a super admin
 
 Secondary Indexes:
 - user_details_table_email_index:
@@ -21,8 +20,7 @@ Secondary Indexes:
 Example Record:
 {
   "user_id": "cognito-identity-123",
-  "email": "user@example.com",
-  "is_super_admin": true
+  "email": "user@example.com"
 }
 
 Query Patterns:
@@ -80,11 +78,6 @@ const ProviderOIDC = "OIDC"
 
 const UserTypeUser = "USER"
 
-var (
-	SuperAdmin    *bool = utils.Ptr(true)
-	NonSuperAdmin *bool = utils.Ptr(false)
-)
-
 type UserDetailsDB struct {
 	espdynamodb.EspDB
 }
@@ -99,7 +92,6 @@ type UserDetailsEntry struct {
 	Provider     string `dynamodbav:"provider,omitempty"`
 	Email        string `dynamodbav:"email,omitempty"`
 	PhoneNumber  string `dynamodbav:"phone,omitempty"`
-	IsSuperAdmin *bool  `dynamodbav:"is_super_admin,omitempty"`
 	Sub          string `dynamodbav:"sub,omitempty"` // Just for third party providers like Google, Facebook, etc.
 
 	Name    string `dynamodbav:"name,omitempty"`

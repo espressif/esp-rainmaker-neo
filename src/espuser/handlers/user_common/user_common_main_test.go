@@ -52,7 +52,6 @@ var _ = Describe("User Common Handler", func() {
 				Email:        email,
 				UserType:     user_details_db.UserTypeUser,
 				Provider:     user_details_db.ProviderOIDC,
-				IsSuperAdmin: user_details_db.NonSuperAdmin,
 			})).To(Succeed())
 
 			minter := jwtutil.NewMinter(backend.Issuer, backend.SigningKey, oidc.SigningKeyID)
