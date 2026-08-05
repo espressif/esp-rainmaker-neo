@@ -12,7 +12,7 @@
 
 [![ESP RainMaker Neo Website](https://img.shields.io/badge/ESP_RainMaker_Neo-Website-6F42C1?logo=espressif)](https://rainmaker.espressif.com)
 &nbsp;
-[![Documentation](https://img.shields.io/badge/ESP_RainMaker_Neo-Docs-6F42C1?logo=readthedocs)](https://docs.neo.rainmaker.espressif.com/)
+[![Documentation](https://img.shields.io/badge/ESP_RainMaker_Neo-Docs-6F42C1?logo=readthedocs)](https://docs.neo.rainmaker.espressif.com)
 
 ---
 
@@ -45,11 +45,11 @@ There are three ways to use it, in increasing order of involvement:
 
 ### Option 1: Public ESP RainMaker Neo
 
-Use the public ESP RainMaker Neo deployment — no cloud setup at all. Check out the detailed documentation [here](https://docs.neo.rainmaker.espressif.com/) for more information.
+Use the public ESP RainMaker Neo deployment — no cloud setup at all. Check out the detailed documentation [here](https://docs.neo.rainmaker.espressif.com/docs/try-it-out) for more information.
 
 ### Option 2: Packaged ESP RainMaker Neo
 
-Run the pre-built ESP RainMaker Neo cloud in your own AWS account. Check out the detailed documentation [here](https://docs.neo.rainmaker.espressif.com/) for more information.
+Run the pre-built ESP RainMaker Neo cloud in your own AWS account. Check out the detailed documentation [here](https://docs.neo.rainmaker.espressif.com/docs/try-it-out) for more information.
 
 ### Option 3: Built-From-Source ESP RainMaker Neo
 
