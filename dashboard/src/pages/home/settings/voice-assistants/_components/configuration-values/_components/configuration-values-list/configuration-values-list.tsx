@@ -8,7 +8,16 @@ import { useTranslation } from "react-i18next";
 import {
   Alert,
   MonospaceContent,
+  SimpleList,
+  type SimpleListItem,
 } from "@espressif/dashboard-ui-components/components";
+import {
+  KeyRound,
+  Link as LinkIcon,
+  Lock,
+  Server,
+  ShieldCheck,
+} from "lucide-react";
 import type { ConfigurationValuesListProps } from "./configuration-values-list.props";
 
 /** The Alexa region each endpoint serves, named as the Alexa console names it. */
@@ -20,7 +29,9 @@ const ALEXA_REGION_LABELS: Record<string, string> = {
 
 /**
  * Renders whichever configuration values the platform has published, or an
- * empty-state notice when none of them are available yet.
+ * empty-state notice when none of them are available yet. Uses `SimpleList` so
+ * each value keeps its own titled row while the shared list owns spacing,
+ * separators and icon sizing.
  */
 export default function ConfigurationValuesList({
   authorizeUrl,
@@ -33,15 +44,68 @@ export default function ConfigurationValuesList({
 }: ConfigurationValuesListProps) {
   const { t } = useTranslation("voice-assistants");
 
-  const hasValues = Boolean(
-    authorizeUrl ||
-      tokenUrl ||
-      clientId ||
-      secret ||
-      scopes ||
-      fulfillmentUrl ||
-      Object.keys(skillArns).length > 0,
-  );
+  // `SimpleList` skips items whose `content` is null/undefined, so unset values
+  // fall out of the list automatically instead of us branching per-row.
+  const items: SimpleListItem[] = [
+    {
+      key: "authorizeUrl",
+      label: t("authorizationUri", "Authorization URI"),
+      icon: LinkIcon,
+      content: authorizeUrl ? (
+        <MonospaceContent value={authorizeUrl} color="silver" />
+      ) : undefined,
+    },
+    {
+      key: "tokenUrl",
+      label: t("accessTokenUri", "Access Token URI"),
+      icon: LinkIcon,
+      content: tokenUrl ? (
+        <MonospaceContent value={tokenUrl} color="silver" />
+      ) : undefined,
+    },
+    {
+      key: "clientId",
+      label: t("clientId", "Client ID"),
+      icon: KeyRound,
+      content: clientId ? (
+        <MonospaceContent value={clientId} color="silver" />
+      ) : undefined,
+    },
+    {
+      key: "secret",
+      label: t("clientSecret", "Client Secret"),
+      icon: Lock,
+      content: secret ? (
+        <MonospaceContent value={secret} color="silver" mask />
+      ) : undefined,
+    },
+    {
+      key: "scopes",
+      label: t("scopes", "Scopes"),
+      icon: ShieldCheck,
+      content: scopes ? (
+        <MonospaceContent value={scopes} color="silver" />
+      ) : undefined,
+    },
+    {
+      key: "fulfillmentUrl",
+      label: t("fulfillmentUrl", "Fulfillment URL"),
+      icon: Server,
+      content: fulfillmentUrl ? (
+        <MonospaceContent value={fulfillmentUrl} color="silver" />
+      ) : undefined,
+    },
+    ...Object.entries(skillArns).map<SimpleListItem>(([region, arn]) => ({
+      key: `skill-${region}`,
+      label:
+        t("skillEndpoint", "Skill endpoint") +
+        ` — ${ALEXA_REGION_LABELS[region] ?? region}`,
+      icon: Server,
+      content: <MonospaceContent value={arn} color="silver" />,
+    })),
+  ];
+
+  const hasValues = items.some((item) => item.content !== undefined);
 
   if (!hasValues) {
     return (
@@ -57,62 +121,5 @@ export default function ConfigurationValuesList({
     );
   }
 
-  return (
-    <>
-      {authorizeUrl && (
-        <MonospaceContent
-          title={t("authorizationUri", "Authorization URI")}
-          value={authorizeUrl}
-          color="mist"
-        />
-      )}
-      {tokenUrl && (
-        <MonospaceContent
-          title={t("accessTokenUri", "Access Token URI")}
-          value={tokenUrl}
-          color="mist"
-        />
-      )}
-      {clientId && (
-        <MonospaceContent
-          title={t("clientId", "Client ID")}
-          value={clientId}
-          color="mist"
-        />
-      )}
-      {secret && (
-        <MonospaceContent
-          title={t("clientSecret", "Client Secret")}
-          value={secret}
-          color="mist"
-          mask
-        />
-      )}
-      {scopes && (
-        <MonospaceContent
-          title={t("scopes", "Scopes")}
-          value={scopes}
-          color="mist"
-        />
-      )}
-      {fulfillmentUrl && (
-        <MonospaceContent
-          title={t("fulfillmentUrl", "Fulfillment URL")}
-          value={fulfillmentUrl}
-          color="mist"
-        />
-      )}
-      {Object.entries(skillArns).map(([region, arn]) => (
-        <MonospaceContent
-          key={region}
-          title={
-            t("skillEndpoint", "Skill endpoint") +
-            ` — ${ALEXA_REGION_LABELS[region] ?? region}`
-          }
-          value={arn}
-          color="mist"
-        />
-      ))}
-    </>
-  );
+  return <SimpleList items={items} iconStyle="none" />;
 }

@@ -5,7 +5,7 @@
  */
 
 import { useTranslation } from "react-i18next";
-import { Badge } from "@espressif/dashboard-ui-components/components";
+import { StatusBadge } from "@/components/status-badge";
 import { getSandboxNumberStatusPresentation } from "@/config/sandbox-number-status.config";
 import type { SandboxNumberStatusBadgeProps } from "./sandbox-number-status-badge.props";
 
@@ -23,9 +23,6 @@ export function SandboxNumberStatusBadge({
   const label = i18nKey ? t(i18nKey, labelFallback) : status;
 
   return (
-    <Badge color={color} variant="soft" className="font-normal gap-1.5">
-      <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden />
-      {label}
-    </Badge>
+    <StatusBadge label={label} Icon={Icon} color={color} size="compact" />
   );
 }

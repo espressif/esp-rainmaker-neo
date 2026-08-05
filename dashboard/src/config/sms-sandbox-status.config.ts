@@ -5,7 +5,7 @@
  */
 
 import type { LucideIcon } from "lucide-react";
-import { CircleDashed, HelpCircle, MessageSquareDot, ShieldAlert } from "lucide-react";
+import { AlertCircle, CheckCircle2, CircleDashed, HelpCircle } from "lucide-react";
 import type { Color } from "@espressif/dashboard-ui-components";
 
 /**
@@ -28,13 +28,13 @@ export const SMS_SANDBOX_STATUS_PRESENTATION: Record<
   SmsSandboxStatusPresentation
 > = {
   sandbox: {
-    Icon: ShieldAlert,
+    Icon: AlertCircle,
     color: "warning",
     i18nKey: "post-deployment:smsSandbox.status.sandbox",
     labelFallback: "In sandbox",
   },
   production: {
-    Icon: MessageSquareDot,
+    Icon: CheckCircle2,
     color: "success",
     i18nKey: "post-deployment:smsSandbox.status.production",
     labelFallback: "Production access enabled",

@@ -5,13 +5,13 @@
  */
 
 import { useTranslation } from "react-i18next";
-import { Badge } from "@espressif/dashboard-ui-components/components";
+import { StatusBadge } from "@/components/status-badge";
 import { getOtaJobStatusPresentation } from "@/config/ota-job-status.config";
 import type { OtaJobStatusBadgeProps } from "./ota-job-status-badge.props";
 
 export function OtaJobStatusBadge({ status }: OtaJobStatusBadgeProps) {
   const { t } = useTranslation("common");
-  const { Icon, color, i18nKey } = getOtaJobStatusPresentation(status);
+  const { Icon, color, spinning, i18nKey } = getOtaJobStatusPresentation(status);
   // Statuses AWS returns that carry no `i18nKey` fall back to the raw status.
   const label = i18nKey ? t(i18nKey, status ?? "") : (status ?? "");
 
@@ -20,9 +20,6 @@ export function OtaJobStatusBadge({ status }: OtaJobStatusBadgeProps) {
   }
 
   return (
-    <Badge color={color} variant="soft" className="font-normal gap-1.5">
-      <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden />
-      {label}
-    </Badge>
+    <StatusBadge label={label} Icon={Icon} color={color} isLoading={spinning} />
   );
 }

@@ -16,9 +16,9 @@ import {
   CheckCircle2,
   Clock,
   Hourglass,
+  LoaderCircle,
   MinusCircle,
   TimerOff,
-  Trash2,
   XCircle,
 } from "lucide-react";
 import type { Color } from "@espressif/dashboard-ui-components";
@@ -30,6 +30,8 @@ import {
 export interface OtaJobStatusPresentation {
   Icon: LucideIcon;
   color: Color;
+  /** Transient in-progress states render a spinner in place of {@link Icon}. */
+  spinning?: boolean;
   /**
    * Chart segment / accent color for this status. Chosen so terminal states
    * keep their intuitive hue (success→green, failed→red, timed out→amber, …)
@@ -45,8 +47,9 @@ type OtaJobStatusKey = JobStatus | JobExecutionStatus;
 
 export const OTA_JOB_STATUS_PRESENTATION: Record<OtaJobStatusKey, OtaJobStatusPresentation> = {
   IN_PROGRESS: {
-    Icon: Activity,
+    Icon: LoaderCircle,
     color: "primary",
+    spinning: true,
     chartColor: CHART_CATEGORY_COLORS.primary,
     i18nKey: "common:otaJobStatus.IN_PROGRESS",
   },
@@ -58,7 +61,12 @@ export const OTA_JOB_STATUS_PRESENTATION: Record<OtaJobStatusKey, OtaJobStatusPr
     chartColor: CHART_CATEGORY_COLORS.gray,
     i18nKey: "common:otaJobStatus.CANCELED",
   },
-  DELETION_IN_PROGRESS: { Icon: Trash2, color: "warning", i18nKey: "common:otaJobStatus.DELETION_IN_PROGRESS" },
+  DELETION_IN_PROGRESS: {
+    Icon: LoaderCircle,
+    color: "warning",
+    spinning: true,
+    i18nKey: "common:otaJobStatus.DELETION_IN_PROGRESS",
+  },
   SUCCEEDED: {
     Icon: CheckCircle2,
     color: "success",

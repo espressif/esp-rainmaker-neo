@@ -5,7 +5,7 @@
  */
 
 import type { LucideIcon } from "lucide-react";
-import { CircleDashed, Clock, MailCheck, ShieldAlert, XCircle } from "lucide-react";
+import { AlertCircle, CheckCircle2, CircleDashed, Clock, XCircle } from "lucide-react";
 import type { Color } from "@espressif/dashboard-ui-components";
 
 /**
@@ -33,13 +33,13 @@ export const SES_ACCESS_STATUS_PRESENTATION: Record<
   SesAccessStatusPresentation
 > = {
   production: {
-    Icon: MailCheck,
+    Icon: CheckCircle2,
     color: "success",
     i18nKey: "post-deployment:sesAccessStatus.production",
     labelFallback: "Production access enabled",
   },
   sandbox: {
-    Icon: ShieldAlert,
+    Icon: AlertCircle,
     color: "warning",
     i18nKey: "post-deployment:sesAccessStatus.sandbox",
     labelFallback: "In sandbox",

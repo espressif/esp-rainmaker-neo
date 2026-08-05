@@ -5,7 +5,7 @@
  */
 
 import { useTranslation } from "react-i18next";
-import { Badge } from "@espressif/dashboard-ui-components/components";
+import { StatusBadge } from "@/components/status-badge";
 import {
   getThingDisplayStatus,
   getThingStatusPresentation,
@@ -24,9 +24,10 @@ export function ThingStatusBadge({ online }: ThingStatusBadgeProps) {
     getThingStatusPresentation(status);
 
   return (
-    <Badge color={color} variant="soft" className="font-normal gap-1.5">
-      <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden />
-      {t(i18nKey, labelFallback)}
-    </Badge>
+    <StatusBadge
+      label={t(i18nKey, labelFallback)}
+      Icon={Icon}
+      color={color}
+    />
   );
 }
