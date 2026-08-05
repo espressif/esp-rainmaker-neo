@@ -67,6 +67,11 @@ FN_CODE='function handler(event) {
 
 account() { aws sts get-caller-identity --query Account --output text 2>/dev/null || echo unknown; }
 
+# Read one response header. Uses -I rather than curl's %header{} write-out, which
+# needs curl >= 7.84: on an older curl %header{} expands to empty, every etag
+# would compare equal, and the fallback check below would pass everything.
+etag_of() { curl -sI "$1" 2>/dev/null | grep -i '^etag:' | tr -d '\r' | sed 's/^[Ee][Tt][Aa][Gg]: *//' || true; }
+
 require_dist() {
   aws cloudfront get-distribution --id "$1" >/dev/null 2>&1 || \
     die "cannot read distribution $1 in account $(account) — wrong credentials or wrong account?"
@@ -166,15 +171,28 @@ cmd_verify() {
     host="$(aws cloudfront get-distribution --id "$dist" --query 'Distribution.DomainName' --output text)"
   fi
 
+  # A 200 does not mean the object exists. The distribution maps origin 404s to
+  # /index.html with a 200, so every missing key serves the landing page and a
+  # status-code-only check reports green on an empty prefix — which is exactly how
+  # /mqtt/ and /events/ sat unpublished while this script passed them. Fingerprint
+  # the landing page and treat any other path returning it as missing.
   log "Rendered pages — https://${host}"
+  local root_etag
+  root_etag="$(etag_of "https://${host}/")"
+  [ -n "$root_etag" ] || warn "no etag on / — cannot detect landing-page fallbacks"
   for p in "${PAGES[@]}"; do
     code="$(curl -s -o /dev/null -w '%{http_code}' "https://${host}${p}" || echo 000)"
-    if [ "$code" = "200" ]; then ok "${code}  ${p}"; else warn "${code}  ${p}"; fail=1; fi
+    if [ "$code" != "200" ]; then warn "${code}  ${p}"; fail=1; continue; fi
+    if [ "$p" != "/" ] && [ -n "$root_etag" ] && [ "$(etag_of "https://${host}${p}")" = "$root_etag" ]; then
+      warn "${code}  ${p}  served the landing page — object missing behind the error response"
+      fail=1
+    else
+      ok "${code}  ${p}"
+    fi
   done
 
-  # A 200 alone is not enough here: the index-rewrite function turns a missing
-  # object into a request for <path>/index.html, which can return an HTML page
-  # with a 200. Check the body really is a spec.
+  # Same trap, plus a weaker one: a rendered HTML page at a .yaml key. Check the
+  # body really is a spec.
   log "Raw specs"
   local body first
   for p in "${RAW[@]}"; do
@@ -185,7 +203,7 @@ cmd_verify() {
     if [ -n "$first" ]; then
       ok "${code}  ${p}  (${first})"
     elif printf '%s' "$body" | grep -qi '<html'; then
-      warn "${code}  ${p}  served HTML, not YAML — spec missing behind the index rewrite"
+      warn "${code}  ${p}  served HTML, not YAML — spec missing behind the error response"
       fail=1
     else
       warn "${code}  ${p}  no openapi/swagger/asyncapi key found"
