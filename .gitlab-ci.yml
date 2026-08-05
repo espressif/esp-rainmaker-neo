@@ -360,7 +360,7 @@ sync_mqtt:
       when: never
     - if: '$CI_COMMIT_BRANCH == "main"'
       changes:
-        - docs/api/MQTT_*.yaml
+        - docs/api/**/*
   variables:
     AWS_DEFAULT_REGION: us-east-1
   before_script:
@@ -407,7 +407,7 @@ sync_events:
       when: never
     - if: '$CI_COMMIT_BRANCH == "main"'
       changes:
-        - docs/api/Push_*.yaml
+        - docs/api/**/*
   variables:
     AWS_DEFAULT_REGION: us-east-1
   before_script:

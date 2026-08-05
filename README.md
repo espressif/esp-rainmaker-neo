@@ -45,11 +45,11 @@ There are three ways to use it, in increasing order of involvement:
 
 ### Option 1: Public ESP RainMaker Neo
 
-Use the public ESP RainMaker Neo deployment — no cloud setup at all. Check out the detailed documentation [here](https://docs.neo.rainmaker.espressif.com/docs/try-it-out) for more information.
+Use the public ESP RainMaker Neo deployment — no cloud setup at all. Check out the detailed documentation [here](http://rmng-docs.s3-website.us-east-2.amazonaws.com/docs/get-started?path=packaged) for more information.
 
 ### Option 2: Packaged ESP RainMaker Neo
 
-Run the pre-built ESP RainMaker Neo cloud in your own AWS account. Check out the detailed documentation [here](https://docs.neo.rainmaker.espressif.com/docs/try-it-out) for more information.
+Run the pre-built ESP RainMaker Neo cloud in your own AWS account. Check out the detailed documentation [here](http://rmng-docs.s3-website.us-east-2.amazonaws.com/docs/get-started?path=from-source) for more information.
 
 ### Option 3: Built-From-Source ESP RainMaker Neo
 

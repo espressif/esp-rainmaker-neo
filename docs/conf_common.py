@@ -37,12 +37,6 @@ myst_heading_anchors = 4
 # Do not add sphinx.ext.autosectionlabel: myst_heading_anchors already provides
 # heading targets, and enabling both gives two competing label schemes.
 
-# Base repository URL for the :project_file: role, which joins it with
-# '<link_type>/<rev>/<path>'. The trailing '/-' supplies the infix GitLab needs
-# for that shape; the option name is historical and implies nothing about
-# hosting.
-github_repo = "https://gitlab.espressif.cn/app-frameworks/esp-rainmaker-neo/-"
-
 # No GitHub mirror to edit against; drop the theme's 'Edit on GitHub' link.
 html_context["display_github"] = False
 
