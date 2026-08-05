@@ -3458,17 +3458,17 @@ class User:
         return self.make_api_request('POST', f'/v1/groups/{group_id}/matter-nocs', data=data)
 
     def get_user(self, access_token=None,is_admin=False):
-        """Get user information from Cognito using access token and verify consistency with DB.
+        """Get user information from Cognito using access token.
+
+        Identity is Cognito-only (admins have no espuser-user-details row), so the
+        attributes returned by Cognito are authoritative — there is no DB to cross-check.
 
         Args:
             access_token (str): Access token (defaults to self.access_token)
 
         Returns:
-            dict: User information with attributes like email, custom:user_id, etc., including DB data
+            dict: User information with attributes like email, custom:user_id, etc.
             None: If the API call fails
-
-        Raises:
-            Exception: If there's inconsistency between Cognito and DB data
         """
         if access_token is None:
             access_token = self.access_token
@@ -3490,58 +3490,15 @@ class User:
             if not user_id:
                 raise Exception("custom:user_id not found in Cognito user attributes")
 
-            # Get user from DB user_details table
-            dynamodb = boto3.resource('dynamodb', region_name=self.region)
-            user_details_table = dynamodb.Table('espuser-user-details')
-
-            db_response = user_details_table.get_item(
-                Key={'user_id': user_id}
-            )
-
-            if 'Item' not in db_response:
-                raise Exception(f"User not found in DB user_details table for user_id: {user_id}")
-
-            db_user = db_response['Item']
-
-            # Verify consistency between Cognito and DB
-            cognito_email = user_attrs.get('email', '')
-            db_email = db_user.get('email', '')
-            if cognito_email != db_email:
-                raise Exception(f"Email mismatch: Cognito has '{cognito_email}', DB has '{db_email}'")
-
-            cognito_super_admin = user_attrs.get('custom:super_admin', 'false') == 'true'
-            db_super_admin = db_user.get('is_super_admin', False)
-            # Handle both bool and string representations in DB
-            if isinstance(db_super_admin, str):
-                db_super_admin = db_super_admin.lower() == 'true'
-            if cognito_super_admin != db_super_admin:
-                raise Exception(f"Super admin flag mismatch: Cognito has '{cognito_super_admin}', DB has '{db_super_admin}'")
-
-            db_provider = db_user.get('provider', '')
-            if db_provider != 'COGNITO':
-                raise Exception(f"Provider mismatch: Expected 'COGNITO', DB has '{db_provider}'")
-
-            db_user_type = db_user.get('user_type', '')
-            expected_user_type = 'ADMIN' if is_admin else 'USER'
-            if db_user_type != expected_user_type:
-                raise Exception(f"User type mismatch: Expected '{expected_user_type}', DB has '{db_user_type}'")
-
             return {
                 'username': user_attrs.get('username', ''),
-                'email': cognito_email,
+                'email': user_attrs.get('email', ''),
                 'custom:user_id': user_id,
                 'phone_number': user_attrs.get('phone_number', ''),
                 'email_verified': user_attrs.get('email_verified', 'false') == 'true',
                 'phone_number_verified': user_attrs.get('phone_number_verified', 'false') == 'true',
-                'custom:super_admin': cognito_super_admin,
-                'db_user_details': {
-                    'user_id': db_user.get('user_id', ''),
-                    'email': db_email,
-                    'is_super_admin': db_super_admin,
-                    'provider': db_provider,
-                    'user_type': db_user_type,
-                }
+                'custom:super_admin': user_attrs.get('custom:super_admin', 'false') == 'true',
             }
         except Exception as e:
-            user_log(f"Failed to get user or verify consistency: {str(e)}")
+            user_log(f"Failed to get user: {str(e)}")
             raise

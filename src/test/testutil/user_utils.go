@@ -112,7 +112,9 @@ func (h *ESPUserTokenHarness) Close() {
 	jwk.NewCache(context.Background())
 }
 
-// SetupTestAdminUser sets up an admin user in Cognito admin pool and creates user details in database
+// SetupTestAdminUser sets up an admin user in the Cognito admin pool. Admins are
+// Cognito-only: their identity (custom:user_id) and privilege (custom:super_admin)
+// live entirely in the pool
 // Returns the user object and rmng context for convenience
 func SetupTestAdminUser(ctx context.Context, userID, email string) (*user.User, *rmngctx.RmngContext) {
 	cognitoMock := awscommon.GetCognitoProviderClient().(*mock.CognitoProviderMock)
@@ -125,18 +127,10 @@ func SetupTestAdminUser(ctx context.Context, userID, email string) (*user.User, 
 	}
 
 	testUser := user.NewUser(userID)
-	testUserCtx := rmngctx.NewRmngContextWithCtx(ctx, testUser)
-	userDetailsDB := user_details_db.NewUserDetailsDB(testUserCtx)
-	userDetailsDB.CreateUserDetails(&user_details_db.UserDetailsEntry{
-		// UserID is automatically set from context
-		Email:        email,
-		IsSuperAdmin: user_details_db.SuperAdmin,
-	})
-
 	return testUser, rmngctx.NewRmngContext(testUser)
 }
 
-// SetupTestNonAdminUserInAdminPool sets up a non-admin user in Cognito admin pool and creates user details in database
+// SetupTestNonAdminUserInAdminPool sets up a non-admin user in the Cognito admin pool
 // This is useful for testing authorization scenarios where a user is in the admin pool but doesn't have super admin privileges
 // Returns the user object and rmng context for convenience
 func SetupTestNonAdminUserInAdminPool(ctx context.Context, userID, email string) (*user.User, *rmngctx.RmngContext) {
@@ -150,13 +144,5 @@ func SetupTestNonAdminUserInAdminPool(ctx context.Context, userID, email string)
 	}
 
 	testUser := user.NewUser(userID)
-	testUserCtx := rmngctx.NewRmngContextWithCtx(ctx, testUser)
-	userDetailsDB := user_details_db.NewUserDetailsDB(testUserCtx)
-	userDetailsDB.CreateUserDetails(&user_details_db.UserDetailsEntry{
-		// UserID is automatically set from context
-		Email:        email,
-		IsSuperAdmin: user_details_db.NonSuperAdmin,
-	})
-
 	return testUser, rmngctx.NewRmngContext(testUser)
 }

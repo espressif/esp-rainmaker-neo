@@ -246,7 +246,6 @@ func (s *OAuthUserAuthService) createUser(rmngCtx *rmngctx.RmngContext, email, p
 		PhoneNumber:  phone,
 		UserType:     user_details_db.UserTypeUser,
 		Provider:     user_details_db.ProviderOIDC,
-		IsSuperAdmin: user_details_db.NonSuperAdmin,
 	}
 	// Claims are stored with the account, so resolving a user is a single write.
 	if profile != nil {
