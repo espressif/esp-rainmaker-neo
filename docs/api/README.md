@@ -2,15 +2,23 @@
 
 Static [Swagger UI](https://github.com/swagger-api/swagger-ui) build plus the OpenAPI/AsyncAPI specs it serves. No bundler, no build step — the files here are published as-is.
 
-Three pipelines in [`.gitlab-ci.yml`](../../.gitlab-ci.yml) read this folder, all on `main` only:
+Three pipelines in [`.gitlab-ci.yml`](../../.gitlab-ci.yml) read this folder, all on `main` only. All three publish to **one** bucket and **one** CloudFront distribution, each under its own path prefix:
 
 | Job | What it publishes | Where |
 |---|---|---|
-| `sync_swagger` | this folder, minus `MQTT_*.yaml` / `mqtt_*` / `Push_*.yaml` | `s3://esp-rainmaker-neo-api` → https://api.docs.neo.rainmaker.espressif.com |
-| `sync_mqtt` | `MQTT_*.yaml` rendered through `@asyncapi/html-template`, plus `mqtt_index.html` as the index | `s3://esp-rainmaker-neo-mqtt` → https://mqtt.docs.neo.rainmaker.espressif.com |
-| `sync_events` | `Push_User.yaml` (notification/event payloads) rendered through `@asyncapi/html-template` | `s3://esp-rainmaker-neo-events` → https://events.docs.neo.rainmaker.espressif.com |
+| `sync_swagger` | this folder, minus `MQTT_*.yaml` / `mqtt_*` / `Push_*.yaml` / `landing_index.html`, plus `landing_index.html` as the root index | `s3://esp-rainmaker-neo-api/http/` → https://api.docs.neo.rainmaker.espressif.com/http/ |
+| `sync_mqtt` | `MQTT_*.yaml` rendered through `@asyncapi/html-template` | `s3://esp-rainmaker-neo-api/mqtt/node/` and `/mqtt/user/` |
+| `sync_events` | `Push_User.yaml` (notification/event payloads) rendered through `@asyncapi/html-template` | `s3://esp-rainmaker-neo-api/events/` → https://api.docs.neo.rainmaker.espressif.com/events/ |
 
-`sync_swagger` uses `aws s3 sync --delete`, so the bucket is an exact mirror of this folder. Deleting a file here deletes it from the live site on the next run; `git revert` puts it back. There is no state outside this repo.
+[`landing_index.html`](./landing_index.html) is the root index at https://api.docs.neo.rainmaker.espressif.com — it links to all five reference sites. It is uploaded by `sync_swagger` with `aws s3 cp` rather than riding the folder sync, because it belongs at the bucket root and not under `http/`, and it has to survive that sync's `--delete`. Same for the two favicons, which it references with `./` from the root.
+
+Each job's `--delete` is scoped to its own prefix, so the three are safe to run in any order and none can remove another's output. **Keep it that way** — widening any of these syncs to the bucket root would make whichever job ran last wipe the other two sites and the landing page.
+
+`sync_swagger` uses `aws s3 sync --delete`, so `http/` is an exact mirror of this folder. Deleting a file here deletes it from the live site on the next run; `git revert` puts it back. There is no state outside this repo.
+
+Raw specs are now at `/mqtt/MQTT_Node.yaml`, `/mqtt/MQTT_User.yaml` and `/events/Push_User.yaml`.
+
+The distribution serving this bucket needs a default root object of `index.html` and, for the `/http/`, and `/mqtt/node/`-style prefixes to resolve without a trailing filename, subdirectory index handling — a CloudFront Function or `index.html`-appending behaviour. S3 website endpoints do this natively; an OAC/REST origin does not.
 
 Separately, [`scripts/upload_rmng_outputs.py`](../../scripts/upload_rmng_outputs.py) publishes `*.yaml` from this folder to the per-account public assets bucket for self-hosted deployments. It globs YAML only and never touches the UI assets.
 
@@ -24,7 +32,7 @@ Vendored from **`swagger-ui-dist@4.12.0`**, Apache-2.0 — see [`LICENSE`](./LIC
 
 Exactly two files differ from upstream. Re-apply both on any refresh.
 
-- [`index.html`](./index.html) — one added line, `<link rel="stylesheet" type="text/css" href="index.css" />`.
+- [`index.html`](./index.html) — two changes: the added `<link rel="stylesheet" type="text/css" href="index.css" />`, and a `.rmng-home` banner (inline `<style>` plus a `<div>` above `#swagger-ui`) linking back to the root landing page. The banner is static markup rather than an addition to Swagger UI's own topbar, which the bundle renders itself.
 - [`swagger-initializer.js`](./swagger-initializer.js) — rewritten for the two-spec `urls` array and an allow-listed `?urls.primaryName=` deep link. This is deliberately **not** `queryConfigEnabled`: that flag also honours `?url=` and `?configUrl=`, which would let anyone point the live site at a spec they control. Keep that comment and the allow-list intact — the security posture below depends on it.
 
 ## Not vendored

@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ESP RainMaker Neo API Reference</title>
+    <link
+      rel="icon"
+      type="image/png"
+      href="./favicon-neo-32x32.png"
+      sizes="32x32"
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      href="./favicon-neo-16x16.png"
+      sizes="16x16"
+    />
+    <link rel="apple-touch-icon" href="./logo-neo-mark.png" />
+    <!--
+      Root index for api.docs.neo.rainmaker.espressif.com. Every reference site
+      now lives under this one host: /http/, /mqtt/, /events/.
+
+      Self-contained on purpose — no stylesheet or font binary is fetched. The
+      font stack and palette are copied from the Admin Dashboard so the two read
+      as one product: --font-sans and the light-mode tokens from
+      @espressif/dashboard-ui-components (src/styles/globals.css and colors.css).
+      Copied rather than imported because that package is a Tailwind 4 @theme
+      block consumed at build time, and this page has no build step.
+    -->
+    <style>
+      :root {
+        /* Mirrors --font-sans from the dashboard UI component library. */
+        --font-sans:
+          system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", Helvetica,
+          Arial, "PingFang SC", "Microsoft YaHei", 黑体, sans-serif;
+
+        /* Light-mode tokens, same hexes as the dashboard. */
+        --background: #fafcff;
+        --foreground: #121212;
+        --foreground-secondary: #12121299;
+        --muted-foreground: #666666;
+        --card: #ffffff;
+        --border: #e1e1e1;
+        --secondary: #2a5a9a;
+        --primary: #0071e3;
+        --sidebar-foreground: #183251;
+
+        /* Brand gradient, sampled from the NEO wordmark in
+           logo-neo-vertical.png rather than picked by eye: the "N" is #e54c3c
+           and the "O" is #3283f2, passing through a #9472c8 purple. Reusing the
+           logo's own red→blue transition ties the cards to the mark. */
+        --brand-red: #e54c3c;
+        --brand-purple: #9472c8;
+        --brand-blue: #3283f2;
+      }
+
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        padding: 80px 24px 64px;
+        background: var(--background);
+        color: var(--foreground);
+        font-family: var(--font-sans);
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      .wrap {
+        max-width: 680px;
+        margin: 0 auto;
+      }
+
+      /* Centred with auto margins rather than text-align on a parent, so the
+         link cards below stay left-aligned. */
+      .brand img {
+        display: block;
+        width: 320px;
+        max-width: 100%;
+        height: auto;
+        margin: 0 auto;
+      }
+
+      .masthead {
+        text-align: center;
+      }
+
+      /* The first section heading needs no extra top margin — .brand already
+         supplies the gap under the logo. */
+      .masthead + h2 {
+        margin-top: 0;
+      }
+
+      h1 {
+        font-size: 1.5rem;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        margin: 0;
+        color: var(--sidebar-foreground);
+      }
+
+      h2 {
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--foreground-secondary);
+        margin: 2rem 0 0.75rem;
+      }
+
+      ul {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: grid;
+        gap: 0.625rem;
+      }
+
+      /* The accent bar is a pseudo-element, not a border-left: borders take a
+         single colour and cannot carry a gradient. inset positioning plus
+         `overflow: hidden` on the anchor keeps the bar inside the 0.5rem
+         rounded corners. */
+      a.doc-link {
+        position: relative;
+        overflow: hidden;
+        display: block;
+        padding: 14px 18px 14px 21px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 0.5rem;
+        text-decoration: none;
+        color: var(--foreground);
+        font-size: 0.9375rem;
+        font-weight: 600;
+        transition:
+          border-color 150ms ease,
+          box-shadow 150ms ease;
+      }
+
+      a.doc-link::before {
+        content: "";
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 3px;
+        transition: width 150ms ease;
+        /* Brand red → blue, the same transition as the NEO wordmark. The purple
+           midpoint is explicit: interpolating red to blue directly in sRGB
+           passes through a desaturated grey. */
+        background: linear-gradient(
+          180deg,
+          var(--brand-red) 0%,
+          var(--brand-purple) 50%,
+          var(--brand-blue) 100%
+        );
+      }
+
+      a.doc-link small {
+        display: block;
+        margin-top: 2px;
+        font-size: 0.8125rem;
+        font-weight: 400;
+        color: var(--muted-foreground);
+      }
+
+      /* The accent bar is a gradient now, so hover widens it instead of
+         recolouring it — the brand ramp stays intact either way. */
+      a.doc-link:hover {
+        border-color: #cfd6e0;
+        box-shadow: 0 1px 3px rgb(18 18 18 / 8%);
+      }
+
+      a.doc-link:hover::before {
+        width: 5px;
+      }
+
+      a.doc-link:focus-visible {
+        outline: 2px solid var(--primary);
+        outline-offset: 2px;
+      }
+
+      footer {
+        margin-top: 3rem;
+        padding-top: 1.25rem;
+        border-top: 1px solid var(--border);
+        font-size: 0.8125rem;
+        color: var(--muted-foreground);
+      }
+
+      footer a {
+        color: var(--secondary);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="masthead">
+        <div class="brand">
+          <img
+            src="./logo-neo-vertical.png"
+            alt="ESP RainMaker NEO"
+            width="640"
+            height="387"
+          />
+        </div>
+      </div>
+
+      <h2>HTTP</h2>
+      <ul>
+        <li>
+          <a class="doc-link" href="./http/?urls.primaryName=RMNG%20API">
+            RainMaker User API
+            <small> REST endpoints for users and admins </small>
+          </a>
+        </li>
+        <li>
+          <a class="doc-link" href="./http/?urls.primaryName=User%20API">
+            RainMaker User Identity API
+            <small>Login and identity management endpoints</small>
+          </a>
+        </li>
+      </ul>
+
+      <h2>MQTT</h2>
+      <ul>
+        <li>
+          <a class="doc-link" href="./mqtt/node/">
+            RainMaker Node MQTT
+            <small>Topics and payloads used by nodes</small>
+          </a>
+        </li>
+        <li>
+          <a class="doc-link" href="./mqtt/user/">
+            RainMaker User MQTT
+            <small>Topics and payloads for phone and web clients</small>
+          </a>
+        </li>
+      </ul>
+
+      <h2>Events</h2>
+      <ul>
+        <li>
+          <a class="doc-link" href="./events/">
+            RainMaker Events
+            <small>Push notification and webhook event payloads</small>
+          </a>
+        </li>
+      </ul>
+
+      <footer>
+        <a href="https://docs.neo.rainmaker.espressif.com/"
+          >ESP RainMaker Neo documentation</a
+        >
+      </footer>
+    </div>
+  </body>
+</html>
