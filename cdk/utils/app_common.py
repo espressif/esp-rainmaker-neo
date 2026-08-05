@@ -1054,9 +1054,13 @@ _API_DOMAIN_DISCOVERY_CODE = """
 import json
 import boto3
 import cfnresponse
+from botocore.config import Config
+
+# GetDomainNames/GetBasePathMappings hit API Gateway's account-region control plane, and the api + mcp discovery custom resources across stacks call it concurrently during a parallel deploy, self-throttling to TooManyRequestsException. Adaptive mode adds a client-side rate limiter plus exponential backoff with jitter, and the higher attempt cap rides out the throttle instead of failing the stack after the default 4 retries.
+_RETRY = Config(retries={'max_attempts': 10, 'mode': 'adaptive'})
 
 def _discover_rest(api_id):
-    client = boto3.client('apigateway')
+    client = boto3.client('apigateway', config=_RETRY)
     for page in client.get_paginator('get_domain_names').paginate():
         for item in page.get('items', []):
             candidate = item['domainName']
@@ -1071,7 +1075,7 @@ def _discover_rest(api_id):
     return '', ''
 
 def _discover_http(api_id):
-    client = boto3.client('apigatewayv2')
+    client = boto3.client('apigatewayv2', config=_RETRY)
     next_token = None
     while True:
         kwargs = {'MaxResults': '500'}
