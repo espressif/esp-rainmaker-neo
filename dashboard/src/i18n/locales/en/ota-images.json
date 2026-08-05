@@ -74,7 +74,7 @@
     "uploadingTitle": "Uploading OTA image",
     "uploadingDescription": "This may take a while. Do not close this window.",
     "successTitle": "OTA Image uploaded successfully.",
-    "successDescription": "You can now use this OTA image to update your devices.",
+    "successDescription": "You can now use this OTA image to update your nodes.",
     "createOtaWithImage": "Create OTA with this image",
     "errorTitle": "Failed to upload OTA image.",
     "errorDescription": "Please try again.",

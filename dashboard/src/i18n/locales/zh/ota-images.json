@@ -74,7 +74,7 @@
     "uploadingTitle": "正在上传 OTA 镜像",
     "uploadingDescription": "这可能需要一些时间。请勿关闭此窗口。",
     "successTitle": "OTA 镜像上传成功。",
-    "successDescription": "您现在可以使用此 OTA 镜像来更新您的设备。",
+    "successDescription": "您现在可以使用此 OTA 镜像来更新您的节点。",
     "createOtaWithImage": "使用此镜像创建 OTA",
     "errorTitle": "OTA 镜像上传失败。",
     "errorDescription": "请重试。",

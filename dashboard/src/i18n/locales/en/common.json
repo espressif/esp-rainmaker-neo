@@ -187,8 +187,8 @@
     }
   },
   "searchFields": {
-    "deviceType": "Device Type",
-    "deviceModel": "Device Model",
+    "deviceType": "Node Type",
+    "deviceModel": "Node Model",
     "firmwareVersion": "Firmware Version",
     "onlineStatus": "Online Status",
     "createdBy": "Created By",
