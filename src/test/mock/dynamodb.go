@@ -172,6 +172,12 @@ type DynamoDBMock struct {
 	// If > 0, the next BatchGetItem call returns the last N keys as UnprocessedKeys
 	// instead of processing them, then resets to 0.
 	NextBatchGetUnprocessedCount int
+	// If > 0, the next BatchWriteItem call returns the last N requests as UnprocessedItems
+	// instead of applying them, then decrements by one so a caller that retries eventually
+	// drains. The real service answers 200 with UnprocessedItems when it throttles part of a
+	// batch, so without this the mock cannot express a partially-applied batch write and a
+	// caller that discards the response looks correct.
+	NextBatchWriteUnprocessedCount int
 }
 
 func NewDynamoDBMock() *DynamoDBMock {
@@ -610,6 +616,27 @@ func (m *DynamoDBMock) DeleteItem(ctx context.Context, params *dynamodb.DeleteIt
 
 func (m *DynamoDBMock) BatchWriteItem(ctx context.Context, params *dynamodb.BatchWriteItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.BatchWriteItemOutput, error) {
 	var out dynamodb.BatchWriteItemOutput
+
+	// Hold back the tail of each batch as unprocessed, mimicking a partial throttle. Decrement so
+	// a caller that retries makes progress and eventually drains, which is what lets a test tell
+	// "retries until done" apart from "gave up" or "never noticed".
+	if m.NextBatchWriteUnprocessedCount > 0 {
+		holdBack := m.NextBatchWriteUnprocessedCount
+		m.NextBatchWriteUnprocessedCount--
+		out.UnprocessedItems = make(map[string][]types.WriteRequest)
+		applied := make(map[string][]types.WriteRequest)
+		for table, requests := range params.RequestItems {
+			if holdBack >= len(requests) {
+				out.UnprocessedItems[table] = requests
+				continue
+			}
+			split := len(requests) - holdBack
+			applied[table] = requests[:split]
+			out.UnprocessedItems[table] = requests[split:]
+		}
+		params = &dynamodb.BatchWriteItemInput{RequestItems: applied}
+	}
+
 	for table, requests := range params.RequestItems {
 		for _, request := range requests {
 			if request.PutRequest != nil {
