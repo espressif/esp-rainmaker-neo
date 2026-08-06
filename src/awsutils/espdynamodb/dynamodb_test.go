@@ -14,7 +14,9 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -387,7 +389,7 @@ var _ = Describe("DynamoDB", func() {
 				Expect(err).NotTo(HaveOccurred())
 
 				// Delete items in batch
-				err = db.DbBatchDeleteItem(hashOnlyTable, items)
+				err = espdynamodb.DbBatchDeleteItem(&db, hashOnlyTable, items)
 				Expect(err).NotTo(HaveOccurred())
 
 				// Verify items were deleted
@@ -593,5 +595,108 @@ var _ = Describe("DynamoDB", func() {
 				Expect(result.Data).To(Equal("updated-data"))
 			})
 		})
+	})
+})
+
+type zeroValueItem struct {
+	HashKey  string `dynamodbav:"hash_key"`
+	RangeKey string `dynamodbav:"range_key"`
+	Data     string `dynamodbav:"data"`
+}
+
+func (z zeroValueItem) GetHKey() string { return "hash_key" }
+func (z zeroValueItem) GetRKey() string { return "range_key" }
+
+var _ = Describe("Key built from key attributes only", func() {
+	var (
+		db     espdynamodb.EspDB
+		dbMock *mock.DynamoDBMock
+		ctx    *rmngctx.RmngContext
+	)
+
+	const table = "key-only-table"
+
+	BeforeEach(func() {
+		ctx = &rmngctx.RmngContext{Context: context.Background()}
+		dbMock = mock.NewDynamoDBMock()
+		awscommon.SetDynamoDBClient(dbMock)
+		db = espdynamodb.NewEspDB(ctx)
+		dbMock.AddTable(table, "hash_key", "range_key")
+	})
+
+	It("reads a key struct whose non-key field holds a zero value", func() {
+		item := zeroValueItem{HashKey: "h1", RangeKey: "r1", Data: ""}
+		Expect(db.DbCreateItem(table, item)).To(Succeed())
+
+		var result zeroValueItem
+		Expect(db.DbGetItem(table, item, &result)).To(Succeed())
+		Expect(result).To(Equal(item))
+	})
+
+	It("deletes a key struct whose non-key field holds a zero value", func() {
+		item := zeroValueItem{HashKey: "h2", RangeKey: "r2", Data: "present"}
+		Expect(db.DbCreateItem(table, item)).To(Succeed())
+
+		Expect(db.DbDeleteItem(table, item)).To(Succeed())
+
+		var result zeroValueItem
+		_ = db.DbGetItem(table, item, &result)
+		Expect(result).To(Equal(zeroValueItem{}), "the row should be gone")
+	})
+
+	It("updates a key struct whose non-key field holds a zero value", func() {
+		item := zeroValueItem{HashKey: "h3", RangeKey: "r3", Data: ""}
+		Expect(db.DbCreateItem(table, item)).To(Succeed())
+
+		_, err := db.DbUpdateItem(espdynamodb.DbUpdateItemInput{
+			TableName: table,
+			Query:     item,
+			Update:    expression.Set(expression.Name("data"), expression.Value("filled")),
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		var result zeroValueItem
+		Expect(db.DbGetItem(table, item, &result)).To(Succeed())
+		Expect(result.Data).To(Equal("filled"))
+	})
+
+	DescribeTable("rejects a Key carrying a non-key attribute",
+		func(call func(map[string]types.AttributeValue) error) {
+			key := map[string]types.AttributeValue{
+				"hash_key":  &types.AttributeValueMemberS{Value: "h"},
+				"range_key": &types.AttributeValueMemberS{Value: "r"},
+				"data":      &types.AttributeValueMemberS{Value: "not-a-key"},
+			}
+			err := call(key)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("ValidationException"))
+		},
+		Entry("on GetItem", func(key map[string]types.AttributeValue) error {
+			_, err := dbMock.GetItem(context.Background(), &dynamodb.GetItemInput{
+				TableName: aws.String(table), Key: key,
+			})
+			return err
+		}),
+		Entry("on DeleteItem", func(key map[string]types.AttributeValue) error {
+			_, err := dbMock.DeleteItem(context.Background(), &dynamodb.DeleteItemInput{
+				TableName: aws.String(table), Key: key,
+			})
+			return err
+		}),
+		Entry("on UpdateItem", func(key map[string]types.AttributeValue) error {
+			_, err := dbMock.UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+				TableName: aws.String(table), Key: key,
+			})
+			return err
+		}),
+	)
+
+	It("reports a Key missing its partition key instead of panicking", func() {
+		_, _, err := mock.ExtractKeys(
+			map[string]types.AttributeValue{"range_key": &types.AttributeValueMemberS{Value: "r"}},
+			"hash_key", "range_key",
+		)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("ValidationException"))
 	})
 })
