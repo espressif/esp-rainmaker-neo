@@ -191,18 +191,15 @@ func (gdb *GroupDB) ListRowsWithGroupID(parentGroupID string) ([]GroupInDB, erro
 		},
 	}
 
-	queryOutput, err := gdb.Query(gdb.Ctx.Context, queryInput)
-	if err != nil {
-		return nil, rmerror.NewRMError(err, "failed to query groups in DynamoDB")
-	}
-
+	// Paginated: the parent row sorts under "NONE", so a truncated page can drop the group
+	// itself as easily as its subgroups.
 	var groups []GroupInDB
-	for _, item := range queryOutput.Items {
+	err := gdb.QueryPaginated(gdb.Ctx.Context, queryInput, func(item map[string]types.AttributeValue) error {
 		addToGroups := false
 		subGroupID, ok := dbcore.GetStringAttr(item, "sub_group_id")
 		if !ok {
 			// Sort key is mandatory; skip a malformed item rather than panic.
-			continue
+			return nil
 		}
 		if subGroupID == "NONE" {
 			// Add Parent group
@@ -211,7 +208,7 @@ func (gdb *GroupDB) ListRowsWithGroupID(parentGroupID string) ([]GroupInDB, erro
 			// Check if user has access to this sub-group, if so add subgroup
 			match, err := gdb.Ctx.IsConditionMatch(utils.GroupListSubEntities, parentGroupID, subGroupID)
 			if err != nil {
-				return nil, rmerror.NewRMError(err, "failed to check condition match")
+				return rmerror.NewRMError(err, "failed to check condition match")
 			}
 			addToGroups = match
 		}
@@ -228,6 +225,10 @@ func (gdb *GroupDB) ListRowsWithGroupID(parentGroupID string) ([]GroupInDB, erro
 			}
 			groups = append(groups, groupEntry)
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, rmerror.NewRMError(err, "failed to query groups in DynamoDB")
 	}
 
 	return groups, nil

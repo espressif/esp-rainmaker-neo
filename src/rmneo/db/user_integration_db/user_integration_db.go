@@ -230,23 +230,28 @@ func (db *UserDB) GetUserEntriesByIntegration(integrationID string) ([]UserInteg
 		return nil, rmerror.NewRMError(err, "failed to build expression for GetUserEntriesByIntegration")
 	}
 
-	result, err := db.Query(db.Ctx.Context, &dynamodb.QueryInput{
+	// Paginated: the send path fans out to every endpoint returned here, so a truncated page
+	// silently skips some of the user's devices.
+	var entries []UserIntegrationEntry
+	err = db.QueryPaginated(db.Ctx.Context, &dynamodb.QueryInput{
 		TableName:                 aws.String(UserEndpointsTable),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
+	}, func(item map[string]types.AttributeValue) error {
+		var entry UserIntegrationEntry
+		if err := attributevalue.UnmarshalMap(item, &entry); err != nil {
+			return rmerror.NewRMError(err, "failed to unmarshal user entries")
+		}
+		entries = append(entries, entry)
+		return nil
 	})
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to query user entries by integration")
 	}
 
-	if len(result.Items) == 0 {
+	if len(entries) == 0 {
 		return nil, rmerror.NewRMError(nil, "user entry not found")
-	}
-
-	var entries []UserIntegrationEntry
-	if err := attributevalue.UnmarshalListOfMaps(result.Items, &entries); err != nil {
-		return nil, rmerror.NewRMError(err, "failed to unmarshal user entries")
 	}
 	return entries, nil
 }

@@ -204,6 +204,9 @@ Walk in order — first "yes" wins.
 4. **`make synth`** and grep template for `<LogicalId>"`. Correct when the ID does NOT end with an 8-char hex hash.
 5. **Construct-tree refs** — if rename forces adjacent resources to rename too, enumerate them in the Aux L1s column.
 
+## DynamoDB access
+- **A listing reads every page.** Use `DBUtil.QueryPaginated`, never a bare `Query` or `Scan` — DynamoDB caps a single call at 1 MB whether or not a `Limit` is set, so a bare call silently truncates as the data grows. The exceptions and the test coverage a listing needs are in [go-rules.mdc](go-rules.mdc).
+
 ## IAM permissions
 - Use `base_res_constants.py` to get the resource names and arns.
 - **Whenever a new AWS SDK call is added to a lambda**, grant the matching IAM permission on that lambda's role in the same change — never defer IAM updates to a later PR.

@@ -327,18 +327,16 @@ func (g *GroupNodeDB) ListGroupNodesWithDBEntry(groupID string) (map[string]*Gro
 		},
 	}
 
-	queryOutput, err := g.Query(g.Ctx.Context, input)
-	if err != nil {
-		return nil, nil, rmerror.NewRMError(err, "failed to query group_device_mapping in DynamoDB")
-	}
 	subgrpNodes := make(map[string]map[string]*GroupNode)
 	grpNodes := make(map[string]*GroupNode)
 
-	for _, item := range queryOutput.Items {
+	// Paginated: this listing also decides which nodes get a SetAllow below, so a truncated
+	// page would drop nodes from the response and deny access to them in the same breath.
+	err := g.QueryPaginated(g.Ctx.Context, input, func(item map[string]types.AttributeValue) error {
 		var groupNode GroupNode
 		if err := attributevalue.UnmarshalMap(item, &groupNode); err != nil || groupNode.NodeID == "" {
 			// node_id is the mapping's key; skip a malformed item rather than panic on the auth path.
-			continue
+			return nil
 		}
 		grpNodes[groupNode.NodeID] = &groupNode
 
@@ -351,6 +349,10 @@ func (g *GroupNodeDB) ListGroupNodesWithDBEntry(groupID string) (map[string]*Gro
 			}
 			subgrpNodes[subgrpID][groupNode.NodeID] = grpNodes[groupNode.NodeID]
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, rmerror.NewRMError(err, "failed to query group_device_mapping in DynamoDB")
 	}
 
 	isLimitedAccess := false
