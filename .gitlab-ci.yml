@@ -449,13 +449,6 @@ sync_events:
   - docs/**/*
   - .gitlab-ci.yml
 
-# main carries "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" rather than
-# "$CI_COMMIT_BRANCH": while an MR from main is open, the workflow rules
-# suppress branch pipelines on it, so main only ever appears as an MR pipeline.
-.if_main:
-  &if_main '$CI_COMMIT_BRANCH == "main" || $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME
-  == "main"'
-
 build_docs:
   extends: .docs_template
   image: python:3.12
@@ -504,8 +497,6 @@ deploy_docs_preview:
     DOCS_DEPLOY_PATH: "$DOCS_PREVIEW_PATH"
     DOCS_DEPLOY_URL_BASE: "$DOCS_PREVIEW_URL_BASE"
   rules:
-    - if: *if_main
-      when: never
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes: *docs_changes
 
@@ -524,6 +515,6 @@ deploy_docs_production:
   # The changes: filter must mirror build_docs': this job needs: it, and a
   # pipeline that creates the deploy without the build is a YAML error.
   rules:
-    - if: *if_main
+    - if: '$CI_COMMIT_BRANCH == "main"'
       changes: *docs_changes
       when: manual
