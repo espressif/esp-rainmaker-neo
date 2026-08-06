@@ -556,10 +556,16 @@ func (s *TimeseriesService) Put(rmngCtx *rmngctx.RmngContext, nodeID string, dat
 // Delete removes all timeseries data for a node. It reads the node's config
 // to discover parameter names and data types, then deletes all raw and processed data.
 func (s *TimeseriesService) Delete(rmngCtx *rmngctx.RmngContext, nodeID string) error {
+	// The config names the parameters to purge, so failing to read it means we cannot know what to
+	// delete. That must surface: the error used to be constructed and dropped, leaving params empty
+	// and the purge reporting success while deleting nothing.
 	configService := config.NewConfigService()
 	configData, err := configService.Get(rmngCtx, nodeID)
-	if err != nil || configData == nil {
-		rmerror.NewRMError(err, "failed to get node config")
+	if err != nil {
+		return rmerror.NewRMError(err, "failed to get node config, cannot determine which timeseries data to delete")
+	}
+	if configData == nil {
+		return rmerror.NewRMError(nil, "node has no config, cannot determine which timeseries data to delete")
 	}
 
 	nodeCfg := config.ToNodeCfg(configData)

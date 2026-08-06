@@ -51,6 +51,17 @@ class ServiceCore(Construct):
             ]
         ))
         
+        # Purging a node's timeseries data batch-deletes it, and BatchWriteItem is a distinct action
+        # from DeleteItem. Granted only on the two timeseries tables, the sole batch-delete target
+        # in this lambda.
+        service_lambda_role.add_to_policy(iam.PolicyStatement(
+            actions=["dynamodb:BatchWriteItem"],
+            resources=[
+                get_table_arn(TABLE_NAMES['RAW_TS_DATA'], region),
+                get_table_arn(TABLE_NAMES['PROCESSED_TS_DATA'], region)
+            ]
+        ))
+
         # Also allow using GSIs on the tables
         service_lambda_role.add_to_policy(iam.PolicyStatement(
             actions=["dynamodb:Query"],
