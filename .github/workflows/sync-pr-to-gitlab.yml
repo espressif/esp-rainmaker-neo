@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+#
+# SPDX-License-Identifier: Apache-2.0
+
+
+# Maintainer flow:
+#   1. Comment "sha=<commit>" on the PR (this also trips sync-jira.yml).
+#   2. Wait for the PR title to gain "(RMNGGH-nnn)" — the labeled webhook payload is
+#      frozen at trigger time, so labelling too early captures the old title.
+#   3. Apply PR-Sync-Merge (new PRs), PR-Sync-Rebase (needs rebasing onto the
+#      internal base branch), or PR-Sync-Update (push new commits to an open MR).
+
+name: Sync PR to GitLab
+
+on:
+  pull_request_target:
+    types: [labeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  sync:
+    name: GitHub PR to GitLab MR
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.label.name == 'PR-Sync-Merge' ||
+      github.event.label.name == 'PR-Sync-Rebase' ||
+      github.event.label.name == 'PR-Sync-Update'
+    steps:
+      # Full history: the action pulls the GitLab base branch into this checkout
+      # and may rebase the PR onto it. Both fail on a depth-1 clone.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Pinned to the v1 branch head rather than tag v1.0.0: GITLAB_NAMESPACE
+      # support landed after that tag, and this project lives under app-frameworks/,
+      # not the action's default espressif/ namespace. Upstream's "v1" is a branch,
+      # so it moves — and this Docker action receives GITLAB_TOKEN in its
+      # environment, so the pin is deliberate. Bump the SHA only after review.
+      - name: Sync to GitLab
+        uses: espressif/sync-pr-to-gitlab@6ea5db60f6cc51c7485f6292f29e51ef92656e3f
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLAB_URL: ${{ secrets.GITLAB_URL }}
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          GIT_CONFIG_NAME: ${{ secrets.GIT_CONFIG_NAME }}
+          GIT_CONFIG_EMAIL: ${{ secrets.GIT_CONFIG_EMAIL }}
+          JIRA_PROJECT: RMNGGH
+          GITLAB_NAMESPACE: app-frameworks

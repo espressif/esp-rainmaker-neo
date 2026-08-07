@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+#
+# SPDX-License-Identifier: Apache-2.0
+
+
+# PRs from collaborators and espressif org members are skipped by the action;
+# only external contributions are mirrored.
+
+name: Sync to Jira
+
+on:
+  issues: {types: [opened]}
+  # Fires on PR comments too, which is how a maintainer's "sha=" comment gets
+  # the Jira issue created before the sync label is applied.
+  issue_comment: {types: [created, edited, deleted]}
+  # Backstop for PRs that never received a comment.
+  schedule: [cron: '0 * * * *']
+  workflow_dispatch:
+    inputs:
+      action: {description: 'Action to be performed', required: true, default: 'mirror-issues'}
+      issue-numbers: {description: 'Issue numbers to sync (comma-separated)', required: true}
+
+jobs:
+  sync-to-jira:
+    name: Sync to Jira
+    runs-on: ubuntu-latest
+    # issues/pull-requests write: the action edits the title to append the Jira key.
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned to the v1 branch head, not tag v1.3.1: that tag is 8 commits behind
+      # and predates both the collaborator/org-member skip (804d28c6) and the
+      # JIRA_COMPONENT fix (7ea02571). Note that upstream's "v1" is a branch, so it
+      # moves — bump this SHA deliberately.
+      - name: Sync to Jira
+        uses: espressif/sync-jira-actions@63eedfd5b3f8767bc063ad5ffcc3b85fe6d92883
+        with:
+          cron_job: ${{ github.event_name == 'schedule' && 'true' || '' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          JIRA_URL: ${{ secrets.JIRA_URL }}
+          JIRA_USER: ${{ secrets.JIRA_USER }}
+          JIRA_PASS: ${{ secrets.JIRA_PASS }}
+          # Must stay identical to JIRA_PROJECT in sync-pr-to-gitlab.yml: this
+          # workflow writes the key into the title, that one parses it back out.
+          JIRA_PROJECT: RMNGGH
+          JIRA_COMPONENT: GitHub
