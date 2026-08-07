@@ -103,7 +103,8 @@
   },
   "noSearchResults": {
     "title": "未找到节点",
-    "description": "请调整搜索或筛选条件以查找节点。"
+    "description": "请调整搜索或筛选条件，或生成新的节点以开始使用。",
+    "action": "生成节点"
   },
   "error": {
     "title": "加载节点失败",

@@ -1,8 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { HtmlTagDescriptor, Plugin } from 'vite'
-import appConfig from '../app.config'
-import urlParams from '../src/config/url-params.config.json'
+import appConfig from '../app.config.ts'
+import urlParams from '../src/config/url-params.config.json' with { type: 'json' }
 
 /** Vite escapes tag attributes itself, but not element text (`children`). */
 function escapeText(value: string): string {

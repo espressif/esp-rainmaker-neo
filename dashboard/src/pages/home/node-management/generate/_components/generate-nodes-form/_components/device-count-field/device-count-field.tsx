@@ -19,17 +19,6 @@ import {
   type GenerateNodesFormValues,
 } from "../../../../_schema/generate-nodes-form.schema";
 
-function clampCount(raw: string): number {
-  const parsed = Number.parseInt(raw, 10);
-  if (Number.isNaN(parsed)) {
-    return GENERATE_NODES_MIN_COUNT;
-  }
-  return Math.min(
-    GENERATE_NODES_MAX_COUNT,
-    Math.max(GENERATE_NODES_MIN_COUNT, parsed),
-  );
-}
-
 export function DeviceCountField() {
   const { t } = useTranslation("generate");
   const { control } = useFormContext<GenerateNodesFormValues>();
@@ -38,22 +27,20 @@ export function DeviceCountField() {
     <FormField
       control={control}
       name="count"
-      render={({ field }) => (
+      render={({ field, fieldState }) => (
         <FormItem>
           <FormControl>
             <Input
+              {...field}
               type="number"
+              inputMode="numeric"
               min={GENERATE_NODES_MIN_COUNT}
               max={GENERATE_NODES_MAX_COUNT}
-              name={field.name}
-              ref={field.ref}
-              value={field.value}
-              onBlur={field.onBlur}
-              onChange={(event) => field.onChange(clampCount(event.target.value))}
-              label={t("fields.count", "Number of devices")}
+              error={Boolean(fieldState.error)}
+              label={t("fields.count", "Number of nodes")}
               startHelperContent={t(
                 "fields.countHint",
-                "Maximum 20 devices per batch.",
+                "Maximum 20 nodes per batch.",
               )}
             />
           </FormControl>

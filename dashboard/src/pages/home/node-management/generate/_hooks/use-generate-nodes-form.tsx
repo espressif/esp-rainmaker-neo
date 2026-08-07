@@ -17,7 +17,7 @@ import {
 import { useGenerateOrchestration } from "./use-generate-orchestration";
 
 const DEFAULT_VALUES: GenerateNodesFormValues = {
-  count: 5,
+  count: "5",
   matter: false,
 };
 
@@ -45,7 +45,10 @@ export function useGenerateNodesForm() {
 
   const handleSubmit = useCallback(
     (values: GenerateNodesFormValues) => {
-      void orchestration.startFlow(values);
+      void orchestration.startFlow({
+        count: Number.parseInt(values.count, 10),
+        matter: values.matter,
+      });
     },
     [orchestration],
   );
@@ -63,7 +66,11 @@ export function useGenerateNodesForm() {
   );
 
   const retry = useCallback(() => {
-    void orchestration.startFlow(form.getValues());
+    const values = form.getValues();
+    void orchestration.startFlow({
+      count: Number.parseInt(values.count, 10),
+      matter: values.matter,
+    });
   }, [orchestration, form]);
 
   return {

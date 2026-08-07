@@ -20,6 +20,7 @@ import {
 import { getNodesColumns } from "./_columns";
 import { NodesPageHeader } from "./_components/nodes-page-header";
 import { NodesTableActions } from "./_components/nodes-table-actions/nodes-table-actions";
+import { NodesEmptyStateAction } from "./_components/nodes-empty-state-action/nodes-empty-state-action";
 import { useNodes } from "./use-nodes";
 import { useRouteParams } from "@/lib/navigation/use-route-params";
 
@@ -120,7 +121,8 @@ function IoTThings() {
           showBorder
           showColumnVisibilitySelector={false}
           noResultsHeading={t("noSearchResults.title", "No nodes found")}
-          noResultsDescription={t("noSearchResults.description", "Try adjusting your search or filter to find the node you're looking for.")}
+          noResultsDescription={t("noSearchResults.description", "Try adjusting your search or filters, or generate new nodes to get started.")}
+          noResultsAction={<NodesEmptyStateAction />}
           pageLabel={t("common:dataTable.page", "Page {{current}}", {
             current: pagination.pageIndex + 1,
           })}
