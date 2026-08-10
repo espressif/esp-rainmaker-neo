@@ -39,7 +39,8 @@
     },
     "name": {
       "label": "Firmware name",
-      "placeholder": "e.g. light-sensor"
+      "placeholder": "e.g. light-sensor",
+      "tooltip": "We recommend a unique name — this is how the image is identified when you create an OTA job."
     },
     "version": {
       "label": "Firmware version",

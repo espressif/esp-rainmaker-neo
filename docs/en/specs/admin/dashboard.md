@@ -87,6 +87,25 @@ with a create route, and a job detail page with **Overview** and **Nodes** tabs.
 - OTA jobs: Job ID, Status, Created At; create via `/jobs/new`
 - Job detail: Overview (job config + Device Metrics chart) and per-node execution status
 
+On upload, the selected file's ESP app-image header (`esp_image_header_t` +
+`esp_app_desc_t` at fixed offset 0x20) is parsed in the browser: firmware
+version, model (project name) and platform (from `chip_id`) fill their form
+fields and each filled field is then **locked** (read-only, lock icon, "Read
+from the firmware image"). The binary is the source of truth, so a tag can never
+contradict the image it describes and no mismatch warning or override is needed.
+Selecting a different file re-fills the locked fields and clears any the new
+image does not report.
+
+| Field | Source |
+|---|---|
+| version, model, platform | Image header — filled and locked whenever present |
+| type | Admin-owned — not in the image header |
+| name | Admin-owned — always typed, never derived from the file name; a tooltip recommends a unique one (it identifies the image when creating an OTA job) |
+
+Non-ESP files (`.hex`, `.elf`, MCU images) skip extraction silently and leave
+every field editable. Node/device *type* is not extractable — it is set at
+runtime by the firmware (`esp_rmaker_node_init`), not stored in the image header.
+
 **API calls:** `ListObjectsV2Command` (S3), `ListJobsCommand`, `DescribeJobCommand`, `CreateJobCommand`, `CreateStreamCommand`
 
 
