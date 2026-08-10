@@ -14,7 +14,6 @@ import {
   FormLabel,
   FormMessage,
 } from "@espressif/dashboard-ui-components/components";
-import { stripExtension } from "@/aws/components/firmware-upload/firmware-upload.utils";
 import {
   OTA_IMAGE_ACCEPT_ATTR,
   type UploadOtaImageFormValues,
@@ -22,8 +21,7 @@ import {
 
 export function SelectOtaImageSection() {
   const { t } = useTranslation(["ota-images", "common"]);
-  const { control, setValue, getValues, trigger } =
-    useFormContext<UploadOtaImageFormValues>();
+  const { control, trigger } = useFormContext<UploadOtaImageFormValues>();
 
   return (
     <FormField
@@ -53,13 +51,6 @@ export function SelectOtaImageSection() {
               files={field.value ?? []}
               onFilesChange={(files) => {
                 field.onChange(files);
-                const selected = files[0];
-                if (selected && !getValues("name")) {
-                  setValue("name", stripExtension(selected.name), {
-                    shouldDirty: true,
-                    shouldValidate: true,
-                  });
-                }
                 void trigger("firmwareFiles");
               }}
               hideDropzoneOnFileSelect={true}

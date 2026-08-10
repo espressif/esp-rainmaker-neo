@@ -24,6 +24,7 @@ export default function UploadOtaImageForm(_props: UploadOtaImageFormProps) {
     t,
     form,
     sections,
+    lockedFields,
     status,
     dialogOpen,
     errorMessage,
@@ -85,7 +86,7 @@ export default function UploadOtaImageForm(_props: UploadOtaImageFormProps) {
                   color="silver"
                   variant="outline"
                 >
-                  <SectionContent />
+                  <SectionContent lockedFields={lockedFields} />
                 </SectionCard>
               </ScrollableSections.Content>
             ))}

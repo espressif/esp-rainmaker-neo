@@ -39,7 +39,8 @@
     },
     "name": {
       "label": "固件名称",
-      "placeholder": "例如 light-sensor"
+      "placeholder": "例如 light-sensor",
+      "tooltip": "建议使用唯一名称——创建 OTA 任务时通过该名称识别此镜像。"
     },
     "version": {
       "label": "固件版本",

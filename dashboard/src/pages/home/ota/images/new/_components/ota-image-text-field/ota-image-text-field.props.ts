@@ -17,4 +17,8 @@ export interface OtaImageTextFieldProps {
   label: string;
   placeholder?: string;
   required?: boolean;
+  /** The value came from the firmware image: render it read-only so it cannot drift from the binary. */
+  locked?: boolean;
+  /** Guidance shown in an info tooltip beside the label. */
+  tooltip?: string;
 }

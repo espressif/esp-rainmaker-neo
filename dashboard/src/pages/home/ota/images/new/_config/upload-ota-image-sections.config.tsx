@@ -11,12 +11,18 @@ import { FileUp, FileText, Settings2 } from "lucide-react";
 import { SelectOtaImageSection } from "../_components/select-ota-image-section";
 import { FirmwareDetailsSection } from "../_components/firmware-details-section";
 import { OtherDetailsSection } from "../_components/other-details-section";
+import type { OtaImageLockedFields } from "../_utils/ota-image-prefill";
+
+export interface UploadOtaImageSectionContentProps {
+  /** Fields filled from the selected image's header, which the section renders locked. */
+  lockedFields: OtaImageLockedFields;
+}
 
 export interface UploadOtaImageFormSection {
   id: string;
   Icon: LucideIcon;
   label: string;
-  Content: ComponentType;
+  Content: ComponentType<UploadOtaImageSectionContentProps>;
 }
 
 export function getUploadOtaImageSections(

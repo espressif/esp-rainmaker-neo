@@ -6,14 +6,18 @@
 
 import { useTranslation } from "react-i18next";
 import { OtaImageTextField } from "../ota-image-text-field";
+import type { UploadOtaImageSectionContentProps } from "../../_config/upload-ota-image-sections.config";
 
-export function OtherDetailsSection() {
+export function OtherDetailsSection({
+  lockedFields,
+}: UploadOtaImageSectionContentProps) {
   const { t } = useTranslation("ota-images");
 
   return (
     <div className="flex flex-col gap-6">
       <OtaImageTextField
         name="model"
+        locked={lockedFields.has("model")}
         label={t("fields.model.label", "Target model")}
         placeholder={t(
           "fields.model.placeholder",
@@ -22,6 +26,7 @@ export function OtherDetailsSection() {
       />
       <OtaImageTextField
         name="platform"
+        locked={lockedFields.has("platform")}
         label={t("fields.platform.label", "Platform")}
         placeholder={t(
           "fields.platform.placeholder",

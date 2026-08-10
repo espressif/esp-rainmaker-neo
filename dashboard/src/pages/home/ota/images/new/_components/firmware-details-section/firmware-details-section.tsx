@@ -6,8 +6,11 @@
 
 import { useTranslation } from "react-i18next";
 import { OtaImageTextField } from "../ota-image-text-field";
+import type { UploadOtaImageSectionContentProps } from "../../_config/upload-ota-image-sections.config";
 
-export function FirmwareDetailsSection() {
+export function FirmwareDetailsSection({
+  lockedFields,
+}: UploadOtaImageSectionContentProps) {
   const { t } = useTranslation("ota-images");
 
   return (
@@ -20,10 +23,15 @@ export function FirmwareDetailsSection() {
           "fields.name.placeholder",
           "e.g. light-sensor",
         )}
+        tooltip={t(
+          "fields.name.tooltip",
+          "We recommend a unique name — this is how the image is identified when you create an OTA job.",
+        )}
       />
       <OtaImageTextField
         name="version"
         required
+        locked={lockedFields.has("version")}
         label={t("fields.version.label", "Firmware version")}
         placeholder={t(
           "fields.version.placeholder",

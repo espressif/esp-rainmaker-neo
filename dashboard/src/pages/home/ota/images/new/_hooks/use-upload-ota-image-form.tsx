@@ -15,6 +15,7 @@ import {
 } from "../_schema/upload-ota-image-form.schema";
 import { getUploadOtaImageSections } from "../_config/upload-ota-image-sections.config";
 import { useUploadOtaImageOrchestration } from "./use-upload-ota-image-orchestration";
+import { useOtaImageExtraction } from "./use-ota-image-extraction";
 
 const DEFAULT_VALUES: UploadOtaImageFormValues = {
   firmwareFiles: [],
@@ -40,6 +41,8 @@ export function useUploadOtaImageForm() {
   });
 
   const sections = useMemo(() => getUploadOtaImageSections(t), [t]);
+
+  const { lockedFields } = useOtaImageExtraction(form);
 
   const {
     status,
@@ -86,6 +89,7 @@ export function useUploadOtaImageForm() {
     t,
     form,
     sections,
+    lockedFields,
     status,
     dialogOpen,
     errorMessage,
