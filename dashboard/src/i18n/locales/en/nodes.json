@@ -103,7 +103,8 @@
   },
   "noSearchResults": {
     "title": "No nodes found",
-    "description": "Try adjusting your search or filter to find the node you're looking for."
+    "description": "Try adjusting your search or filters, or generate new nodes to get started.",
+    "action": "Generate nodes"
   },
   "error": {
     "title": "Failed to load nodes",

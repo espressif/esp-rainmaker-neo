@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { defineConfig } from "./src/lib/app-config/define-config";
+import { defineConfig } from "./src/lib/app-config/define-config.ts";
 
 export default defineConfig({
   title: "ESP RainMaker Neo | Admin Dashboard",

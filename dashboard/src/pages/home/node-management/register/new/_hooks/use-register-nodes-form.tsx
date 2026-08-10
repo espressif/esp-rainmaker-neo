@@ -64,6 +64,14 @@ export function useRegisterNodesForm(initialCertificateFile?: File) {
     form.reset(DEFAULT_VALUES);
   }, [orchestration, form]);
 
+  const handleDialogOpenChange = useCallback(
+    (open: boolean) => {
+      if (open) {return;}
+      goToRegistrationJobs();
+    },
+    [goToRegistrationJobs],
+  );
+
   return {
     t,
     form,
@@ -73,7 +81,7 @@ export function useRegisterNodesForm(initialCertificateFile?: File) {
     isSubmitting:
       orchestration.isSubmitting || orchestration.processState.dialogOpen,
     handleSubmit,
-    handleDialogOpenChange: orchestration.handleDialogOpenChange,
+    handleDialogOpenChange,
     retryFrom: orchestration.retryFrom,
     closeDialog: orchestration.closeDialog,
     goToRegistrationJobs,

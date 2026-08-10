@@ -37,6 +37,7 @@
   },
   "errors": {
     "noMqttHost": "IoT endpoint not configured",
+    "countRequired": "Enter the number of nodes to generate.",
     "countInteger": "Enter a whole number of nodes.",
     "countMin": "Generate at least 1 node.",
     "countMax": "Maximum 20 nodes per batch."

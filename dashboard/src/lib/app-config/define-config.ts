@@ -1,4 +1,4 @@
-import type { AppConfig } from './types';
+import type { AppConfig } from './types.ts';
 
 /**
  * Define application configuration with type safety

@@ -37,6 +37,7 @@
   },
   "errors": {
     "noMqttHost": "未配置 IoT 端点",
+    "countRequired": "请输入要生成的节点数量。",
     "countInteger": "请输入整数个节点。",
     "countMin": "至少生成 1 个节点。",
     "countMax": "每批最多 20 个节点。"
