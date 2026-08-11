@@ -31,11 +31,50 @@ env:
   PYTHON_VERSION: "3.12"
 
 jobs:
+  # Single diff computed once and shared via needs:/outputs
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.filter.outputs.go }}
+      python_cdk: ${{ steps.filter.outputs.python_cdk }}
+      dashboard: ${{ steps.filter.outputs.dashboard }}
+      api_docs: ${{ steps.filter.outputs.api_docs }}
+      mqtt: ${{ steps.filter.outputs.mqtt }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Diff against base
+        id: filter
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+            echo "python_cdk=true" >> "$GITHUB_OUTPUT"
+            echo "dashboard=true" >> "$GITHUB_OUTPUT"
+            echo "api_docs=true" >> "$GITHUB_OUTPUT"
+            echo "mqtt=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # merge-base, not the base tip: unrelated commits landing on main
+          # while the PR is open must not re-trigger every job.
+          base="$(git merge-base "origin/${{ github.base_ref }}" HEAD)"
+          # Pathspecs are git wildmatch, where '*' already crosses '/', so
+          # '*.go' covers top-level files too — '**/*.go' would miss them.
+          check() { git diff --quiet "$base" -- "$@" && echo false || echo true; }
+          echo "go=$(check '*.go' go.mod go.sum go.work go.work.sum Makefile src/esp-cloud-common)" >> "$GITHUB_OUTPUT"
+          echo "python_cdk=$(check '*.py' requirements.txt cdk.json Stackfile.yaml deployment/docker/Dockerfile Makefile)" >> "$GITHUB_OUTPUT"
+          echo "dashboard=$(check 'dashboard/**')" >> "$GITHUB_OUTPUT"
+          echo "api_docs=$(check 'docs/api/**')" >> "$GITHUB_OUTPUT"
+          echo "mqtt=$(check docs/api/MQTT_*.yaml docs/api/Push_*.yaml)" >> "$GITHUB_OUTPUT"
+
   # Ginkgo across all three go.work modules. `make test` delegates to each
   # submodule's own `make test` (TEST_SUBMODULES) because ginkgo's package
   # discovery stops at Go module boundaries.
   unittest:
     name: Unit tests
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -57,14 +96,32 @@ jobs:
         with:
           name: coverage
           path: |
-            coverage.xml
+            build/coverage/coverage.xml
             build/tests/
           if-no-files-found: ignore
+
+  # Static analysis via the rmng-lint tooling. Non-blocking, same as GitLab's go_lint.
+  go_lint:
+    name: Go lint
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make lint
 
   # govulncheck, scanned per module because it does not cross go.work boundaries.
   # Blocking, same as GitLab's go_vulncheck.
   vulncheck:
     name: govulncheck
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -81,6 +138,8 @@ jobs:
   # dashboard job below covers those.
   cdk_synth:
     name: CDK synth
+    needs: changes
+    if: needs.changes.outputs.python_cdk == 'true'
     runs-on: ubuntu-latest
     env:
       CDK_PUBLISH: "true"
@@ -118,6 +177,8 @@ jobs:
   # reused for the npm ci + build so the build invocation stays in one place.
   dashboard:
     name: Admin dashboard
+    needs: changes
+    if: needs.changes.outputs.dashboard == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -140,6 +201,8 @@ jobs:
   # Schema validation for the published API definitions.
   api_docs:
     name: API definitions
+    needs: changes
+    if: needs.changes.outputs.api_docs == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -150,11 +213,20 @@ jobs:
         run: |
           npx --yes @apidevtools/swagger-cli validate docs/api/Api_Swagger.yaml
           npx --yes @apidevtools/swagger-cli validate docs/api/User_Api_Swagger.yaml
+      # A bare `npx --yes @asyncapi/cli` resolves @asyncapi/generator@3.4.0, which
+      # pins @asyncapi/generator-hooks@0.1.1 — a version never published to npm —
+      # so the install dies with ETARGET. Installing into a scratch package.json
+      # lets an npm override pull the hooks package back to a version that exists.
       - name: Validate AsyncAPI
+        if: needs.changes.outputs.mqtt == 'true'
+        working-directory: ${{ runner.temp }}
         run: |
-          npx --yes @asyncapi/cli validate docs/api/MQTT_Node.yaml
-          npx --yes @asyncapi/cli validate docs/api/MQTT_User.yaml
-          npx --yes @asyncapi/cli validate docs/api/Push_User.yaml
+          npm init --yes >/dev/null
+          npm pkg set overrides.@asyncapi/generator-hooks=0.1.0
+          npm install --no-save @asyncapi/cli@6.0.0
+          for spec in MQTT_Node MQTT_User Push_User; do
+            npx @asyncapi/cli validate "$GITHUB_WORKSPACE/docs/api/$spec.yaml"
+          done
 
   # Working-tree secret scan, configured by .gitleaks.toml.
   #
