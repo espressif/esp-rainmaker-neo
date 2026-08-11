@@ -410,6 +410,66 @@ var _ = Describe("Group", func() {
 			Expect(rmerror.ErrorWithStack(err)).To(ContainSubstring("node is not in the group"))
 		})
 
+		addSubGroup := func(subGroupID string) error {
+			_, err := group.UpdateNodeAndSubgroup(rmng_context, testGroup.GroupID, nodeID, subGroupID, group_node_db.SubGroupOperationTypeAdd)
+			return err
+		}
+		removeSubGroup := func(subGroupID string) error {
+			_, err := group.UpdateNodeAndSubgroup(rmng_context, testGroup.GroupID, nodeID, subGroupID, group_node_db.SubGroupOperationTypeRemove)
+			return err
+		}
+		occupiedSlots := func() []string {
+			item := getGroupDeviceMappingItem(testGroup.GroupID, nodeID)
+			Expect(item).ToNot(BeNil())
+			var out []string
+			for _, slot := range []string{"subgrp1", "subgrp2", "subgrp3"} {
+				if s, ok := item[slot].(*types.AttributeValueMemberS); ok {
+					out = append(out, s.Value)
+				}
+			}
+			return out
+		}
+
+		It("should not write a duplicate tag when the same subgroup is added twice", func() {
+			Expect(addSubGroup(subGroup1.SubGroupID)).To(Succeed())
+			Expect(addSubGroup(subGroup1.SubGroupID)).To(Succeed(), "re-adding is idempotent, not an error")
+			Expect(occupiedSlots()).To(ConsistOf(subGroup1.SubGroupID))
+		})
+
+		// The owner believing a device is revoked while the subgroup's members still see it is the
+		// user-visible consequence, so it is asserted through the member's own listing.
+		It("should hide the node from a subgroup member once it is removed", func() {
+			Expect(addSubGroup(subGroup1.SubGroupID)).To(Succeed())
+			Expect(addSubGroup(subGroup1.SubGroupID)).To(Succeed())
+			Expect(occupiedSlots()).To(ConsistOf(subGroup1.SubGroupID))
+
+			member := user.NewUser("subgroup-tag-member")
+			ShareAndApproveSubGroup(rmng_context, rmngctx.NewRmngContext(member), testGroup.GroupID, subGroup1.SubGroupID)
+
+			memberGroups, err := group.ListGroupsForUser(rmngctx.NewRmngContext(user.NewUser(member.GetID())), true)
+			Expect(err).To(BeNil())
+			Expect(group_node_db.GetNodeIDs(memberGroups[0].NodeGroupEntries)).To(ConsistOf(nodeID))
+
+			Expect(removeSubGroup(subGroup1.SubGroupID)).To(Succeed())
+
+			memberGroups, err = group.ListGroupsForUser(rmngctx.NewRmngContext(user.NewUser(member.GetID())), true)
+			Expect(err).To(BeNil())
+			Expect(group_node_db.GetNodeIDs(memberGroups[0].NodeGroupEntries)).To(BeEmpty(),
+				"the owner revoked the node, so the subgroup member must lose it")
+		})
+
+		It("should leave other subgroups untouched when one is removed", func() {
+			Expect(addSubGroup(subGroup1.SubGroupID)).To(Succeed())
+			Expect(addSubGroup(subGroup2.SubGroupID)).To(Succeed())
+			Expect(removeSubGroup(subGroup1.SubGroupID)).To(Succeed())
+			Expect(occupiedSlots()).To(ConsistOf(subGroup2.SubGroupID))
+		})
+
+		It("should still reject removing a subgroup the node is not in", func() {
+			Expect(addSubGroup(subGroup1.SubGroupID)).To(Succeed())
+			Expect(removeSubGroup(subGroup2.SubGroupID)).To(HaveOccurred())
+		})
+
 		It("should return correct nodes when LoadNodes is called", func() {
 			moreNodeIDs := []string{"node2", "node3", "node4"}
 			for _, nid := range moreNodeIDs {

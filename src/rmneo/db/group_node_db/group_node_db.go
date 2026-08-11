@@ -420,7 +420,16 @@ func (g *GroupNodeDB) UpdateSubGroup(groupID, nodeID, subGroupID string, operati
 			return NodesGroups{}, rmerror.NewRMError(nil, "node is not in the specified subgroup")
 		}
 	} else {
-		updateExpression, expressionAttributeNames, expressionAttributeValues = getAddSubGroupExpression(groupNodeEntry, subGroupID)
+		var alreadyPresent bool
+		updateExpression, expressionAttributeNames, expressionAttributeValues, alreadyPresent = getAddSubGroupExpression(groupNodeEntry, subGroupID)
+		if alreadyPresent {
+			// Idempotent: the node is already in this subgroup, so report the current state rather than writing a duplicate tag.
+			var current GroupNode
+			if err := attributevalue.UnmarshalMap(groupNodeEntry, &current); err != nil {
+				return NodesGroups{}, rmerror.NewRMError(err, "failed to unmarshal group node")
+			}
+			return current.toNodesGroups(), nil
+		}
 		if updateExpression == "" {
 			return NodesGroups{}, rmerror.NewRMError(nil, "node is already in 3 subgroups")
 		}
@@ -462,9 +471,16 @@ func getRemoveSubGroupExpression(item map[string]types.AttributeValue, subGroupI
 	return "", nil
 }
 
-func getAddSubGroupExpression(item map[string]types.AttributeValue, subGroupID string) (string, map[string]string, map[string]types.AttributeValue) {
-	// Add the subgroup to first available slot
+// getAddSubGroupExpression puts subGroupID in the first free slot. alreadyPresent is true when the node is already tagged with it, in which case there is nothing to write — a second tag for the same subgroup would survive a removal, which clears only the slot it finds first.
+func getAddSubGroupExpression(item map[string]types.AttributeValue, subGroupID string) (expr string, names map[string]string, values map[string]types.AttributeValue, alreadyPresent bool) {
 	subgroups := []string{"subgrp1", "subgrp2", "subgrp3"}
+	for _, subgroup := range subgroups {
+		if s, ok := item[subgroup].(*types.AttributeValueMemberS); ok && s.Value == subGroupID {
+			return "", nil, nil, true
+		}
+	}
+
+	// Add the subgroup to first available slot
 	for _, subgroup := range subgroups {
 		if _, exists := item[subgroup]; !exists {
 			updateExpression := fmt.Sprintf("SET #%s = :%s", subgroup, subgroup)
@@ -474,10 +490,10 @@ func getAddSubGroupExpression(item map[string]types.AttributeValue, subGroupID s
 			expressionAttributeNames := map[string]string{
 				fmt.Sprintf("#%s", subgroup): subgroup,
 			}
-			return updateExpression, expressionAttributeNames, expressionAttributeValues
+			return updateExpression, expressionAttributeNames, expressionAttributeValues, false
 		}
 	}
-	return "", nil, nil
+	return "", nil, nil, false
 }
 
 // GetNodeIDByAlias resolves an alias to a node_id by querying the group_device_mapping table.
