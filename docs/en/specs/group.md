@@ -22,6 +22,8 @@ Groups simplify user access control: what nodes a user can reach is scoped by th
   - Can update group/subgroup names
   - Can delete group
   - Can share/unshare group/subgroups with others
+  - Can obtain a device NOC for the group's Matter fabric
+  - Receives the group's Matter fabric material (root CA, IPK, CAT ids)
   
 - **Secondary Access**: Limited access to group
   - Can create subgroups
@@ -30,6 +32,8 @@ Groups simplify user access control: what nodes a user can reach is scoped by th
   - Can update group/subgroup names
   - Cannot delete group
   - Cannot share/unshare group/subgroups
+  - Cannot obtain a device NOC
+  - Receives the group's Matter fabric material (root CA, IPK, CAT ids)
   
 - **Sub-entity Access**: Access only to specific subgroups
   - Can update subgroup names
@@ -38,6 +42,14 @@ Groups simplify user access control: what nodes a user can reach is scoped by th
   - Cannot add/remove nodes
   - Cannot delete subgroups
   - Cannot share/unshare subgroups
+  - Cannot obtain a device NOC
+  - Does not receive the group's Matter fabric material; the capability is reported as enabled but its data is withheld
+
+### Matter device NOC
+
+Issuing a device NOC places a new identity in the group's Matter fabric, so it requires the same permission as adding a node to the group — primary access. Both steps of the association flow enforce it: the certificate is handed out at verify, not at confirm, so verify checks the permission rather than relying on the later step.
+
+Matter access control is fabric-wide, so a certificate signed by the group's fabric root CA is not contained by the subgroup boundary. That is why sub-entity members are refused, and why the fabric material is withheld from them in group listings.
 
 ## Naming rules
 

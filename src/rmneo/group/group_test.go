@@ -2541,3 +2541,107 @@ var _ = Describe("unshare capability hook ordering", func() {
 		})).To(BeNil())
 	})
 })
+
+var _ = Describe("Matter fabric access", func() {
+	var owner, secondary, subMember *user.User
+	var ctxOwner *rmngctx.RmngContext
+	var groupID, subID string
+
+	BeforeEach(func() {
+		test_utils.TestSetup()
+		owner = user.NewUser("mf-owner")
+		secondary = user.NewUser("mf-secondary")
+		subMember = user.NewUser("mf-sub")
+		ctxOwner = rmngctx.NewRmngContext(owner)
+
+		g, err := group.CreateGroupForUserWithOptions(ctxOwner, "Fabric",
+			&group.CreateGroupOptions{Capabilities: []string{group.MatterCapabilityName}})
+		Expect(err).To(BeNil())
+		groupID = g.GroupID
+
+		sub, err := group.CreateSubGroup(ctxOwner, groupID, "Kitchen")
+		Expect(err).To(BeNil())
+		subID = sub.SubGroupID
+	})
+
+	freshCtx := func(u *user.User) *rmngctx.RmngContext {
+		return rmngctx.NewRmngContext(user.NewUser(u.GetID()))
+	}
+
+	// The MatterGroup carries the fabric's Root CA private key, and the membership lookup behind it accepts a subgroup-scoped row, so the gate has to be group-level.
+	Describe("LoadMatterGroupFromGrpID", func() {
+		It("refuses to load the fabric for a subgroup-only member", func() {
+			ShareAndApproveSubGroup(ctxOwner, freshCtx(subMember), groupID, subID)
+
+			mg, err := group.LoadMatterGroupFromGrpID(freshCtx(subMember), groupID)
+			Expect(err).To(HaveOccurred())
+			Expect(mg).To(BeNil())
+		})
+
+		It("refuses to load the fabric for a non-member", func() {
+			stranger := user.NewUser("mf-stranger")
+			mg, err := group.LoadMatterGroupFromGrpID(freshCtx(stranger), groupID)
+			Expect(err).To(HaveOccurred())
+			Expect(mg).To(BeNil())
+		})
+
+		It("still loads the fabric for the primary owner", func() {
+			mg, err := group.LoadMatterGroupFromGrpID(freshCtx(owner), groupID)
+			Expect(err).To(BeNil())
+			Expect(mg).ToNot(BeNil())
+			Expect(mg.MatterData.RootCAPrivateKey).ToNot(BeEmpty())
+			Expect(mg.MatterData.FabricID).ToNot(BeEmpty())
+			Expect(mg.AccessType).To(Equal(utils.GroupPrimaryAccess))
+		})
+
+		It("still loads the fabric for a secondary member", func() {
+			ShareAndApproveGroup(ctxOwner, freshCtx(secondary), groupID, utils.GroupSecondaryAccess)
+			mg, err := group.LoadMatterGroupFromGrpID(freshCtx(secondary), groupID)
+			Expect(err).To(BeNil())
+			Expect(mg).ToNot(BeNil())
+			Expect(mg.AccessType).To(Equal(utils.GroupSecondaryAccess))
+		})
+
+		It("still rejects a group without the matter capability", func() {
+			plain, err := group.CreateGroupForUser(ctxOwner, "Plain")
+			Expect(err).To(BeNil())
+			_, err = group.LoadMatterGroupFromGrpID(freshCtx(owner), plain.GroupID)
+			Expect(err).To(MatchError(ContainSubstring("Matter capability")))
+		})
+	})
+
+	// Group listings feed CapabilityData straight into the response, and never go through the loader above, so the fabric material has to be withheld there too.
+	Describe("fabric material in group listings", func() {
+		fabricDataFor := func(u *user.User) map[string]interface{} {
+			groups, err := group.ListGroupsForUser(freshCtx(u), false)
+			Expect(err).To(BeNil())
+			Expect(groups).To(HaveLen(1))
+			return groups[0].CapabilityData[group.MatterCapabilityName]
+		}
+
+		It("withholds the fabric material from a subgroup-only member", func() {
+			ShareAndApproveSubGroup(ctxOwner, freshCtx(subMember), groupID, subID)
+			Expect(fabricDataFor(subMember)).To(BeEmpty(),
+				"ipk, root_ca and the CAT ids must not reach a subgroup-scoped member")
+		})
+
+		It("still reports the capability name to a subgroup-only member", func() {
+			ShareAndApproveSubGroup(ctxOwner, freshCtx(subMember), groupID, subID)
+			groups, err := group.ListGroupsForUser(freshCtx(subMember), false)
+			Expect(err).To(BeNil())
+			Expect(groups[0].Capabilities).To(ContainElement(group.MatterCapabilityName))
+		})
+
+		It("still gives the owner the fabric material", func() {
+			data := fabricDataFor(owner)
+			Expect(data).ToNot(BeEmpty())
+			Expect(data["ipk"]).ToNot(BeEmpty())
+			Expect(data["root_ca"]).ToNot(BeEmpty())
+		})
+
+		It("still gives a secondary member the fabric material", func() {
+			ShareAndApproveGroup(ctxOwner, freshCtx(secondary), groupID, utils.GroupSecondaryAccess)
+			Expect(fabricDataFor(secondary)).ToNot(BeEmpty())
+		})
+	})
+})
