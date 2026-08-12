@@ -92,12 +92,18 @@ func (h *ESPUserTokenHarness) Mint(userID string) string {
 // sub and share an auth-event id, so a receiver pairing them accepts the two together.
 // Two calls yield two distinct sign-ins, which is what a mismatch spec needs.
 func (h *ESPUserTokenHarness) MintPair(userID string) (accessToken, idToken string) {
+	return h.MintPairForClient(userID, "rm_mobile")
+}
+
+// MintPairForClient is MintPair for a named client, so a spec can present a pair minted for an
+// audience other than the first-party one (a voice-assistant or MCP token).
+func (h *ESPUserTokenHarness) MintPairForClient(userID, clientID string) (accessToken, idToken string) {
 	authEventID := jwtutil.NewAuthEventID()
 
-	access, err := h.minter.AccessToken(userID, "rm_mobile", "openid", authEventID, jwtutil.Contact{})
+	access, err := h.minter.AccessToken(userID, clientID, "openid", authEventID, jwtutil.Contact{})
 	gomega.Expect(err).NotTo(gomega.HaveOccurred())
 
-	id, err := h.minter.IDToken(userID, "rm_mobile", authEventID, jwtutil.Contact{})
+	id, err := h.minter.IDToken(userID, clientID, authEventID, jwtutil.Contact{})
 	gomega.Expect(err).NotTo(gomega.HaveOccurred())
 
 	return access, id
