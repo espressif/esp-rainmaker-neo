@@ -11,6 +11,7 @@ import (
 	"net/http"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/sharing_request_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
@@ -240,6 +241,12 @@ func handleAcceptSharingRequest(context context.Context, request events.APIGatew
 	err := group.ApproveSharingRequest(ctx, requestID)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Send()
+		if errors.Is(err, sharing_request_db.ErrSharingRequestNotFound) {
+			return utils.APIGwRespJSON(http.StatusNotFound, utils.NewAPIStatus("Sharing request not found")), nil
+		}
+		if errors.Is(err, sharing_request_db.ErrSharingRequestExpired) {
+			return utils.APIGwRespJSON(http.StatusGone, utils.NewAPIStatus("Sharing request has expired")), nil
+		}
 		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Failed to accept sharing request")), nil
 	}
 	return utils.APIGwRespJSON(http.StatusOK, utils.NewAPIStatus("Request accepted successfully")), nil

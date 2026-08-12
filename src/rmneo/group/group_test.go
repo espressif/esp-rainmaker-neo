@@ -10,12 +10,15 @@ import (
 	"errors"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/sharing_request_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_group_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/ids"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"reflect"
 	"sort"
+	"strconv"
+	"time"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
@@ -1663,6 +1666,77 @@ var _ = Describe("Group Sharing", func() {
 			})
 		})
 	})
+
+	// Requests carry a 24-hour expiration_time and the table declares it as its TTL attribute,
+	// but DynamoDB's sweep is only "typically within 48 hours" — so nothing but an explicit
+	// clock comparison keeps an invite inside the window it advertises.
+	Describe("Sharing request expiry", func() {
+		var expiryOwner *rmngctx.RmngContext
+		var expiryGroupID string
+
+		BeforeEach(func() {
+			expiryOwner = rmngctx.NewRmngContext(user.NewUser("ex-owner"))
+			g, err := group.CreateGroupForUser(expiryOwner, "House")
+			Expect(err).To(BeNil())
+			expiryGroupID = g.GroupID
+		})
+
+		inviteeCtx := func() *rmngctx.RmngContext {
+			return rmngctx.NewRmngContext(user.NewUser("ex-invitee"))
+		}
+
+		share := func() string {
+			reqID, err := group.ShareGroup(expiryOwner, expiryGroupID, "ex-invitee", utils.GroupSecondaryAccess, auth.UserInfo{})
+			Expect(err).To(BeNil())
+			return reqID
+		}
+
+		backdate := func(requestID string) {
+			_, err := awscommon.GetDynamoDBClient().UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+				TableName: aws.String(sharing_request_db.SharingRequestsTable),
+				Key: map[string]types.AttributeValue{
+					"user_id":            &types.AttributeValueMemberS{Value: "ex-invitee"},
+					"sharing_request_id": &types.AttributeValueMemberS{Value: requestID},
+				},
+				UpdateExpression: aws.String("SET expiration_time = :t"),
+				ExpressionAttributeValues: map[string]types.AttributeValue{
+					":t": &types.AttributeValueMemberN{Value: strconv.FormatInt(time.Now().Add(-time.Hour).Unix(), 10)},
+				},
+			})
+			Expect(err).To(BeNil())
+		}
+
+		It("should hide an expired request from the recipient's inbox", func() {
+			backdate(share())
+			Expect(group.GetMySharingRequests(inviteeCtx())).To(BeEmpty())
+		})
+
+		It("should refuse to approve an expired request", func() {
+			reqID := share()
+			backdate(reqID)
+			err := group.ApproveSharingRequest(inviteeCtx(), reqID)
+			Expect(errors.Is(err, sharing_request_db.ErrSharingRequestExpired)).To(BeTrue(), "got %v", err)
+		})
+
+		// UnmarshalMap(nil, ...) succeeds, so without an explicit nil check a missing id came
+		// back as a zero-valued request with no error.
+		It("should report a missing request as not found rather than succeeding", func() {
+			err := group.ApproveSharingRequest(inviteeCtx(), "no-such-request-id")
+			Expect(errors.Is(err, sharing_request_db.ErrSharingRequestNotFound)).To(BeTrue(), "got %v", err)
+		})
+
+		It("should still approve a request inside its window", func() {
+			Expect(group.ApproveSharingRequest(inviteeCtx(), share())).To(Succeed())
+		})
+
+		It("should still list a request inside its window", func() {
+			share()
+			reqs, err := group.GetMySharingRequests(inviteeCtx())
+			Expect(err).To(BeNil())
+			Expect(reqs).To(HaveLen(1))
+		})
+	})
+
 })
 
 var _ = Describe("ListUsersForGroupOrSubGroup", func() {
