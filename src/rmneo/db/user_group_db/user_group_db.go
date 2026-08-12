@@ -553,6 +553,11 @@ func (db *UserGroupDB) RemoveUserFromGroup(groupID string, userID string) error 
 		}
 	}
 
+	return db.removeUserFromGroupAuthorized(groupID, userID)
+}
+
+// removeUserFromGroupAuthorized deletes a user's mapping row without any authorization check. Per the "Authorized" suffix convention the caller must have enforced its own check first — used by the subgroup-cleanup path, which is gated on GroupDeleteSubGroup rather than GroupShare.
+func (db *UserGroupDB) removeUserFromGroupAuthorized(groupID string, userID string) error {
 	queryInput := &dynamodb.QueryInput{
 		TableName:              aws.String(UserGroupMappingTable),
 		IndexName:              aws.String(UserGroupMappingByGroupIDIndex),
@@ -632,7 +637,8 @@ func (db *UserGroupDB) removeSubGroupFromUser(userID, groupID, subGroupID string
 	if len(newSubEntities) == 0 {
 		// This was the user's only subgroup — remove the entire mapping row.
 		// Use the auth-free variant; the caller already enforced authorization.
-		return db.RemoveUserFromGroup(groupID, userID)
+		// (RemoveUserFromGroup would re-check GroupShare, which the subgroup-delete caller does not hold — that mismatch used to abort the cleanup and leave the member with a mapping row pointing at a deleted subgroup.)
+		return db.removeUserFromGroupAuthorized(groupID, userID)
 	}
 
 	expr, err := expression.NewBuilder().

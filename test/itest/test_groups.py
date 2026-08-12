@@ -940,3 +940,36 @@ def test_remove_foreign_node_from_foreign_subgroup_denied(two_tenants):
     assert resp.status_code >= 400, (
         f"Removed a foreign node from a foreign subgroup returned {resp.status_code}: {resp.text[:150]}"
     )
+
+
+def test_subgroup_delete_by_secondary_removes_member_mapping(test_user1, test_user2, test_user3):
+    """A secondary's subgroup delete must also scrub the subgroup from its members.
+
+    The cleanup went through a path re-checking group:share, which a secondary does not hold —
+    so it aborted and the member kept a row naming a subgroup that no longer exists, which
+    still listed the parent group for them.
+    """
+    owner_api = Group(test_user1)
+    group_id = owner_api.create_group("Subgroup Delete Cleanup Test")
+    try:
+        subgroup_id = owner_api.create_subgroup(group_id, "Kitchen")
+
+        owner_api.share_group(group_id, test_user2.username, "secondary")
+        accept_sharing_request_for(test_user2, group_id, "")
+        owner_api.share_subgroup(group_id, subgroup_id, test_user3.username)
+        accept_sharing_request_for(test_user3, group_id, subgroup_id)
+
+        member_api = Group(test_user3)
+        assert any(g["group_id"] == group_id for g in member_api.list_groups().get("groups", [])), \
+            "the subgroup member should see the parent group before the delete"
+
+        # The secondary deletes the subgroup.
+        Group(test_user2).delete_subgroup(group_id, subgroup_id)
+
+        visible = [g["group_id"] for g in member_api.list_groups().get("groups", [])]
+        assert group_id not in visible, (
+            "the member's only subgroup was deleted, so their mapping must go with it; "
+            f"still visible: {visible}"
+        )
+    finally:
+        owner_api.delete_group(group_id, warn_error=True)
