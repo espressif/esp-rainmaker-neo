@@ -87,12 +87,12 @@ func NewUserDetailsDB(ctx *rmngctx.RmngContext) *UserDetailsDB {
 }
 
 type UserDetailsEntry struct {
-	UserID       string `dynamodbav:"user_id"`
-	UserType     string `dynamodbav:"user_type,omitempty"`
-	Provider     string `dynamodbav:"provider,omitempty"`
-	Email        string `dynamodbav:"email,omitempty"`
-	PhoneNumber  string `dynamodbav:"phone,omitempty"`
-	Sub          string `dynamodbav:"sub,omitempty"` // Just for third party providers like Google, Facebook, etc.
+	UserID      string `dynamodbav:"user_id"`
+	UserType    string `dynamodbav:"user_type,omitempty"`
+	Provider    string `dynamodbav:"provider,omitempty"`
+	Email       string `dynamodbav:"email,omitempty"`
+	PhoneNumber string `dynamodbav:"phone,omitempty"`
+	Sub         string `dynamodbav:"sub,omitempty"` // Just for third party providers like Google, Facebook, etc.
 
 	Name    string `dynamodbav:"name,omitempty"`
 	Locale  string `dynamodbav:"locale,omitempty"`

@@ -9,6 +9,7 @@ package identity_providers_db
 
 import (
 	"errors"
+
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/espdynamodb"
@@ -26,6 +27,8 @@ const (
 
 	TypeOIDC = "oidc"
 	TypeOTP  = "otp"
+
+	InbuiltProviderName = "cognito"
 )
 
 var ErrProviderNotFound = errors.New("identity provider not found")
@@ -69,6 +72,8 @@ func (p *ProviderEntry) GetHKey() string { return identityProvidersHashKey }
 func (p *ProviderEntry) GetRKey() string { return "" }
 
 func (p *ProviderEntry) IsEnabled() bool { return p.Enabled != nil && *p.Enabled }
+
+func (p *ProviderEntry) IsInbuilt() bool { return p.ProviderName == InbuiltProviderName }
 
 // OffersPasswordGrant reports whether the legacy password surface can authenticate against this
 // provider. Unset counts as no, so a half-written row cannot expose a password endpoint.

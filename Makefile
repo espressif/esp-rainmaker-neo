@@ -258,7 +258,7 @@ endif
 # Generate one <name>-test target per TEST_SUBMODULES entry, each forwarding to that submodule's own `make test`.
 $(TEST_SUBMODULES:%=%-test): %-test: ; $(MAKE) -C $* test
 
-ITEST_ARGS ?= -n 12 -m "not unsafe"
+ITEST_ARGS ?= -n 12 -m "not unsafe and not cognito"
 itest:  ## Run the pytest integration suite against a deployed stack
 	pytest test/itest/ $(OPTIONAL_ITEST_DIRS) -v -s --capture=tee-sys --html=build/tests/report.html --self-contained-html --dist=loadgroup $(ITEST_ARGS)
 

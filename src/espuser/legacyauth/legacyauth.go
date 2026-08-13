@@ -12,8 +12,9 @@ package legacyauth
 import (
 	"context"
 	"errors"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"strings"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/cognitoutil"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
@@ -34,11 +35,25 @@ const legacyScope = "openid email phone"
 type Service struct {
 	cognito *cognitoutil.CognitoService
 	oauth   *auth.OAuthUserAuthService
+
+	providerName string
+}
+
+// IsRainMakerProvider reports whether the resolved provider is RainMaker's own, so user-facing
+// messages may name the product.
+func (s *Service) IsRainMakerProvider() bool {
+	return strings.EqualFold(s.providerName, "rainmaker")
 }
 
 // ErrNoPasswordProvider means no enabled provider advertises a password client, so this surface has
 // nothing to authenticate against.
 var ErrNoPasswordProvider = errors.New("legacyauth: no enabled provider offers a password grant")
+var ErrUserNotConfirmed = errors.New("legacyauth: account is not confirmed")
+
+// ErrAccountAlreadyUsable means a duplicate signup authenticated an existing confirmed account, so
+// the caller owns it and should sign in rather than wait for a verification code. Not a failure —
+// the handler still answers 201, only with a different message.
+var ErrAccountAlreadyUsable = errors.New("legacyauth: account already exists and is usable")
 
 // NewService resolves the password app client from the provider registry, so the upstream may live in
 // any account and needs no deployment wiring here.
@@ -66,8 +81,9 @@ func NewService(ctx context.Context) (*Service, error) {
 	return &Service{
 		// The provider's pool may live in another region than this deployment; InitiateAuth must
 		// reach that region's Cognito endpoint, so the client is built for the issuer's region.
-		cognito: cognitoutil.NewAppClientServiceForRegion(provider.ClientID, provider.ClientSecret, regionFromCognitoIssuer(provider.Issuer)),
-		oauth:   oauth,
+		cognito:      cognitoutil.NewAppClientServiceForRegion(provider.ClientID, provider.ClientSecret, regionFromCognitoIssuer(provider.Issuer)),
+		oauth:        oauth,
+		providerName: provider.ProviderName,
 	}, nil
 }
 
@@ -93,6 +109,9 @@ func (s *Service) SigninWithPassword(ctx context.Context, username, password str
 	}
 	login, err := s.cognito.InitiateAuth(ctx, &cognitoutil.LoginRequest{Username: username, Password: password})
 	if err != nil || !login.Success {
+		if auth.IsUserNotConfirmedError(err) {
+			return nil, ErrUserNotConfirmed
+		}
 		return nil, rmerror.NewRMError(err, "authentication failed")
 	}
 	email, phone, err := verifiedContacts(login.IDToken)
@@ -124,8 +143,16 @@ func (s *Service) Signup(ctx context.Context, email, phone, password string) err
 	}
 	if _, err := s.cognito.SignUp(ctx, username, email, phone, password); err != nil {
 		if auth.IsUserAlreadyExistsError(err) {
-			// Confirmed accounts get no code (the provider refuses the resend);
-			// dropped either way so the response never says the account exists.
+			// The account exists. InitiateAuth with the submitted password tells the states apart:
+			login, authErr := s.cognito.InitiateAuth(ctx, &cognitoutil.LoginRequest{Username: username, Password: password})
+			if authErr == nil && login.Success {
+				// Confirmed account, correct password: the caller owns it, so route to sign-in
+				// rather than mail a code they cannot use.
+				return ErrAccountAlreadyUsable
+			}
+			// Unconfirmed (correct password), or an incorrect password (either state): resend the
+			// code, so an owner who cannot supply the password can still recover. The dropped error
+			// and uniform 201 keep the response from revealing that the account exists.
 			_ = s.cognito.ResendSignupCode(ctx, username)
 			return nil
 		}
@@ -136,8 +163,8 @@ func (s *Service) Signup(ctx context.Context, email, phone, password string) err
 
 func (s *Service) VerifySignup(ctx context.Context, username, code string) error {
 	if err := s.cognito.ConfirmSignUp(ctx, username, code); err != nil {
-		// Unknown user fails exactly like a wrong code, so the answer never says
-		// whether the account exists.
+		// One answer for every failure, unknown user included — Cognito checks the code before the
+		// account state, so nothing more specific is knowable here.
 		return rmerror.NewRMError(err, "verification failed")
 	}
 	return nil

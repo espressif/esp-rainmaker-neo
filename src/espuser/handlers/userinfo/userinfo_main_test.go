@@ -57,11 +57,11 @@ var _ = Describe("OIDC userinfo endpoint", func() {
 	seedUser := func(userID, email, phone, scope string) string {
 		db := user_details_db.NewUserDetailsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
 		Expect(db.CreateUserDetails(&user_details_db.UserDetailsEntry{
-			UserID:       userID,
-			Email:        email,
-			PhoneNumber:  phone,
-			UserType:     user_details_db.UserTypeUser,
-			Provider:     user_details_db.ProviderOIDC,
+			UserID:      userID,
+			Email:       email,
+			PhoneNumber: phone,
+			UserType:    user_details_db.UserTypeUser,
+			Provider:    user_details_db.ProviderOIDC,
 		})).To(Succeed())
 
 		// Mirror production: the token carries scope-gated contact claims (see resolveTokenContact), which is what userinfo reflects back — no DB read at the userinfo endpoint.
