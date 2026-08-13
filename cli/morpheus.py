@@ -668,7 +668,6 @@ def handle_user_commands(user):
                 print("    matter_assoc <group_id> initiate")
                 print("    matter_assoc <group_id> verify <nocsr_hex> <challenge_hex> <sig_hex> [request_id]")
                 print("    matter_assoc <group_id> confirm [request_id] [capabilities]")
-                print("    matter_assoc <group_id> confirm <request_id> acc")
         elif main_command == 'matter_get_noc':
             if len(args) == 1:
                 handle_matter_get_noc(user, args[0])

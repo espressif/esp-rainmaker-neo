@@ -383,14 +383,14 @@ paths:
                   items:
                     type: string
                   description:
-                    List of capabilities to enable for the node (e.g., ["acc"])
+                    List of capabilities to enable for the node
             examples:
               withCapabilities:
                 summary: "Confirm with capabilities"
                 description: |
                   Confirms the node association and invokes capability lambdas for each requested capability.
                 value:
-                  capabilities: ["acc"]
+                  capabilities: ["custom_cap"]
               withoutCapabilities:
                 summary: "Confirm without capabilities"
                 description: |
@@ -930,7 +930,7 @@ paths:
                           group_cat_id_admin: "01000001"
                           group_cat_id_operate: "06000001"
                 groupsWithCapabilities:
-                  summary: Groups with node capabilities (e.g., ACC)
+                  summary: Groups with node capabilities
                   value:
                     groups:
                       - group_id: "grp_abc123"
@@ -941,9 +941,9 @@ paths:
                           - "node2"
                         node_details:
                           node1:
-                            capabilities: ["rmng", "matter", "acc"]
+                            capabilities: ["rmng", "matter", "custom_cap"]
                             capability_details:
-                              acc:
+                              custom_cap:
                                 endpoint_id: "de152ff2-f070-4d0e-94da-770828b1770f"
                               matter:
                                 matter_node_id: "B2C3D4E5F6071829"
@@ -4324,14 +4324,14 @@ components:
           description: >
             Capability names for this node. "rmng" denotes a RainMaker node and
             is present for every node except pure Matter nodes; "matter" denotes
-            a node on the group's Matter fabric; other names (e.g. "acc") are
-            feature capabilities.
+            a node on the group's Matter fabric; other names are feature
+            capabilities.
           items:
             type: string
             enum:
               - rmng
               - matter
-              - acc
+              - custom_cap
           example: ["rmng", "matter"]
         capability_details:
           type: object
@@ -4339,7 +4339,7 @@ components:
           additionalProperties:
             type: object
           example:
-            acc:
+            custom_cap:
               endpoint_id: "de152ff2-f070-4d0e-94da-770828b1770f"
             matter:
               matter_node_id: "B2C3D4E5F6071829"

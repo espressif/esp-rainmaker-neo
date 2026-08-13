@@ -47,7 +47,7 @@ There are three ways to use it, in increasing order of involvement:
 The cloud specification lives as Markdown under [docs/en/specs/](docs/en/specs/), with [docs/en/index.md](docs/en/index.md) as the table of contents. The pages are readable directly in the repo; to build and view the HTML docs locally, see the [docs build guide](docs/README.md).
 
 - [HTTP, MQTT and Events Reference](https://api.docs.neo.rainmaker.espressif.com)
-- [Glossary](misc/GLOSSARY.md)
+- [Glossary](docs/GLOSSARY.md)
 
 ## Contributing
 

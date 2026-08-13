@@ -740,7 +740,7 @@ class User:
             group_id: ID of the group to associate with
             csr: Optional CSR (PEM string) for Matter devices. If provided, includes
                  CSR in verify request and calls confirm endpoint.
-            capabilities: Optional list of capability names to enable (e.g., ["acc"])
+            capabilities: Optional list of capability names to enable
 
         Returns:
             For non-Matter (csr=None): None on success, error string on failure

@@ -34,7 +34,7 @@ Then obey the format and rules below.
 `type(scope): description`
 
 - **type** — one of: `feat`, `fix`, `docs`, `refactor`, `test`, `chore` (per `.claude/rules/git-flow.mdc`).
-- **scope** — the primary package/area touched (e.g. `group`, `node`, `db`, `acc`). Pick the dominant one from the staged paths.
+- **scope** — the primary package/area touched (e.g. `group`, `node`, `db`). Pick the dominant one from the staged paths.
 - **description** — imperative mood, lowercase start, no trailing period.
 
 Optional body (only when the change spans multiple distinct things):

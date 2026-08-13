@@ -31,7 +31,7 @@ The Makefile already resolves the target:
   inputs per group, builds the admin dashboard, deploys every stack group from
   `Stackfile.yaml`, then uploads outputs).
 - Single stack group: `make deploy-<group>` (groups come from `Stackfile.yaml`,
-  e.g. `rmng`, `espuser`, `alexa`, `acc`, `claim`). Prefer this when the user names
+  e.g. `rmng`, `espuser`, `alexa`, `claim`). Prefer this when the user names
   a component — it's much faster than `deploy-all`.
 - **`claim` is intentionally excluded from `deploy-all`** (it creates a billable KMS
   CA key). Deploy it only when the user explicitly asks: `make deploy-claim`.
