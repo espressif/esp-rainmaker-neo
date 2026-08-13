@@ -152,7 +152,7 @@ def do_confirm(user, group_id, request_id, capabilities=None):
         user: User object with make_api_request method
         group_id: ID of the group
         request_id: Request ID from initiate
-        capabilities: Optional list of capability names to enable (e.g., ["acc"])
+        capabilities: Optional list of capability names to enable
 
     Returns:
         True on success, error string on failure
@@ -189,7 +189,7 @@ def do_matter_dev_assoc(user, device, group_id, use_device_key=False, include_ve
         include_vendor_reserved1: If True, include vendor_reserved1 in NOCSRElements
         custom_vendor_reserved1: If provided and include_vendor_reserved1=True, use this value
                                  instead of device.node_thing_name
-        capabilities: Optional list of capability names to enable during confirm (e.g., ["acc"])
+        capabilities: Optional list of capability names to enable during confirm
 
     Returns:
         dict with 'noc', 'matter_node_id', 'request_id', 'vendor_reserved1' on success, error string on failure

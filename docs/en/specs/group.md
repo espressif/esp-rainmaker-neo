@@ -285,13 +285,13 @@ sequenceDiagram
      - TableName: `rmng-group-node-assoc`
        | Column | Type | Notes |
        | --- | --- | --- |
-       | `capabilities` | List\<String\> | Capability names for this node. `rmng` = RainMaker node; `matter` = Matter (fabric) node; `acc` = feature capability. Node-level, not group-level. |
-       | `alias`        | String         | Optional. ACC endpoint ID (detail for the `acc` capability). Also GSI partition key. |
+       | `capabilities` | List\<String\> | Capability names for this node. `rmng` = RainMaker node; `matter` = Matter (fabric) node; `custom_cap` = feature capability. Node-level, not group-level. |
+       | `alias`        | String         | Optional. Endpoint ID (detail for the `custom_cap` capability). Also GSI partition key. |
      - Query by `group_id` (PK) to get all nodes in the group
      - Extract subgroup memberships from `subgrp1`, `subgrp2`, `subgrp3` fields
      - Build each node's `capabilities` array from the stored list, and its
        `capability_details` map from per-capability data:
-       - `acc` → `{endpoint_id: alias}`
+       - `custom_cap` → `{endpoint_id: alias}`
        - `matter` → `{matter_node_id}`, where `matter_node_id` is **derived from the
          node_id** — not stored
    - If group has Matter capability, extract matter details from main group entry (where `sub_group_id = "NONE"`):
@@ -315,9 +315,9 @@ sequenceDiagram
       "node_ids": ["node1", "node2"],
       "node_details": {
         "node1": {
-          "capabilities": ["rmng", "matter", "acc"],
+          "capabilities": ["rmng", "matter", "custom_cap"],
           "capability_details": {
-            "acc": { "endpoint_id": "de152ff2-f070-4d0e-94da-770828b1770f" },
+            "custom_cap": { "endpoint_id": "de152ff2-f070-4d0e-94da-770828b1770f" },
             "matter": { "matter_node_id": "A1B2C3D4E5F60718" }
           }
         },
@@ -347,7 +347,6 @@ sequenceDiagram
 - Node capabilities and when they are assigned (at node association time, persisted on the `rmng-group-node-assoc` row):
   - `rmng`: a RainMaker node — set when a node joins via the RainMaker (challenge-response) association, or via the Matter flow whose `vendor_reserved1` matches a registered RainMaker device
   - `matter`: a Matter (fabric) node — set when a node joins via the Matter (nocsr_elements) flow and receives a device NOC. Its `matter_node_id` is **derived from the node_id** at response time, not stored. A **pure Matter node** (no `vendor_reserved1` / not a registered device) gets `matter` only, **without** `rmng`
-  - `acc`: feature capability with `endpoint_id`, set asynchronously by the ACC capability lambda after confirm
 
 If matter fabric, response includes matter details:
 ```json
@@ -388,8 +387,7 @@ If matter fabric, response includes matter details:
 **Notes**:
 - `node_details` is optional and only present for nodes with capabilities
 - Each entry in `node_details` contains a `capabilities` list and a `capability_details` map
-- Capability data structure depends on the capability type:
-  - `acc`: contains `endpoint_id` for the ACC (Amazon Connectivity) capability
+- Capability data structure depends on the capability type
 - When the group is a Matter fabric, its fabric data is returned under a separate top-level `matter` object on the group
 
 **Sequence Diagram**:
@@ -416,8 +414,7 @@ sequenceDiagram
         
         ListAPI->>GroupNodeDB: Query rmng-group-node-assoc<br/>(group_id)
         GroupNodeDB->>ListAPI: Return node mappings<br/>{node_id, capabilities, subgrp1, subgrp2, subgrp3}
-        
-        ListAPI->>ListAPI: Populate node_details<br/>with capability data (acc, etc.)
+        ListAPI->>ListAPI: Populate node_details<br/>with capability data
         ListAPI->>ListAPI: Filter subgroups<br/>based on access permissions
         ListAPI->>ListAPI: Extract matter details<br/>(if matter fabric)
     end

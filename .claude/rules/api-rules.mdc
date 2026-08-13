@@ -23,7 +23,7 @@ Conventions visible to API clients and integrators. Everything here is part of t
 | MQTT topics | `snake_case` segments | `rainmaker/nodes/{node_id}/to_cloud` |
 | MQTT payload keys | `snake_case` | same |
 
-External-contract surfaces (Amazon ACC, Alexa Smart Home, Google Smart Home, AWS IoT Lifecycle Events, MCP/JSON-RPC, OAuth state cookies) keep the upstream casing — they are public contracts owned by another party and we mirror them verbatim.
+External-contract surfaces (Alexa Smart Home, Google Smart Home, AWS IoT Lifecycle Events, MCP/JSON-RPC, OAuth state cookies) keep the upstream casing — they are public contracts owned by another party and we mirror them verbatim.
 
 ## HTTP status codes (REST) - TODO
 
