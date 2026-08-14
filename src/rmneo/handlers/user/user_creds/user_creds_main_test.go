@@ -55,6 +55,8 @@ var _ = Describe("User Creds Main", func() {
 
 		GinkgoT().Setenv("IDENTITY_POOL_ID", "us-east-1:test-identity-pool-id")
 		GinkgoT().Setenv("AWS_REGION", "us-east-1")
+		// The audience the exchange is pinned to; the harness mints first-party pairs for it.
+		GinkgoT().Setenv("USER_CLIENT_ID", "rm_mobile")
 
 		// The handler verifies the OIDC access token against the issuer's JWKS in-handler; the harness stands up that JWKS server and points ESPUSER_ISSUER at it.
 		tokenHarness = test_utils.SetupESPUserTokenHarness(ctx)
@@ -257,6 +259,54 @@ var _ = Describe("User Creds Main", func() {
 			response := CallUserCredsHandler(ctx, buildRequest("not.a.jwt", testToken))
 			Expect(response.StatusCode).To(Equal(401))
 		})
+
+		// A delegated third-party token must not be exchangeable for role credentials. Refused
+		// before the Identity Pool is ever asked.
+		It("refuses a pair minted for the voice-assistant audience", func() {
+			access, id := tokenHarness.MintPairForClient(testSub, "va-client")
+			cognitoIdentityMock.AddTokenMapping(id, testIdentityId)
+
+			response := CallUserCredsHandler(ctx, buildRequest(access, id))
+
+			Expect(response.StatusCode).To(Equal(403))
+			Expect(cognitoIdentityMock.LastGetIdInput).To(BeNil())
+		})
+
+		It("refuses a pair minted for the MCP audience", func() {
+			access, id := tokenHarness.MintPairForClient(testSub, "mcp-oauth-client")
+			cognitoIdentityMock.AddTokenMapping(id, testIdentityId)
+
+			response := CallUserCredsHandler(ctx, buildRequest(access, id))
+
+			Expect(response.StatusCode).To(Equal(403))
+			Expect(cognitoIdentityMock.LastGetIdInput).To(BeNil())
+		})
+
+		// The pin applies to both halves, so mixing audiences cannot slip past either check.
+		It("refuses a first-party id_token carried by a third-party access token", func() {
+			access, _ := tokenHarness.MintPairForClient(testSub, "va-client")
+			_, id := tokenHarness.MintPair(testSub)
+
+			response := CallUserCredsHandler(ctx, buildRequest(access, id))
+
+			Expect(response.StatusCode).To(Equal(403))
+		})
+
+		// Fails closed: with no pin configured the OIDC path refuses rather than falling back to
+		// accepting any audience. Uses a harness-minted pair because that is what routes to the
+		// OIDC service — the admin (Cognito) path is deliberately unpinned, since the
+		// voice-assistant and MCP audiences are issued by the OIDC provider and cannot reach it.
+		It("refuses an otherwise valid pair when the pinned audience is not configured", func() {
+			access, id := tokenHarness.MintPair(testSub)
+			cognitoIdentityMock.AddTokenMapping(id, testIdentityId)
+			GinkgoT().Setenv("USER_CLIENT_ID", "")
+
+			response := CallUserCredsHandler(ctx, buildRequest(access, id))
+
+			Expect(response.StatusCode).To(Equal(403))
+			Expect(cognitoIdentityMock.LastGetIdInput).To(BeNil())
+		})
+
 	})
 })
 

@@ -269,12 +269,15 @@ class CreateIdentityPool(Construct):
         # OIDC client_ids (token `aud`) end users authenticate with.
         # thumbprint_list is required by the API but ignored for the OIDC providers
         # STS trusts via its own CA store; the standard root-CA thumbprint is used.
+        # Only the first-party client is federated. esp_mcp_client_id and esp_user_va_client_id are
+        # deliberately NOT here: both audiences are delegated to third parties (MCP clients, Alexa
+        # and Google), and federating an audience is what makes its tokens exchangeable for the role
+        # above. Neither integration calls /v1/user/credentials, so neither needs federating.
         esp_user_oidc_provider = iam.CfnOIDCProvider(
             self, "EspUserOidcProvider",
             url=common_resources.esp_user_issuer,
             client_id_list=[
                 common_resources.esp_user_client_id,
-                common_resources.esp_user_va_client_id,
             ],
             thumbprint_list=["9e99a48a9960b14926bb7f3b02e22da2b0ab7280"],
         )

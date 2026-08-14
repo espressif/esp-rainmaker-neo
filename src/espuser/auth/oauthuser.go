@@ -345,6 +345,8 @@ type oidcTokenClaims struct {
 	Locale      string `json:"locale,omitempty"`
 	Picture     string `json:"picture,omitempty"`
 	TokenUse    string `json:"token_use,omitempty"`
+	// ClientID names the client an access token was minted for; id tokens name it in `aud`.
+	ClientID string `json:"client_id,omitempty"`
 	// OriginJTI ties an access token to the id token minted in the same sign-in.
 	OriginJTI string `json:"origin_jti,omitempty"`
 	jwtgo.RegisteredClaims
@@ -367,14 +369,27 @@ func (s *OAuthUserAuthService) verifyOwnToken(token, wantTokenUse string) (oidcT
 	return claims, nil
 }
 
+// VerifyTokenPair verifies the two halves of one sign-in and requires both to name the first-party client. The voice-assistant and MCP audiences are delegated to third parties, so a pair minted for one of them must not be exchanged for credentials, whatever else it is allowed to do. Pinned here rather than in verifyOwnToken because those audiences may legitimately call the ordinary APIs; they just may not vend credentials.
 func (s *OAuthUserAuthService) VerifyTokenPair(ctx context.Context, accessToken, idToken string) error {
+	firstPartyClientID := os.Getenv("USER_CLIENT_ID")
+	if firstPartyClientID == "" {
+		return rmerror.NewRMError(nil, "USER_CLIENT_ID is required to pin the token pair's audience")
+	}
+	allowedClientIDs := []string{firstPartyClientID}
+
 	accessClaims, err := s.verifyOwnToken(accessToken, jwtutil.TokenUseAccess)
 	if err != nil {
 		return rmerror.NewRMError(err, "access token failed validation")
 	}
+	if err := jwtutil.RequireAllowedClientID([]string{accessClaims.ClientID}, allowedClientIDs); err != nil {
+		return rmerror.NewRMError(err, "access token was issued for a different app client")
+	}
 	idClaims, err := s.verifyOwnToken(idToken, jwtutil.TokenUseID)
 	if err != nil {
 		return rmerror.NewRMError(err, "id_token failed validation")
+	}
+	if err := jwtutil.RequireAllowedClientID(idClaims.Audience, allowedClientIDs); err != nil {
+		return rmerror.NewRMError(err, "id_token was issued for a different app client")
 	}
 	return jwtutil.RequireSameAuthEventValues(
 		accessClaims.Subject, idClaims.Subject,
