@@ -165,6 +165,7 @@ type DynamoDBMock struct {
 	// Returned once on the next matching call, then cleared.
 	NextDescribeError error
 	NextUpdateError   error
+	NextGetItemError  error
 	// If > 0, the next BatchGetItem call returns the last N keys as UnprocessedKeys
 	// instead of processing them, then resets to 0.
 	NextBatchGetUnprocessedCount int
@@ -433,6 +434,15 @@ func (m *DynamoDBMock) BatchGetItem(ctx context.Context, params *dynamodb.BatchG
 }
 
 func (m *DynamoDBMock) GetItem(ctx context.Context, params *dynamodb.GetItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error) {
+	// A read that FAILS is a different thing from a read that finds nothing, and callers routinely
+	// conflate them. Without this the mock can only ever produce the second, so code that treats a
+	// throttle or timeout as "no such row" looks correct in tests.
+	if m.NextGetItemError != nil {
+		err := m.NextGetItemError
+		m.NextGetItemError = nil
+		return nil, err
+	}
+
 	// Extract the table name and item ID from the input
 	tableName, pkey, skey, err := m.GetKeys(params)
 	if err != nil {
