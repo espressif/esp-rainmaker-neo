@@ -3,7 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import time
-from test.itest.conftest import run_shared_group_stages, run_shared_subgroup_stages
+
+import boto3
+import pytest
+
+from test.itest.conftest import (
+    connect_device_with_retry,
+    run_shared_group_stages,
+    run_shared_subgroup_stages,
+)
 
 def test_schedule_functionality(associated_device):
     """Test schedule functionality including setting and getting schedule."""
@@ -210,3 +218,77 @@ def test_node_schedule_cross_tenant_write_denied(two_tenants):
         "Wrote schedule to foreign node via own-group path + foreign nodeId"
     assert user_a.set_node_schedule(tenant_b["group_id"], "", tenant_b["node_id"], sched) is False, \
         "Wrote schedule to foreign node via foreign group path"
+
+
+# A failed node_details read must not be answered as "you have no schedules".
+#
+# The getSchedVer reply carries the version the firmware compares against its own copy, so it is a
+# staleness marker. Answering version 0 after a read failure makes a device holding real schedules
+# conclude the cloud has none, ask for details, receive an empty set, and discard the user's data.
+#
+# Reproducing this live needs the read to actually fail, so the test injects an explicit IAM Deny on
+# just the node_to_cloud Lambda's GetItem against the node_details table, then removes it. The
+# injection is a separate inline policy so removal is a delete of something this test created — it
+# cannot corrupt the role's real policies. Marked `unsafe` because it mutates a shared role for a
+# few seconds: it is excluded from the default `-m "not unsafe"` suite run.
+ROLE_NAME = "rmng-node-to-cloud-role-ap-south-1"
+FAULT_POLICY_NAME = "ZZZ-itest-faultinjection-deny-node-details-read"
+# TABLE_NAMES["NODE_DETAILS"] is "rmng-nodes" — the logical name and the physical name
+# differ, and denying the wrong ARN silently denies nothing.
+NODE_DETAILS_TABLE = "rmng-nodes"
+
+DENY_POLICY = {
+    "Version": "2012-10-17",
+    "Statement": [{
+        "Effect": "Deny",
+        "Action": "dynamodb:GetItem",
+        "Resource": f"arn:aws:dynamodb:ap-south-1:296205263862:table/{NODE_DETAILS_TABLE}",
+    }],
+}
+
+# IAM policy changes are not read-your-writes for an already-warm Lambda execution role.
+IAM_PROPAGATION_S = 90
+
+
+@pytest.fixture
+def node_details_read_denied():
+    """Deny the node_to_cloud Lambda its node_details read for the duration of the test."""
+    iam = boto3.client("iam")
+    import json as _json
+    iam.put_role_policy(
+        RoleName=ROLE_NAME,
+        PolicyName=FAULT_POLICY_NAME,
+        PolicyDocument=_json.dumps(DENY_POLICY),
+    )
+    time.sleep(IAM_PROPAGATION_S)
+    try:
+        yield
+    finally:
+        # Always remove it, including on assertion failure — leaving this in place would break
+        # every device's schedule/trigger sync.
+        iam.delete_role_policy(RoleName=ROLE_NAME, PolicyName=FAULT_POLICY_NAME)
+        time.sleep(IAM_PROPAGATION_S)
+
+
+@pytest.mark.unsafe
+def test_failed_node_details_read_is_not_answered_as_empty(associated_device, node_details_read_denied):
+    """With the read denied, the cloud must not claim version 0 — it must not answer at all."""
+    device, group_id, test_user1, _ = associated_device
+    assert connect_device_with_retry(device), "failed to connect device"
+    device.get_group_info()
+
+    # Give the node a real schedule, so "answered as empty" is distinguishable from "empty".
+    schedule_data = [{"id": "1", "name": "Morning", "enabled": True, "time": "09:00", "action": "on"}]
+    assert test_user1.set_node_schedule(
+        group_id, None, device.node_thing_name, {"schedules": schedule_data}
+    ), "failed to set a schedule before the fault injection"
+
+    version = device.get_schedule_version(timeout=15)
+
+    assert version != 0, (
+        "the cloud answered getSchedVer with version 0 while the node_details read was failing — "
+        "a device holding real schedules would treat that as 'cloud has none' and discard them"
+    )
+    assert version is None, (
+        f"expected no getSchedVer answer at all while the read was failing, got version {version}"
+    )
