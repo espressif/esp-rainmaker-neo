@@ -15,6 +15,20 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )
 
+// nodeDetailsEvents are the events answered from the node_details row. A nil row with no error
+// legitimately means "this node has no config yet", and version 0 is the right answer. A nil row
+// because the READ FAILED means we do not know, and these events must not be answered: the
+// version doubles as the device's staleness marker, so replying "version 0, empty" makes a device
+// holding real schedules and triggers discard them.
+var nodeDetailsEvents = map[string]bool{
+	"getAlexaEn":        true,
+	"getGVAEn":          true,
+	"getSchedVer":       true,
+	"getSchedDetails":   true,
+	"getTriggerVer":     true,
+	"getTriggerDetails": true,
+}
+
 // handlePublishInputEvent processes a single publish input event from a device
 // This is the core business logic shared between direct invocation and SQS modes
 func handlePublishInputEvent(ctx context.Context, event node.PublishInputEvent) error {
@@ -35,7 +49,7 @@ func handlePublishInputEvent(ctx context.Context, event node.PublishInputEvent) 
 		if !ok {
 			continue
 		}
-		if eventStr == "getAlexaEn" || eventStr == "getGVAEn" || eventStr == "getSchedVer" || eventStr == "getSchedDetails" || eventStr == "getTriggerDetails" || eventStr == "getTriggerVer" {
+		if nodeDetailsEvents[eventStr] {
 			needsNodeDetails = true
 			break
 		}
@@ -43,13 +57,10 @@ func handlePublishInputEvent(ctx context.Context, event node.PublishInputEvent) 
 
 	// Read node details once if needed
 	var nodeDetails *node_details_db.NodeDetails
+	var nodeDetailsErr error
 	if needsNodeDetails {
 		nodeDetailsDB := node_details_db.NewNodeDetailsDB(rmngCtx)
-		var err error
-		nodeDetails, err = nodeDetailsDB.GetNodeDetails(event.ThingName)
-		if err != nil {
-			rlog.Error(rmngCtx).Err(err).Msg("Failed to get node details")
-		}
+		nodeDetails, nodeDetailsErr = nodeDetailsDB.GetNodeDetails(event.ThingName)
 	}
 
 	// Process each event
@@ -62,6 +73,13 @@ func handlePublishInputEvent(ctx context.Context, event node.PublishInputEvent) 
 
 		// Add debug logging
 		rlog.Debug(rmngCtx).Msgf("Processing event: %s", eventStr)
+
+		// Leave a details-dependent event UNANSWERED when the read failed. The device re-asks on
+		// its next batch, whereas a "version 0, empty" reply would make it drop real state.
+		if nodeDetailsErr != nil && nodeDetailsEvents[eventStr] {
+			rlog.Warn(rmngCtx).Err(nodeDetailsErr).Msgf("Not answering %s: node details unreadable, replying would look like an empty config", eventStr)
+			continue
+		}
 
 		switch eventStr {
 		case "getGroupInfo":
@@ -134,9 +152,16 @@ func handlePublishInputEvent(ctx context.Context, event node.PublishInputEvent) 
 		}
 	}
 
-	err := responseData.Send(ctx)
-	if err != nil {
+	// Answer whatever did not depend on node details before surfacing the failure, so a device
+	// asking for group info or a time sync in the same batch is not held hostage by it.
+	if err := responseData.Send(ctx); err != nil {
 		rlog.Error(rmngCtx).Err(err).Send()
+	}
+
+	// Propagate the read failure so the SQS path retries the message and the direct path's rule
+	// error action sees it. Returning nil here is what made the outage invisible.
+	if nodeDetailsErr != nil {
+		return rmerror.NewRMError(nodeDetailsErr, fmt.Sprintf("could not read node details for %s; details-dependent events left unanswered", event.ThingName))
 	}
 	return nil
 }

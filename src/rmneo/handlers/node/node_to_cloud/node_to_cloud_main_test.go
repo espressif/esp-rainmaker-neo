@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
@@ -841,3 +842,97 @@ func TestPublishInputEventHandler(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "PublishInputEventHandler Suite")
 }
+
+// The reply to getSchedVer/getTriggerVer carries the version the firmware compares against its
+// local set. A nil node_details row with NO error legitimately means "no config yet" and version 0
+// is correct. A nil row because the READ FAILED means we do not know — and answering "version 0,
+// empty" makes a device holding real schedules conclude the cloud has none and drop them.
+var _ = Describe("node_to_cloud when the node_details read fails", func() {
+	var (
+		ctx       context.Context
+		iotMock   *mock.IoTDataPlaneMock
+		dbMock    *mock.DynamoDBMock
+		thingName string
+	)
+
+	// publishedEvents returns the event names in the single from_cloud reply, or nil if silent.
+	publishedEvents := func() []interface{} {
+		if len(iotMock.PublishCalls) == 0 {
+			return nil
+		}
+		var payload map[string]interface{}
+		Expect(json.Unmarshal(iotMock.PublishCalls[0].Payload, &payload)).To(Succeed())
+		evs, _ := payload["event"].([]interface{})
+		return evs
+	}
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		test_utils.TestSetup()
+		iotMock = mock.NewIoTDataPlaneMock()
+		awscommon.SetIoTDataPlaneClient(iotMock)
+		dbMock = awscommon.GetDynamoDBClient().(*mock.DynamoDBMock)
+
+		service.Initialize()
+		schedule.Register()
+
+		testUser := user.NewUser("test-user-id")
+		grp, err := group.CreateGroupForUser(rmngctx.NewRmngContext(testUser), "Test Group")
+		Expect(err).To(BeNil())
+
+		thingName = "test-thing"
+		test_utils.ManuallyAddNodeToGroup(ctx, grp.GroupID, thingName)
+
+		// Give the node real schedule data, so "answered as empty" is distinguishable from
+		// "genuinely empty" — without this the test cannot tell the bug from correct behaviour.
+		n := node.NewNode(thingName)
+		detailsDB := node_details_db.NewNodeDetailsDB(rmngctx.NewRmngContextWithCtx(ctx, n))
+		Expect(detailsDB.UpdateServiceDataWithVersion(thingName, "schedule",
+			map[string]interface{}{"Schedules": []interface{}{map[string]interface{}{"id": "1"}}})).To(Succeed())
+	})
+
+	It("leaves the details-dependent events unanswered instead of reporting an empty config", func() {
+		dbMock.NextGetItemError = errors.New("ProvisionedThroughputExceededException: throttled")
+
+		err := handlePublishInputEvent(ctx, node.PublishInputEvent{
+			ThingName: thingName,
+			Data: map[string]interface{}{
+				"event": []interface{}{"getSchedVer", "getSchedDetails", "getGroupInfo"},
+			},
+		})
+
+		Expect(err).To(HaveOccurred(), "a failed node_details read must not be reported as success")
+
+		evs := publishedEvents()
+		Expect(evs).ToNot(ContainElement("getSchedVer"),
+			"answering getSchedVer after a failed read tells the device version 0, and it drops its schedules")
+		Expect(evs).ToNot(ContainElement("getSchedDetails"),
+			"answering getSchedDetails after a failed read sends an empty schedule set")
+		Expect(evs).To(ContainElement("getGroupInfo"),
+			"events that do not depend on node details should still be answered")
+	})
+
+	It("still answers version 0 when the node genuinely has no config", func() {
+		// Fresh node, no node_details row, and no injected failure.
+		err := handlePublishInputEvent(ctx, node.PublishInputEvent{
+			ThingName: "brand-new-thing",
+			Data:      map[string]interface{}{"event": []interface{}{"getSchedVer"}},
+		})
+
+		Expect(err).ToNot(HaveOccurred(), "an absent row is not an error")
+		Expect(publishedEvents()).To(ContainElement("getSchedVer"),
+			"a node with no config must still get an answer, or it will keep asking forever")
+	})
+
+	It("answers normally when the read succeeds", func() {
+		err := handlePublishInputEvent(ctx, node.PublishInputEvent{
+			ThingName: thingName,
+			Data:      map[string]interface{}{"event": []interface{}{"getSchedVer", "getSchedDetails"}},
+		})
+
+		Expect(err).ToNot(HaveOccurred())
+		evs := publishedEvents()
+		Expect(evs).To(ContainElement("getSchedVer"))
+		Expect(evs).To(ContainElement("getSchedDetails"))
+	})
+})
