@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"net/http"
 
@@ -31,6 +32,44 @@ const (
 	pathSignout         = "/v1/user/auth/signout"
 	pathPassword        = "/v1/user/auth/password"
 )
+
+// Messages name RainMaker only when the resolved provider IS RainMaker (see
+// Service.IsRainMakerProvider); a bundled Cognito or any other provider gets the neutral wording.
+const (
+	rainmakerSignupMessage = "Code sent. Existing RainMaker users must signin or reset password."
+	neutralSignupMessage   = "Code sent. Existing users must signin or reset password."
+
+	unconfirmedAccountMessage = "Signin failed. Account not verified — reset your password."
+
+	// One answer for every /signup/verify failure; the wording carries the sign-in hint.
+	rainmakerVerifyFailedMessage = "Invalid code or RainMaker account already exists. Try signin or reset password."
+	neutralVerifyFailedMessage   = "Invalid code or account already exists. Try signin or reset password."
+
+	// Signup by someone who proved the password of an existing confirmed account: sign in, no code.
+	rainmakerAccountExistsMessage = "Account already exists. RainMaker users: signin or reset password."
+	neutralAccountExistsMessage   = "Account already exists. Signin or reset password."
+)
+
+func signupMessage(rainmaker bool) string {
+	if rainmaker {
+		return rainmakerSignupMessage
+	}
+	return neutralSignupMessage
+}
+
+func verifyFailedMessage(rainmaker bool) string {
+	if rainmaker {
+		return rainmakerVerifyFailedMessage
+	}
+	return neutralVerifyFailedMessage
+}
+
+func accountExistsMessage(rainmaker bool) string {
+	if rainmaker {
+		return rainmakerAccountExistsMessage
+	}
+	return neutralAccountExistsMessage
+}
 
 type tokenReq struct {
 	Username     string `json:"username,omitempty"`
@@ -103,8 +142,14 @@ func handleSignin(ctx context.Context, request events.APIGatewayProxyRequest, sv
 	}
 	tokens, err := svc.SigninWithPassword(ctx, req.Username, req.Password)
 	if err != nil {
-		// Uniform 401 so the response is no oracle; operators get the real cause from the log.
 		rlog.Error(ctx).Err(err).Msg("legacy signin failed")
+		// An unconfirmed account is named explicitly: the caller proved the password, so nothing
+		// is disclosed that they did not already know, and a generic refusal would leave them
+		// with no way to recover the account.
+		if errors.Is(err, legacyauth.ErrUserNotConfirmed) {
+			return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus(unconfirmedAccountMessage)), nil
+		}
+		// Uniform 401 so the response is no oracle; operators get the real cause from the log.
 		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Authentication failed")), nil
 	}
 	return utils.APIGwRespJSON(http.StatusOK, withBearer(tokens)), nil
@@ -135,11 +180,17 @@ func handleSignup(ctx context.Context, request events.APIGatewayProxyRequest, sv
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Password is required")), nil
 	}
 	if err := svc.Signup(ctx, req.Email, req.PhoneNumber, req.Password); err != nil {
+		// The caller proved the password of an existing confirmed account: nothing was created, so
+		// this is a 409, and they are told to sign in rather than wait for a code that will not
+		// come. Reachable only with the credential, so the distinct status leaks nothing.
+		if errors.Is(err, legacyauth.ErrAccountAlreadyUsable) {
+			return utils.APIGwRespJSON(http.StatusConflict, utils.NewAPIStatus(accountExistsMessage(svc.IsRainMakerProvider()))), nil
+		}
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Failed to create user account")), nil
 	}
 	return utils.APIGwRespJSON(http.StatusCreated, map[string]any{
 		"requires_verification": true,
-		"message":               "Verification code sent. Existing RainMaker users should log in instead",
+		"message":               signupMessage(svc.IsRainMakerProvider()),
 	}), nil
 }
 
@@ -153,7 +204,8 @@ func handleSignupVerify(ctx context.Context, request events.APIGatewayProxyReque
 		username = req.PhoneNumber
 	}
 	if err := svc.VerifySignup(ctx, username, req.Code); err != nil {
-		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Invalid verification code")), nil
+		rlog.Error(ctx).Err(err).Msg("legacy signup verification failed")
+		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(verifyFailedMessage(svc.IsRainMakerProvider()))), nil
 	}
 	return utils.APIGwRespJSON(http.StatusOK, utils.NewAPIStatus("Verified successfully. You can now login.")), nil
 }

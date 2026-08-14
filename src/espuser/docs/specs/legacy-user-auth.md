@@ -94,11 +94,44 @@ this surface can be used to probe which contacts are registered:
 | Operation | Account exists | Account does not exist |
 |---|---|---|
 | Sign-in (`/token`), wrong/any password | 401 `Authentication failed` | 401 `Authentication failed` |
-| Signup (`/signup`) | 201 `Verification code sent. Existing RainMaker users should log in instead` — unconfirmed: code re-sent; confirmed: **no code sent** (provider refuses the resend, error dropped) | 201 same message — account created, code sent |
-| Signup verify (`/signup/verify`), wrong/any code | 400 `Invalid verification code` | 400 `Invalid verification code` |
+| Signup (`/signup`) | 201 `Code sent. Existing RainMaker users must signin or reset password.` — a code is re-sent **only** for an unconfirmed account retrying with its correct password; a confirmed account or a wrong password gets no mail (see below) | 201 same message — account created, code sent |
+| Signup verify (`/signup/verify`), wrong/any code | 400 `Invalid code or RainMaker account already exists. Try signin or reset password.` | 400 same message |
 | Password recovery (`/password-recovery`) | 200 `If your account exists, you will receive a code` — code sent | 200 same message — nothing sent |
 | Recovery confirmation (`/password-recovery/confirmation`) | 400 `Invalid verification code` without the mailed code | 400 `Invalid verification code` |
 | Change password (`/password`) | 401 `Password change failed` unless the caller's own access token and old password both check out — no account probe possible without a token | 401 `Password change failed` |
+
+### Duplicate signup: how the resend is decided
+
+`SignUp` raises `UsernameExistsException` for confirmed and unconfirmed accounts alike, and
+`ConfirmSignUp`/`ResendConfirmationCode` cannot tell them apart either (measured against a real
+pool — Cognito validates the code before the account state, and the resend happily mails a
+confirmed account). The one call that separates the two with only an app client is
+`InitiateAuth` with the password the caller just submitted: `UserNotConfirmedException` is
+raised only for an unconfirmed account, and only after the password matched. So the code is
+re-sent exclusively on that signal; everything else — confirmed account, wrong password, MFA
+challenge — gets the same 201 and no mail.
+
+Sign-in keeps one deliberate exception: an unconfirmed account presenting the **correct**
+password gets `Signin failed. Account not verified — reset your password.` Since Cognito checks
+the password first, this is reachable only by someone already holding the credential.
+
+`/signup/verify` is fully uniform — every failure, unknown user included, answers the same 400,
+and the message itself carries the sign-in/reset hint so a user who signed up twice is not
+stranded.
+
+An `AliasAttributes` pool cannot serve this surface at all: Cognito refuses email-format
+usernames on that shape, and this surface signs up with the email as the username. Signup fails
+with the masked 400 (`Failed to create user account`).
+
+### Provider-specific wording
+
+Two messages name the product, and only when RainMaker's own pool backs the deployment:
+
+| Message | Inbuilt (`provider_name = "cognito"`) | Registered external provider |
+|---|---|---|
+| signup 201 | `Code sent. Existing RainMaker users must signin or reset password.` | `Code sent. Existing users must signin or reset password.` |
+| account exists 409 | `Account already exists. RainMaker users: signin or reset password.` | `Account already exists. Signin or reset password.` |
+| verify failure 400 | `Invalid code or RainMaker account already exists. Try signin or reset password.` | `Invalid code or account already exists. Try signin or reset password.` |
 
 ## Security notes
 

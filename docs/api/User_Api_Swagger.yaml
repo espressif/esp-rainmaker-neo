@@ -490,8 +490,7 @@ paths:
       summary: Password sign-in
       description: |
         Verifies `username`/`password` against the bundled Cognito pool
-        server-side and returns an ESP User token set. All failures collapse to
-        a uniform `401` (no account-existence oracle).
+        server-side and returns an ESP User token set.
       tags:
         - User Auth
       security: []
@@ -509,9 +508,19 @@ paths:
               schema:
                 $ref: "#/components/schemas/TokenSet"
         "400":
-          $ref: "#/components/responses/BadRequest"
+          description: "`Invalid request body`"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: |
+            `Authentication failed` — wrong password, or no such account.
+            `Signin failed. Account not verified — reset your password.` — correct password, account never verified.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /v1/user/auth/token/refresh:
     post:
@@ -574,8 +583,8 @@ paths:
                   message:
                     type: string
                     example:
-                      Verification code sent. Existing RainMaker users should
-                      log in instead
+                      Code sent. Existing RainMaker users must signin or reset
+                      password.
         "400":
           $ref: "#/components/responses/BadRequest"
 
@@ -602,13 +611,18 @@ paths:
                   description: Verification code Cognito delivered at signup.
       responses:
         "200":
-          description: Account verified.
+          description: "`Verified successfully. You can now login.`"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
         "400":
-          $ref: "#/components/responses/BadRequest"
+          description: |
+            `Invalid code or RainMaker account already exists. Try signin or reset password.` — one answer for every failure: wrong, expired or empty code, an account that does not exist, and an account that is already confirmed. The product name appears only when the resolved provider is named RainMaker.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /v1/user/auth/password-recovery:
     post:

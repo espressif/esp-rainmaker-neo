@@ -18,13 +18,11 @@ from test.itest.conftest import (
 from test.itest.email_utils import (
     generate_random_email,
     generate_test_password,
-    get_verification_code_from_server,
 )
 from urllib.parse import parse_qs, urlparse
 import boto3
 import pytest
 import requests
-import time
 import uuid
 
 
@@ -56,46 +54,8 @@ def test_signin_returns_tokens(test_user1):
     assert test_user1.refresh_token is not None
 
 
-@pytest.mark.xdist_group("env_mut")
-def test_signup_is_enumeration_resistant_for_confirmed_accounts(require_mailosaur):
-    """Signup answers 201 with the same body for a new and for an already confirmed
-    account, and a confirmed account gets no verification code re-sent."""
-    if not USER_API_GATEWAY_URL or not END_USER_POOL_ID:
-        pytest.skip("espuser outputs not configured")
-    email = generate_random_email()
-    password = generate_test_password()
-    signup_url = f"{USER_API_GATEWAY_URL}/v1/user/auth/signup"
-
-    started = time.time()
-    first = requests.post(signup_url, json={"email": email, "password": password})
-    assert first.status_code == 201, first.text
-    assert first.json()["message"] == \
-        "Verification code sent. Existing RainMaker users should log in instead", first.text
-
-    try:
-        code = get_verification_code_from_server(recipient_email=email, since_timestamp=started)
-        assert code, "the first signup must deliver a verification code"
-
-        verified = requests.post(f"{USER_API_GATEWAY_URL}/v1/user/auth/signup/verify",
-                                 json={"email": email, "code": code})
-        assert verified.status_code == 200, verified.text
-
-        after_confirm = time.time()
-        again = requests.post(signup_url, json={"email": email, "password": password})
-        assert again.status_code == 201, again.text
-        assert again.text == first.text, \
-            "the response must not reveal that the account already exists"
-
-        resent = get_verification_code_from_server(max_retries=2, retry_delay=5.0, timeout=20.0,
-                                                   recipient_email=email,
-                                                   since_timestamp=after_confirm)
-        assert resent is None, "a confirmed account must not receive another code"
-    finally:
-        try:
-            boto3.client('cognito-idp', region_name=REGION).admin_delete_user(
-                UserPoolId=END_USER_POOL_ID, Username=email)
-        except Exception:  # noqa: BLE001
-            pass
+# Signup enumeration resistance moved to test_cognito_auth_matrix.py, which asserts it
+# against the provisioned pool and an external one.
 
 
 # --- Admin (Cognito) and end user (OIDC) with the same email are separate identities. ---
@@ -159,43 +119,8 @@ def test_same_email_as_admin_and_end_user_are_separate_identities():
 # --- Core OAuth semantics. These hold for any login method, so they use the cheapest one. ---
 
 
-def test_refresh_rotation_and_reuse_detection(test_user1):
-    """Rotation and reuse detection are one behaviour: every redemption spends the presented token.
-
-    Both refresh surfaces share one service, so both are driven from a single login. Redeeming
-    returns a new token; re-presenting a spent one is refused and takes the whole login family with
-    it, which is what makes rotation a theft detector rather than just hygiene.
-    """
-    if not USER_API_GATEWAY_URL:
-        pytest.skip("USER_API_GATEWAY_URL not configured")
-
-    signin = test_user1.signin()
-    assert signin.status_code == 200, signin.text
-    original = signin.json()["refresh_token"]
-
-    oidc = test_user1.refresh_tokens(original)
-    assert oidc.status_code == 200, oidc.text
-    rotated = oidc.json()
-    assert rotated["access_token"] and rotated["id_token"], rotated
-    assert rotated["refresh_token"] != original, "/oauth2/token must rotate the refresh token"
-
-    legacy = requests.post(f"{USER_API_GATEWAY_URL}/v1/user/auth/token/refresh",
-                           json={"refresh_token": rotated["refresh_token"]})
-    assert legacy.status_code == 200, legacy.text
-    legacy_rotated = legacy.json()["refresh_token"]
-    assert legacy_rotated != rotated["refresh_token"], \
-        "the legacy surface must rotate too — it is not reuse-tolerant"
-
-    # The spent original is refused with the OAuth error code, not a bare failure.
-    replay = test_user1.refresh_tokens(original)
-    assert replay.status_code == 400, replay.text
-    assert replay.json().get("error") == "invalid_grant", replay.text
-
-    # Reuse is theft, so the family dies — even the newest token stops working, on either surface.
-    assert test_user1.refresh_tokens(legacy_rotated).status_code == 400
-    dead = requests.post(f"{USER_API_GATEWAY_URL}/v1/user/auth/token/refresh",
-                         json={"refresh_token": legacy_rotated})
-    assert dead.status_code == 401, f"the family must be gone: {dead.status_code} {dead.text}"
+# Refresh rotation and reuse detection moved to test_cognito_auth_matrix.py, which asserts
+# them against the provisioned pool and an external one.
 
 
 def test_refresh_grace_tolerates_lost_response_retry(test_user1):

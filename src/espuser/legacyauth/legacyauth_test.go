@@ -33,6 +33,8 @@ const (
 	testClientID2 = "native-client"
 	poolJWKSParam = "/espuser/base/end-user-pool-jwks-test"
 	testPassword  = "Password1!"
+	// The code CognitoProviderMock issues for every signup (its DefaultConfirmationCode).
+	mockConfirmationCode = "123456"
 )
 
 // seedPasswordProvider registers the enabled provider row NewService resolves its app client from.
@@ -145,15 +147,50 @@ var _ = Describe("SigninWithPassword", func() {
 	})
 
 	Describe("enumeration resistance", func() {
-		It("reports signup success for an already confirmed account without sending a code", func() {
+		It("routes a confirmed account to sign-in when the duplicate signup proves the password", func() {
+			// InitiateAuth authenticates, so the caller owns the account: no code, sign-in message.
 			svc := newService("u@example.com", true)
-			Expect(svc.Signup(context.Background(), "u@example.com", "", testPassword)).To(Succeed())
+			Expect(svc.Signup(context.Background(), "u@example.com", "", testPassword)).To(MatchError(ErrAccountAlreadyUsable))
+		})
+
+		It("keeps a wrong-password duplicate signup uniform, never routing to sign-in (negative)", func() {
+			// A wrong password proves nothing, so the plain success is indistinguishable from a
+			// fresh signup — no ErrAccountAlreadyUsable.
+			svc := newService("u@example.com", true)
+			Expect(svc.Signup(context.Background(), "u@example.com", "", "Different-9!x")).To(Succeed())
 		})
 
 		It("reports signup success for an unconfirmed account by re-sending the code", func() {
 			svc := newService("u@example.com", true)
 			Expect(svc.Signup(context.Background(), "fresh@example.com", "", testPassword)).To(Succeed())
 			Expect(svc.Signup(context.Background(), "fresh@example.com", "", testPassword)).To(Succeed())
+		})
+
+		It("fails verification of an already confirmed account like any other failure (negative)", func() {
+			svc := newService("u@example.com", true)
+			Expect(svc.Signup(context.Background(), "twice@example.com", "", testPassword)).To(Succeed())
+			Expect(svc.VerifySignup(context.Background(), "twice@example.com", mockConfirmationCode)).To(Succeed())
+
+			Expect(svc.VerifySignup(context.Background(), "twice@example.com", mockConfirmationCode)).NotTo(Succeed())
+		})
+
+		It("names an unconfirmed account at sign-in, so it can be recovered", func() {
+			svc := newService("u@example.com", true)
+			Expect(svc.Signup(context.Background(), "pending2@example.com", "", testPassword)).To(Succeed())
+
+			_, err := svc.SigninWithPassword(context.Background(), "pending2@example.com", testPassword)
+			Expect(err).To(MatchError(ErrUserNotConfirmed))
+		})
+
+		It("keeps a wrong password against an unconfirmed account uniform (negative)", func() {
+			// The disclosure above is bounded by Cognito raising UserNotConfirmed only after the
+			// password matches; a guess must stay indistinguishable from any other failure.
+			svc := newService("u@example.com", true)
+			Expect(svc.Signup(context.Background(), "pending3@example.com", "", testPassword)).To(Succeed())
+
+			_, err := svc.SigninWithPassword(context.Background(), "pending3@example.com", "wrong-password")
+			Expect(err).To(HaveOccurred())
+			Expect(err).NotTo(MatchError(ErrUserNotConfirmed))
 		})
 
 		It("fails signup verification for an unknown user exactly like a wrong code (negative)", func() {

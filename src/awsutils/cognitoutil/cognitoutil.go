@@ -249,6 +249,14 @@ func (c *CognitoService) InitiateAuth(ctx context.Context, req *LoginRequest) (*
 		}, err
 	}
 
+	// A challenge (MFA, ...) verifies the password but issues no tokens; nil would panic below.
+	if output.AuthenticationResult == nil {
+		return &LoginResponse{
+			Success: false,
+			Message: "Authentication requires a challenge this surface does not support",
+		}, nil
+	}
+
 	return &LoginResponse{
 		AccessToken:  *output.AuthenticationResult.AccessToken,
 		RefreshToken: *output.AuthenticationResult.RefreshToken,

@@ -241,11 +241,11 @@ func (s *OAuthUserAuthService) ResolveOrCreateUserByContacts(rmngCtx *rmngctx.Rm
 func (s *OAuthUserAuthService) createUser(rmngCtx *rmngctx.RmngContext, email, phone string, profile *user_details_db.UpstreamProfile) (string, error) {
 	userID := ids.NewUserID()
 	entry := &user_details_db.UserDetailsEntry{
-		UserID:       userID,
-		Email:        email,
-		PhoneNumber:  phone,
-		UserType:     user_details_db.UserTypeUser,
-		Provider:     user_details_db.ProviderOIDC,
+		UserID:      userID,
+		Email:       email,
+		PhoneNumber: phone,
+		UserType:    user_details_db.UserTypeUser,
+		Provider:    user_details_db.ProviderOIDC,
 	}
 	// Claims are stored with the account, so resolving a user is a single write.
 	if profile != nil {

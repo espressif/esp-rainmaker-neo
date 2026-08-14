@@ -486,13 +486,18 @@ func (m *CognitoProviderMock) ConfirmSignUp(ctx context.Context, params *cognito
 		}
 	}
 
-	if user.IsConfirmed {
-		return nil, fmt.Errorf("user already confirmed")
-	}
-
-	// Validate confirmation code
+	// Real Cognito validates the code BEFORE the account state (measured): a wrong code answers
+	// CodeMismatchException even on a confirmed account, and a previously-valid code on a
+	// confirmed account answers ExpiredCodeException — never NotAuthorizedException.
 	if *params.ConfirmationCode != user.ConfirmationCode {
-		return nil, fmt.Errorf("invalid confirmation code")
+		return nil, &types.CodeMismatchException{
+			Message: aws.String("Invalid verification code provided, please try again."),
+		}
+	}
+	if user.IsConfirmed {
+		return nil, &types.ExpiredCodeException{
+			Message: aws.String("Invalid code provided, please request a code again."),
+		}
 	}
 
 	// Confirm the user
@@ -550,9 +555,12 @@ func (m *CognitoProviderMock) handleUserPasswordAuth(userPoolID string, params *
 		}
 	}
 
-	// Check if user is confirmed
+	// Check if user is confirmed. Cognito raises this only once the password has matched, which is
+	// why the password check above comes first.
 	if !user.IsConfirmed {
-		return nil, fmt.Errorf("user not confirmed")
+		return nil, &types.UserNotConfirmedException{
+			Message: aws.String("User is not confirmed."),
+		}
 	}
 
 	// Check if user is enabled

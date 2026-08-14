@@ -48,10 +48,10 @@ var _ = Describe("User Common Handler", func() {
 		seedUser := func(userID, email string) string {
 			db := user_details_db.NewUserDetailsDB(rmngctx.NewRmngContextWithCtx(ctx, nil))
 			Expect(db.CreateUserDetails(&user_details_db.UserDetailsEntry{
-				UserID:       userID,
-				Email:        email,
-				UserType:     user_details_db.UserTypeUser,
-				Provider:     user_details_db.ProviderOIDC,
+				UserID:   userID,
+				Email:    email,
+				UserType: user_details_db.UserTypeUser,
+				Provider: user_details_db.ProviderOIDC,
 			})).To(Succeed())
 
 			minter := jwtutil.NewMinter(backend.Issuer, backend.SigningKey, oidc.SigningKeyID)

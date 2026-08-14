@@ -157,7 +157,9 @@ var _ = Describe("CognitoProviderMock", func() {
 
 			_, err := cognitoMock.ConfirmSignUp(ctx, confirmInput)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("invalid confirmation code"))
+			// Typed like the real service: callers branch on the exception, not on the text.
+			var codeMismatch *types.CodeMismatchException
+			Expect(errors.As(err, &codeMismatch)).To(BeTrue())
 		})
 
 		It("should return error for non-existent user", func() {
@@ -176,7 +178,9 @@ var _ = Describe("CognitoProviderMock", func() {
 			// Second confirmation
 			_, err = cognitoMock.ConfirmSignUp(ctx, confirmInput)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("user already confirmed"))
+			// Measured: a spent-but-matching code on a confirmed account answers ExpiredCode.
+			var expired *types.ExpiredCodeException
+			Expect(errors.As(err, &expired)).To(BeTrue())
 		})
 
 		It("should return injected error", func() {
@@ -299,7 +303,8 @@ var _ = Describe("CognitoProviderMock", func() {
 
 			_, err := cognitoMock.InitiateAuth(ctx, authInput)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("user not confirmed"))
+			var notConfirmed *types.UserNotConfirmedException
+			Expect(errors.As(err, &notConfirmed)).To(BeTrue())
 		})
 
 		It("should return error for disabled user", func() {

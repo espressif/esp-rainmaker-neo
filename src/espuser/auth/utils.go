@@ -58,6 +58,14 @@ func IsUserNotExistsError(err error) bool {
 	return false
 }
 
+func IsUserNotConfirmedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var notConfirmed *types.UserNotConfirmedException
+	return errors.As(err, &notConfirmed)
+}
+
 // IsUserAlreadyExistsError checks if an error indicates that a user already exists
 func IsUserAlreadyExistsError(err error) bool {
 	if err == nil {
