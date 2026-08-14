@@ -1825,11 +1825,11 @@ def provision_end_user():
         except Exception:  # noqa: BLE001
             pass
 # ============================================================================
-# Webhook mock toggle (test-infra deployed by `make test-setup`)
+# Webhook mock toggle (test-infra deployed by `make itest-setup`)
 # ============================================================================
 
-# Path to the test-infra outputs written by `make test-setup`.
-_TEST_INFRA_OUTPUTS = "cdk-outputs-test.json"
+# Path to the test-infra outputs written by `make itest-setup`.
+_TEST_INFRA_OUTPUTS = "build/cdk/cdk-outputs-test.json"
 _NOTIFICATIONS_LAMBDA = "rmng-notifications"
 
 
@@ -1864,7 +1864,7 @@ def webhook_mock():
     """Enable the DynamoDB webhook mock on the notifications Lambda for the run.
 
     Yields (base_url, api_key): the test-infra API Gateway URL (deployed by
-    `make test-setup`) and the API key gating every /v1 method. Points
+    `make itest-setup`) and the API key gating every /v1 method. Points
     rmng-notifications at the mock with the key, and disables it on teardown —
     even if a test fails — by blanking webhook_mock_base_url, the sole toggle the
     Lambda reads. Skips the requesting test(s) when the infra isn't deployed. The
@@ -1874,7 +1874,7 @@ def webhook_mock():
     infra = _load_mock_infra()
     if infra is None:
         pytest.skip(
-            "test webhook mock not deployed; run `make test-setup` first"
+            "test webhook mock not deployed; run `make itest-setup` first"
         )
     base_url, api_key = infra
 
