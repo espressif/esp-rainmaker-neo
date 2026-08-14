@@ -624,12 +624,19 @@ func UnshareGroup(ctx *rmngctx.RmngContext, groupID string, targetUserID string)
 		}
 	}
 
+	// Remove the user FIRST. The capability hooks below have side effects that outlive the request — the Matter hook rotates a fabric CAT ID, invalidating every NOC already issued under it — so they must not run until the removal has passed its own authorization check (GroupShare) and the last-primary guard, and committed. Ordering them before the removal let a call that was ultimately rejected keep its side effects.
+	if err := userGroupDB.UnshareUserGroup(groupID, targetUserID); err != nil {
+		return err
+	}
+
 	// Get group to find its capabilities
 	group, err := GetGroupByID(ctx, groupID)
 	if err != nil {
-		// Log but continue - the unshare should still proceed
+		// Log but don't fail — the user is already out. The caller's in-context permissions survive their own row being deleted, so a self-leave still authorizes the hooks below.
 		rlog.Error(ctx).Err(err).Msg("Failed to get group for capability callbacks")
-	} else if accessType != "" && len(group.Capabilities) > 0 {
+		return nil
+	}
+	if accessType != "" && len(group.Capabilities) > 0 {
 		// Call OnUserExitGroup for each capability
 		if err := invokeCapabilityOnUserExitGroup(ctx, groupID, targetUserID, accessType, group.Capabilities); err != nil {
 			rlog.Error(ctx).Err(err).Msg("Failed to invoke OnUserExitGroup for capabilities")
@@ -637,8 +644,7 @@ func UnshareGroup(ctx *rmngctx.RmngContext, groupID string, targetUserID string)
 		}
 	}
 
-	// Then remove the user
-	return userGroupDB.UnshareUserGroup(groupID, targetUserID)
+	return nil
 }
 
 // ShareSubGroup shares a subgroup with a user.

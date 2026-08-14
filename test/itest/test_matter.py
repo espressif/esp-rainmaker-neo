@@ -899,3 +899,45 @@ def test_matter_noc_on_foreign_group_denied(test_user1, test_user2):
     finally:
         if group_id_b:
             group_api_b.delete_group(group_id_b, warn_error=True)
+
+
+def _matter_cats(group_api, group_id):
+    """(admin, operate) CAT ids as the group owner currently sees them."""
+    group = group_api._get_group(group_id)
+    assert group is not None, "owner should still see the group"
+    matter = group.get("matter")
+    assert matter, f"group listing carried no matter object: {group}"
+    return matter["group_cat_id_admin"], matter["group_cat_id_operate"]
+
+def test_denied_unshare_does_not_rotate_the_fabric_cat(test_user1, test_user2, test_user3):
+    """A secondary's rejected remove-member must not rotate the fabric CAT.
+
+    The Matter exit hook rotates a CAT id, invalidating the NOCs issued under it, so it must run
+    only after the removal is authorized and committed — never on a call that is then refused.
+    """
+    owner_api = Group(test_user1)
+    group_id = None
+    try:
+        group_id = owner_api.create_matter_group("unshare hook test")["group_id"]
+
+        owner_api.share_group(group_id, test_user2.username, "secondary")
+        accept_sharing_request_for(test_user2, group_id, "")
+        owner_api.share_group(group_id, test_user3.username, "secondary")
+        accept_sharing_request_for(test_user3, group_id, "")
+
+        admin_before, operate_before = _matter_cats(owner_api, group_id)
+
+        # test_user2 is a secondary: it has no group:share, so this must be refused.
+        response = test_user2.make_api_request(
+            'DELETE', f'/v1/groups/{group_id}/users/{test_user3.user_id}')
+        assert response.status_code != 200, \
+            f"a secondary must not be able to remove another member (got {response.status_code})"
+
+        admin_after, operate_after = _matter_cats(owner_api, group_id)
+        assert operate_after == operate_before, \
+            "a refused removal rotated the operate CAT, invalidating issued NOCs"
+        assert admin_after == admin_before, \
+            "a refused removal rotated the admin CAT, invalidating the owner's own NOC"
+    finally:
+        if group_id:
+            owner_api.delete_group(group_id, warn_error=True)

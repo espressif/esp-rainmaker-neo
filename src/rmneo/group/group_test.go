@@ -6,6 +6,7 @@ package group_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
@@ -2109,5 +2110,107 @@ var _ = Describe("Matter Capability OnUserExitGroup", func() {
 			expectedCATID2, _ := group.IncrementCATIDVersion(expectedCATID1)
 			Expect(capData2["group_cat_id_operate"]).To(Equal(expectedCATID2))
 		})
+	})
+})
+
+func matterCATIDs(groupID string) (admin string, operate string) {
+	item := test_utils.QuickGetItem(group_db.GroupsTable, map[string]types.AttributeValue{
+		"group_id":     &types.AttributeValueMemberS{Value: groupID},
+		"sub_group_id": &types.AttributeValueMemberS{Value: "NONE"},
+	})
+	Expect(item).ToNot(BeNil())
+	s, ok := item["cap_matter"].(*types.AttributeValueMemberS)
+	Expect(ok).To(BeTrue(), "cap_matter should be a JSON string")
+
+	var data map[string]interface{}
+	Expect(json.Unmarshal([]byte(s.Value), &data)).To(Succeed())
+	admin, _ = data["group_cat_id_admin"].(string)
+	operate, _ = data["group_cat_id_operate"].(string)
+	return admin, operate
+}
+
+var _ = Describe("unshare capability hook ordering", func() {
+	var owner, secondary, other *user.User
+	var ctxOwner *rmngctx.RmngContext
+	var groupID string
+
+	BeforeEach(func() {
+		test_utils.TestSetup()
+		owner = user.NewUser("uh-owner")
+		secondary = user.NewUser("uh-secondary")
+		other = user.NewUser("uh-other")
+		ctxOwner = rmngctx.NewRmngContext(owner)
+
+		g, err := group.CreateGroupForUserWithOptions(ctxOwner, "Fabric",
+			&group.CreateGroupOptions{Capabilities: []string{group.MatterCapabilityName}})
+		Expect(err).To(BeNil())
+		groupID = g.GroupID
+	})
+
+	freshCtx := func(u *user.User) *rmngctx.RmngContext {
+		return rmngctx.NewRmngContext(user.NewUser(u.GetID()))
+	}
+
+	// The Matter exit hook rotates a fabric CAT ID, invalidating every NOC already issued under it, so it must not run before the removal is authorized and committed.
+	It("does not rotate the fabric CAT when a secondary's unshare is denied", func() {
+		ShareAndApproveGroup(ctxOwner, freshCtx(secondary), groupID, utils.GroupSecondaryAccess)
+		ShareAndApproveGroup(ctxOwner, freshCtx(other), groupID, utils.GroupSecondaryAccess)
+		adminBefore, operateBefore := matterCATIDs(groupID)
+
+		err := group.UnshareGroup(freshCtx(secondary), groupID, other.GetID())
+		Expect(err).To(HaveOccurred(), "a secondary member has no group:share")
+
+		adminAfter, operateAfter := matterCATIDs(groupID)
+		Expect(operateAfter).To(Equal(operateBefore))
+		Expect(adminAfter).To(Equal(adminBefore))
+	})
+
+	It("does not rotate the fabric CAT when the last-primary leave is rejected", func() {
+		adminBefore, _ := matterCATIDs(groupID)
+
+		err := group.UnshareGroup(freshCtx(owner), groupID, owner.GetID())
+		Expect(err).To(HaveOccurred(), "the last primary cannot be removed")
+
+		adminAfter, _ := matterCATIDs(groupID)
+		Expect(adminAfter).To(Equal(adminBefore))
+	})
+
+	It("leaves the target in the group when the unshare is denied", func() {
+		ShareAndApproveGroup(ctxOwner, freshCtx(secondary), groupID, utils.GroupSecondaryAccess)
+		ShareAndApproveGroup(ctxOwner, freshCtx(other), groupID, utils.GroupSecondaryAccess)
+
+		Expect(group.UnshareGroup(freshCtx(secondary), groupID, other.GetID())).To(HaveOccurred())
+		Expect(test_utils.QuickGetItem(user_group_db.UserGroupMappingTable, map[string]types.AttributeValue{
+			"user_id":  &types.AttributeValueMemberS{Value: other.GetID()},
+			"group_id": &types.AttributeValueMemberS{Value: groupID},
+		})).ToNot(BeNil())
+	})
+
+	// Rotation on a real removal is intended behaviour and must be preserved.
+	It("still rotates the admin CAT when a co-primary is removed", func() {
+		ShareAndApproveGroup(ctxOwner, freshCtx(secondary), groupID, utils.GroupPrimaryAccess)
+		adminBefore, _ := matterCATIDs(groupID)
+
+		Expect(group.UnshareGroup(freshCtx(owner), groupID, secondary.GetID())).To(Succeed())
+		adminAfter, _ := matterCATIDs(groupID)
+		Expect(adminAfter).ToNot(Equal(adminBefore))
+	})
+
+	It("still rotates the operate CAT when a secondary is removed", func() {
+		ShareAndApproveGroup(ctxOwner, freshCtx(secondary), groupID, utils.GroupSecondaryAccess)
+		_, operateBefore := matterCATIDs(groupID)
+
+		Expect(group.UnshareGroup(freshCtx(owner), groupID, secondary.GetID())).To(Succeed())
+		_, operateAfter := matterCATIDs(groupID)
+		Expect(operateAfter).ToNot(Equal(operateBefore))
+	})
+
+	It("still removes the member on a successful unshare", func() {
+		ShareAndApproveGroup(ctxOwner, freshCtx(secondary), groupID, utils.GroupSecondaryAccess)
+		Expect(group.UnshareGroup(freshCtx(owner), groupID, secondary.GetID())).To(Succeed())
+		Expect(test_utils.QuickGetItem(user_group_db.UserGroupMappingTable, map[string]types.AttributeValue{
+			"user_id":  &types.AttributeValueMemberS{Value: secondary.GetID()},
+			"group_id": &types.AttributeValueMemberS{Value: groupID},
+		})).To(BeNil())
 	})
 })
