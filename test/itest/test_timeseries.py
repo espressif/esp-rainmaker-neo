@@ -12,6 +12,10 @@ from test.itest.conftest import (
     USER_API_GATEWAY_URL,
     IOT_ENDPOINT,
 )
+import calendar
+import os
+
+import boto3
 import pytest
 import time
 
@@ -508,4 +512,130 @@ def test_timeseries_cross_tenant_read_denied(two_tenants):
         params={"key": "Temperature", "data_type": "float"})
     assert r2.status_code >= 400, (
         f"Read foreign node timeseries via foreign-group path returned {r2.status_code}: {r2.text[:150]}"
+    )
+
+
+# Deleting a node's timeseries data must actually delete it, from both tables.
+#
+# The purge names the sort key explicitly when batch-deleting. Naming the raw table's `ts` against
+# the processed-aggregate table matched no attribute, which aborted the purge on its first
+# parameter: processed aggregates were never removed and raw data past the first parameter was left
+# behind.
+#
+# This test asserts on the TABLE CONTENTS rather than the API response, because the defect's
+# signature is precisely that the API answers 200 while deleting nothing.
+#
+# The suite has no other coverage of this path: `GetTimeSeriesParams` only returns parameters whose
+# config carries the `time_series` property, and no other test device declares one, so for every
+# other node the purge is a no-op before it reaches the code under test. This test sets a real
+# config first for that reason.
+RAW_TABLE = "rmng-raw-ts-data"
+PROCESSED_TABLE = "rmng-processed-ts-data"
+
+PARAM_KEY = "purgeparam"
+PARAM_DT = "float"
+
+# Backdated days, oldest first, so the processed table holds archived windows as well as the open
+# "current" row — a purge has to take both, and only a later sample closes a window.
+DAYS = ["2024-05-10", "2024-05-11", "2024-05-12"]
+
+AGGREGATION_TIMEOUT_S = 180
+AGGREGATION_POLL_S = 10
+
+
+def _midday_epoch_seconds(date_str):
+    y, m, d = (int(p) for p in date_str.split("-"))
+    return calendar.timegm((y, m, d, 12, 0, 0, 0, 0, 0))
+
+
+def _table(name):
+    region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+    return boto3.resource("dynamodb", region_name=region).Table(name)
+
+
+def _row_count(table_name, node_id):
+    """Rows in one node/param partition of the given table."""
+    from boto3.dynamodb.conditions import Key
+    partition = f"{node_id}.{PARAM_KEY}.{PARAM_DT}"
+    resp = _table(table_name).query(
+        KeyConditionExpression=Key("node_key_dt").eq(partition),
+        ConsistentRead=True,
+    )
+    return resp["Count"]
+
+
+@pytest.fixture
+def node_with_timeseries_history(associated_device):
+    """A node whose config declares a time_series param, with data in both tables."""
+    device, group_id, test_user1, _ = associated_device
+    assert connect_device_with_retry(device), "failed to connect device"
+    device.get_group_info()
+
+    # Without the time_series property the purge finds no parameters and never reaches the
+    # code under test, so this config is load-bearing, not decoration.
+    assert device.set_node_config({
+        "node_id": device.node_thing_name,
+        "info": {"fw_version": "1.0", "type": "test.purge"},
+        "devices": [{
+            "id": "sensor",
+            "type": "esp.device.sensor",
+            "params": [{
+                # NodeCfgDeviceParam.ID is json "id"; "name" leaves it empty and the purge then
+                # targets an empty partition key, deleting nothing while still returning 200.
+                "id": PARAM_KEY,
+                "type": "esp.param.temperature",
+                "data_type": PARAM_DT,
+                "properties": ["read", "time_series"],
+            }],
+        }],
+    }), "failed to set a node config declaring a time_series param"
+
+    for date_str in DAYS:
+        assert device.publish_timeseries_data(
+            k=PARAM_KEY, data_type=PARAM_DT, value=1.0,
+            timestamp=_midday_epoch_seconds(date_str), timezone="UTC",
+        ), f"failed to publish the {date_str} sample"
+        time.sleep(1)
+
+    node_id = device.node_thing_name
+
+    # Precondition: both tables must actually hold rows, or a passing purge proves nothing.
+    deadline = time.time() + AGGREGATION_TIMEOUT_S
+    while time.time() < deadline:
+        if _row_count(RAW_TABLE, node_id) > 0 and _row_count(PROCESSED_TABLE, node_id) > 0:
+            break
+        time.sleep(AGGREGATION_POLL_S)
+    else:
+        pytest.skip(
+            f"timeseries data never landed in both tables within {AGGREGATION_TIMEOUT_S}s "
+            f"(raw={_row_count(RAW_TABLE, node_id)}, processed={_row_count(PROCESSED_TABLE, node_id)}) "
+            "— ingest or stream-processor problem, not the purge defect"
+        )
+
+    return device, group_id, test_user1, node_id
+
+
+def test_purge_empties_both_timeseries_tables(node_with_timeseries_history):
+    """DELETE .../timeseries must leave neither raw samples nor processed aggregates behind."""
+    _, group_id, test_user1, node_id = node_with_timeseries_history
+
+    raw_before = _row_count(RAW_TABLE, node_id)
+    processed_before = _row_count(PROCESSED_TABLE, node_id)
+    assert raw_before > 0 and processed_before > 0, "precondition: both tables should hold rows"
+
+    response = test_user1.make_api_request(
+        "DELETE", f"/v1/groups/{group_id}/nodes/{node_id}/timeseries"
+    )
+    assert response.status_code == 200, f"purge returned {response.status_code}: {response.text}"
+
+    # Assert on the tables, not the response: the defect is a 200 that deleted nothing.
+    raw_after = _row_count(RAW_TABLE, node_id)
+    processed_after = _row_count(PROCESSED_TABLE, node_id)
+
+    assert raw_after == 0, (
+        f"{raw_after} of {raw_before} raw rows survived the purge for node {node_id}"
+    )
+    assert processed_after == 0, (
+        f"{processed_after} of {processed_before} processed aggregate rows survived the purge "
+        f"for node {node_id}"
     )

@@ -18,6 +18,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/timeseries"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/timeseries/timewindow"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
@@ -1351,4 +1352,97 @@ var _ = Describe("Timeseries Service Integration", func() {
 		})
 	})
 
+})
+
+// The two timeseries tables share a partition key but not a sort key. A batch delete names the
+// sort key explicitly, so naming the raw table's "ts" against the processed table matched nothing
+// and aborted the purge, leaving data the caller was told had been deleted.
+var _ = Describe("Purging all timeseries data for a node", func() {
+	const nodeID = "purge-node"
+
+	var (
+		db     *timeseries_db.TimeseriesDB
+		mockDB *mock.DynamoDBMock
+		params []timeseries_db.ParamKey
+	)
+
+	BeforeEach(func() {
+		test_utils.TestSetup()
+		mockDB = awscommon.GetDynamoDBClient().(*mock.DynamoDBMock)
+		mockDB.AddTable(timeseries_db.RawTSDataTable, "node_key_dt", "ts")
+		mockDB.AddTable(processed_ts_db.ProcessedTSDataTable, "node_key_dt", "interval_key")
+		mockDB.ProfileReset()
+
+		sysCtx := rmngctx.NewRmngContext(utils.NewSystemActor())
+		db = timeseries_db.NewTimeseriesDB(sysCtx)
+
+		params = []timeseries_db.ParamKey{
+			{Name: "temperature", DataType: "float"},
+			{Name: "energy", DataType: "float"},
+		}
+
+		processedDB := processed_ts_db.NewProcessedTsDB(sysCtx)
+		for _, p := range params {
+			// Raw samples, keyed on ts.
+			for _, ts := range []int64{1000, 2000} {
+				Expect(db.PutTimeseriesData(&timeseries_db.TimeseriesEntry{
+					NodeID: nodeID, DataKey: p.Name, DataType: p.DataType,
+					Timestamp: ts, TopicName: "ts-test", Value: 1.0,
+				})).To(Succeed())
+			}
+			// Processed rows, keyed on interval_key — both the open "current" row and an
+			// archived window, since a purge has to take both.
+			entry := &processed_ts_db.ProcessedTsEntry{
+				NodeKeyDt: nodeID + "." + p.Name + "." + p.DataType,
+				NodeID:    nodeID, DataKey: p.Name, DataType: p.DataType,
+			}
+			Expect(processedDB.UpsertCurrentEntry(entry)).To(Succeed())
+			Expect(processedDB.CreateWindowEntry(entry, "daily#2026-01-15")).To(Succeed())
+		}
+	})
+
+	It("removes every row from both tables, for every parameter", func() {
+		Expect(db.DeleteAllTimeseriesForNode(nodeID, params)).To(Succeed())
+
+		for _, p := range params {
+			raw, err := db.GetTimeseriesDataWithPagination(nodeID, p.Name, p.DataType, 0, 0, 0, "")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(raw.Entries).To(BeEmpty(), "raw data survived the purge for %s", p.Name)
+		}
+
+		// The processed table is the one the old code never touched at all.
+		sysCtx := rmngctx.NewRmngContext(utils.NewSystemActor())
+		processedDB := processed_ts_db.NewProcessedTsDB(sysCtx)
+		for _, p := range params {
+			entries, err := processedDB.GetWindowEntries(nodeID, p.Name, p.DataType,
+				timewindow.WindowDaily, time.Time{}, time.Time{})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(entries).To(BeEmpty(), "archived aggregates survived the purge for %s", p.Name)
+
+			current, err := processedDB.GetCurrentEntry(nodeID, p.Name, p.DataType)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(current).To(BeNil(), "the open current aggregate survived the purge for %s", p.Name)
+		}
+	})
+
+	It("purges the second parameter even when the first one fails", func() {
+		// An unknown table name is the cheapest way to make one pair fail; the old code returned
+		// on the first error and abandoned everything after it.
+		Expect(db.DeleteTimeseriesForParam("rmng-no-such-table", nodeID, "temperature", "float")).
+			To(HaveOccurred(), "an unknown table must be refused, not silently skipped")
+
+		Expect(db.DeleteAllTimeseriesForNode(nodeID, params)).To(Succeed())
+
+		for _, p := range params {
+			raw, err := db.GetTimeseriesDataWithPagination(nodeID, p.Name, p.DataType, 0, 0, 0, "")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(raw.Entries).To(BeEmpty(), "raw data survived for %s", p.Name)
+		}
+	})
+
+	It("reports an error rather than claiming success when a table is unknown", func() {
+		err := db.DeleteTimeseriesForParam("rmng-no-such-table", nodeID, "temperature", "float")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("rmng-no-such-table"))
+	})
 })

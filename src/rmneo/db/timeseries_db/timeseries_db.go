@@ -64,6 +64,7 @@ Access Control:
 package timeseries_db
 
 import (
+	"errors"
 	"fmt"
 	dbcore "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/processed_ts_db"
@@ -85,6 +86,13 @@ import (
 const (
 	RawTSDataTable = "rmng-raw-ts-data"
 )
+
+// The two timeseries tables share a partition key but NOT a sort key, and a batch delete has to
+// name the sort key exactly: an attribute the item does not carry aborts the whole delete.
+var timeseriesKeyAttributes = map[string][]string{
+	RawTSDataTable:                       {"node_key_dt", "ts"},
+	processed_ts_db.ProcessedTSDataTable: {"node_key_dt", "interval_key"},
+}
 
 type TimeseriesDB struct {
 	dbcore.DB
@@ -362,19 +370,31 @@ func (db *TimeseriesDB) DeleteTimeseriesForParam(tableName, nodeID, dataKey, dat
 		},
 	}
 
-	return db.QueryAndBatchDelete(db.Ctx.Context, queryInput, tableName, []string{"node_key_dt", "ts"})
+	keyAttributes, ok := timeseriesKeyAttributes[tableName]
+	if !ok {
+		return rmerror.NewRMError(nil, fmt.Sprintf("cannot delete timeseries data: unknown table %q has no key attributes registered", tableName))
+	}
+
+	return db.QueryAndBatchDelete(db.Ctx.Context, queryInput, tableName, keyAttributes)
 }
 
 // DeleteAllTimeseriesForNode deletes all timeseries data (raw and processed) for a node
 // given its parameter list (each param has Name and DataType).
+// DeleteAllTimeseriesForNode is a purge, so it does not stop at the first failure: returning early
+// would leave every later parameter's data in place, which is how one bad table name previously
+// turned the whole purge into a no-op. Every table/parameter pair is attempted and the failures are
+// reported together, so the caller learns the purge was partial and which parts survived.
 func (db *TimeseriesDB) DeleteAllTimeseriesForNode(nodeID string, params []ParamKey) error {
+	var errs []error
 	for _, dataKey := range params {
-		if err := db.DeleteTimeseriesForParam(RawTSDataTable, nodeID, dataKey.Name, dataKey.DataType); err != nil {
-			return rmerror.NewRMError(err, fmt.Sprintf("failed to delete raw timeseries for %s.%s", dataKey.Name, dataKey.DataType))
+		for _, tableName := range []string{RawTSDataTable, processed_ts_db.ProcessedTSDataTable} {
+			if err := db.DeleteTimeseriesForParam(tableName, nodeID, dataKey.Name, dataKey.DataType); err != nil {
+				errs = append(errs, fmt.Errorf("%s %s.%s: %w", tableName, dataKey.Name, dataKey.DataType, err))
+			}
 		}
-		if err := db.DeleteTimeseriesForParam(processed_ts_db.ProcessedTSDataTable, nodeID, dataKey.Name, dataKey.DataType); err != nil {
-			return rmerror.NewRMError(err, fmt.Sprintf("failed to delete processed timeseries for %s.%s", dataKey.Name, dataKey.DataType))
-		}
+	}
+	if len(errs) > 0 {
+		return rmerror.NewRMError(errors.Join(errs...), fmt.Sprintf("failed to delete timeseries data for %d of %d node parameters", len(errs), len(params)*2))
 	}
 	return nil
 }
