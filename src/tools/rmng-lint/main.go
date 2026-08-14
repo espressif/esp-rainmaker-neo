@@ -5,6 +5,7 @@
 package main
 
 import (
+	"github.com/espressif/esp-rainmaker-neo/src/tools/rmng-lint/losterr"
 	"github.com/espressif/esp-rainmaker-neo/src/tools/rmng-lint/norlog"
 
 	"golang.org/x/tools/go/analysis/multichecker"
@@ -13,5 +14,6 @@ import (
 func main() {
 	multichecker.Main(
 		norlog.Analyzer,
+		losterr.Analyzer,
 	)
 }
