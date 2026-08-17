@@ -24,7 +24,7 @@ body:
       label: Environment
       placeholder: |
         - OS: macOS 15
-        - Go: 1.26.5
+        - Go: 1.26.6
         - Python: 3.12
         - CDK: 2.x
         - AWS region: ap-south-1

@@ -59,7 +59,7 @@ Prerequisites:
 
 - Your own AWS account
 - [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) (latest)
-- [Go 1.26.5](https://go.dev/doc/install)
+- [Go 1.26.6](https://go.dev/doc/install)
 - [Python 3.12](https://www.python.org/downloads/)
 - [Node.js 24](https://nodejs.org/)
 
