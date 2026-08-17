@@ -184,13 +184,8 @@ dashboard_check:
 # -------------------------
 go_vulncheck:
   stage: security
-  # Pinned (not the default golang:latest): a blocking stdlib vulnerability gate must
-  # be deterministic. The floating minor tag keeps picking up stdlib security patches
-  # (e.g. the go1.26.5 crypto/tls fix) without an unpredictable jump to a new
-  # major/minor that :latest would bring. Bump this when the codebase moves to a newer
-  # Go line. Relies on the global GIT_SUBMODULE_STRATEGY: recursive so src/esp-cloud-common
-  # is checked out for scanning.
-  image: golang:1.26
+  # Pinned to the exact go.mod toolchain, matching GitHub's vulncheck job
+  image: golang:1.26.5
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
