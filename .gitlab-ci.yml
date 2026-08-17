@@ -21,8 +21,7 @@ variables:
 default:
   # Pinned to the go.mod toolchain. :latest silently follows new Go releases, so a
   # jump to the next minor would land in CI before the codebase is ready for it.
-  # The security job below deliberately keeps a floating :1.26 instead — see there.
-  image: golang:1.26.5
+  image: golang:1.26.6
   tags:
     - rmng
 
@@ -126,7 +125,7 @@ pip_audit:
 cdk_synth:
   stage: lint
   # Registry path from the predefined project variable; only the tag is pinned here.
-  image: $CI_REGISTRY_IMAGE/rmng:go1.26.5_node24
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
@@ -184,13 +183,8 @@ dashboard_check:
 # -------------------------
 go_vulncheck:
   stage: security
-  # Pinned (not the default golang:latest): a blocking stdlib vulnerability gate must
-  # be deterministic. The floating minor tag keeps picking up stdlib security patches
-  # (e.g. the go1.26.5 crypto/tls fix) without an unpredictable jump to a new
-  # major/minor that :latest would bring. Bump this when the codebase moves to a newer
-  # Go line. Relies on the global GIT_SUBMODULE_STRATEGY: recursive so src/esp-cloud-common
-  # is checked out for scanning.
-  image: golang:1.26
+  # Pinned to the exact go.mod toolchain, matching GitHub's vulncheck job
+  image: golang:1.26.6
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
@@ -234,7 +228,7 @@ unittest:
 .deploy_template:
   stage: deploy
   # Registry path from the predefined project variable; only the tag is pinned here.
-  image: $CI_REGISTRY_IMAGE/rmng:go1.26.5_node24
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       when: manual
@@ -310,7 +304,7 @@ deploy_eu-west-1:
     - if: $CI_PIPELINE_SOURCE == "web"
   variables:
     NODE_VERSION: "24"
-    GO_VERSION: "1.26.5"
+    GO_VERSION: "1.26.6"
     DOCKER_IMAGE_REGISTRY: "$CI_REGISTRY"
     DOCKER_IMAGE_VERSION: "go${GO_VERSION}_node${NODE_VERSION}"
     DOCKER_IMAGE_NAME: "${CI_REGISTRY_IMAGE}/rmng:${DOCKER_IMAGE_VERSION}"

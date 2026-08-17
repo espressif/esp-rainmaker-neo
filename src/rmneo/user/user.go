@@ -8,10 +8,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+
 	"github.com/espressif/esp-cloud-common/go/rbac/rbac"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_integration_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"strings"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/user_details_db"
@@ -79,7 +80,7 @@ func NewUnconfirmedUser() *User {
 }
 
 // NewUserFromUserID fetches a user by user ID. Returns an error if the user does not exist.
-// Used to resolve path parameters (e.g. try as ID first, then fall back to user code).
+// Used to resolve path parameters.
 // Resolves against user_details (the authoritative per-user record, minted at signup),
 // not the app-clients table — a user without a registered push client still exists.
 func NewUserFromUserID(ctx *rmngctx.RmngContext, userID string) (*User, error) {

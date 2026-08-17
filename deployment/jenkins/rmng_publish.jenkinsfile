@@ -13,7 +13,7 @@ pipeline {
         docker {
             label 'cloud'
             // Registry coordinates come from Jenkins global environment variables, not credentials: the agent block is evaluated before any credential binding (or this pipeline's own environment block) exists.
-            image "${env.JENKINS_RAINMAKER_NEO_DOCKER_IMAGE_PATH}/rmng:go1.26.5_node24"
+            image "${env.JENKINS_RAINMAKER_NEO_DOCKER_IMAGE_PATH}/rmng:go1.26.6_node24"
             registryUrl "${env.JENKINS_DOCKER_REGISTRY_URL}"
             registryCredentialsId 'JENKINS_GITLAB_USER_CREDENTIALS_APP_FRAMEWORKS'
             alwaysPull true

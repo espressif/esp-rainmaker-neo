@@ -7,7 +7,7 @@ FROM amazonlinux:2023
 # Build arguments
 # GO_VERSION must track go.mod. CI passes it explicitly; this default is what a local
 # `docker build` gets, and anything below go.mod's version cannot compile the module.
-ARG GO_VERSION=1.26.5
+ARG GO_VERSION=1.26.6
 ARG NODE_VERSION=24
 ARG VERSION
 
