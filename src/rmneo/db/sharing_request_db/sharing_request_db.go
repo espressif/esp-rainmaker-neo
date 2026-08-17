@@ -67,11 +67,13 @@ Access Control:
 package sharing_request_db
 
 import (
+	"errors"
 	dbcore "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
 	"strconv"
 	"time"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -83,6 +85,12 @@ import (
 
 const (
 	SharingRequestsTable = "rmng-sharing-reqs"
+)
+
+// Handlers map these to 404 and 410 respectively.
+var (
+	ErrSharingRequestNotFound = errors.New("sharing request not found")
+	ErrSharingRequestExpired  = errors.New("sharing request has expired")
 )
 
 type SharingRequestDB struct {
@@ -156,7 +164,21 @@ func (db *SharingRequestDB) GetMySharingRequests() ([]*SharingRequestEntry, erro
 		return nil, err
 	}
 
-	return entries, nil
+	// Drop expired requests. DynamoDB's TTL sweep is only "typically within 48 hours", so a row past expiration_time can still be sitting in the table long after the 24-hour window closed; nothing else compares it against the clock.
+	live := entries[:0]
+	for _, entry := range entries {
+		if entry.IsExpired() {
+			continue
+		}
+		live = append(live, entry)
+	}
+
+	return live, nil
+}
+
+// IsExpired reports whether the request is past its expiration_time. A zero value means no expiry was recorded (older rows), which is treated as not expired.
+func (e *SharingRequestEntry) IsExpired() bool {
+	return e.ExpirationTime != 0 && time.Now().Unix() > e.ExpirationTime
 }
 
 func (db *SharingRequestDB) GetSharingRequestbyID(sharingRequestID string) (*SharingRequestEntry, error) {
@@ -173,11 +195,18 @@ func (db *SharingRequestDB) GetSharingRequestbyID(sharingRequestID string) (*Sha
 	if err != nil {
 		return nil, err
 	}
+	// UnmarshalMap(nil, ...) succeeds and yields a zero-valued entry, so without this a missing request would be reported as a valid one with empty group/user/access fields.
+	if result.Item == nil {
+		return nil, rmerror.NewRMError(ErrSharingRequestNotFound, "sharing request not found")
+	}
 
 	entry := &SharingRequestEntry{}
 	err = attributevalue.UnmarshalMap(result.Item, entry)
 	if err != nil {
 		return nil, err
+	}
+	if entry.IsExpired() {
+		return nil, rmerror.NewRMError(ErrSharingRequestExpired, "sharing request has expired")
 	}
 	return entry, nil
 }
