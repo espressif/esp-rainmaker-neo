@@ -728,7 +728,7 @@ def handle_user_commands(user):
             else:
                 handle_process_sharing_request(user, main_command.split('_')[0], args[0])
         elif main_command == 'register_node':
-            if len(args) == 2:
+            if len(args) == 3:
                 node_id, admin_group_names_str, tags_str = args
                 handle_register_node(user, node_id, admin_group_names_str, tags_str=tags_str)
             else:
