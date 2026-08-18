@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/espressif/esp-cloud-common/go/rbac/rbac"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/nodes_online_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
@@ -1437,13 +1438,16 @@ func RegisterNodeInRmng(rmngCtx *rmngctx.RmngContext, cert string, caCert string
 		return nodeId, rmerror.NewRMError(err, "failed to register")
 	}
 
-	// Add node to node_details table. Error is intentionally ignored — the
-	// row is opportunistic; downstream lookups treat its absence the same
-	// as any other missing-row case. node_type is whatever the node-register
-	// hook classified the node as (empty for plain nodes); core does not
-	// interpret it.
-	_ = node_details_db.NewNodeDetailsDB(rmngCtx).
-		AddNode(node_details_db.NodeDetailsEntry{NodeID: nodeId, RegTs: time.Now().Unix(), AdminId: adminId, NodeType: nodeType})
+	// AddNode's conditional put is what detects a re-registration. Other write
+	// failures stay non-fatal: the row is opportunistic and downstream lookups
+	// treat its absence like any other missing row.
+	if err := node_details_db.NewNodeDetailsDB(rmngCtx).
+		AddNode(node_details_db.NodeDetailsEntry{NodeID: nodeId, RegTs: time.Now().Unix(), AdminId: adminId, NodeType: nodeType}); err != nil {
+		if db.IsConditionalCheckFailedException(err) {
+			return nodeId, ErrNodeAlreadyRegistered
+		}
+		rlog.Warn(rmngCtx).Err(err).Msg("failed to record node details row")
+	}
 
 	if err := n.applyMetadata(rmngCtx, adminGroupNames, tags); err != nil {
 		return nodeId, err
@@ -1457,6 +1461,11 @@ func RegisterNodeInRmng(rmngCtx *rmngctx.RmngContext, cert string, caCert string
 // row in node_details. Callers (the bulk update container) record this as a
 // failure with a clean reason rather than treating it as a transport error.
 var ErrNodeNotFound = errors.New("node not found")
+
+// ErrNodeAlreadyRegistered is returned by RegisterNodeInRmng when the node is
+// already registered. Handlers map it to HTTP 409; use UpdateNodeInRmng to
+// modify an existing node.
+var ErrNodeAlreadyRegistered = errors.New("node already registered")
 
 // UpdateNodeInRmng applies metadata updates (admin groups, tags) and
 // optionally a cert update to an existing registered node.

@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"net/http"
 	"os"
@@ -101,6 +102,9 @@ func handleRegisterSingleNode(rctx *rmngctx.RmngContext, request events.APIGatew
 
 	nodeId, err := node.RegisterNodeInRmng(rctx, req.Cert, req.CACert, req.AdminGroupNames, req.Tags, rctx.GetID(), req.Capabilities)
 	if err != nil {
+		if errors.Is(err, node.ErrNodeAlreadyRegistered) {
+			return RegisterSingleNodeResponse{}, rmerror.NewRMError(err, fmt.Sprintf("node %s is already registered", nodeId))
+		}
 		return RegisterSingleNodeResponse{}, rmerror.NewRMError(err, "failed to register node")
 	}
 
@@ -267,6 +271,10 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		// POST /v1/admin/nodes (single node registration)
 		response, err = handleRegisterSingleNode(rctx, request)
 		if err != nil {
+			if errors.Is(err, node.ErrNodeAlreadyRegistered) {
+				rlog.Warn(rctx).Err(err).Send()
+				return utils.APIGwRespJSON(http.StatusConflict, utils.NewAPIStatus(err.Error())), nil
+			}
 			rlog.Error(rctx).Err(err).Send()
 			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
 		}

@@ -562,19 +562,19 @@ var _ = Describe("Node", func() {
 				Expect(len(thing.CertificateIds)).To(BeNumerically(">", 0))
 			})
 
-			It("should handle duplicate registration gracefully", func() {
+			It("should reject a duplicate registration", func() {
 				// First registration
 				nodeIDRegistered, err := node.RegisterNodeInRmng(testUserContext, nodeCert, "", []string{}, []string{}, "test-user-id", nil)
 				Expect(err).To(BeNil())
 				Expect(nodeIDRegistered).To(Equal(testNode.GetID()))
 
-				// Second registration with same certificate
+				// Second registration with same certificate. The node id still
+				// comes back alongside the error so callers can report it.
 				nodeIDRegistered, err = node.RegisterNodeInRmng(testUserContext, nodeCert, "", []string{}, []string{}, "test-user-id", nil)
-				Expect(err).To(BeNil())
+				Expect(err).To(MatchError(node.ErrNodeAlreadyRegistered))
 				Expect(nodeIDRegistered).To(Equal(testNode.GetID()))
 
-				// Verify everything is still properly registered AND the
-				// cert-to-Thing attachment survives the second call.
+				// The rejected call must leave the live node untouched.
 				Expect(iotClient.VerifyThingExists(testNode.GetID())).To(BeTrue())
 				Expect(iotClient.VerifyCertificateExists(nodeCert)).To(BeTrue())
 				Expect(iotClient.VerifyCertificateActive(nodeCert)).To(BeTrue())

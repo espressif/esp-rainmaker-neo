@@ -2225,6 +2225,10 @@ paths:
         Synchronously registers a single node using a provided certificate string.
         The certificate is used to create a thing in AWS IoT Core
         Returns the created node ID immediately.
+
+        Registration is not idempotent: submitting a certificate whose node is
+        already registered returns 409. Use the update-jobs endpoint to modify
+        an already-registered node.
       tags:
         - Node Administration
       security:
@@ -2244,6 +2248,12 @@ paths:
                 $ref: "#/components/schemas/RegisterSingleNodeResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "409":
+          description: A node with this certificate's CN is already registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIStatusMessage"
         "500":
           $ref: "#/components/responses/InternalServerError"
 
