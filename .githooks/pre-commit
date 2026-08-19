@@ -1,0 +1,29 @@
+#!/bin/sh
+#
+# Block a commit whose staged changes carry a secret, a real address, or values
+# tied to one AWS deployment. Same ruleset as the CI secret scan
+# (.gitleaks.toml), so a commit that passes here passes there.
+#
+# Activate with "make githooks". Skipped with a warning when gitleaks is absent —
+# CI still gates, this is only the earlier, cheaper signal.
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+    printf 'warning: gitleaks not installed, skipping the local secret scan (CI still runs it)\n' >&2
+    exit 0
+fi
+
+if ! gitleaks git --staged --no-banner --redact; then
+    cat >&2 <<'MSG'
+
+Commit blocked: the staged changes carry something that must not enter the repo.
+
+Fix the value rather than rewording the commit:
+  - read it from an env var with NO baked-in default, and fail loudly if unset
+  - or use a placeholder: example.com, <account-id>, YOUR_API_BASE
+  - fixtures use example.com addresses and the conventional fake account ids
+
+A genuine false positive belongs in .gitleaks.toml, as a value-scoped allowlist
+on the specific rule, with a comment saying why.
+MSG
+    exit 1
+fi

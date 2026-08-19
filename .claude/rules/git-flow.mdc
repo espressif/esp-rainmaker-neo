@@ -34,3 +34,13 @@ Semantic versioning: MAJOR.MINOR.PATCH
 - CI checks must pass
 - Branch must be up-to-date
 - No direct commits to main
+## Nothing deployment-specific or personal in a tracked file
+This repository publishes to GitHub. Code, tests, docs, comments and throwaway
+scripts must not carry a real email, an AWS account id or ARN, an API Gateway or
+IoT endpoint, a Cognito pool id, a key or a token — not even a dev-only one.
+Read the value from an env var with no baked-in default and fail loudly when it is
+unset, or use a placeholder (`example.com`, `<account-id>`, `YOUR_API_BASE`); test
+fixtures use `example.com` addresses and the conventional fake account ids.
+`.gitleaks.toml` enforces this in CI and in the `make githooks` pre-commit hook. A
+genuine false positive goes in that file as a value-scoped allowlist on the rule it
+trips, with a comment saying why.

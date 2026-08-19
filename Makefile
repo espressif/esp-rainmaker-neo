@@ -290,9 +290,15 @@ clean:  ## Remove build artifacts (leaves cdk-outputs*.json deploy state alone)
 
 	$(foreach s,$(TEST_SUBMODULES),rm -rf $(s)/build/;)
 
+githooks:  ## Point git at .githooks so the pre-commit secret scan runs
+	@git config core.hooksPath .githooks
+	@command -v gitleaks >/dev/null 2>&1 \
+		|| echo "note: install gitleaks to make the hook effective (CI gates on it regardless)"
+	@echo "Git hooks path set to .githooks — pre-commit secret scan active."
+
 # Pattern targets are deliberately absent: `%` is a literal filename in .PHONY, so listing
 # `deploy-%` there did nothing. They are phony in practice because no such file is produced.
 .PHONY: all help go_build optional-build admin-dashboard-build \
 	deploy setup diff destroy synth publish \
-	lint vulncheck test itest itest-setup test-infra-destroy plantuml clean \
+	lint vulncheck test itest itest-setup test-infra-destroy plantuml clean githooks \
 	$(TEST_SUBMODULES:%=%-test)
