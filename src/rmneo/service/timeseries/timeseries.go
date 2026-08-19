@@ -562,7 +562,13 @@ func (s *TimeseriesService) Delete(rmngCtx *rmngctx.RmngContext, nodeID string) 
 		rmerror.NewRMError(err, "failed to get node config")
 	}
 
-	nodeCfg := config.ToNodeCfg(configData)
+	// The config names the parameters to purge, so a config we cannot decode must stop the purge
+	// rather than narrow it. Dropping this error left params empty and the purge reported success
+	// having deleted nothing — the same outcome as having no timeseries parameters at all.
+	nodeCfg, err := config.ToNodeCfg(configData)
+	if err != nil {
+		return rmerror.NewRMError(err, "cannot determine which timeseries data to delete")
+	}
 	params := nodeCfg.GetTimeSeriesParams()
 	if len(params) == 0 {
 		return nil
