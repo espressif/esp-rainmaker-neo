@@ -113,7 +113,8 @@ var _ = Describe("ConfigService", func() {
 			Expect(paramMap["type"]).To(Equal("bool"))
 
 			// Verify ToNodeCfg conversion
-			nodeCfg := config.ToNodeCfg(data)
+			nodeCfg, convErr := config.ToNodeCfg(data)
+			Expect(convErr).To(BeNil())
 			Expect(nodeCfg.Devices).To(HaveLen(1))
 			Expect(nodeCfg.Devices[0].ID).To(Equal("Test Device"))
 			Expect(nodeCfg.Devices[0].Type).To(Equal("switch"))
@@ -242,7 +243,8 @@ var _ = Describe("ConfigService", func() {
 			Expect(info["type"]).To(Equal("smartlight-mtr-app"))
 
 			// Verify ToNodeCfg conversion
-			nodeCfg := config.ToNodeCfg(data)
+			nodeCfg, convErr := config.ToNodeCfg(data)
+			Expect(convErr).To(BeNil())
 			Expect(nodeCfg.DataModel).To(Equal("matter"))
 			Expect(nodeCfg.Endpoints).To(HaveKey("0x1"))
 			Expect(nodeCfg.Info.FWVersion).To(Equal("36b47e808-dirty"))
@@ -516,6 +518,45 @@ var _ = Describe("ConfigService", func() {
 				_, err := configService.Get(rmngCtx, nonExistentNode)
 				Expect(err).ToNot(BeNil())
 				Expect(err.Error()).To(ContainSubstring("Node has no config"))
+			})
+
+			// A node writes its own config over MQTT, so its field types are not under cloud
+			// control. A mistyped field decodes to a zero value, and dropping the error left the
+			// caller unable to tell "the node declared nothing" from "we could not read it".
+			It("should surface a decode error rather than returning a zero-valued config", func() {
+				mistyped := map[string]interface{}{
+					"data_model": "default",
+					// devices must be a list; a node that serialises it as an object is an
+					// ordinary slip for a C JSON writer.
+					"devices": map[string]interface{}{"unexpected": "object"},
+				}
+
+				cfg, err := config.ToNodeCfg(mistyped)
+
+				Expect(err).ToNot(BeNil())
+				Expect(err.Error()).To(ContainSubstring("failed to decode node config"))
+				Expect(cfg.Devices).To(BeEmpty())
+			})
+
+			It("should still decode a well-formed config without error", func() {
+				cfg, err := config.ToNodeCfg(map[string]interface{}{
+					"data_model": "default",
+					"devices": []interface{}{map[string]interface{}{
+						"id":     "Light",
+						"type":   "esp.device.lightbulb",
+						"params": []interface{}{},
+					}},
+				})
+
+				Expect(err).To(BeNil())
+				Expect(cfg.Devices).To(HaveLen(1))
+				Expect(cfg.Devices[0].ID).To(Equal("Light"))
+			})
+
+			It("should treat a nil config as an empty one without erroring", func() {
+				cfg, err := config.ToNodeCfg(nil)
+				Expect(err).To(BeNil())
+				Expect(cfg.Devices).To(BeEmpty())
 			})
 		})
 	})

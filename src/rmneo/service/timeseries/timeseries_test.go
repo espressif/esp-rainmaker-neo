@@ -16,6 +16,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_details_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/timeseries"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/timeseries/timewindow"
@@ -1349,6 +1350,42 @@ var _ = Describe("Timeseries Service Integration", func() {
 			// NOT "2026-02-21" (which is what happens when the WindowStart epoch is formatted in UTC)
 			Expect(aggregates[0]["date"]).To(Equal("2026-02-22"),
 				"Response date should reflect the local timezone date, not the UTC interpretation of the window start epoch")
+		})
+	})
+
+	// The config is what names the parameters to purge, so a config we cannot decode has to stop
+	// the purge rather than silently narrow it to nothing.
+	Describe("Delete", func() {
+		seedConfig := func(cfg map[string]interface{}) {
+			nodeCtx := rmngctx.NewRmngContext(node.NewNode(testNodeID))
+			Expect(node_details_db.NewNodeDetailsDB(nodeCtx).UpdateServiceData("config", cfg)).To(BeNil())
+		}
+
+		It("should refuse the purge when the node's config cannot be decoded", func() {
+			// devices must be a list; a node that serialises it as an object is an ordinary slip
+			// for a C JSON writer, and is not under cloud control.
+			seedConfig(map[string]interface{}{
+				"data_model": "default",
+				"devices":    map[string]interface{}{"unexpected": "object"},
+			})
+
+			err := timeseriesService.Delete(rmngCtx, testNodeID)
+
+			Expect(err).ToNot(BeNil(), "an undecodable config must stop the purge, not report success")
+			Expect(err.Error()).To(ContainSubstring("cannot determine which timeseries data to delete"))
+		})
+
+		It("should still report success for a node whose config declares no timeseries parameters", func() {
+			seedConfig(map[string]interface{}{
+				"data_model": "default",
+				"devices": []interface{}{map[string]interface{}{
+					"id":     "Light",
+					"type":   "esp.device.lightbulb",
+					"params": []interface{}{},
+				}},
+			})
+
+			Expect(timeseriesService.Delete(rmngCtx, testNodeID)).To(BeNil())
 		})
 	})
 

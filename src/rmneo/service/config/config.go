@@ -103,11 +103,16 @@ type MatterClientCluster struct {
 	Commands []string `json:"c,omitempty"` // generated commands
 }
 
-// ToNodeCfg converts a map or any compatible type to a NodeCfg struct
-func ToNodeCfg(source any) NodeCfg {
+// ToNodeCfg converts a map or any compatible type to a NodeCfg struct. The error is returned
+// rather than dropped: a config a node wrote with a mistyped field decodes to a zero value, and a
+// caller that reads meaning out of the result — which parameters carry timeseries data, say —
+// cannot tell "the node declared nothing" apart from "we could not read what it declared".
+func ToNodeCfg(source any) (NodeCfg, error) {
 	var nodeCfg NodeCfg
-	utils.ConvertAnyToAny(source, &nodeCfg)
-	return nodeCfg
+	if err := utils.ConvertAnyToAny(source, &nodeCfg); err != nil {
+		return NodeCfg{}, rmerror.NewRMError(err, "failed to decode node config")
+	}
+	return nodeCfg, nil
 }
 
 // ToMap converts NodeCfg struct to map[string]interface{} for database storage
