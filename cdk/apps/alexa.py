@@ -10,6 +10,7 @@ import json
 import aws_cdk as cdk
 from aws_cdk import Tags
 from src.alexa.stacks.alexa_stack import AlexaStack
+from src.alexa.stacks.rmng_alexa_cfg_core_stack import RMNGAlexaCfgCoreStack
 from app_common import CommonResources, apply_common_tags
 
 
@@ -59,6 +60,23 @@ common_resources = CommonResources(
     prefix="rmng-alexa-",
 )
 
+def _cfg_common_resources():
+    """Fresh CommonResources for the configuration API.
+
+    Deliberately the plain "rmng-" prefix, not this app's "rmng-alexa-": the
+    config Lambda was created in rmng-core as `rmng-alexa-cfg`, and the prefix
+    feeds the physical function name. Reusing the app's prefix would rename it
+    to `rmng-alexa-alexa-cfg` and replace the function on deploy.
+    """
+    return CommonResources(
+        api_gateway_id="",
+        api_gateway_root_resource_id="",
+        admin_api_resource_id="",
+        cognito_authorizer_id="",
+        prefix="rmng-",
+    )
+
+
 # Parameters resolved from rmng-outputs.json unless CDK_PUBLISH=true (then empty defaults; override at deploy)
 alexa_params = {
     "rmng_region": "" if is_publish else rmng_region,
@@ -84,5 +102,21 @@ AlexaStack(
     stack_name=f"rmng-alexa-core-{rmng_region}",
     description=f"RMNG Alexa Core Stack - Alexa Skill Lambda Stack ({rmng_region})",
 )
+
+# The configuration API is a single set of routes on the shared API Gateway, so
+# unlike the skill Lambda it is created once rather than per Alexa region.
+# deploy.sh loops this app over the Alexa regions with AWS_REGION set to each and
+# RMNG_REGION pinned to the backend region; the two match only on the pass that
+# targets the backend, which is where the shared API lives. On a publish synth
+# there is no loop, so the stack is always emitted.
+deploy_region = os.environ.get("AWS_REGION")
+if is_publish or not deploy_region or deploy_region == rmng_region:
+    RMNGAlexaCfgCoreStack(
+        app,
+        "rmng-alexa-cfg-core",
+        _cfg_common_resources(),
+        synthesizer=custom_synthesizer,
+        description="RMNG Alexa Cfg Core Stack - Alexa configuration API",
+    )
 
 app.synth()

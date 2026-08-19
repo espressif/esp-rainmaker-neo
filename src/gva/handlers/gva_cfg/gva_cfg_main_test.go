@@ -14,7 +14,7 @@ import (
 	"testing"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/gva"
+	"github.com/espressif/esp-rainmaker-neo/src/gva"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"

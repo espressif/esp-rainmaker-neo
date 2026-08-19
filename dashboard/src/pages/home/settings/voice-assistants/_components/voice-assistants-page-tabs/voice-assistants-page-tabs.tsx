@@ -11,6 +11,7 @@ import {
   TabsTrigger,
 } from "@espressif/dashboard-ui-components/components";
 import { CustomIcon } from "@/components/custom-icon";
+import { isAlexaEnabled, isGvaEnabled } from "@/lib/config";
 import type {
   VoiceAssistantTab,
   VoiceAssistantsPageTabsProps,
@@ -28,14 +29,20 @@ export default function VoiceAssistantsPageTabs({
       onValueChange={(value) => onTabChange(value as VoiceAssistantTab)}
     >
       <TabsList variant="line">
-        <TabsTrigger value="alexa">
-          <CustomIcon type="amazon-alexa" size={16} />
-          {t("sidebar.alexa", "Alexa")}
-        </TabsTrigger>
-        <TabsTrigger value="gva">
-          <CustomIcon type="google-assistant" size={16} />
-          {t("sidebar.gva", "GVA")}
-        </TabsTrigger>
+        {/* Each assistant ships as its own stack, so a tab appears only where
+            that stack is deployed. */}
+        {isAlexaEnabled() && (
+          <TabsTrigger value="alexa">
+            <CustomIcon type="amazon-alexa" size={16} />
+            {t("sidebar.alexa", "Alexa")}
+          </TabsTrigger>
+        )}
+        {isGvaEnabled() && (
+          <TabsTrigger value="gva">
+            <CustomIcon type="google-assistant" size={16} />
+            {t("sidebar.gva", "GVA")}
+          </TabsTrigger>
+        )}
       </TabsList>
     </Tabs>
   );

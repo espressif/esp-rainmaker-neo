@@ -109,6 +109,8 @@ SSM_PARAMETERS = {
     # /v1/admin, published by rmng-core so a separate stack (rmng-claim-core)
     # can attach admin routes under it without recreating it (which collides).
     'API_GATEWAY_V1_ADMIN_RESOURCE_ID': '/rmng/base/api-gateway-v1-admin-resource-id',
+    'API_GATEWAY_V1_INTEGRATIONS_RESOURCE_ID': '/rmng/base/api-gateway-v1-integrations-resource-id',
+    'API_GATEWAY_V1_ADMIN_INTEGRATIONS_RESOURCE_ID': '/rmng/base/api-gateway-v1-admin-integrations-resource-id',
     'ADMIN_RESOURCE_ID': '/rmng/base/admin-api-resource-id',
     'COGNITO_AUTHORIZER_ID': '/rmng/base/cognito-authorizer-id',
     'IDENTITY_POOL_ID': '/rmng/base/identity-pool-id',

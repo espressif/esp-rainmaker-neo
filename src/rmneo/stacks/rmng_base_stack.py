@@ -33,8 +33,6 @@ from src.rmneo.handlers.nodeadmin.base import NodeAdminBase
 from gsi_infra import GsiInfraCore, ManagedTable, GsiReadinessGate
 from src.rmneo.handlers.timeseries.base import ServiceBase
 from src.rmneo.handlers.notification.base import NotificationBase
-from src.alexa.handlers.base import AlexaSkillBase
-from src.rmneo.handlers.gva.base import GVAActionBase
 from src.rmneo.handlers.integration.base import IntegrationBase
 from src.rmneo.handlers.admin.admin_config.base import AdminConfigBase
 from src.rmneo.handlers.hello_world.base import HelloWorldBase
@@ -928,8 +926,6 @@ class RMNGBaseStack(Stack):
         # (rmng-claim-base); rmng-base no longer creates them.
         self.service_base = ServiceBase(self, "ServiceBase", self.common_resources)
         self.notification_base = NotificationBase(self, "NotificationBase", self.common_resources)
-        self.alexa_skill_base = AlexaSkillBase(self, "AlexaSkillBase", self.common_resources)
-        self.gva_action_base = GVAActionBase(self, "GVAActionBase", self.common_resources)
         self.integration_base = IntegrationBase(self, "IntegrationBase", self.common_resources)
         self.admin_config_base = AdminConfigBase(self, "AdminConfigBase", self.common_resources)
         self.hello_world_base = HelloWorldBase(self, "HelloWorldBase", self.common_resources)
@@ -953,8 +949,6 @@ class RMNGBaseStack(Stack):
             self.nodeadmin_base,
             self.service_base,
             self.notification_base,
-            self.alexa_skill_base,
-            self.gva_action_base,
             self.integration_base,
             self.hello_world_base,
         ):

@@ -57,7 +57,7 @@ function alexaSkillArns(outputs: ClientOutputs, region: string | undefined): Rec
  */
 function mapClientOutputs(outputs: ClientOutputs): RuntimeConfig {
   const base = (outputs['rmng-base'] ?? {}) as StringOutputs
-  const core = (outputs['rmng-core'] ?? {}) as StringOutputs
+  const gva = (outputs['rmng-gva-core'] ?? {}) as StringOutputs
   const espUser = (outputs['espuser-base'] ?? {}) as StringOutputs
   return {
     API_GATEWAY_URL: base.ApiGatewayUrl,
@@ -74,8 +74,10 @@ function mapClientOutputs(outputs: ClientOutputs): RuntimeConfig {
     TOKEN_URL: espUser.EspUserTokenUrl,
     OIDC_CLIENT_ID: espUser.EspAdminUserPoolClientId,
     VA_CLIENT_ID: espUser.EspVaClientId,
-    GVA_FULFILLMENT_URL: core.GVAFulfillmentUrl,
+    GVA_FULFILLMENT_URL: gva.GVAFulfillmentUrl,
+    GVA_ENABLED: Boolean(outputs['rmng-gva-core']),
     ALEXA_SKILL_ARNS: alexaSkillArns(outputs, base.StackRegion),
+    ALEXA_ENABLED: Boolean(outputs['rmng-alexa-cfg-core']),
     BRIDGE_ENABLED: Boolean(outputs['rmng-bridge-core']),
   }
 }

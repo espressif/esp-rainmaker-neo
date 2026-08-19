@@ -35,8 +35,12 @@ export interface RuntimeConfig {
   TOKEN_URL?: string
   /** OAuth client id the voice assistants link as; espuser-base `EspVaClientId`. */
   VA_CLIENT_ID?: string
-  /** Google voice assistant fulfillment endpoint; rmng-core `GVAFulfillmentUrl`. */
+  /** Google voice assistant fulfillment endpoint; rmng-gva-core `GVAFulfillmentUrl`. */
   GVA_FULFILLMENT_URL?: string
+  /** Whether the optional `rmng-gva-core` stack is deployed. */
+  GVA_ENABLED?: boolean
+  /** Whether the Alexa configuration stack (`rmng-alexa-cfg-core`) is deployed. */
+  ALEXA_ENABLED?: boolean
   /** Alexa skill endpoint ARN per Alexa region; the per-region `rmng-alexa-core` stacks. */
   ALEXA_SKILL_ARNS?: Record<string, string>
   /** Whether the optional `rmng-bridge-core` stack is deployed. */
@@ -86,6 +90,16 @@ export function getGvaFulfillmentUrl(): string {
 export function getAlexaSkillArns(): Record<string, string> {
   const value = useConfigStore.getState().config?.ALEXA_SKILL_ARNS
   return value && typeof value === 'object' ? value : {}
+}
+
+/** Whether the Alexa configuration stack (`rmng-alexa-cfg-core`) is deployed, i.e. the integration is available. */
+export function isAlexaEnabled(): boolean {
+  return useConfigStore.getState().config?.ALEXA_ENABLED === true
+}
+
+/** Whether the Google Home stack (`rmng-gva-core`) is deployed, i.e. the integration is available. */
+export function isGvaEnabled(): boolean {
+  return useConfigStore.getState().config?.GVA_ENABLED === true
 }
 
 /** Whether the optional bridge stack (`rmng-bridge-core`) is deployed, i.e. the bridge capability is available. */
