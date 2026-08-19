@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+import os
 import time
 
 import boto3
@@ -231,47 +233,81 @@ def test_node_schedule_cross_tenant_write_denied(two_tenants):
 # injection is a separate inline policy so removal is a delete of something this test created — it
 # cannot corrupt the role's real policies. Marked `unsafe` because it mutates a shared role for a
 # few seconds: it is excluded from the default `-m "not unsafe"` suite run.
-ROLE_NAME = "rmng-node-to-cloud-role-ap-south-1"
 FAULT_POLICY_NAME = "ZZZ-itest-faultinjection-deny-node-details-read"
 # TABLE_NAMES["NODE_DETAILS"] is "rmng-nodes" — the logical name and the physical name
 # differ, and denying the wrong ARN silently denies nothing.
 NODE_DETAILS_TABLE = "rmng-nodes"
 
-DENY_POLICY = {
-    "Version": "2012-10-17",
-    "Statement": [{
-        "Effect": "Deny",
-        "Action": "dynamodb:GetItem",
-        "Resource": f"arn:aws:dynamodb:ap-south-1:296205263862:table/{NODE_DETAILS_TABLE}",
-    }],
-}
+# IAM policy changes are not read-your-writes for an already-warm Lambda execution role. The
+# initial wait is a floor, not a guarantee — the test polls for the deny to actually bite, so a
+# slow propagation costs time instead of failing the run.
+IAM_PROPAGATION_S = 45
+FAULT_EFFECTIVE_TIMEOUT_S = 180
 
-# IAM policy changes are not read-your-writes for an already-warm Lambda execution role.
-IAM_PROPAGATION_S = 90
+
+def _region():
+    region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+    assert region, "AWS_REGION (or AWS_DEFAULT_REGION) must be set to inject the fault"
+    return region
+
+
+def _role_name():
+    return f"rmng-node-to-cloud-role-{_region()}"
+
+
+def _deny_policy(node_id):
+    """Deny the node_details read for ONE node, named by the table's partition key.
+
+    The policy attaches to a role every device's node_to_cloud invocation shares, so an
+    unconditioned Deny would stop schedule and trigger sync for every device in the region
+    while this test runs — including tests on other xdist workers. LeadingKeys narrows it to
+    the node under test: a GetItem for any other node_id fails the condition, so the Deny does
+    not apply to it.
+    """
+    account_id = boto3.client("sts").get_caller_identity()["Account"]
+    return {
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Effect": "Deny",
+            "Action": "dynamodb:GetItem",
+            "Resource": f"arn:aws:dynamodb:{_region()}:{account_id}:table/{NODE_DETAILS_TABLE}",
+            "Condition": {"ForAllValues:StringEquals": {"dynamodb:LeadingKeys": [node_id]}},
+        }],
+    }
 
 
 @pytest.fixture
-def node_details_read_denied():
-    """Deny the node_to_cloud Lambda its node_details read for the duration of the test."""
+def deny_node_details_read():
+    """Yield a callable that denies the node_details read for one node, and always removes it.
+
+    A callable rather than a plain fixture because the node id is only known inside the test,
+    and because the schedule has to be written BEFORE reads start failing.
+    """
     iam = boto3.client("iam")
-    import json as _json
-    iam.put_role_policy(
-        RoleName=ROLE_NAME,
-        PolicyName=FAULT_POLICY_NAME,
-        PolicyDocument=_json.dumps(DENY_POLICY),
-    )
-    time.sleep(IAM_PROPAGATION_S)
+    applied = False
+
+    def apply(node_id):
+        nonlocal applied
+        iam.put_role_policy(
+            RoleName=_role_name(),
+            PolicyName=FAULT_POLICY_NAME,
+            PolicyDocument=json.dumps(_deny_policy(node_id)),
+        )
+        applied = True
+        time.sleep(IAM_PROPAGATION_S)
+
     try:
-        yield
+        yield apply
     finally:
         # Always remove it, including on assertion failure — leaving this in place would break
-        # every device's schedule/trigger sync.
-        iam.delete_role_policy(RoleName=ROLE_NAME, PolicyName=FAULT_POLICY_NAME)
-        time.sleep(IAM_PROPAGATION_S)
+        # that device's schedule and trigger sync for good.
+        if applied:
+            iam.delete_role_policy(RoleName=_role_name(), PolicyName=FAULT_POLICY_NAME)
+            time.sleep(IAM_PROPAGATION_S)
 
 
 @pytest.mark.unsafe
-def test_failed_node_details_read_is_not_answered_as_empty(associated_device, node_details_read_denied):
+def test_failed_node_details_read_is_not_answered_as_empty(associated_device, deny_node_details_read):
     """With the read denied, the cloud must not claim version 0 — it must not answer at all."""
     device, group_id, test_user1, _ = associated_device
     assert connect_device_with_retry(device), "failed to connect device"
@@ -283,12 +319,22 @@ def test_failed_node_details_read_is_not_answered_as_empty(associated_device, no
         group_id, None, device.node_thing_name, {"schedules": schedule_data}
     ), "failed to set a schedule before the fault injection"
 
+    # Only now start failing the read, and only for this node.
+    deny_node_details_read(device.node_thing_name)
+
+    # A real version means the Deny has not propagated yet, so keep asking. Version 0 is the
+    # defect itself and fails immediately — waiting longer could only hide it.
+    deadline = time.time() + FAULT_EFFECTIVE_TIMEOUT_S
     version = device.get_schedule_version(timeout=15)
+    while version is not None and version != 0 and time.time() < deadline:
+        time.sleep(10)
+        version = device.get_schedule_version(timeout=15)
 
     assert version != 0, (
         "the cloud answered getSchedVer with version 0 while the node_details read was failing — "
         "a device holding real schedules would treat that as 'cloud has none' and discard them"
     )
     assert version is None, (
-        f"expected no getSchedVer answer at all while the read was failing, got version {version}"
+        f"the read was never actually denied: still answering version {version} after "
+        f"{FAULT_EFFECTIVE_TIMEOUT_S}s, so this run proves nothing about the fix"
     )
