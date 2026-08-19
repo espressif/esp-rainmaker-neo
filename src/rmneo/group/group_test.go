@@ -702,6 +702,46 @@ var _ = Describe("Group", func() {
 			Expect(updatedGroup.LoadNodes(rmng_context)).To(BeNil())
 			test_utils.AssertNormalizedEqual(expectedGroup.SubGroups, updatedGroup.SubGroups)
 		})
+
+		mappingRow := func(userID, groupID string) map[string]types.AttributeValue {
+			return test_utils.QuickGetItem(user_group_db.UserGroupMappingTable, map[string]types.AttributeValue{
+				"user_id":  &types.AttributeValueMemberS{Value: userID},
+				"group_id": &types.AttributeValueMemberS{Value: groupID},
+			})
+		}
+
+		// A secondary member holds group:deletesubgroup but not group:share, so the cleanup that
+		// scrubs the subgroup from its members must not depend on group:share.
+		It("should remove a subgroup member's mapping row when a secondary deletes the subgroup", func() {
+			owner := rmngctx.NewRmngContext(user.NewUser("sd-owner"))
+			parent, err := group.CreateGroupForUser(owner, "House")
+			Expect(err).To(BeNil())
+			sub, err := group.CreateSubGroup(owner, parent.GroupID, "Kitchen")
+			Expect(err).To(BeNil())
+
+			ShareAndApproveGroup(owner, rmngctx.NewRmngContext(user.NewUser("sd-secondary")), parent.GroupID, utils.GroupSecondaryAccess)
+			ShareAndApproveSubGroup(owner, rmngctx.NewRmngContext(user.NewUser("sd-sub")), parent.GroupID, sub.SubGroupID)
+			Expect(mappingRow("sd-sub", parent.GroupID)).ToNot(BeNil())
+
+			Expect(group.DeleteSubGroup(
+				rmngctx.NewRmngContext(user.NewUser("sd-secondary")), parent.GroupID, sub.SubGroupID)).To(Succeed())
+
+			Expect(mappingRow("sd-sub", parent.GroupID)).To(BeNil(),
+				"the member's only subgroup was deleted, so their mapping row must go with it")
+		})
+
+		It("should remove a subgroup member's mapping row when the owner deletes the subgroup", func() {
+			owner := rmngctx.NewRmngContext(user.NewUser("sd-owner2"))
+			parent, err := group.CreateGroupForUser(owner, "House")
+			Expect(err).To(BeNil())
+			sub, err := group.CreateSubGroup(owner, parent.GroupID, "Kitchen")
+			Expect(err).To(BeNil())
+			ShareAndApproveSubGroup(owner, rmngctx.NewRmngContext(user.NewUser("sd-sub2")), parent.GroupID, sub.SubGroupID)
+
+			Expect(group.DeleteSubGroup(owner, parent.GroupID, sub.SubGroupID)).To(Succeed())
+			Expect(mappingRow("sd-sub2", parent.GroupID)).To(BeNil())
+		})
+
 	})
 })
 
