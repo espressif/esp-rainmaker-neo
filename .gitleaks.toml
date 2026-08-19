@@ -71,3 +71,79 @@ id = "generic-api-key"
     '''^docs/api/.*\.ya?ml$''',
     '''^src/espuser/docs/specs/.*\.md$''',
   ]
+
+# --- Deployment-specific and personal values -------------------------------
+#
+# The default ruleset looks for secrets. The values below are not secrets, and that
+# is exactly why they slip through: they name one specific AWS deployment or one
+# person. This repository publishes to GitHub, where an account id next to a live
+# endpoint is a targeting aid, and a real address is somebody's inbox.
+#
+# Read the value from an env var with no baked-in default, or use a placeholder —
+# example.com, <account-id>, YOUR_API_BASE. Fixtures use example.com and one of the
+# conventional fake account ids allowlisted below.
+#
+# The allowlists here match on the VALUE, not the path, so a rule stays live in a
+# file that already holds a fake id: adding a real one to a fixture still fails.
+
+[[rules]]
+id = "esp-aws-account-arn"
+description = "ARN carrying a real AWS account id"
+regex = '''arn:aws[a-z-]*:[a-z0-9-]*:[a-z0-9-]*:[0-9]{12}:'''
+
+  [[rules.allowlists]]
+  description = "Conventional fake account ids: the two AWS documentation ids, and any single digit repeated twelve times (999999999999 in the esp-cloud-common submodule's policy fixtures)."
+  regexes = [
+    '''(123456789012|111122223333|0{12}|1{12}|2{12}|3{12}|4{12}|5{12}|6{12}|7{12}|8{12}|9{12})''',
+  ]
+
+[[rules]]
+id = "esp-aws-account-id"
+description = "Bare 12-digit AWS account id"
+regex = '''(?:account[_-]?id|:|=|/)["']?([0-9]{12})["']?(?:[^0-9]|$)'''
+
+  [[rules.allowlists]]
+  description = """
+  Conventional fake account ids, plus DER/ASN.1 and hex fixtures whose byte runs
+  happen to be twelve digits long: src/utils/certissuer (certificate parsing),
+  src/rmneo/service/matter (TLV payloads) and the dashboard's matter-gen tests.
+  """
+  regexes = [
+    '''(123456789012|111122223333|0{12}|1{12}|2{12}|3{12}|4{12}|5{12}|6{12}|7{12}|8{12}|9{12})''',
+    '''(304502210098|616263313233|784646463120)''',
+  ]
+
+[[rules]]
+id = "esp-api-gateway-host"
+description = "API Gateway host of a specific deployment"
+regex = '''[a-z0-9]{8,}\.execute-api\.[a-z0-9-]+\.amazonaws\.com'''
+
+[[rules]]
+id = "esp-iot-endpoint"
+description = "IoT data endpoint of a specific deployment"
+regex = '''[a-z0-9]+(?:-ats)?\.iot\.[a-z0-9-]+\.amazonaws\.com'''
+
+  [[rules.allowlists]]
+  description = "Documented placeholders in dashboard docs and unit tests."
+  regexes = ['''(xxxx|host|example|placeholder|your-endpoint)(-ats)?\.iot\.''']
+
+[[rules]]
+id = "esp-cognito-pool-id"
+description = "Cognito user pool id of a specific deployment"
+regex = '''\b[a-z]{2}-[a-z]+-[0-9]_[A-Za-z0-9]{9}\b'''
+
+  [[rules.allowlists]]
+  description = "Obvious placeholder pool id in src/utils/jwtutil/cognito_test.go."
+  regexes = ['''_AbCdEfGhI\b''']
+
+[[rules]]
+id = "esp-personal-email"
+description = "Real address; fixtures and docs use example.com"
+regex = '''[A-Za-z0-9._%+-]+@espressif\.com'''
+
+  [[rules.allowlists]]
+  description = """
+  Team mailboxes, not a person: the security contact in SECURITY.md, the support
+  address in the API docs, and the CA subject in certissuer fixtures.
+  """
+  regexes = ['''(ca|rainmaker|esp-rainmaker-support)@espressif\.com''']
