@@ -11,7 +11,7 @@ from aws_cdk import (
 )
 from constructs import Construct
 from app_common import CommonResources, create_lambda_function, create_base_lambda_role, get_or_create_api_resource, add_cors_options
-from src.rmneo.handlers.gva.gva_cfg.stack import GVACfgAPI
+from src.gva.handlers.gva_cfg.stack import GVACfgAPI
 from src.rmneo.stacks.base_res_constants import TABLE_NAMES, SSM_PARAMETERS
 from src.espuser.stacks.base_res_constants import USER_SSM_PARAMETERS
 from arn_utils import (
@@ -23,7 +23,9 @@ from arn_utils import (
 class GVAActionCore(Construct):
     """Core/compute resources for GVA Action - Lambda function and API integration"""
     
-    def __init__(self, scope: Construct, id: str, common_resources: CommonResources, **kwargs) -> None:
+    def __init__(self, scope: Construct, id: str, common_resources: CommonResources,
+                 v1_resource_id: str = None, integrations_resource_id: str = None,
+                 admin_integrations_resource_id: str = None, **kwargs) -> None:
         super().__init__(scope, id, **kwargs)
         
         region = Stack.of(self).region
@@ -123,14 +125,18 @@ class GVAActionCore(Construct):
         integrations_path_part = "integrations"
         gva_path_part = "gva"
         
-        # Share v1 resource if already created
-        v1_parent_id = get_or_create_api_resource(
+        # The shared API's /v1 is owned by rmng-core; when a parent id is
+        # supplied (the separate GVA stack passes it from SSM) attach under it
+        # rather than recreating /v1, which would collide on the API.
+        v1_parent_id = v1_resource_id or get_or_create_api_resource(
             self, "V1Resource", common_resources,
             common_resources.api_gateway_root_resource_id, v1_path_part
         )
         
-        # Share integrations resource if already created
-        integrations_parent_id = get_or_create_api_resource(
+        # /v1/integrations is a shared parent owned by rmng-core (the generic
+        # integrations API). Attach under it when its id is supplied rather than
+        # recreating it, which would collide on the shared API.
+        integrations_parent_id = integrations_resource_id or get_or_create_api_resource(
             self, "IntegrationsResource", common_resources,
             v1_parent_id, integrations_path_part
         )
@@ -196,4 +202,5 @@ class GVAActionCore(Construct):
         )
 
         # Create GVA configuration API
-        GVACfgAPI(self, "GVACfgAPI", common_resources)
+        GVACfgAPI(self, "GVACfgAPI", common_resources,
+                  admin_integrations_resource_id=admin_integrations_resource_id)

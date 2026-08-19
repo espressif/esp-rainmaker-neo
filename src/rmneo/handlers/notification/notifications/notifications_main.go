@@ -14,7 +14,7 @@ import (
 
 	"github.com/espressif/esp-rainmaker-neo/src/alexa"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/gva"
+	"github.com/espressif/esp-rainmaker-neo/src/gva"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification/push"

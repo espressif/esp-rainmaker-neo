@@ -28,8 +28,6 @@ from src.rmneo.handlers.node.core import NodeCore
 from src.rmneo.handlers.nodeadmin.core import NodeAdminCore
 from src.rmneo.handlers.timeseries.core import ServiceCore
 from src.rmneo.handlers.notification.core import NotificationCore
-from src.alexa.handlers.core import AlexaSkillCore
-from src.rmneo.handlers.gva.core import GVAActionCore
 from src.rmneo.handlers.integration.core import IntegrationCore
 from src.rmneo.handlers.admin.core import IotEventModeCore
 from src.rmneo.handlers.admin.rmng_admin_creds.stack import AdminCredsCore
@@ -132,6 +130,32 @@ class RMNGCoreStack(Stack):
             description="Shared API Gateway /v1/admin resource ID (for cross-stack admin route attachment)",
         )
 
+        # /v1/integrations and /v1/admin/integrations are shared parents: the
+        # generic integrations API owns them, and the voice-assistant stacks
+        # attach their own children (alexa, gva) underneath. Publish both ids so
+        # those stacks reference them instead of recreating them, which would
+        # collide on the shared API.
+        v1_integrations_resource_id = get_or_create_api_resource(
+            self, "V1IntegrationsResource", common_resources,
+            v1_resource_id, "integrations"
+        )
+        create_ssm_string_parameter(
+            self, "ApiGatewayV1IntegrationsResourceIdParameter",
+            parameter_name=SSM_PARAMETERS['API_GATEWAY_V1_INTEGRATIONS_RESOURCE_ID'],
+            string_value=v1_integrations_resource_id,
+            description="Shared API Gateway /v1/integrations resource ID (for cross-stack route attachment)",
+        )
+        v1_admin_integrations_resource_id = get_or_create_api_resource(
+            self, "V1AdminIntegrationsResource", common_resources,
+            v1_admin_resource_id, "integrations"
+        )
+        create_ssm_string_parameter(
+            self, "ApiGatewayV1AdminIntegrationsResourceIdParameter",
+            parameter_name=SSM_PARAMETERS['API_GATEWAY_V1_ADMIN_INTEGRATIONS_RESOURCE_ID'],
+            string_value=v1_admin_integrations_resource_id,
+            description="Shared API Gateway /v1/admin/integrations resource ID (for cross-stack route attachment)",
+        )
+
         # Service APIs depend on group structures (must come after GroupCore)
         self.service_core = ServiceCore(
             self, "ServiceCore", common_resources,
@@ -139,8 +163,6 @@ class RMNGCoreStack(Stack):
         )
 
         # Voice assistant APIs depend on user/node structures
-        self.alexa_skill_core = AlexaSkillCore(self, "AlexaSkillCore", common_resources)
-        self.gva_action_core = GVAActionCore(self, "GVAActionCore", common_resources)
 
         # Notification service depends on other services being available
         self.notification_core = NotificationCore(self, "NotificationCore", common_resources, node_data_reset_function=self.node_data_reset.function)
@@ -282,8 +304,6 @@ class RMNGCoreStack(Stack):
         api_deploy.node.add_dependency(self.node_core)
         api_deploy.node.add_dependency(self.nodeadmin_core)
         api_deploy.node.add_dependency(self.service_core)
-        api_deploy.node.add_dependency(self.alexa_skill_core)
-        api_deploy.node.add_dependency(self.gva_action_core)
         api_deploy.node.add_dependency(self.notification_core)
         api_deploy.node.add_dependency(self.integration_core)
         api_deploy.node.add_dependency(self.iot_event_mode_core)
@@ -296,9 +316,5 @@ class RMNGCoreStack(Stack):
         CfnOutput(self, "BulkNodeTaskDefinitionArn", value=self.nodeadmin_core.register_container.container_params["task_definition_arn"])
         CfnOutput(self, "BulkNodeSubnetIds", value=self.nodeadmin_core.register_container.container_params["public_subnet_ids"])
         CfnOutput(self, "BulkNodeSecurityGroupId", value=self.nodeadmin_core.register_container.container_params["security_group_id"])
-        CfnOutput(self, "GVAFulfillmentUrl",
-            value=f"{api_gateway_url}/{self.gva_action_core.fulfillment_path}",
-            description="GVA fulfillment webhook URL"
-        )
 
         CfnOutput(self, "McpHttpApiUrl", value=self.mcp_oauth.api_url)

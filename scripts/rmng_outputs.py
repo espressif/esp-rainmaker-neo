@@ -179,6 +179,7 @@ class RmngSettings:
         esp_user_base = outputs.get('espuser-base', {})
         rmng_base = outputs.get('rmng-base', {})
         rmng_core = outputs.get('rmng-core', {})
+        rmng_gva_core = outputs.get('rmng-gva-core', {})
 
         try:
             required = {
@@ -203,7 +204,8 @@ class RmngSettings:
             user_api_gateway_url=esp_user_base.get('EspUserApiUrl', ''),
             esp_user_client_id=esp_user_base.get('EspUserClientId') or DEFAULT_ESP_USER_CLIENT_ID,
             esp_user_discovery_issuer=esp_user_base.get('EspUserDiscoveryIssuer', ''),
-            gva_fulfillment_url=rmng_core.get('GVAFulfillmentUrl', ''),
+            # GVA moved to its own stack; fall back to rmng-core for deployments predating it.
+            gva_fulfillment_url=rmng_gva_core.get('GVAFulfillmentUrl') or rmng_core.get('GVAFulfillmentUrl', ''),
             alexa_region_arns=alexa_region_arns(outputs),
             **required,
         )

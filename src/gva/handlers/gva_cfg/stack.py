@@ -26,7 +26,8 @@ from arn_utils import (
 from src.espuser.stacks.base_res_constants import USER_TABLE_NAMES
 
 class GVACfgAPI(Construct):
-    def __init__(self, scope: Construct, id: str, common_resources: CommonResources, **kwargs) -> None:
+    def __init__(self, scope: Construct, id: str, common_resources: CommonResources,
+                 admin_integrations_resource_id: str = None, **kwargs) -> None:
         super().__init__(scope, id, **kwargs)
 
         region = Stack.of(self).region
@@ -87,17 +88,26 @@ class GVACfgAPI(Construct):
         # (Admin-tier rename — was /v1/integrations/gva/configuration; the public
         # /v1/integrations/gva action endpoint is unchanged and still owned by
         # GVAActionCore.)
-        v1_parent_id = get_or_create_api_resource(
-            self, "V1Resource", common_resources,
-            common_resources.api_gateway_root_resource_id, "v1"
-        )
+        # /v1 and /v1/admin are owned by rmng-base; when their id is already
+        # resolved (the separate stack reads it from SSM) attach under it rather
+        # than recreating them, which would collide on the shared API.
+        if common_resources.admin_api_resource_id:
+            v1_admin_parent_id = common_resources.admin_api_resource_id
+        else:
+            v1_parent_id = get_or_create_api_resource(
+                self, "V1Resource", common_resources,
+                common_resources.api_gateway_root_resource_id, "v1"
+            )
 
-        v1_admin_parent_id = get_or_create_api_resource(
-            self, "V1AdminResource", common_resources,
-            v1_parent_id, "admin"
-        )
+            v1_admin_parent_id = get_or_create_api_resource(
+                self, "V1AdminResource", common_resources,
+                v1_parent_id, "admin"
+            )
 
-        admin_integrations_parent_id = get_or_create_api_resource(
+        # /v1/admin/integrations is a shared parent owned by rmng-core (the generic
+        # integrations API). Attach under it when its id is supplied rather than
+        # recreating it, which would collide on the shared API.
+        admin_integrations_parent_id = admin_integrations_resource_id or get_or_create_api_resource(
             self, "AdminIntegrationsResource", common_resources,
             v1_admin_parent_id, "integrations"
         )

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { Outlet, useLocation, useNavigate } from "@tanstack/react-router";
 import {
   ContentContainer,
@@ -13,6 +13,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { VoiceAssistantsPageHeading } from "./_components/voice-assistants-page-heading";
 import { ConfigurationValues } from "./_components/configuration-values";
+import { isAlexaEnabled, isGvaEnabled } from "@/lib/config";
 import type { VoiceAssistantTab } from "./_components/voice-assistants-page-tabs";
 
 const TAB_PATHS: Record<VoiceAssistantTab, string> = {
@@ -22,6 +23,26 @@ const TAB_PATHS: Record<VoiceAssistantTab, string> = {
 
 function getActiveTab(pathname: string): VoiceAssistantTab {
   return pathname.includes("/voice-assistants/gva") ? "gva" : "alexa";
+}
+
+/** Each assistant's route stays reachable by URL after its tab is hidden, so a
+ * deployment missing that stack redirects to the other assistant rather than
+ * rendering a page whose config API does not exist. With neither deployed there
+ * is nowhere to go, so the page renders empty and the sidebar entry is hidden. */
+function useRedirectFromDisabledTab(activeTab: VoiceAssistantTab) {
+  const navigate = useNavigate();
+  const enabled: Record<VoiceAssistantTab, boolean> = useMemo(
+    () => ({ alexa: isAlexaEnabled(), gva: isGvaEnabled() }),
+    [],
+  );
+  const fallback = (Object.keys(enabled) as VoiceAssistantTab[]).find(
+    (tab) => enabled[tab],
+  );
+  useEffect(() => {
+    if (!enabled[activeTab] && fallback) {
+      void navigate({ to: TAB_PATHS[fallback], replace: true });
+    }
+  }, [activeTab, enabled, fallback, navigate]);
 }
 
 /**
@@ -39,6 +60,8 @@ export default function VoiceAssistants() {
     () => getActiveTab(location.pathname),
     [location.pathname],
   );
+
+  useRedirectFromDisabledTab(activeTab);
 
   const handleTabChange = useCallback(
     (value: VoiceAssistantTab) => {

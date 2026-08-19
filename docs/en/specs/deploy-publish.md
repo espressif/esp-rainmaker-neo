@@ -76,3 +76,40 @@ a changed default, so a default-carried value would not take effect on an
 existing stack. A value in the body changes the template, which lets dependent
 resources (e.g. custom resources keyed on a trigger property) re-run when the
 value changes.
+
+---
+
+## 5. Migrating resources between stacks
+
+When a construct moves from one stack to another — as the voice-assistant
+integrations did when Alexa and Google Home gained their own stacks —
+CloudFormation does not transfer the resources. The old stack deletes them and
+the new stack creates them, because each stack owns only what its own template
+declares. Two consequences follow.
+
+**Deploy the losing stack first.** API Gateway routes and Lambda function names
+are unique per API and per account+region, so if the new stack is created while
+the old one still declares the same route or function name, the create fails
+with an already-exists error. Deploying `rmng-core` first releases them.
+
+**The endpoint is briefly absent.** Between the two deploys the routes do not
+exist and calls to them return 404. This affects the integration's own
+endpoints only — for Alexa and Google Home that is the configuration API and,
+for Google Home, the fulfillment endpoint. Device control paths and the shared
+API are untouched. Google Home fulfillment resumes without reconfiguring the
+Google Home project: the path is unchanged, so only its availability lapses.
+
+For the Alexa and Google Home split specifically:
+
+```bash
+make deploy          # rmng-core sheds the integration resources
+make deploy-gva      # Google Home fulfillment + config API
+make deploy-alexa    # skill Lambda (3 regions) + config API (backend region)
+```
+
+Outputs move with their stack. `GVAFulfillmentUrl` is published by
+`rmng-gva-core` rather than `rmng-core`; consumers read the new location and
+fall back to the old one so a deployment that predates the split keeps working
+(`scripts/rmng_outputs.py`). The dashboard uses the presence of each stack in
+the published outputs to decide whether to offer that integration at all, so an
+assistant whose stack is not deployed simply does not appear.

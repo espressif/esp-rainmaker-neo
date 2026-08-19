@@ -27,6 +27,7 @@ packages:
       - espuser
       - rmng
       - alexa
+      - gva
       - claim
 
   enterprise:
@@ -67,11 +68,19 @@ groups:
       - rmng-claim-core
 
   alexa:
-    friendly_name: "Voice Assistants"
-    description: "Control your ESP RainMaker Neo devices with Alexa and Google Home"
+    friendly_name: "Amazon Alexa"
+    description: "Control your ESP RainMaker Neo devices with Amazon Alexa"
     mandatory: true
     stacks:
       - rmng-alexa-core
+      - rmng-alexa-cfg-core
+
+  gva:
+    friendly_name: "Google Home"
+    description: "Control your ESP RainMaker Neo devices with Google Home"
+    mandatory: true
+    stacks:
+      - rmng-gva-core
 
   espuser-pro:
     friendly_name: "ESP RainMaker Neo Identity Pro"
@@ -301,6 +310,28 @@ stacks:
     template: rmng-claim-core.template.json
     depends_on:
       - rmng-claim-base
+    regions:
+      mode: all
+      explicit: []
+    parameters: {}
+
+  rmng-alexa-cfg-core:
+    friendly_name: "RainMaker Alexa Cfg Core"
+    stack_name: rmng-alexa-cfg-core
+    template: rmng-alexa-cfg-core.template.json
+    depends_on:
+      - rmng-core
+    regions:
+      mode: all
+      explicit: []
+    parameters: {}
+
+  rmng-gva-core:
+    friendly_name: "RainMaker Google Home Core"
+    stack_name: rmng-gva-core
+    template: rmng-gva-core.template.json
+    depends_on:
+      - rmng-core
     regions:
       mode: all
       explicit: []

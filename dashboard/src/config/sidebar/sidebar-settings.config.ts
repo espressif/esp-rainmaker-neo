@@ -7,6 +7,7 @@
 import type { TFunction } from "i18next";
 import type { SidebarGroupConfig } from "@espressif/dashboard-ui-components/components";
 import { sidebarIcons } from "./sidebar-icons.config";
+import { isAlexaEnabled, isGvaEnabled } from "@/lib/config";
 
 export function getSettingsSidebarGroup(t: TFunction): SidebarGroupConfig {
   const group = sidebarIcons.settings;
@@ -16,12 +17,18 @@ export function getSettingsSidebarGroup(t: TFunction): SidebarGroupConfig {
     icon: group.icon,
     defaultExpanded: true,
     items: [
-      {
-        id: "voice-assistants",
-        label: t("sidebar.voiceAssistants", "Voice assistants"),
-        icon: group.items["voice-assistants"],
-        path: "/home/settings/voice-assistants",
-      },
+      // Both assistants ship as their own stacks; with neither deployed the page
+      // has no tabs to show, so the entry is omitted rather than linking to it.
+      ...(isAlexaEnabled() || isGvaEnabled()
+        ? [
+            {
+              id: "voice-assistants",
+              label: t("sidebar.voiceAssistants", "Voice assistants"),
+              icon: group.items["voice-assistants"],
+              path: "/home/settings/voice-assistants",
+            },
+          ]
+        : []),
       {
         id: "push-notifications",
         label: t("sidebar.pushNotifications", "Push notifications"),

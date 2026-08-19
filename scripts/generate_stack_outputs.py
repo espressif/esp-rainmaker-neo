@@ -117,6 +117,12 @@ def main():
                 output_data[name] = outputs
                 updated_count += 1
                 print(f"    -> Found {len(outputs)} outputs")
+            elif output_data.pop(name, None) is not None:
+                # The dashboard reads presence of a stack's entry as "this
+                # integration is deployed", so a stack that has been destroyed
+                # must lose its entry instead of lingering from an earlier run.
+                updated_count += 1
+                print("    -> Stack gone; dropped its stale outputs")
 
     if updated_count > 0:
         with open(output_path, "w") as f:

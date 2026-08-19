@@ -5,7 +5,7 @@
 package main
 
 import (
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/gva"
+	"github.com/espressif/esp-rainmaker-neo/src/gva"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/config"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 )
