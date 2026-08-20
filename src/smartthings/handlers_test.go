@@ -11,7 +11,6 @@ import (
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_details_db"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/nodes_online_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_integration_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
@@ -97,31 +96,50 @@ func seedNodeConfig(nodeID string, cfg config.NodeCfg) {
 	Expect(err).To(BeNil())
 }
 
-// seedReportedShadow writes a reported shadow for a node/group with the given device params.
+// seedReportedShadow writes a reported shadow for a node/group with the given
+// device params, keeping any connectivity already set so the two seeding helpers
+// can be called in either order.
 func seedReportedShadow(nodeID, groupID string, params map[string]interface{}) {
 	iotDataClient := awscommon.GetIoTDataPlaneClient().(*mock.IoTDataPlaneMock)
 	shadowName := fmt.Sprintf("params-%s", groupID)
+
+	var online *bool
+	if existing, ok := iotDataClient.Shadows[nodeID][shadowName]; ok {
+		var current node.IoTNodeShadow
+		if json.Unmarshal(existing, &current) == nil && current.State != nil && current.State.Reported != nil {
+			online = current.State.Reported.Online
+		}
+	}
+
 	shadow := node.IoTNodeShadow{
 		State: &node.ShadowState{
-			Reported: &node.ReportedOrDesiredShadow{Params: params},
+			Reported: &node.ReportedOrDesiredShadow{Params: params, Online: online},
 		},
 	}
 	shadowJSON, _ := json.Marshal(shadow)
 	iotDataClient.AddDirect(nodeID, shadowName, shadowJSON)
 }
 
-// setNodeOnline seeds a nodes_online entry with the given connectivity event type.
-func setNodeOnline(nodeID string, online bool) {
-	rmngCtx := rmngctx.NewRmngContext(utils.NewSystemActor())
-	eventType := "disconnected"
-	if online {
-		eventType = "connected"
+// setNodeOnline sets reported.online in the node's shadow, the connectivity
+// source SmartThings reads. Any params already seeded are preserved.
+func setNodeOnline(nodeID, groupID string, online bool) {
+	iotDataClient := awscommon.GetIoTDataPlaneClient().(*mock.IoTDataPlaneMock)
+	shadowName := fmt.Sprintf("params-%s", groupID)
+
+	shadow := node.IoTNodeShadow{State: &node.ShadowState{Reported: &node.ReportedOrDesiredShadow{}}}
+	if existing, ok := iotDataClient.Shadows[nodeID][shadowName]; ok {
+		Expect(json.Unmarshal(existing, &shadow)).To(BeNil())
+		if shadow.State == nil {
+			shadow.State = &node.ShadowState{}
+		}
+		if shadow.State.Reported == nil {
+			shadow.State.Reported = &node.ReportedOrDesiredShadow{}
+		}
 	}
-	err := nodes_online_db.NewNodesOnlineDB(rmngCtx).AddNodeSession(nodes_online_db.NodesOnlineEntry{
-		ClientID:  nodeID,
-		EventType: eventType,
-	})
-	Expect(err).To(BeNil())
+	shadow.State.Reported.Online = utils.Ptr(online)
+
+	shadowJSON, _ := json.Marshal(shadow)
+	iotDataClient.AddDirect(nodeID, shadowName, shadowJSON)
 }
 
 // seedCallbackTokens writes a SmartThings endpoint row for the user into rmng-user-endpoints.
@@ -370,7 +388,7 @@ var _ = Describe("SmartThings handlers", func() {
 	// ------------------------------------------------------------------
 	Describe("HandleStateRefresh", func() {
 		It("maps shadow params to ST states and always includes healthCheck (online)", func() {
-			setNodeOnline(switchNodeID, true)
+			setNodeOnline(switchNodeID, testGroup.GroupID, true)
 			seedReportedShadow(switchNodeID, testGroup.GroupID, map[string]interface{}{
 				"Switch": map[string]interface{}{"power": true},
 			})
@@ -396,7 +414,7 @@ var _ = Describe("SmartThings handlers", func() {
 		})
 
 		It("reports healthStatus offline when the node is not connected", func() {
-			setNodeOnline(switchNodeID, false)
+			setNodeOnline(switchNodeID, testGroup.GroupID, false)
 			seedReportedShadow(switchNodeID, testGroup.GroupID, map[string]interface{}{
 				"Switch": map[string]interface{}{"power": false},
 			})
@@ -428,7 +446,7 @@ var _ = Describe("SmartThings handlers", func() {
 		})
 
 		It("returns DEVICE-DELETED when the device is not present in the node config", func() {
-			setNodeOnline(switchNodeID, true)
+			setNodeOnline(switchNodeID, testGroup.GroupID, true)
 			seedReportedShadow(switchNodeID, testGroup.GroupID, map[string]interface{}{})
 
 			extID := GetDeviceID(switchNodeID, "Nonexistent")
@@ -499,7 +517,7 @@ var _ = Describe("SmartThings handlers", func() {
 				if nodeIDKey == "light" {
 					nodeID = lightNodeID
 				}
-				setNodeOnline(nodeID, true)
+				setNodeOnline(nodeID, testGroup.GroupID, true)
 
 				resp, err := HandleCommand(ctx, buildCommandReq(GetDeviceID(nodeID, deviceName), cmd))
 				Expect(err).To(BeNil())
@@ -530,7 +548,7 @@ var _ = Describe("SmartThings handlers", func() {
 		)
 
 		It("returns DEVICE-ERROR/OFFLINE when the node is offline", func() {
-			setNodeOnline(switchNodeID, false)
+			setNodeOnline(switchNodeID, testGroup.GroupID, false)
 
 			resp, err := HandleCommand(ctx, buildCommandReq(GetDeviceID(switchNodeID, "Switch"),
 				STCommand{Capability: CapabilitySwitch, Command: "on"}))
@@ -544,7 +562,7 @@ var _ = Describe("SmartThings handlers", func() {
 		})
 
 		It("resolves params from the deviceCookie without reading the node config", func() {
-			setNodeOnline(switchNodeID, true)
+			setNodeOnline(switchNodeID, testGroup.GroupID, true)
 			// Config says this device does not exist. A command still succeeds when the
 			// cookie carries the param map, which is only possible if the config was
 			// not consulted.
@@ -567,7 +585,7 @@ var _ = Describe("SmartThings handlers", func() {
 		})
 
 		It("returns DEVICE-ERROR when the cookie carries no param for the capability", func() {
-			setNodeOnline(switchNodeID, true)
+			setNodeOnline(switchNodeID, testGroup.GroupID, true)
 
 			req := stRequest(userID, InteractionCommandRequest)
 			req.Devices = []STCommandDevice{{
@@ -597,7 +615,7 @@ var _ = Describe("SmartThings handlers", func() {
 		})
 
 		It("returns DEVICE-ERROR when a command targets a capability the device lacks", func() {
-			setNodeOnline(switchNodeID, true)
+			setNodeOnline(switchNodeID, testGroup.GroupID, true)
 			// Switch has no brightness param; setLevel must fail.
 			resp, err := HandleCommand(ctx, buildCommandReq(GetDeviceID(switchNodeID, "Switch"),
 				STCommand{Capability: CapabilitySwitchLevel, Command: "setLevel", Arguments: []interface{}{float64(50)}}))

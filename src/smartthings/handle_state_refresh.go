@@ -6,9 +6,7 @@ package smartthings
 
 import (
 	"context"
-	"errors"
 
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/nodes_online_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/config"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
@@ -82,9 +80,13 @@ func getDeviceState(rmngCtx *rmngctx.RmngContext, externalDeviceID string, nodeG
 		}
 	}
 
-	// Read device shadow params
+	// Read the device shadow. One read supplies both the params and the node's
+	// reachability (reported.online), the platform's connectivity source of truth
+	// — the same one Alexa, GVA and our own state callbacks use. The nodes_online
+	// table is a session record for the presence handler, not a live status flag:
+	// nothing ever writes a disconnected state into it.
 	n := node.NewNode(nodeID)
-	deviceDataMap, err := n.GetParams(rmngCtx, deviceName)
+	shadow, err := n.ReadFromReportedShadow(rmngCtx)
 	if err != nil {
 		rlog.Warn(rmngCtx).Err(err).Str("nodeID", nodeID).Str("device", deviceName).Msg("failed to read device shadow")
 		return STDeviceState{
@@ -96,6 +98,8 @@ func getDeviceState(rmngCtx *rmngctx.RmngContext, externalDeviceID string, nodeG
 			}},
 		}
 	}
+
+	deviceDataMap := node.DeviceParamsFromShadow(shadow, deviceName)
 
 	// Get node config to determine param types for capability mapping
 	nodeCfg, err := getNodeConfig(rmngCtx, nodeID)
@@ -135,10 +139,8 @@ func getDeviceState(rmngCtx *rmngctx.RmngContext, externalDeviceID string, nodeG
 	// Map shadow state to SmartThings capability attributes
 	states := mapShadowToSTStates(deviceCfg, deviceDataMap)
 
-	// Check connectivity status from Nodes_Online table
-	online := isNodeOnline(rmngCtx, nodeID)
 	healthStatus := "online"
-	if !online {
+	if !node.ShadowOnline(shadow) {
 		healthStatus = "offline"
 	}
 	states = append(states, STState{
@@ -244,22 +246,6 @@ func mapShadowToSTStates(deviceCfg *config.NodeCfgDevice, deviceData map[string]
 	}
 
 	return states
-}
-
-// isNodeOnline checks the Nodes_Online table to determine if a node is currently connected.
-func isNodeOnline(rmngCtx *rmngctx.RmngContext, nodeID string) bool {
-	nodesOnlineDB := nodes_online_db.NewNodesOnlineDB(rmngCtx)
-	entry, err := nodesOnlineDB.GetNodeSessionInfo(nodeID)
-	if err != nil {
-		if errors.Is(err, nodes_online_db.ErrNodeNotFound) {
-			// No entry means the node has never connected — treat as offline
-			return false
-		}
-		rlog.Warn(rmngCtx).Err(err).Str("nodeID", nodeID).Msg("failed to check node online status")
-		return false
-	}
-
-	return entry.EventType == "connected"
 }
 
 // toNumericValue converts an interface{} to float64 for numeric shadow values.
