@@ -68,7 +68,7 @@ func HandleExecute(ctx context.Context, request GVARequest, accessToken string) 
 
 func executeDeviceCommand(ctx context.Context, rmngCtx *rmngctx.RmngContext, deviceID string, customData map[string]interface{}, execution ExecuteExecution, accessToken string) (ExecuteCommand, error) {
 	// Parse device ID to get node ID and device name
-	userCtx, node, deviceName, err := GetUserNodeFromRequest(ctx, GVARequest{}, deviceID, accessToken)
+	userCtx, n, deviceName, err := GetUserNodeFromRequest(ctx, GVARequest{}, deviceID, accessToken)
 	if err != nil {
 		return ExecuteCommand{}, rmerror.NewRMError(err, "failed to parse device ID")
 	}
@@ -81,12 +81,33 @@ func executeDeviceCommand(ctx context.Context, rmngCtx *rmngctx.RmngContext, dev
 	if err != nil {
 		return ExecuteCommand{}, err
 	}
-	if err := user.LoadNodePermissions(userCtx, groupID, node.GetID()); err != nil {
+	if err := user.LoadNodePermissions(userCtx, groupID, n.GetID()); err != nil {
 		return ExecuteCommand{}, rmerror.NewRMError(err, "failed to load node permissions")
 	}
 
+	// A command published to a node that is not connected is a silent no-op, so
+	// report OFFLINE rather than a success the user will not see happen. The
+	// shadow's reported.online is the platform's connectivity source of truth,
+	// the same one QUERY and the proactive Report State use.
+	shadow, err := n.ReadFromReportedShadow(userCtx)
+	if err != nil {
+		return ExecuteCommand{
+			IDs:       []string{deviceID},
+			Status:    StatusError,
+			ErrorCode: ErrorCodeUnknownError,
+		}, rmerror.NewRMError(err, "failed to read device shadow")
+	}
+	if !node.ShadowOnline(shadow) {
+		return ExecuteCommand{
+			IDs:       []string{deviceID},
+			Status:    StatusOffline,
+			ErrorCode: ErrorCodeDeviceOffline,
+			States:    map[string]interface{}{"online": false},
+		}, nil
+	}
+
 	// Execute the command based on the command type
-	states, err := handleCommand(ctx, userCtx, node, deviceName, execution, customData)
+	states, err := handleCommand(ctx, userCtx, n, deviceName, execution, customData)
 	if err != nil {
 		return ExecuteCommand{
 			IDs:       []string{deviceID},
@@ -94,6 +115,10 @@ func executeDeviceCommand(ctx context.Context, rmngCtx *rmngctx.RmngContext, dev
 			ErrorCode: ErrorCodeUnknownError,
 		}, err
 	}
+
+	// Reported once here rather than by each command handler: reaching this point
+	// means the node was online when the command was published.
+	states["online"] = true
 
 	return ExecuteCommand{
 		IDs:    []string{deviceID},
@@ -156,7 +181,6 @@ func handleOnOffCommand(ctx context.Context, userCtx *rmngctx.RmngContext, node 
 
 	// Return current state
 	states["on"] = on
-	states["online"] = true
 
 	return states, nil
 }
@@ -198,7 +222,6 @@ func handleBrightnessCommand(ctx context.Context, userCtx *rmngctx.RmngContext, 
 
 	// Return current state
 	states["brightness"] = int(brightness)
-	states["online"] = true
 
 	return states, nil
 }
@@ -251,7 +274,6 @@ func handleColorCommand(ctx context.Context, userCtx *rmngctx.RmngContext, node 
 		states["color"] = map[string]interface{}{
 			"spectrumRgb": hsvToRgbInt(hue, saturation/100.0, value/100.0),
 		}
-		states["online"] = true
 	} else if rgbVal, exists := color["spectrumRGB"].(float64); exists {
 		// Google sends packed 0xRRGGBB; the device speaks HSV.
 		hue, sat, val := rgbIntToHsv(int(rgbVal))
@@ -275,7 +297,6 @@ func handleColorCommand(ctx context.Context, userCtx *rmngctx.RmngContext, node 
 		states["color"] = map[string]interface{}{
 			"spectrumRgb": int(rgbVal),
 		}
-		states["online"] = true
 	} else if temperature, exists := color["temperature"].(float64); exists {
 		// Color temperature command
 		if cctParam == "" {
@@ -294,7 +315,6 @@ func handleColorCommand(ctx context.Context, userCtx *rmngctx.RmngContext, node 
 		states["color"] = map[string]interface{}{
 			"temperatureK": int(temperature),
 		}
-		states["online"] = true
 	} else {
 		return nil, rmerror.NewRMError(fmt.Errorf("unsupported color format"), "invalid parameter")
 	}
@@ -361,7 +381,6 @@ func handleFanSpeedCommand(ctx context.Context, userCtx *rmngctx.RmngContext, no
 	// Return current state
 	states["currentFanSpeedPercent"] = speedPercentage
 	states["currentFanSpeedSetting"] = speedSetting
-	states["online"] = true
 
 	return states, nil
 }
@@ -394,7 +413,6 @@ func handleTemperatureCommand(ctx context.Context, userCtx *rmngctx.RmngContext,
 	// Return current state
 	states["thermostatTemperatureSetpoint"] = tempSetpoint
 	states["thermostatMode"] = "heat" // Default mode
-	states["online"] = true
 
 	return states, nil
 }
@@ -439,7 +457,6 @@ func handleSetModesCommand(ctx context.Context, userCtx *rmngctx.RmngContext, no
 	states["currentModeSettings"] = map[string]interface{}{
 		"mode": modeValue,
 	}
-	states["online"] = true
 
 	return states, nil
 }

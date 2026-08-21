@@ -473,6 +473,46 @@ def test_gva_disconnect(user_with_1_dev_each_in_2_groups):
     expected = {'requestId': 'mock_request_id', 'payload': {}}
     assert disconnect_response == expected
 
+def test_gva_execute_offline_device(user_with_1_dev_each_in_2_groups):
+    """EXECUTE for a disconnected node answers OFFLINE instead of a silent success.
+
+    Publishing to a node with no live MQTT session is a no-op, so reporting SUCCESS
+    would tell Google the command landed when nothing happened.
+    """
+    device1, _device2, group1_id, _group2_id, test_user1 = user_with_1_dev_each_in_2_groups
+
+    custom_data = {"groupID": group1_id, "paramMap_OnOff": "Power"}
+    device_id = device1.node_thing_name + ".Light1"
+
+    test_user1.get_aws_credentials()
+    assert device1.connect(), "Failed to connect to MQTT"
+    shadow_name = f"params-{group1_id}"
+    assert device1.shadow_connect([shadow_name]), "Failed to connect to shadow"
+    device1.update_named_shadow(shadow_name, {"online": True, "Light1": {"Power": False}})
+
+    # Drop the connection and wait for the presence handler to write reported.online=false.
+    # Poll rather than sleep a fixed interval: the disconnect event is asynchronous, and
+    # this also fails loudly if presence never updates at all.
+    device1.disconnect()
+    deadline = time.time() + OFFLINE_PROPAGATION_WAIT + 90
+    online = None
+    while time.time() < deadline:
+        query_response = test_user1.gva_query_device(device_id, custom_data)
+        online = query_response['payload']['devices'][device_id].get('online')
+        if online is False:
+            break
+        time.sleep(5)
+    assert online is False, f"node never reported offline after disconnect (last: {online})"
+
+    control_response = test_user1.gva_control_device(
+        device_id, custom_data, "action.devices.commands.OnOff", {"on": True})
+    command = control_response['payload']['commands'][0]
+
+    assert command['status'] == 'OFFLINE', f"expected OFFLINE, got {command}"
+    assert command['errorCode'] == 'deviceOffline', f"expected deviceOffline, got {command}"
+    assert command['states']['online'] is False, f"expected online False, got {command}"
+
+
 def test_gva_comprehensive_discovery(user_with_1_dev_each_in_2_groups):
     """
     Comprehensive GVA discovery test that mirrors Alexa discovery test structure.
