@@ -400,10 +400,16 @@ Three sub-modes are selected by which params are present:
 
 **(c) Historical range** — `start_date` and/or `end_date`, `window` required:
 - Dates are parsed with the same hourly/daily format tolerance; `end_date`
-  is extended to include the whole final day (or hour).
+  is extended to include the whole final day (or hour). Both bounds are
+  inclusive of the period they name, so an hourly `end_date` written without
+  an hour still covers that entire day.
 - The query is a **sort-key range on `interval_key`** using the window keys
   for the start/end as bounds, so DynamoDB reads only the matching window
-  rows instead of scanning the partition and filtering.
+  rows instead of scanning the partition and filtering. `GetWindowEntries*`
+  takes the range as `[start, end)`, but `interval_key BETWEEN` is inclusive
+  on both ends, so the end bound is converted to the last window key that
+  starts strictly before `end` — formatting `end` itself would return one
+  window too many.
 - Paginated (`page_size` / `start_key`), newest-first. Response carries an
   `aggregates` array (each element dated from its `interval_key`),
   `page_total`, a `query_info` echo, and `next_key` when more pages exist.

@@ -262,30 +262,42 @@ func (s *TimeseriesService) handleAggregatesRequest(processedTsDB *processed_ts_
 	}
 }
 
+// parseAggregateBound parses an aggregates date bound and returns the half-open period it names.
+// YYYY-MM-DDTHH is accepted only for the hourly window; every other bound is a whole day, so an
+// hourly bound written without an hour still spans that day rather than collapsing to hour 00.
+// The two formats must not be tried in sequence with a shared err: a format that was never
+// attempted leaves err nil, which previously let an unparsed bound through as the zero time.
+func parseAggregateBound(value string, window string) (start time.Time, end time.Time, err error) {
+	if window == "hourly" && len(value) >= 13 {
+		start, err = time.Parse("2006-01-02T15", value)
+		if err != nil {
+			return time.Time{}, time.Time{}, err
+		}
+		return start, start.Add(time.Hour), nil
+	}
+
+	start, err = time.Parse("2006-01-02", value)
+	if err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+	return start, start.AddDate(0, 0, 1), nil
+}
+
+func invalidBoundMessage(param string, window string) string {
+	if window == "hourly" {
+		return fmt.Sprintf("invalid %s format. Use YYYY-MM-DD or YYYY-MM-DDTHH format for hourly aggregates", param)
+	}
+	return fmt.Sprintf("invalid %s format. Use YYYY-MM-DD format", param)
+}
+
 func (s *TimeseriesService) handleHistoricalAggregates(processedTsDB *processed_ts_db.ProcessedTsDB, nodeID, dataKey, dataType, window, date string) (interface{}, error) {
 	if window == "" {
 		return nil, rmerror.NewRMError(nil, "window parameter is required for historical aggregates")
 	}
 
-	// Parse date with enhanced format support
-	var parsedDate time.Time
-	var err error
-
-	// For hourly window, try parsing with hour specification first (YYYY-MM-DDTHH)
-	if window == "hourly" && len(date) >= 13 {
-		parsedDate, err = time.Parse("2006-01-02T15", date)
-	}
-
-	// If hourly parsing failed or it's not hourly, try standard date format (YYYY-MM-DD)
-	if err != nil || window != "hourly" {
-		parsedDate, err = time.Parse("2006-01-02", date)
-		if err != nil {
-			if window == "hourly" {
-				return nil, rmerror.NewRMError(err, "invalid date format. Use YYYY-MM-DD or YYYY-MM-DDTHH format for hourly aggregates")
-			} else {
-				return nil, rmerror.NewRMError(err, "invalid date format. Use YYYY-MM-DD format")
-			}
-		}
+	parsedDate, _, err := parseAggregateBound(date, window)
+	if err != nil {
+		return nil, rmerror.NewRMError(err, invalidBoundMessage("date", window))
 	}
 
 	// Validate window type
@@ -370,55 +382,23 @@ func (s *TimeseriesService) handleHistoricalAggregatesRange(processedTsDB *proce
 		return nil, rmerror.NewRMError(nil, "window parameter is required for historical aggregates")
 	}
 
-	// Parse start_date parameter with enhanced format support
+	// start_date is inclusive; end_date contributes the exclusive end of the period it names,
+	// so a date-only bound on an hourly window covers that whole day.
 	var startTime time.Time
 	if startDate != "" {
 		var err error
-
-		// For hourly window, try parsing with hour specification first (YYYY-MM-DDTHH)
-		if window == "hourly" && len(startDate) >= 13 {
-			startTime, err = time.Parse("2006-01-02T15", startDate)
-		}
-
-		// If hourly parsing failed or it's not hourly, try standard date format (YYYY-MM-DD)
-		if err != nil || window != "hourly" {
-			startTime, err = time.Parse("2006-01-02", startDate)
-			if err != nil {
-				if window == "hourly" {
-					return nil, rmerror.NewRMError(err, "invalid start_date format. Use YYYY-MM-DD or YYYY-MM-DDTHH format for hourly aggregates")
-				} else {
-					return nil, rmerror.NewRMError(err, "invalid start_date format. Use YYYY-MM-DD format")
-				}
-			}
+		startTime, _, err = parseAggregateBound(startDate, window)
+		if err != nil {
+			return nil, rmerror.NewRMError(err, invalidBoundMessage("start_date", window))
 		}
 	}
 
-	// Parse end_date parameter with enhanced format support
 	var endTime time.Time
 	if endDate != "" {
 		var err error
-
-		// For hourly window, try parsing with hour specification first (YYYY-MM-DDTHH)
-		if window == "hourly" && len(endDate) >= 13 {
-			endTime, err = time.Parse("2006-01-02T15", endDate)
-			if err == nil {
-				// For hourly end time, add 1 hour to include the entire hour
-				endTime = endTime.Add(time.Hour)
-			}
-		}
-
-		// If hourly parsing failed or it's not hourly, try standard date format (YYYY-MM-DD)
-		if err != nil || window != "hourly" {
-			endTime, err = time.Parse("2006-01-02", endDate)
-			if err != nil {
-				if window == "hourly" {
-					return nil, rmerror.NewRMError(err, "invalid end_date format. Use YYYY-MM-DD or YYYY-MM-DDTHH format for hourly aggregates")
-				} else {
-					return nil, rmerror.NewRMError(err, "invalid end_date format. Use YYYY-MM-DD format")
-				}
-			}
-			// For end date, we want to include the entire day, so add 24 hours
-			endTime = endTime.AddDate(0, 0, 1)
+		_, endTime, err = parseAggregateBound(endDate, window)
+		if err != nil {
+			return nil, rmerror.NewRMError(err, invalidBoundMessage("end_date", window))
 		}
 	}
 

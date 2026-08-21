@@ -2093,12 +2093,14 @@ paths:
           name: start_date
           schema:
             type: string
-          description: Range start date.
+          description: Range start date (inclusive).
         - in: query
           name: end_date
           schema:
             type: string
-          description: Range end date.
+          description: |
+            Range end date (inclusive). Covers the whole period named, so an
+            hourly `end_date` written without an hour includes that entire day.
         - $ref: "#/components/parameters/PageSize"
         - $ref: "#/components/parameters/StartKey"
 
