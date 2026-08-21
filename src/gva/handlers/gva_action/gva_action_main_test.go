@@ -14,8 +14,8 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"testing"
 
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
 	"github.com/espressif/esp-rainmaker-neo/src/gva"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/config"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
@@ -590,6 +590,60 @@ var _ = Describe("GVA Action", func() {
 	})
 
 	Describe("EXECUTE (Control)", func() {
+		// A command published to a disconnected node is a silent no-op, so EXECUTE
+		// must answer OFFLINE rather than SUCCESS. Connectivity comes from the same
+		// reported.online the QUERY spec above covers.
+		It("returns OFFLINE and does not publish when the shadow reports the node offline", func() {
+			iotDataClient := awscommon.GetIoTDataPlaneClient().(*mock.IoTDataPlaneMock)
+			shadowName := fmt.Sprintf("params-%s", testGroup.GroupID)
+			shadowState := map[string]interface{}{
+				"state": map[string]interface{}{"reported": map[string]interface{}{
+					"online": false,
+					"params": map[string]interface{}{"ColorLight": map[string]interface{}{"power": false}},
+				}},
+			}
+			shadowBytes, err := json.Marshal(shadowState)
+			Expect(err).To(BeNil())
+			iotDataClient.AddDirect(testNodeID3, shadowName, shadowBytes)
+
+			cd, err := json.Marshal(map[string]string{"groupID": testGroup.GroupID, "paramMap_OnOff": "power"})
+			Expect(err).To(BeNil())
+			executeRequest := gva.GVARequest{
+				RequestID: "test-request-id",
+				Inputs: []gva.Input{{
+					Intent: gva.IntentExecute,
+					Payload: json.RawMessage(`{"commands":[{"devices":[{"id":"` + testNodeID3 +
+						`.ColorLight","customData":` + string(cd) +
+						`}],"execution":[{"command":"action.devices.commands.OnOff","params":{"on":true}}]}]}`),
+				}},
+			}
+			requestBody, err := json.Marshal(executeRequest)
+			Expect(err).To(BeNil())
+
+			publishesBefore := len(iotDataClient.PublishCalls)
+
+			response, err := handler(ctx, events.APIGatewayProxyRequest{
+				HTTPMethod: "POST", Body: string(requestBody),
+				Headers: map[string]string{"Authorization": "Bearer " + testToken},
+			})
+			Expect(err).To(BeNil())
+			Expect(response.StatusCode).To(Equal(200))
+
+			var gvaResponse gva.GVAResponse
+			Expect(json.Unmarshal([]byte(response.Body), &gvaResponse)).To(Succeed())
+			var executePayload gva.ExecutePayload
+			payloadBytes, _ := json.Marshal(gvaResponse.Payload)
+			Expect(json.Unmarshal(payloadBytes, &executePayload)).To(Succeed())
+
+			Expect(executePayload.Commands).To(HaveLen(1))
+			Expect(executePayload.Commands[0].Status).To(Equal("OFFLINE"))
+			Expect(executePayload.Commands[0].ErrorCode).To(Equal("deviceOffline"))
+			Expect(executePayload.Commands[0].States).To(HaveKeyWithValue("online", false))
+
+			// Nothing reached the device.
+			Expect(iotDataClient.PublishCalls).To(HaveLen(publishesBefore))
+		})
+
 		DescribeTable("should handle various commands",
 			func(command, deviceSuffix, groupIDKey, paramMapKey, paramMapValue, executionCommand string, params map[string]interface{}, expectedStates map[string]interface{}, expectedShadowDevice string, expectedShadowParams map[string]interface{}, expectedReads, expectedWrites int, initialShadowParams map[string]interface{}) {
 				var nodeID string
@@ -609,6 +663,7 @@ var _ = Describe("GVA Action", func() {
 				initialShadowState := map[string]interface{}{
 					"state": map[string]interface{}{
 						"reported": map[string]interface{}{
+							"online": true,
 							"params": map[string]interface{}{
 								expectedShadowDevice: initialShadowParams,
 							},
@@ -739,6 +794,7 @@ var _ = Describe("GVA Action", func() {
 			initialShadowState := map[string]interface{}{
 				"state": map[string]interface{}{
 					"reported": map[string]interface{}{
+						"online": true,
 						"params": map[string]interface{}{
 							"ColorLight": map[string]interface{}{
 								"hue": 0, "saturation": 0, "brightness": 100,
@@ -852,6 +908,7 @@ var _ = Describe("GVA Action", func() {
 			initialShadowState := map[string]interface{}{
 				"state": map[string]interface{}{
 					"reported": map[string]interface{}{
+						"online": true,
 						"params": map[string]interface{}{
 							"ColorLight": map[string]interface{}{
 								"hue": 0, "saturation": 0, "brightness": 0,
@@ -1041,6 +1098,7 @@ var _ = Describe("GVA Action", func() {
 				initialShadowState := map[string]interface{}{
 					"state": map[string]interface{}{
 						"reported": map[string]interface{}{
+							"online": true,
 							"params": map[string]interface{}{
 								tc.expectedShadowDevice: tc.initialShadowParams,
 							},
