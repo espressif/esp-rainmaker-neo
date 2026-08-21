@@ -639,3 +639,116 @@ def test_purge_empties_both_timeseries_tables(node_with_timeseries_history):
         f"{processed_after} of {processed_before} processed aggregate rows survived the purge "
         f"for node {node_id}"
     )
+
+
+# Historical-aggregate queries must return the window that was asked for.
+#
+# The interval_key sort-key range is BETWEEN, which is inclusive on both ends, while the
+# handlers pass a half-open [start, end) range. Formatting the exclusive end as a window key
+# therefore matched one window too many, and because the query runs newest-first the
+# single-date path returned that extra later window as entries[0] — labelled with the
+# requested date. These probes assert the correct window, so a failure means the defect is
+# live on the deployment under test.
+#
+# Four consecutive days are published on purpose. A window is archived only when a LATER
+# sample crosses its boundary, so the last day published is never archived. Three days would
+# leave DAY_2 open, and the range probe — whose whole point is that DAY_2 must not appear —
+# would then pass against the bug and prove nothing. Verified: with three days the range
+# assertion passed pre-fix while the single-date one failed.
+# A fixed date far in the past, so these windows are always historical (archived) rather
+# than the still-open "current" row, and never collide with wall-clock-based test data.
+DAY_0 = "2024-06-10"
+DAY_1 = "2024-06-11"
+DAY_2 = "2024-06-12"
+# Published only so DAY_2's window closes; never asserted on directly.
+DAY_3 = "2024-06-13"
+
+# Distinct value per day so a response can be traced to the day it came from.
+VALUE_BY_DAY = {DAY_0: 11.0, DAY_1: 22.0, DAY_2: 33.0, DAY_3: 44.0}
+
+WINDOW_PARAM_KEY = "aggwindow"
+
+
+def _publish_days(device):
+    """Publish one backdated sample per day, oldest first, so each day archives the previous."""
+    for date_str in (DAY_0, DAY_1, DAY_2, DAY_3):
+        published = device.publish_timeseries_data(
+            k=WINDOW_PARAM_KEY,
+            data_type=PARAM_DT,
+            value=VALUE_BY_DAY[date_str],
+            timestamp=_midday_epoch_seconds(date_str),
+            timezone="UTC",
+        )
+        assert published, f"failed to publish the {date_str} sample"
+        time.sleep(1)
+
+
+def _aggregate_for(test_user1, group_id, node_id, date_str):
+    """Return the single aggregate dict for date_str, or None if not archived yet."""
+    response = test_user1.get_node_timeseries_historical_aggregates(
+        group_id, node_id, WINDOW_PARAM_KEY, PARAM_DT, window="daily", date=date_str
+    )
+    aggregates = response.get("aggregates") or []
+    if len(aggregates) != 1:
+        return None
+    # The "no historical data" placeholder carries a message and no numbers.
+    return aggregates[0] if "sum" in aggregates[0] else None
+
+
+@pytest.fixture
+def archived_days(associated_device):
+    """Publish four consecutive backdated days and wait until the first three are archived."""
+    device, group_id, test_user1, _ = associated_device
+    assert connect_device_with_retry(device), "failed to connect device"
+    device.get_group_info()
+    assert getattr(device, "group_id", None), "device has no group_id after get_group_info"
+
+    _publish_days(device)
+
+    node_id = device.node_thing_name
+    deadline = time.time() + AGGREGATION_TIMEOUT_S
+    while time.time() < deadline:
+        # DAY_2 archiving is the real precondition: DAY_1 and DAY_2 are the extra windows
+        # the buggy queries reach for, so without them the probes cannot distinguish fixed
+        # from broken. DAY_2 archives last, so it gates the wait.
+        if _aggregate_for(test_user1, group_id, node_id, DAY_2) is not None:
+            break
+        time.sleep(AGGREGATION_POLL_S)
+    else:
+        pytest.skip(
+            f"timeseries aggregation did not archive {DAY_2} within {AGGREGATION_TIMEOUT_S}s "
+            "— stream processor or ingest problem, not the window-selection defect"
+        )
+
+    return device, group_id, test_user1, node_id
+
+
+def test_single_date_returns_that_date_not_the_next(archived_days):
+    """A single-date query must not return the following day's aggregate."""
+    _, group_id, test_user1, node_id = archived_days
+
+    aggregate = _aggregate_for(test_user1, group_id, node_id, DAY_0)
+    assert aggregate is not None, f"no archived daily aggregate for {DAY_0}"
+
+    assert aggregate["date"] == DAY_0, f"response is labelled {aggregate['date']}, asked for {DAY_0}"
+    assert aggregate["sum"] == pytest.approx(VALUE_BY_DAY[DAY_0]), (
+        f"asked for {DAY_0} (value {VALUE_BY_DAY[DAY_0]}) but got sum {aggregate['sum']}; "
+        f"{VALUE_BY_DAY[DAY_1]} means the {DAY_1} window was returned instead"
+    )
+
+
+def test_range_excludes_the_window_after_end_date(archived_days):
+    """A range query must stop at end_date, not spill into the next window."""
+    _, group_id, test_user1, node_id = archived_days
+
+    response = test_user1.get_node_timeseries_historical_aggregates_range(
+        group_id, node_id, WINDOW_PARAM_KEY, PARAM_DT, window="daily",
+        start_date=DAY_0, end_date=DAY_1,
+    )
+    dates = [aggregate["date"] for aggregate in response.get("aggregates") or []]
+
+    assert DAY_2 not in dates, (
+        f"range {DAY_0}..{DAY_1} returned {DAY_2}, one window past end_date; got {dates}"
+    )
+    assert DAY_0 in dates, f"range {DAY_0}..{DAY_1} is missing start_date {DAY_0}; got {dates}"
+    assert DAY_1 in dates, f"range {DAY_0}..{DAY_1} is missing end_date {DAY_1}; got {dates}"

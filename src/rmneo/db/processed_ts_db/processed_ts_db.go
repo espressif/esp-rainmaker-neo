@@ -314,7 +314,15 @@ type HistoricalAggregatesQueryResult struct {
 	NextToken string
 }
 
-// GetWindowEntriesWithPagination retrieves window entries with pagination
+// lastWindowKeyBefore returns the interval_key of the last window that starts before endTime.
+// endTime is an exclusive bound, but Between is inclusive on both ends, so formatting endTime
+// itself would also match the window that begins exactly at it.
+func lastWindowKeyBefore(endTime time.Time, windowType timewindow.TimeWindow) string {
+	return timewindow.FormatWindowKey(endTime.Add(-time.Nanosecond), windowType)
+}
+
+// GetWindowEntriesWithPagination retrieves window entries with pagination.
+// startTime is inclusive and endTime is exclusive, matching Go's own half-open time ranges.
 func (db *ProcessedTsDB) GetWindowEntriesWithPagination(nodeID, dataKey, dataType string, windowType timewindow.TimeWindow, startTime, endTime time.Time, limit int32, nextToken string) (*HistoricalAggregatesQueryResult, error) {
 	// Access permission check
 	if err := db.IsAuthorized(utils.NodeGet, nodeID); err != nil {
@@ -332,13 +340,13 @@ func (db *ProcessedTsDB) GetWindowEntriesWithPagination(nodeID, dataKey, dataTyp
 
 	if !startTime.IsZero() && !endTime.IsZero() {
 		startKey := timewindow.FormatWindowKey(startTime, windowType)
-		endKey := timewindow.FormatWindowKey(endTime, windowType)
+		endKey := lastWindowKeyBefore(endTime, windowType)
 		keyCondition = keyCondition.And(expression.Key("interval_key").Between(expression.Value(startKey), expression.Value(endKey)))
 	} else if !startTime.IsZero() {
 		startKey := timewindow.FormatWindowKey(startTime, windowType)
 		keyCondition = keyCondition.And(expression.Key("interval_key").Between(expression.Value(startKey), expression.Value(keyPrefix+"~")))
 	} else if !endTime.IsZero() {
-		endKey := timewindow.FormatWindowKey(endTime, windowType)
+		endKey := lastWindowKeyBefore(endTime, windowType)
 		keyCondition = keyCondition.And(expression.Key("interval_key").Between(expression.Value(keyPrefix), expression.Value(endKey)))
 	} else {
 		keyCondition = keyCondition.And(expression.Key("interval_key").BeginsWith(keyPrefix))

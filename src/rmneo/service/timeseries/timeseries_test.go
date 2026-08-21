@@ -1446,3 +1446,230 @@ var _ = Describe("Purging all timeseries data for a node", func() {
 		Expect(err.Error()).To(ContainSubstring("rmng-no-such-table"))
 	})
 })
+
+// The interval_key range is inclusive on both ends while the handlers pass an exclusive
+// endTime, so a window boundary is easy to over-include. Each seeded window carries a
+// distinct sum so a response can be traced back to the window it actually came from.
+var _ = Describe("Timeseries historical aggregates window range", func() {
+	const nodeID = "window-range-node"
+
+	var (
+		svc     *timeseries.TimeseriesService
+		rmngCtx *rmngctx.RmngContext
+	)
+
+	// seed writes one historical window entry per interval_key, using the map value as its sum.
+	seed := func(windowType string, windows map[string]float64) {
+		db := processed_ts_db.NewProcessedTsDB(rmngctx.NewRmngContext(utils.NewSystemActor()))
+		for key, sum := range windows {
+			entry := &processed_ts_db.ProcessedTsEntry{
+				NodeKeyDt:  nodeID + ".temperature.float",
+				NodeID:     nodeID,
+				DataKey:    "temperature",
+				DataType:   "float",
+				WindowType: windowType,
+				WindowAggregates: processed_ts_db.WindowAggregates{
+					Count: 1, Sum: sum, Min: sum, Max: sum, Average: sum,
+					FirstValue: sum, LastValue: sum,
+				},
+			}
+			Expect(db.CreateWindowEntry(entry, key)).To(Succeed())
+		}
+	}
+
+	// query runs a GET against the /aggregates sub-path and returns the aggregates array.
+	query := func(params map[string]string) []map[string]interface{} {
+		params["key"] = "temperature"
+		params["data_type"] = "float"
+		ctx := context.WithValue(rmngCtx.Context, "query_params", params)
+		rmngCtx.Context = context.WithValue(ctx, "timeseries_type", "aggregates")
+
+		data, err := svc.Get(rmngCtx, nodeID)
+		Expect(err).ToNot(HaveOccurred())
+		return data.(map[string]interface{})["aggregates"].([]map[string]interface{})
+	}
+
+	dates := func(aggregates []map[string]interface{}) []string {
+		out := make([]string, 0, len(aggregates))
+		for _, a := range aggregates {
+			out = append(out, a["date"].(string))
+		}
+		return out
+	}
+
+	BeforeEach(func() {
+		test_utils.TestSetup()
+		service.Initialize()
+		timeseries.Register()
+		svc = timeseries.NewTimeseriesService()
+
+		u := user.NewUser("window-range-user")
+		u.Permissions.SetAllow(utils.NodeGet.String(), nodeID)
+		rmngCtx = rmngctx.NewRmngContext(u)
+
+		mockDB := awscommon.GetDynamoDBClient().(*mock.DynamoDBMock)
+		mockDB.AddTable(processed_ts_db.ProcessedTSDataTable, "node_key_dt", "interval_key")
+		mockDB.ProfileReset()
+	})
+
+	Describe("a single date", func() {
+		DescribeTable("returns only the requested window",
+			func(windowType string, windows map[string]float64, date string, wantSum float64) {
+				seed(windowType, windows)
+
+				aggregates := query(map[string]string{"window": windowType, "date": date})
+
+				Expect(aggregates).To(HaveLen(1))
+				Expect(aggregates[0]["date"]).To(Equal(date))
+				Expect(aggregates[0]["sum"]).To(BeNumerically("==", wantSum))
+			},
+			Entry("daily does not return the following day",
+				"daily", map[string]float64{"daily#2026-01-15": 15, "daily#2026-01-16": 16},
+				"2026-01-15", 15.0),
+			Entry("hourly does not return the following hour",
+				"hourly", map[string]float64{"hourly#2026-01-15T14": 14, "hourly#2026-01-15T15": 15},
+				"2026-01-15T14", 14.0),
+			Entry("monthly does not return the following month",
+				"monthly", map[string]float64{"monthly#2026-01": 1, "monthly#2026-02": 2},
+				"2026-01-15", 1.0),
+			Entry("weekly does not return the following week",
+				"weekly", map[string]float64{"weekly#2026-01-12": 12, "weekly#2026-01-19": 19},
+				"2026-01-15", 12.0),
+		)
+
+		It("resolves an hourly date carrying no hour to hour 00", func() {
+			seed("hourly", map[string]float64{"hourly#2026-01-15T00": 0, "hourly#2026-01-15T01": 1})
+
+			aggregates := query(map[string]string{"window": "hourly", "date": "2026-01-15"})
+
+			Expect(aggregates).To(HaveLen(1))
+			Expect(aggregates[0]["sum"]).To(BeNumerically("==", 0))
+		})
+
+		It("reports no data when only the following window exists", func() {
+			seed("daily", map[string]float64{"daily#2026-01-16": 16})
+
+			aggregates := query(map[string]string{"window": "daily", "date": "2026-01-15"})
+
+			Expect(aggregates).To(HaveLen(1))
+			Expect(aggregates[0]).To(HaveKeyWithValue("message", "No historical data available for this window"))
+			Expect(aggregates[0]).ToNot(HaveKey("sum"))
+		})
+	})
+
+	Describe("a date range", func() {
+		It("excludes the window immediately after end_date", func() {
+			seed("daily", map[string]float64{
+				"daily#2026-01-14": 14, "daily#2026-01-15": 15, "daily#2026-01-16": 16,
+			})
+
+			aggregates := query(map[string]string{
+				"window": "daily", "start_date": "2026-01-14", "end_date": "2026-01-15",
+			})
+
+			Expect(dates(aggregates)).To(ConsistOf("2026-01-14", "2026-01-15"))
+		})
+
+		It("includes end_date itself when start and end are the same day", func() {
+			seed("daily", map[string]float64{"daily#2026-01-15": 15, "daily#2026-01-16": 16})
+
+			aggregates := query(map[string]string{
+				"window": "daily", "start_date": "2026-01-15", "end_date": "2026-01-15",
+			})
+
+			Expect(dates(aggregates)).To(ConsistOf("2026-01-15"))
+		})
+
+		It("covers the whole day when an hourly end_date carries no hour", func() {
+			seed("hourly", map[string]float64{
+				"hourly#2026-01-15T00": 0, "hourly#2026-01-15T23": 23, "hourly#2026-01-16T00": 100,
+			})
+
+			aggregates := query(map[string]string{
+				"window": "hourly", "start_date": "2026-01-15", "end_date": "2026-01-15",
+			})
+
+			Expect(dates(aggregates)).To(ConsistOf("2026-01-15T00", "2026-01-15T23"))
+		})
+
+		It("includes the end hour when an hourly end_date carries one", func() {
+			seed("hourly", map[string]float64{
+				"hourly#2026-01-15T14": 14, "hourly#2026-01-15T15": 15, "hourly#2026-01-15T16": 16,
+			})
+
+			aggregates := query(map[string]string{
+				"window": "hourly", "start_date": "2026-01-15T14", "end_date": "2026-01-15T15",
+			})
+
+			Expect(dates(aggregates)).To(ConsistOf("2026-01-15T14", "2026-01-15T15"))
+		})
+
+		It("excludes the next year when a monthly range ends in December", func() {
+			seed("monthly", map[string]float64{
+				"monthly#2026-01": 1, "monthly#2026-12": 12, "monthly#2027-01": 100,
+			})
+
+			aggregates := query(map[string]string{
+				"window": "monthly", "start_date": "2026-01-01", "end_date": "2026-12-31",
+			})
+
+			Expect(dates(aggregates)).To(ConsistOf("2026-01", "2026-12"))
+		})
+
+		It("keeps a sub-month range inside its own month", func() {
+			seed("monthly", map[string]float64{"monthly#2025-12": 12, "monthly#2026-01": 1})
+
+			aggregates := query(map[string]string{
+				"window": "monthly", "start_date": "2026-01-15", "end_date": "2026-01-20",
+			})
+
+			Expect(dates(aggregates)).To(ConsistOf("2026-01"))
+		})
+
+		It("bounds the range when only end_date is given", func() {
+			seed("daily", map[string]float64{"daily#2026-01-14": 14, "daily#2026-01-15": 15})
+
+			aggregates := query(map[string]string{"window": "daily", "end_date": "2026-01-14"})
+
+			Expect(dates(aggregates)).To(ConsistOf("2026-01-14"))
+		})
+
+		It("returns an empty page when the range holds no windows", func() {
+			seed("daily", map[string]float64{"daily#2026-01-20": 20})
+
+			aggregates := query(map[string]string{
+				"window": "daily", "start_date": "2026-01-14", "end_date": "2026-01-15",
+			})
+
+			Expect(aggregates).To(BeEmpty())
+		})
+	})
+
+	Describe("an unparseable bound", func() {
+		DescribeTable("is rejected rather than silently dropped",
+			func(params map[string]string, wantMessage string) {
+				params["key"] = "temperature"
+				params["data_type"] = "float"
+				ctx := context.WithValue(rmngCtx.Context, "query_params", params)
+				rmngCtx.Context = context.WithValue(ctx, "timeseries_type", "aggregates")
+
+				_, err := svc.Get(rmngCtx, nodeID)
+
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring(wantMessage))
+			},
+			Entry("a malformed single date",
+				map[string]string{"window": "daily", "date": "15-01-2026"},
+				"invalid date format"),
+			Entry("a malformed start_date",
+				map[string]string{"window": "daily", "start_date": "not-a-date", "end_date": "2026-01-15"},
+				"invalid start_date format"),
+			Entry("a malformed end_date",
+				map[string]string{"window": "daily", "start_date": "2026-01-14", "end_date": "2026-13-99"},
+				"invalid end_date format"),
+			Entry("an hourly bound with a malformed hour",
+				map[string]string{"window": "hourly", "start_date": "2026-01-15T99", "end_date": "2026-01-15T16"},
+				"invalid start_date format"),
+		)
+	})
+})
