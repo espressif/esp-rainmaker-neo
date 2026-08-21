@@ -40,6 +40,8 @@ from cryptography.hazmat.primitives import serialization, hashes
 from cryptography import x509
 import uuid
 import time
+from queue import Empty
+
 import boto3
 import subprocess
 import sys
@@ -1542,6 +1544,100 @@ def connect_device_with_retry(device, max_retries=2, base_delay=1):
             if attempt < max_retries - 1:
                 time.sleep(base_delay * (2 ** attempt))
     return False
+
+
+# ---------------------------------------------------------------------------
+# Shadow / presence helpers
+#
+# Shared by the device-status, association and event-pipeline suites, which all
+# need to read a named shadow or wait for the presence lambda to write one.
+# ---------------------------------------------------------------------------
+
+def iot_data_client():
+    """boto3 iot-data client bound to this deployment's IoT endpoint."""
+    return boto3.client("iot-data", region_name=REGION, endpoint_url=f"https://{IOT_ENDPOINT}")
+
+
+def get_shadow(thing_name, shadow_name):
+    """Shadow document, or None when the shadow does not exist."""
+    iot_data = iot_data_client()
+    try:
+        response = iot_data.get_thing_shadow(thingName=thing_name, shadowName=shadow_name)
+    except iot_data.exceptions.ResourceNotFoundException:
+        return None
+    return json.loads(response["payload"].read())
+
+
+def reported_state(thing_name, shadow_name):
+    """The shadow's reported state, or {} when the shadow does not exist."""
+    return (get_shadow(thing_name, shadow_name) or {}).get("state", {}).get("reported", {})
+
+
+def wait_for_reported_online(thing_name, shadow_name, expected, timeout=60):
+    """Poll a shadow until reported.online is `expected`.
+
+    Returns the last value seen, so a failing caller can report what the shadow
+    was stuck at rather than just that it timed out. The default timeout clears
+    the presence lambda's 10s offline delay plus the round-trip through
+    nodes-online and the shadow write, which runs ~25s in practice.
+    """
+    deadline = time.time() + timeout
+    while True:
+        online = reported_state(thing_name, shadow_name).get("online")
+        if online is expected or time.time() >= deadline:
+            return online
+        time.sleep(2)
+
+
+def wait_for_shadow_absent(thing_name, shadow_name, timeout=30):
+    """Poll until the named shadow no longer exists."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if get_shadow(thing_name, shadow_name) is None:
+            return True
+        time.sleep(2)
+    return False
+
+
+def request_from_cloud(device, event_name, attempts=3, timeout=20):
+    """Publish a to_cloud event and return the matching from_cloud answer.
+
+    Re-asks like firmware does: the reply crosses the IoT rule, the lambda (via
+    SQS when the deployment is in that mode) and back, which exceeds 20s under
+    load — the SDK's own setNodeConfig ack waits 30s for the same reason.
+    """
+    for _ in range(attempts):
+        while not device.from_cloud_queue.empty():
+            device.from_cloud_queue.get_nowait()
+        if not device.publish_to_cloud({"event": [event_name]}):
+            continue
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                message = device.from_cloud_queue.get(timeout=2)
+            except Empty:
+                continue
+            if event_name in message:
+                return message[event_name]
+    return None
+
+
+def wait_for_node_session(thing_name, timeout=30):
+    """Wait for node_connected_rule to record the broker session in rmng-nodes-online.
+
+    Returns (sessionIdentifier, versionNumber), or (None, None) on timeout, so a
+    caller can build an exactly-matching disconnect event. Presence disconnects
+    are dropped outright when there is no row, so the disconnect path is only
+    reachable once this lands.
+    """
+    table = boto3.resource("dynamodb", region_name=REGION).Table("rmng-nodes-online")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        item = table.get_item(Key={"clientId": thing_name}).get("Item")
+        if item and item.get("sessionIdentifier"):
+            return item["sessionIdentifier"], int(item.get("versionNumber", 0))
+        time.sleep(2)
+    return None, None
 
 
 def generate_and_upload_node_csv(user, nodes, return_certs=False):

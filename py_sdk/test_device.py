@@ -861,7 +861,7 @@ class Device:
 
         return self._publish_to_topic(topic, payload, "direct notification")
 
-    def wait_for_group_info(self, timeout=5):
+    def wait_for_group_info(self, timeout=15):
         # Wait for the response
         start_time = time.time()
         while time.time() - start_time < timeout:
@@ -879,7 +879,7 @@ class Device:
         return False
 
 
-    def get_group_info(self, timeout=5):
+    def get_group_info(self, timeout=15):
         if not self.mqtt_connection:
             device_log("Error: MQTT not connected. Call connect() first.")
             return None

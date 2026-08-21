@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/sharing_request_db"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_group_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_integration_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"io"
@@ -178,6 +179,72 @@ var _ = Describe("Notification Constructors", func() {
 			_, err := notification.NewShadowUpdateNotification("test-node", "invalid-format", emptyState, emptyState)
 			Expect(err).ToNot(BeNil())
 		})
+
+		It("should report a bare 'params-' name via ErrNoGroupInName", func() {
+			emptyState := node.ReportedOrDesiredShadow{}
+			_, err := notification.NewShadowUpdateNotification("test-node", "params-", emptyState, emptyState)
+			Expect(err).To(MatchError(notification.ErrNoGroupInName))
+		})
+
+		It("should report a name whose group segment is empty via ErrNoGroupInName", func() {
+			emptyState := node.ReportedOrDesiredShadow{}
+			_, err := notification.NewShadowUpdateNotification("test-node", "params--sub1", emptyState, emptyState)
+			Expect(err).To(MatchError(notification.ErrNoGroupInName))
+		})
+	})
+})
+
+var _ = Describe("hasDispatchableService", func() {
+	It("is true when a service is named", func() {
+		Expect(hasDispatchableService(map[string]interface{}{"alexa": true})).To(BeTrue())
+	})
+
+	It("is false for a map holding only the version bookkeeping key", func() {
+		Expect(hasDispatchableService(map[string]interface{}{"version": float64(3)})).To(BeFalse())
+	})
+
+	It("is false for an empty map", func() {
+		Expect(hasDispatchableService(map[string]interface{}{})).To(BeFalse())
+	})
+
+	It("is false for a nil map", func() {
+		Expect(hasDispatchableService(nil)).To(BeFalse())
+	})
+
+	It("is true when a service is named alongside version", func() {
+		Expect(hasDispatchableService(map[string]interface{}{"version": float64(3), "gva": true})).To(BeTrue())
+	})
+})
+
+var _ = Describe("hasConnectivityDispatchTarget", func() {
+	// Local registry, not the global one: notification.Initialize() would reset
+	// registrations other specs depend on.
+	var registry *notification.NotificationServiceRegistry
+
+	BeforeEach(func() {
+		registry = notification.NewNotificationServiceRegistry()
+		registry.Register(&recordingService{name: "gate_plain"})
+		registry.Register(&connectivityRecordingService{recordingService{name: "gate_conn"}})
+	})
+
+	It("is true when a named service opts into connectivity changes", func() {
+		Expect(hasConnectivityDispatchTarget(registry, map[string]interface{}{"gate_plain": true, "gate_conn": true})).To(BeTrue())
+	})
+
+	It("is false when only non-connectivity services are named", func() {
+		Expect(hasConnectivityDispatchTarget(registry, map[string]interface{}{"gate_plain": true})).To(BeFalse())
+	})
+
+	It("is false for unregistered service names", func() {
+		Expect(hasConnectivityDispatchTarget(registry, map[string]interface{}{"no_such_service": true})).To(BeFalse())
+	})
+
+	It("ignores the version bookkeeping key", func() {
+		Expect(hasConnectivityDispatchTarget(registry, map[string]interface{}{"version": float64(7)})).To(BeFalse())
+	})
+
+	It("is false for an empty notify map", func() {
+		Expect(hasConnectivityDispatchTarget(registry, map[string]interface{}{})).To(BeFalse())
 	})
 })
 
@@ -2242,9 +2309,18 @@ var _ = Describe("Notifications Handler", func() {
 				map[string]interface{}{"version": float64(4)},
 				map[string]interface{}{"version": float64(5)},
 				nil, nil)
+			mockDB := awscommon.GetDynamoDBClient().(*mock.DynamoDBMock)
+			mockDB.ProfileReset()
 			Expect(Handler(ctx, event)).To(BeNil())
 			Expect(plain.sendTos).To(Equal(1))
 			Expect(conn.sendTos).To(Equal(1))
+
+			// The recipient list depends only on the group, so it is resolved once
+			// and reused: both services here are user-specific, and without the
+			// memoisation in Handler each would run its own
+			// ListUsersForGroupOrSubGroup query against the same group.
+			reads := mockDB.ProfileGet().Accesses[user_group_db.UserGroupMappingTable].ReadCount
+			Expect(reads).To(Equal(1), "the recipient list must be resolved once per event, not once per service")
 		})
 
 		It("dispatches on the first-ever notification with no previous version", func() {
@@ -2277,6 +2353,79 @@ var _ = Describe("Notifications Handler", func() {
 			}
 			Expect(Handler(ctx, event)).To(BeNil())
 			Expect(plain.sendTos).To(Equal(1))
+		})
+	})
+
+	// Dropped as no-ops: returning an error would have the caller retry an event
+	// that can never succeed.
+	Describe("No-op events", func() {
+		var plain *recordingService
+
+		BeforeEach(func() {
+			plain = &recordingService{name: "noop_plain"}
+			notification.Registry().Register(plain)
+		})
+
+		It("drops a group-less 'params-' shadow update without failing", func() {
+			event := NotificationEvent{
+				NodeID:           nodeID,
+				TopicName:        "params-",
+				NotificationType: "shadow_update",
+				CurrState: node.ReportedOrDesiredShadow{
+					Params: map[string]interface{}{"notify": map[string]interface{}{"version": float64(1)}},
+				},
+				Notify: map[string]interface{}{"noop_plain": true, "version": float64(1)},
+			}
+			Expect(Handler(ctx, event)).To(BeNil())
+			Expect(plain.sendTos).To(Equal(0))
+		})
+
+		It("returns without dispatching when the notify map is empty", func() {
+			event := NotificationEvent{
+				NodeID:           nodeID,
+				TopicName:        "params-" + groupID,
+				NotificationType: "shadow_update",
+				CurrState: node.ReportedOrDesiredShadow{
+					Params: map[string]interface{}{"status": "online"},
+				},
+				Notify: map[string]interface{}{},
+			}
+			Expect(Handler(ctx, event)).To(BeNil())
+			Expect(plain.sendTos).To(Equal(0))
+		})
+
+		It("returns without dispatching when the notify map holds only version", func() {
+			event := NotificationEvent{
+				NodeID:           nodeID,
+				TopicName:        "params-" + groupID,
+				NotificationType: "shadow_update",
+				CurrState: node.ReportedOrDesiredShadow{
+					Params: map[string]interface{}{"notify": map[string]interface{}{"version": float64(9)}},
+				},
+				Notify: map[string]interface{}{"version": float64(9)},
+			}
+			Expect(Handler(ctx, event)).To(BeNil())
+			Expect(plain.sendTos).To(Equal(0))
+		})
+
+		It("skips a connectivity-only fire that no registered service listens for", func() {
+			online, offline := true, false
+			event := NotificationEvent{
+				NodeID:           nodeID,
+				TopicName:        "params-" + groupID,
+				NotificationType: "shadow_update",
+				PrevState: node.ReportedOrDesiredShadow{
+					Params: map[string]interface{}{"notify": map[string]interface{}{"version": float64(3)}},
+					Online: &online,
+				},
+				CurrState: node.ReportedOrDesiredShadow{
+					Params: map[string]interface{}{"notify": map[string]interface{}{"version": float64(3)}},
+					Online: &offline,
+				},
+				Notify: map[string]interface{}{"noop_plain": true, "version": float64(3)},
+			}
+			Expect(Handler(ctx, event)).To(BeNil())
+			Expect(plain.sendTos).To(Equal(0), "the lingering notify map must not be re-delivered")
 		})
 	})
 

@@ -6,12 +6,19 @@ package notification
 
 import (
 	"context"
+	"errors"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"strings"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 )
+
+// ErrNoGroupInName marks a name carrying no group ID — the bare "params-",
+// emitted when a publisher builds it from an empty groupId. Group membership is
+// what resolves recipients, so such a notification is unroutable: a no-op, not
+// a failure.
+var ErrNoGroupInName = errors.New("no group ID in name")
 
 // NotificationServiceType represents the type of notification service
 type NotificationServiceType string
@@ -249,7 +256,7 @@ func NewNotificationFromEvent(nodeID, topicName, notificationType string, currSt
 // This is a simplified version that doesn't import the node package to avoid circular dependencies
 func parseGroupIDFromPartialName(partialName string) (string, []string, error) {
 	if partialName == "" {
-		return "", nil, rmerror.NewRMError(nil, "empty partial name")
+		return "", nil, rmerror.NewRMError(ErrNoGroupInName, "empty partial name")
 	}
 
 	parts := strings.Split(partialName, "-")
@@ -266,7 +273,7 @@ func parseGroupIDFromPartialName(partialName string) (string, []string, error) {
 	}
 
 	if groupID == "" {
-		return "", nil, rmerror.NewRMError(nil, "could not extract group ID from partial name: "+partialName)
+		return "", nil, rmerror.NewRMError(ErrNoGroupInName, "could not extract group ID from partial name: "+partialName)
 	}
 
 	return groupID, subGroupIDs, nil

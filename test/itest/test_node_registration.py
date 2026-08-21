@@ -5,6 +5,7 @@
 from py_sdk.test_device import Device, generate_key_and_cert, validate_tags, split_combined_cert_pem
 from test.itest.conftest import (
     connect_device_with_retry,
+    request_from_cloud,
     REGION,
     CA_CERT,
     IOT_ENDPOINT,
@@ -764,3 +765,45 @@ def test_failed_nodes_presigned_csv_retry(super_admin_user):
                     boto3.client("s3", region_name=REGION).delete_object(Bucket=bucket, Key=key)
                 except Exception as e:
                     print(f"Warning: failed to delete S3 object {path}: {e}")
+
+
+def test_groupless_node_bootsequence(bare_device, super_admin_user):
+    """A registered but unassociated node must complete its boot sequence.
+
+    Before its first association a node belongs to no group, and no step here
+    depends on one: it learns it has no group, reaches its unicast params topic,
+    syncs its clock, uploads its config, and carries admin tags in the
+    group-independent iparams shadow. A group-less node blocked at any of these
+    would never finish coming online.
+    """
+    device = bare_device()
+    assert connect_device_with_retry(device, max_retries=3, base_delay=2), \
+        "Group-less device failed to connect"
+    node_id = device.node_thing_name
+
+    # getGroupInfo must be answered, and the answer must carry no group.
+    group_info = request_from_cloud(device, "getGroupInfo")
+    assert group_info is not None, "Cloud never answered getGroupInfo for a group-less node"
+    assert "pgrp" not in group_info, \
+        f"Expected no group for an unassociated node, got {group_info}"
+
+    unicast_topic = f"rainmaker/nodes/{node_id}/user/params-/params"
+    assert device.subscribe(topic=unicast_topic), \
+        f"Group-less node could not subscribe to {unicast_topic}"
+
+    time_sync = request_from_cloud(device, "getTimeSync")
+    assert time_sync is not None, \
+        "No getTimeSync answer — the session did not survive the unicast subscribe"
+    assert abs(time_sync["time"] - time.time() * 1000) < 5 * 60 * 1000, \
+        f"Server time {time_sync['time']} deviates more than 5 minutes from test host time"
+
+    # Config is stored per node, not per group. set_node_config consumes its own
+    # from_cloud ack and returns True only on status == "success".
+    assert device.set_node_config({"device_type": "light_bulb", "firmware_version": "1.0"}), \
+        "Cloud did not accept setNodeConfig for a group-less node"
+
+    # Admin tags live in the iparams shadow, whose name carries no group.
+    result = super_admin_user.admin_put_node_tags(node_id, admin_tags={"env": "staging"})
+    assert result is not False, "Admin tag write failed for a group-less node"
+    tags = super_admin_user.admin_get_node_tags(node_id)
+    assert tags["admin"]["env"] == "staging", f"Admin tags not readable back: {tags}"

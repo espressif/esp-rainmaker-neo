@@ -262,13 +262,18 @@ var _ = Describe("Presence Event Handler", func() {
 
 			Expect(iotMock.Shadows).To(HaveLen(1))
 			Expect(iotMock.Shadows).To(HaveKey("test-node-without-group"))
+			// Both names are written: "params-" is the shadow a group-less node
+			// reports into, so its online:true must be corrected there too, and
+			// "iparams" is group-independent.
 			Expect(iotMock.Shadows["test-node-without-group"]).To(And(
-				HaveLen(1),
+				HaveLen(2),
 				HaveKey("iparams"),
+				HaveKey("params-"),
 			))
 
-			shadowData := iotMock.Shadows["test-node-without-group"]["iparams"]
-			Expect(string(shadowData)).To(MatchJSON(`{"state":{"reported":{"online":false}}}`))
+			offlineState := `{"state":{"reported":{"online":false}}}`
+			Expect(string(iotMock.Shadows["test-node-without-group"]["iparams"])).To(MatchJSON(offlineState))
+			Expect(string(iotMock.Shadows["test-node-without-group"]["params-"])).To(MatchJSON(offlineState))
 		})
 
 		It("should handle a session mismatch", func() {
