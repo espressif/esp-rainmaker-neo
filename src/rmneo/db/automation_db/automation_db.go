@@ -276,15 +276,19 @@ func (adb *AutomationDB) ListGroupAutomations(groupID string) ([]AutomationItem,
 		},
 	}
 
-	queryOutput, err := adb.Query(adb.Ctx.Context, queryInput)
+	// Paginated: DeleteNodeFromAutomations walks this list to strip a departing node, so a
+	// truncated page would leave the tail of a group's automations pointing at that node.
+	var automations []AutomationItem
+	err := adb.QueryPaginated(adb.Ctx.Context, queryInput, func(item map[string]types.AttributeValue) error {
+		var automation AutomationItem
+		if err := attributevalue.UnmarshalMap(item, &automation); err != nil {
+			return rmerror.NewRMError(err, "failed to unmarshal automation items")
+		}
+		automations = append(automations, automation)
+		return nil
+	})
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to query automations in DynamoDB")
-	}
-
-	var automations []AutomationItem
-	err = attributevalue.UnmarshalListOfMaps(queryOutput.Items, &automations)
-	if err != nil {
-		return nil, rmerror.NewRMError(err, "failed to unmarshal automation items")
 	}
 
 	return automations, nil

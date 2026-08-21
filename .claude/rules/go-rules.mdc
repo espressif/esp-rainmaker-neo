@@ -57,6 +57,8 @@ aws-sdk-go-v2/service/acmpca/types")
 - Always create separate DB structs for each table, with a `dynamodbav:""` tag on each field.
 - Always use `attributevalue.UnmarshalMap()` and `attributevalue.MarshalMap()` for unmarshalling/marshalling items to and from the database.
 - Always use the expression builder for building all DynamoDB operations.
+- **A listing must use `QueryPaginated`, never a bare `Query`.** `Query` returns at most 1 MB per call whether or not you set a `Limit`, so a bare `Query` silently truncates once the partition grows. A bare `Query` is correct only when the key condition can match a single item (both keys fixed, or reading `Items[0]` off a unique GSI key) or when a `Limit` is the caller's own bound. When a listing also grants permissions per row, truncation denies access as well as hiding data, so this is not only a display bug.
+- Cover a listing with a spec that seeds past `mock.DynamoDBMock.MaxPageItems`; without it the mock returns everything in one page and a truncating read looks correct.
 
 ## RBAC / Authorization
 - **Checks live in the DB layer, not the caller.** Every DB helper performs its own `IsAuthorized` check; callers do not re-check before calling. A caller adds an explicit check only when the DB layer cannot express the constraint (rare).

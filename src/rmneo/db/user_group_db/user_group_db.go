@@ -343,17 +343,14 @@ func (db *UserGroupDB) ListGroupsForUser(groupId string) ([]UserGroupEntry, erro
 		ProjectionExpression:      aws.String("group_id, sub_entity_ids, access_type"),
 	}
 
-	queryOutput, err := db.Query(db.Ctx.Context, queryInput)
-	if err != nil {
-		return nil, rmerror.NewRMError(err, "failed to query user_group_mapping in DynamoDB")
-	}
-
 	var groups []UserGroupEntry
-	for _, item := range queryOutput.Items {
+	// Paginated: each row also grants this request's permissions on its group, so a truncated
+	// page would hide the group and deny access to it.
+	err := db.QueryPaginated(db.Ctx.Context, queryInput, func(item map[string]types.AttributeValue) error {
 		var entry UserGroupEntry
 		if err := attributevalue.UnmarshalMap(item, &entry); err != nil || entry.GroupID == "" {
 			// Skip an item missing the mandatory sort key (or otherwise malformed) rather than panic on the auth path.
-			continue
+			return nil
 		}
 
 		db.Ctx.SetAllowMultiple(utils.GetGroupPermissions(entry.AccessType), entry.GroupID)
@@ -367,6 +364,10 @@ func (db *UserGroupDB) ListGroupsForUser(groupId string) ([]UserGroupEntry, erro
 			SubEntityIDs: append([]string{}, entry.SubEntityIDs...),
 			AccessType:   entry.AccessType,
 		})
+		return nil
+	})
+	if err != nil {
+		return nil, rmerror.NewRMError(err, "failed to query user_group_mapping in DynamoDB")
 	}
 
 	return groups, nil
@@ -468,15 +469,17 @@ func (db *UserGroupDB) listAllUsersForGroupAuthorized(groupID string) ([]UserGro
 		ExpressionAttributeValues: expr.Values(),
 	}
 
-	result, err := db.Query(db.Ctx.Context, queryInput)
+	var entries []UserGroupGSIEntry
+	err = db.QueryPaginated(db.Ctx.Context, queryInput, func(item map[string]types.AttributeValue) error {
+		var entry UserGroupGSIEntry
+		if err := attributevalue.UnmarshalMap(item, &entry); err != nil {
+			return rmerror.NewRMError(err, "failed to unmarshal user group entries")
+		}
+		entries = append(entries, entry)
+		return nil
+	})
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to query user_group_mapping in DynamoDB")
-	}
-
-	var entries []UserGroupGSIEntry
-	err = attributevalue.UnmarshalListOfMaps(result.Items, &entries)
-	if err != nil {
-		return nil, rmerror.NewRMError(err, "failed to unmarshal user group entries")
 	}
 
 	return entries, nil

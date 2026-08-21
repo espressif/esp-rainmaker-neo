@@ -147,7 +147,10 @@ type DynamoDBMock struct {
 	// If the table has a sort key, then the structure is like this:
 	items_pskey map[string]*orderedmap.OrderedMap
 	PutItemErr  error
-	mx          sync.RWMutex
+	// MaxPageItems caps how many items one Query returns, standing in for the service's 1 MB
+	// page cap so tests can exercise a multi-page read. Zero (the default) means unlimited.
+	MaxPageItems int
+	mx           sync.RWMutex
 	// condMx makes a conditional write atomic with respect to other writes.
 	//
 	// getItem and putItem each take mx separately, so evaluating a
@@ -697,19 +700,26 @@ func (m *DynamoDBMock) QueryInternal(input *dynamodb.QueryInput) (*dynamodb.Quer
 		}
 	}
 
-	// Apply limit and set LastEvaluatedKey if there are more results
+	// Apply limit and set LastEvaluatedKey if there are more results. MaxPageItems stands in
+	// for the real service's 1 MB page cap, which applies whether or not the caller sent a
+	// Limit — without it the mock can only ever return one page, so a read path that ignores
+	// LastEvaluatedKey looks correct in tests and silently truncates against AWS.
+	limit := 0
 	if input.Limit != nil && *input.Limit > 0 {
-		limit := int(*input.Limit)
-		if len(matchingItems) > limit {
-			// Set LastEvaluatedKey to the last item we're returning
-			lastItem := matchingItems[limit-1]
-			output.LastEvaluatedKey = make(map[string]types.AttributeValue)
-			output.LastEvaluatedKey[tableDetails.PrimaryKey] = lastItem[tableDetails.PrimaryKey]
-			if tableDetails.SortKey != "" {
-				output.LastEvaluatedKey[tableDetails.SortKey] = lastItem[tableDetails.SortKey]
-			}
-			matchingItems = matchingItems[:limit]
+		limit = int(*input.Limit)
+	}
+	if m.MaxPageItems > 0 && (limit == 0 || m.MaxPageItems < limit) {
+		limit = m.MaxPageItems
+	}
+	if limit > 0 && len(matchingItems) > limit {
+		// Set LastEvaluatedKey to the last item we're returning
+		lastItem := matchingItems[limit-1]
+		output.LastEvaluatedKey = make(map[string]types.AttributeValue)
+		output.LastEvaluatedKey[tableDetails.PrimaryKey] = lastItem[tableDetails.PrimaryKey]
+		if tableDetails.SortKey != "" {
+			output.LastEvaluatedKey[tableDetails.SortKey] = lastItem[tableDetails.SortKey]
 		}
+		matchingItems = matchingItems[:limit]
 	}
 
 	// Handle Count select or return items with projection

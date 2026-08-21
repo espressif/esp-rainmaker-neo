@@ -153,13 +153,15 @@ func (db *SharingRequestDB) GetMySharingRequests() ([]*SharingRequestEntry, erro
 		},
 	}
 
-	result, err := db.Query(db.Ctx.Context, input)
-	if err != nil {
-		return nil, err
-	}
-
 	entries := []*SharingRequestEntry{}
-	err = attributevalue.UnmarshalListOfMaps(result.Items, &entries)
+	err := db.QueryPaginated(db.Ctx.Context, input, func(item map[string]types.AttributeValue) error {
+		var entry SharingRequestEntry
+		if err := attributevalue.UnmarshalMap(item, &entry); err != nil {
+			return err
+		}
+		entries = append(entries, &entry)
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
