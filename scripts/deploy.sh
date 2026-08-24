@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Default stack group to deploy (rmng, espuser, or alexa)
+# Default stack group to deploy (rmng, espuser, alexa, or smartthings)
 STACK_GROUP="rmng"
 OUTPUTS_FILE="build/cdk/cdk-outputs.json"
 PUBLISH_VERSION=""
@@ -64,6 +64,14 @@ if [ "$command" == "--setup" ]; then
             AWS_REGION="$ALEXA_REGION" cdk bootstrap --qualifier "$STACK_GROUP" --app "python3 $APP_FILE" \
                 --toolkit-stack-name "CDKToolkit-${STACK_GROUP}"
         done
+    elif [ "$STACK_GROUP" == "smartthings" ]; then
+        # Qualifier is "sthing" (CDK caps qualifiers at 10 chars), matching the app's synthesizer.
+        ST_REGIONS=("us-east-1" "eu-west-1" "ap-northeast-1")
+        for ST_REGION in "${ST_REGIONS[@]}"; do
+            echo "Bootstrapping smartthings in region: $ST_REGION"
+            AWS_REGION="$ST_REGION" cdk bootstrap --qualifier "sthing" --app "python3 $APP_FILE" \
+                --toolkit-stack-name "CDKToolkit-${STACK_GROUP}"
+        done
     else
         cdk bootstrap --qualifier "$STACK_GROUP" --app "python3 $APP_FILE" \
             --toolkit-stack-name "CDKToolkit-${STACK_GROUP}"
@@ -118,6 +126,13 @@ if [ "$STACK_GROUP" == "alexa" ]; then
     for ALEXA_REGION in "${ALEXA_REGIONS[@]}"; do
         echo "Deploying alexa stack to region: $ALEXA_REGION (rmng region: $RMNG_REGION)"
         RMNG_REGION="$RMNG_REGION" AWS_REGION="$ALEXA_REGION" cdk deploy --all --app "python3 $APP_FILE" --require-approval never --asset-parallelism true --outputs-file $OUTPUTS_FILE
+    done
+elif [ "$STACK_GROUP" == "smartthings" ]; then
+    ST_REGIONS=("us-east-1" "eu-west-1" "ap-northeast-1")
+    RMNG_REGION="$AWS_REGION"
+    for ST_REGION in "${ST_REGIONS[@]}"; do
+        echo "Deploying smartthings stack to region: $ST_REGION (rmng region: $RMNG_REGION)"
+        RMNG_REGION="$RMNG_REGION" AWS_REGION="$ST_REGION" cdk deploy --all --app "python3 $APP_FILE" --require-approval never --asset-parallelism true --outputs-file $OUTPUTS_FILE
     done
 else
     cdk deploy --all --app "python3 $APP_FILE" --require-approval never --asset-parallelism true --outputs-file $OUTPUTS_FILE ${DEPLOY_PARAMS[@]+"${DEPLOY_PARAMS[@]}"}

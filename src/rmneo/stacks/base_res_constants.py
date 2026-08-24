@@ -136,6 +136,7 @@ SSM_PARAMETERS = {
 SSM_PARAMETER_PREFIXES = {
     'GVA_CONFIG': '/rmng/gva/',
     'ALEXA_CONFIG': '/rmng/alexa/',
+    'ST_CONFIG': '/rmng/smartthings/',
 }
 
 # S3 Bucket Name Pattern

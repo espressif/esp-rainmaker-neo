@@ -782,6 +782,70 @@ func AppendGetGVAEn(data *DataToDevice, gvaEnabled bool) {
 	}
 }
 
+// SendSTEnabled sends a notification to the device about its SmartThings enabled status
+func (n *Node) SendSTEnabled(ctx context.Context) error {
+	data := NewDataToDevice(n)
+	AppendGetSTEn(data, true)
+	err := data.Send(ctx)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// UpdateSTEnabled updates the SmartThings enabled status for the node
+func (n *Node) UpdateSTEnabled(ctx context.Context, enabled bool) error {
+	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, n)
+	nodeDetailsDB := node_details_db.NewNodeDetailsDB(rmngCtx)
+	return nodeDetailsDB.UpdateServiceData("st_en", enabled)
+}
+
+// GetSTEnStatus gets the SmartThings enabled status for the node
+func (n *Node) GetSTEnStatus(ctx context.Context) (*bool, error) {
+	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, n)
+	nodeDetailsDB := node_details_db.NewNodeDetailsDB(rmngCtx)
+
+	data, err := nodeDetailsDB.GetServiceData(n.ThingName, "st_en")
+	if err != nil {
+		return nil, err
+	}
+
+	if data == nil {
+		return nil, nil
+	}
+
+	enabled, ok := data.(bool)
+	if !ok {
+		return nil, rmerror.NewRMError(nil, "invalid SmartThings enabled status type")
+	}
+
+	return &enabled, nil
+}
+
+// HandleGetSTEnWithNodeDetails handles the getSTEn event with pre-fetched NodeDetails
+func HandleGetSTEnWithNodeDetails(ctx context.Context, n *Node, responseData *DataToDevice, nodeDetails *node_details_db.NodeDetails) error {
+	stEnabled := false
+	if nodeDetails != nil {
+		enabled, err := nodeDetails.GetServiceData("st_en")
+		if err == nil && enabled != nil {
+			if enabledBool, ok := enabled.(bool); ok {
+				stEnabled = enabledBool
+			}
+		}
+	}
+
+	AppendGetSTEn(responseData, stEnabled)
+	return nil
+}
+
+// AppendGetSTEn appends SmartThings enabled status to the response
+func AppendGetSTEn(data *DataToDevice, stEnabled bool) {
+	data.Event = append(data.Event, "getSTEn")
+	data.Data["getSTEn"] = map[string]interface{}{
+		"enabled": stEnabled,
+	}
+}
+
 // SendGetGroupInfo generates the group info for the node and sends it to the device
 func (n *Node) SendGetGroupInfo(ctx context.Context) error {
 	data := NewDataToDevice(n)

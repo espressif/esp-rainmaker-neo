@@ -28,6 +28,7 @@ packages:
       - rmng
       - alexa
       - gva
+      - smartthings
       - claim
 
   enterprise:
@@ -81,6 +82,14 @@ groups:
     mandatory: true
     stacks:
       - rmng-gva-core
+
+  smartthings:
+    friendly_name: "Samsung SmartThings"
+    description: "Control your ESP RainMaker Neo devices with Samsung SmartThings"
+    mandatory: true
+    stacks:
+      - rmng-st-core
+      - rmng-st-cfg-core
 
   espuser-pro:
     friendly_name: "ESP RainMaker Neo Identity Pro"
@@ -349,6 +358,63 @@ stacks:
         us-east-1: mandatory
         eu-west-1: mandatory
         us-west-2: mandatory
+    parameters:
+      RmngRegion:
+        value: ${rmng-base.outputs.StackRegion}
+        prompt: false
+        description: "Region where the rmng stack is deployed"
+      EspUserIssuer:
+        value: ${rmng-base.inputs.EspUserIssuer}
+        prompt: false
+        description: "ESP User OAuth issuer URL"
+      EspUserClientId:
+        value: ${rmng-base.inputs.EspUserClientId}
+        prompt: false
+        description: "ESP User Client ID"
+      EspAdminUserPoolId:
+        value: ${rmng-base.inputs.EspAdminUserPoolId}
+        prompt: false
+        description: "ESP Admin User Pool ID"
+      EspAdminUserPoolClientId:
+        value: ${rmng-base.inputs.EspAdminUserPoolClientId}
+        prompt: false
+        description: "ESP Admin User Pool Client ID"
+      EspUserJwks:
+        value: ${rmng-base.inputs.EspUserJwks}
+        prompt: false
+        description: "ESP User JWKS SSM parameter name"
+      EspAdminUserPoolJwks:
+        value: ${rmng-base.inputs.EspAdminUserPoolJwks}
+        prompt: false
+        description: "ESP Admin User Pool JWKS SSM parameter name"
+      IdentityPoolId:
+        value: ${rmng-base.outputs.IdentityPoolId}
+        prompt: false
+        description: "Cognito Identity Pool ID"
+
+  rmng-st-cfg-core:
+    friendly_name: "RainMaker SmartThings Cfg Core"
+    stack_name: rmng-st-cfg-core
+    template: rmng-st-cfg-core.template.json
+    depends_on:
+      - rmng-core
+    regions:
+      mode: all
+      explicit: []
+    parameters: {}
+
+  rmng-st-core:
+    friendly_name: "RainMaker SmartThings Core"
+    stack_name: rmng-st-core-${APP_REGION}
+    template: rmng-st-core.template.json
+    depends_on:
+      - rmng-base
+    regions:
+      mode: explicit
+      explicit:
+        us-east-1: mandatory
+        eu-west-1: mandatory
+        ap-northeast-1: mandatory
     parameters:
       RmngRegion:
         value: ${rmng-base.outputs.StackRegion}

@@ -23,6 +23,7 @@ import (
 var nodeDetailsEvents = map[string]bool{
 	"getAlexaEn":        true,
 	"getGVAEn":          true,
+	"getSTEn":           true,
 	"getSchedVer":       true,
 	"getSchedDetails":   true,
 	"getTriggerVer":     true,
@@ -115,6 +116,11 @@ func handlePublishInputEvent(ctx context.Context, event node.PublishInputEvent) 
 			err := node.HandleGetGVAEnWithNodeDetails(ctx, n, responseData, nodeDetails)
 			if err != nil {
 				rlog.Error(rmngCtx).Err(err).Msg("Failed to handle getGVAEn")
+			}
+		case "getSTEn":
+			err := node.HandleGetSTEnWithNodeDetails(ctx, n, responseData, nodeDetails)
+			if err != nil {
+				rlog.Error(rmngCtx).Err(err).Msg("Failed to handle getSTEn")
 			}
 		case "getSchedVer":
 			err := node.HandleGetSchedVerWithNodeDetails(ctx, n, responseData, nodeDetails)

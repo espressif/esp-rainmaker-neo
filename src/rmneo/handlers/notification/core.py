@@ -64,7 +64,8 @@ class NotificationCore(Construct):
             ],
             resources=[
                 get_ssm_parameter_prefix_arn('ALEXA_CONFIG', region),
-                get_ssm_parameter_prefix_arn('GVA_CONFIG', region)
+                get_ssm_parameter_prefix_arn('GVA_CONFIG', region),
+                get_ssm_parameter_prefix_arn('ST_CONFIG', region)
             ]
         ))
         

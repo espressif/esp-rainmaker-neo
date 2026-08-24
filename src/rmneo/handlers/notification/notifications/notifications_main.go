@@ -19,6 +19,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification/push"
+	"github.com/espressif/esp-rainmaker-neo/src/smartthings"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
@@ -72,6 +73,11 @@ func initialize() {
 	gvaAdapter := gva.NewGVANotification(context.Background(), mockBaseURL)
 	notification.Registry().Register(gvaAdapter)
 	rlog.Info(context.TODO()).Msg("Registered GVA notification service")
+
+	// Register SmartThings notification service
+	stAdapter := smartthings.NewSTNotification(context.Background(), mockBaseURL)
+	notification.Registry().Register(stAdapter)
+	rlog.Info(context.TODO()).Msg("Registered SmartThings notification service")
 
 	pushAdapter := push.NewMobilePushService()
 	notification.Registry().Register(pushAdapter)

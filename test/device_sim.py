@@ -35,9 +35,10 @@ class DeviceSim:
         self.current_subgroup_control_topics = []
         self.ishadow_name = "iparams"
         
-        # Alexa and GVA notification support
+        # Alexa, GVA and SmartThings notification support
         self.alexa_enabled = False
         self.gva_enabled = False
+        self.st_enabled = False
         self.notification_version = 1
 
         # Read configurations
@@ -286,6 +287,12 @@ class DeviceSim:
             self.gva_enabled = message["getGVAEn"].get("enabled", False)
             print(f"GVA enabled status updated: {self.gva_enabled}")
 
+    def handle_st_enabled_response(self, message):
+        """Handle the getSTEn response from the cloud"""
+        if "getSTEn" in message and isinstance(message["getSTEn"], dict):
+            self.st_enabled = message["getSTEn"].get("enabled", False)
+            print(f"SmartThings enabled status updated: {self.st_enabled}")
+
     def process_messages(self):
         while not self.should_stop:
             try:
@@ -301,6 +308,9 @@ class DeviceSim:
                     # Handle GVA enabled status
                     if "getGVAEn" in message:
                         self.handle_gva_enabled_response(message)
+                    # Handle SmartThings enabled status
+                    if "getSTEn" in message:
+                        self.handle_st_enabled_response(message)
                 elif message_type == 'params' and self.shadow_name:
                     # Apply the SDK's auto-mode-switch logic before mirroring
                     # the desired-params write back into the reported shadow,
@@ -492,17 +502,19 @@ class DeviceSim:
             message: dict of parameters to update
         """
         print(f"Updating shadows with message: {message}")
-        # If Alexa or GVA is enabled, add the notification field
-        if self.alexa_enabled or self.gva_enabled:
+        # If Alexa, GVA or SmartThings is enabled, add the notification field
+        if self.alexa_enabled or self.gva_enabled or self.st_enabled:
             shadow_message = message.copy()
             notify = {"version": self.notification_version}
             if self.alexa_enabled:
                 notify["alexa"] = True
             if self.gva_enabled:
                 notify["gva"] = True
+            if self.st_enabled:
+                notify["smartthings"] = True
             shadow_message["notify"] = notify
             self.notification_version += 1
-            print(f"Adding notification to shadow update (version: {self.notification_version-1}, alexa: {self.alexa_enabled}, gva: {self.gva_enabled})")
+            print(f"Adding notification to shadow update (version: {self.notification_version-1}, alexa: {self.alexa_enabled}, gva: {self.gva_enabled}, smartthings: {self.st_enabled})")
         else:
             shadow_message = message
 

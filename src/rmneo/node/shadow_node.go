@@ -89,7 +89,7 @@ func EmitGroupMembershipChangeAsync(ctx *rmngctx.RmngContext, nodeID, groupID st
 		SubGroupIDs:      subGroupIDs,
 		Action:           action,
 		// Voice-assistant channels that maintain their own device registry.
-		Notify: map[string]interface{}{"alexa": struct{}{}, "gva": struct{}{}},
+		Notify: map[string]interface{}{"alexa": struct{}{}, "gva": struct{}{}, "smartthings": struct{}{}},
 	}
 	if err := lambdautil.InvokeAsync(ctx.Context, fn, event); err != nil {
 		rlog.Error(ctx).Err(err).Str("nodeID", nodeID).Str("groupID", groupID).Str("action", action).

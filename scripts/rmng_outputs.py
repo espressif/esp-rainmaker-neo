@@ -36,6 +36,7 @@ DEFAULT_ESP_USER_CLIENT_ID = 'user-pool-client'
 # Alexa smart-home region codes keyed by the AWS region the endpoint lives in. Alexa accepts
 # endpoints only in these three regions, wherever RMNG itself is deployed.
 AWS_REGION_TO_ALEXA = {'us-east-1': 'NA', 'eu-west-1': 'EU', 'us-west-2': 'FE'}
+AWS_REGION_TO_ST = {'us-east-1': 'NA', 'eu-west-1': 'EU', 'ap-northeast-1': 'AP'}
 
 _URL_SCHEMES = ('http://', 'https://')
 
@@ -111,6 +112,21 @@ def default_alexa_arn(region_arns):
     return region_arns.get('NA') or next(iter(region_arns.values()), None)
 
 
+def st_region_arns(outputs):
+    """Map each STSchemaAppFunctionArn to its SmartThings geo code (NA/EU/AP).
+
+    Same shape-agnostic resolution as alexa_region_arns: the geo comes from the
+    region embedded in the ARN, covering both flat and per-region-nested outputs.
+    """
+    region_arns = {}
+    for arn in find_outputs(outputs, 'STSchemaAppFunctionArn'):
+        parts = arn.split(':')
+        code = AWS_REGION_TO_ST.get(parts[3] if len(parts) > 3 else '')
+        if code:
+            region_arns[code] = arn
+    return region_arns
+
+
 def oidc_endpoints(outputs):
     """Resolve the (authorize, token) OIDC endpoints used for voice-assistant account linking.
 
@@ -168,6 +184,7 @@ class RmngSettings:
     gva_fulfillment_url: str
 
     alexa_region_arns: dict
+    st_region_arns: dict
 
     @classmethod
     def from_source(cls, source=None):
@@ -207,6 +224,7 @@ class RmngSettings:
             # GVA moved to its own stack; fall back to rmng-core for deployments predating it.
             gva_fulfillment_url=rmng_gva_core.get('GVAFulfillmentUrl') or rmng_core.get('GVAFulfillmentUrl', ''),
             alexa_region_arns=alexa_region_arns(outputs),
+            st_region_arns=st_region_arns(outputs),
             **required,
         )
 

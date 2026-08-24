@@ -312,6 +312,19 @@ var _ = Describe("Publish Input Event Handler", func() {
 					"enabled": false
 				}
 			}`),
+		Entry("getSTEn event",
+			`{
+			   "thing_name": "test-thing",
+			   "data": {
+			   		"event": ["getSTEn"]
+			   }
+			  }`,
+			`{
+				"event": ["getSTEn"],
+				"getSTEn": {
+					"enabled": false
+				}
+			}`),
 		Entry("hello event",
 			`{
 			   "thing_name": "test-thing",
@@ -332,14 +345,14 @@ var _ = Describe("Publish Input Event Handler", func() {
 			`{
 			   "thing_name": "test-thing",
 			   "data": {
-			   		"event": ["getGroupInfo", "hello", "getAlexaEn", "getGVAEn"],
+			   		"event": ["getGroupInfo", "hello", "getAlexaEn", "getGVAEn", "getSTEn"],
 			   		"hello": {
 			   			"id": "test-hello-id"
 			   		}
 			   }
 			}`,
 			`{
-				"event": ["getGroupInfo", "hello", "getAlexaEn", "getGVAEn"],
+				"event": ["getGroupInfo", "hello", "getAlexaEn", "getGVAEn", "getSTEn"],
 				"getGroupInfo": {
 					"pgrp": "{{.GroupID}}"
 				},
@@ -350,6 +363,9 @@ var _ = Describe("Publish Input Event Handler", func() {
 					"enabled": false
 				},
 				"getGVAEn": {
+					"enabled": false
+				},
+				"getSTEn": {
 					"enabled": false
 				}
 			}`),

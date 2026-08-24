@@ -123,6 +123,8 @@ tags:
     description: Admin-only - configure 3p integrations (Alexa Skill, etc.).
   - name: Google Voice Assistant
     description: Admin-only - configure the Google Voice Assistant integration.
+  - name: SmartThings
+    description: Admin-only - configure the Samsung SmartThings integration.
 
 paths:
   /v1/groups/{groupId}/node-assoc-requests:
@@ -2850,6 +2852,117 @@ paths:
         "500":
           $ref: "#/components/responses/InternalServerError"
 
+  # NOTE (not rendered): SmartThings is configured through this dedicated
+  # path (served by the st_cfg Lambda), not through the unified
+  # /v1/admin/integrations tree above — its credentials live in SSM, not
+  # in an integration record.
+  /v1/admin/integrations/smartthings/configuration:
+    post:
+      summary: Configure SmartThings integration
+      description: |
+        Stores the SmartThings Schema App OAuth credentials (client ID and
+        client secret). Also registers the three SmartThings OAuth callback
+        URLs (`https://c2c-us.smartthings.com/oauth/callback`, `c2c-eu`,
+        `c2c-ap`) on the voice-assistant OIDC client. Super-admin only.
+      tags:
+        - SmartThings
+      security:
+        - sigv4: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/STCfgRequest"
+            example:
+              client_id: "0a1b2c3d-4e5f-6789-abcd-ef0123456789"
+              client_secret: "s3cr3t-abcdefghijklmnopqrstuvwxyz"
+      responses:
+        "200":
+          description: Configuration stored successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+              example:
+                message: "SmartThings configuration stored successfully"
+        "400":
+          description: Invalid request - missing, empty, or oversized fields
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/STCfgValidationError"
+              examples:
+                invalidBody:
+                  value:
+                    message: "invalid request body"
+                emptyClientId:
+                  value:
+                    message: "client_id must not be empty"
+                    field: "client_id"
+                tooLongClientSecret:
+                  value:
+                    message: "client_secret must not exceed 256 characters"
+                    field: "client_secret"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    get:
+      summary: Get SmartThings configuration
+      description: |
+        Retrieves the stored SmartThings client ID. The client secret is
+        never returned. Super-admin only.
+      tags:
+        - SmartThings
+      security:
+        - sigv4: []
+      responses:
+        "200":
+          description: Configuration retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/STCfgGetResponse"
+              example:
+                client_id: "0a1b2c3d-4e5f-6789-abcd-ef0123456789"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    delete:
+      summary: Delete SmartThings configuration
+      description: |
+        Removes the SmartThings client ID and client secret. This effectively
+        disables the SmartThings integration until reconfigured. Super-admin only.
+      tags:
+        - SmartThings
+      security:
+        - sigv4: []
+      responses:
+        "200":
+          description: Configuration deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+              example:
+                message: "SmartThings configuration deleted successfully"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
   /v1/admin/iot-event-mode:
     get:
       summary: Get the current IoT-rule action mode for event-handler lambdas
@@ -4869,6 +4982,52 @@ components:
           example: "Espressif"
         message:
           type: string
+
+    STCfgRequest:
+      type: object
+      description: |
+        SmartThings Schema App OAuth credentials. Both fields are required,
+        must be non-empty, and must not exceed 256 characters. The client ID
+        is stored as an SSM `String` parameter and the client secret as a
+        `SecureString` parameter.
+      required:
+        - client_id
+        - client_secret
+      properties:
+        client_id:
+          type: string
+          maxLength: 256
+          description: The SmartThings Schema App OAuth client ID.
+        client_secret:
+          type: string
+          maxLength: 256
+          description: The SmartThings Schema App OAuth client secret.
+
+    STCfgGetResponse:
+      type: object
+      description: |
+        The stored SmartThings client ID. The client secret is never
+        returned.
+      properties:
+        client_id:
+          type: string
+          description: The stored SmartThings client ID.
+
+    STCfgValidationError:
+      type: object
+      description: |
+        SmartThings configuration error. For field-level validation
+        failures, `field` names the offending request field; it is absent
+        for other errors (e.g. an unparseable body).
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          description: Human-readable error description.
+        field:
+          type: string
+          description: The request field that failed validation.
 
     GetFileUploadUrlResponse:
       type: object
