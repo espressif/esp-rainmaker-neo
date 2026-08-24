@@ -1,3 +1,12 @@
+/*
+ * SPDX-FileCopyrightText: 2020 SmartBear Software Inc.
+ * SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Modified from the Swagger UI static distribution
+ */
+
 window.onload = function() {
   //<editor-fold desc="Changeable Configuration Block">
 

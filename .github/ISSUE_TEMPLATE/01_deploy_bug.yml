@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+#
+# SPDX-License-Identifier: Apache-2.0
+
 name: Build or deployment bug
 description: Something fails during `make go_build`, `make synth`, or `make deploy`
 labels: ["Type: Bug", "Area: Deploy"]

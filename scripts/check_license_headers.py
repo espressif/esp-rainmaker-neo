@@ -70,6 +70,13 @@ EXCLUDED_PREFIXES = (
     "docs/api/swagger-ui",
     "docs/api/oauth2-redirect.html",
     "docs/api/index.css",
+    # Brand marks and artwork: trademark, not Apache-2.0. See NOTICE's TRADEMARKS section.
+    "assets/architecture.svg",
+    "dashboard/src/assets/img/logo/",
+    "dashboard/src/assets/img/favicon/",
+    "assets/alexa_logo",
+    "assets/gva_logo",
+    "assets/smartthings_logo",
 )
 
 EXCLUDED_SUFFIXES = (
@@ -138,6 +145,12 @@ def insert_header(path: str) -> None:
     lines = content.splitlines(keepends=True)
     at = 0
     while at < len(lines) and PRELUDE_RE.match(lines[at]):
+        # A declaration can share its line with the document root (minified SVG is written that way); splitting it keeps the header above the content instead of after the closing tag.
+        head, sep, rest = lines[at].partition("?>")
+        if not sep:
+            head, sep, rest = lines[at].partition(">")
+        if sep and rest.strip():
+            lines[at : at + 1] = [head + sep + "\n", rest]
         at += 1
     block = header_block(path)
     tail = lines[at:]
@@ -196,8 +209,7 @@ def main() -> int:
     print(
         "\nEvery source file needs this header (comment syntax per language):\n"
         f"\n  # {COPYRIGHT}\n  #\n  # {LICENSE_ID}\n"
-        "\nRun `make license-fix` to insert it, or"
-        " `python3 scripts/check_license_headers.py --files <path> --fix`."
+        "\nRe-run with --fix to insert it."
     )
     return 1
 
