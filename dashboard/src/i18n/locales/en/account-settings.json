@@ -24,10 +24,15 @@
     "requirementMet": "Requirement met",
     "requirementUnmet": "Requirement not met",
     "submit": "Update password",
+    "setPasswordTitle": "Set a password",
+    "setPasswordDescription": "You sign in with an emailed code. Add a password to sign in with one as well.",
+    "setPasswordSubmit": "Set password",
     "errorTitle": "Could not change your password",
     "success": {
       "title": "Password updated",
       "description": "Your password has been changed. You'll be signed out so you can sign in again with the new one.",
+      "setTitle": "Password set",
+      "setDescription": "Your password has been set. You'll be signed out so you can sign in with it.",
       "countdown": "Signing you out in {{seconds}}s.",
       "signInAgain": "Sign in again"
     }

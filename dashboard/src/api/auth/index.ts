@@ -11,12 +11,19 @@
 export type {
   SigninRequest,
   SigninResponse,
+  StartSigninRequest,
+  StartSigninResult,
+  SelectOtpRequest,
+  OtpChallenge,
+  VerifyOtpRequest,
+  UserAuthFactors,
   ChangePasswordRequest,
   ChangePasswordResponse,
   ForgotPasswordRequest,
   ForgotPasswordResponse,
   ConfirmForgotPasswordRequest,
   ConfirmForgotPasswordResponse,
+  ChallengeKind,
 } from './auth.types'
 
 export {
@@ -24,6 +31,10 @@ export {
   type AuthSchemaMessages,
   getSigninRequestSchema,
   type SigninRequestSchema,
+  getIdentifyRequestSchema,
+  type IdentifyRequestSchema,
+  getOtpRequestSchema,
+  type OtpRequestSchema,
   getChangePasswordRequestSchema,
   type ChangePasswordRequestSchema,
   getForgotPasswordRequestSchema,
@@ -40,4 +51,8 @@ export {
   useChangePassword,
   useForgotPassword,
   useConfirmForgotPassword,
+  useStartSignin,
+  useSelectOtp,
+  useVerifyOtp,
+  useUserAuthFactors,
 } from './auth.queries'

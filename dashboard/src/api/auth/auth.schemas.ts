@@ -95,14 +95,55 @@ export const getSigninRequestSchema = (messages: AuthSchemaMessages) =>
 export type SigninRequestSchema = z.infer<ReturnType<typeof getSigninRequestSchema>>
 
 /**
- * Zod schema for change password request validation
+ * Zod schema for the first login step, which collects only an address
  */
-export const getChangePasswordRequestSchema = (messages: AuthSchemaMessages) =>
+export const getIdentifyRequestSchema = (messages: AuthSchemaMessages) =>
+  z.object({
+    username: z.string().min(1, messages.emailRequired).email(messages.emailInvalid),
+  })
+
+export type IdentifyRequestSchema = z.infer<ReturnType<typeof getIdentifyRequestSchema>>
+
+/**
+ * Zod schema for the emailed one-time code
+ */
+export const getOtpRequestSchema = (messages: AuthSchemaMessages) =>
+  z.object({
+    code: z.string().min(1, messages.codeRequired),
+  })
+
+export type OtpRequestSchema = z.infer<ReturnType<typeof getOtpRequestSchema>>
+
+/**
+ * Zod schema for change password request validation.
+ *
+ * `requireCurrentPassword` is false for an admin with no password yet (the
+ * "set a first password" form has no current-password field to render or
+ * validate). The field itself stays a plain required-shape `z.string()` in both
+ * cases — branching between `.min(1, …)` and `.optional()` would give the field
+ * two different static types depending on a runtime boolean, which `zodResolver`
+ * cannot reconcile with a single `useForm<ChangePasswordRequestSchema>()` call.
+ * The emptiness check instead runs as a `superRefine`, so it can be skipped
+ * without changing the field's type.
+ */
+export const getChangePasswordRequestSchema = (
+  messages: AuthSchemaMessages,
+  { requireCurrentPassword = true }: { requireCurrentPassword?: boolean } = {},
+) =>
   z
     .object({
-      old_password: z.string().min(1, messages.currentPasswordRequired),
+      old_password: z.string(),
       new_password: newPasswordSchema(messages),
       confirm_password: confirmPasswordSchema(messages),
+    })
+    .superRefine((data, ctx) => {
+      if (requireCurrentPassword && data.old_password.length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: messages.currentPasswordRequired,
+          path: ['old_password'],
+        })
+      }
     })
     .refine(passwordsMatch.check, passwordsMatch.options(messages))
 

@@ -414,6 +414,21 @@ class CreateAdminBaseResources(Construct):
             self, "AdminUserPool",
             user_pool_name='ESP-Admin-Users',
             self_sign_up_enabled=False,
+            # SignInPolicy is rejected below Essentials, and CDK's default is
+            # "ESSENTIALS for a newly created pool; LITE otherwise" — ambiguous for a
+            # pool that already exists, so it is pinned rather than inferred.
+            feature_plan=cognito.FeaturePlan.ESSENTIALS,
+            # PASSWORD covers both the plain-password and SRP flows, so adding EMAIL_OTP
+            # takes nothing away. sms_otp is deliberately absent: it needs a registered
+            # SNS origination number, and phone sign-in is separate later work.
+            # Note: OTP first factors are incompatible with *required* MFA, and under the
+            # pool's optional MFA an admin who enrols MFA stops being OTP-eligible.
+            sign_in_policy=cognito.SignInPolicy(
+                allowed_first_auth_factors=cognito.AllowedFirstAuthFactors(
+                    password=True,
+                    email_otp=True,
+                ),
+            ),
             custom_attributes={
                 "user_id": cognito.StringAttribute(
                     mutable=True,
@@ -438,6 +453,13 @@ class CreateAdminBaseResources(Construct):
             self, "AdminClient",
             user_pool=admin_user_pool,
             user_pool_client_name="admin-client",
+            # Overriding auth_flows replaces the shared default wholesale, so
+            # user_password and user_srp are respelled to keep existing sign-in intact.
+            # user=True is ALLOW_USER_AUTH, without which passwordless is unavailable.
+            auth_flows=cognito.AuthFlow(user_password=True, user_srp=True, user=True),
+            # The default 3 minutes has to cover email delivery plus the admin finding
+            # and typing the code. Permitted range is 3-15.
+            auth_session_validity=Duration.minutes(5),
             refresh_token_validity=Duration.days(30),
         )
 

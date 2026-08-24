@@ -113,3 +113,19 @@ fall back to the old one so a deployment that predates the split keeps working
 (`scripts/rmng_outputs.py`). The dashboard uses the presence of each stack in
 the published outputs to decide whether to offer that integration at all, so an
 assistant whose stack is not deployed simply does not appear.
+
+### Removed outputs leave their backing resource behind
+
+`AdminTempPasswordStore` declared only an `on_create` call, so when the construct
+was removed CloudFormation's Delete was a no-op and the SSM `SecureString` it
+wrote survives in the account. It still holds a password valid for every admin
+seeded before the passwordless change, so remove it once the deployment has
+upgraded:
+
+```bash
+aws ssm delete-parameter --name /espuser/admin-temp-password
+```
+
+Admins are not locked out by this. Existing admins keep the password stored in
+Cognito, and both they and newly seeded admins sign in with an emailed one-time
+code.

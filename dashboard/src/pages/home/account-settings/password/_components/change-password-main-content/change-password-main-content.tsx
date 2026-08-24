@@ -16,9 +16,10 @@ import type { ChangePasswordMainContentProps } from "./change-password-main-cont
 export default function ChangePasswordMainContent({
   isPasswordChanged,
   onPasswordChanged,
+  mode,
 }: ChangePasswordMainContentProps) {
   if (isPasswordChanged) {
-    return <ChangePasswordSuccess />;
+    return <ChangePasswordSuccess mode={mode} />;
   }
 
   return <ChangePasswordForm onSuccess={onPasswordChanged} />;

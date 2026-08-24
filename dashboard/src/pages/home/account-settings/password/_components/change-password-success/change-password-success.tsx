@@ -9,12 +9,21 @@ import { useTranslation } from "react-i18next";
 import { LogIn } from "lucide-react";
 import { Alert, Button } from "@espressif/dashboard-ui-components/components";
 import { logout } from "@/lib/auth";
+import type { SetPasswordMode } from "../../_utils/password-factor";
+
+interface ChangePasswordSuccessProps {
+  /** Whether this admin changed an existing password or set their first one. */
+  mode: SetPasswordMode;
+}
 
 /**
- * Login lands here with the "password updated" banner already shown, so the admin
- * sees why they were signed out.
+ * Login lands here with a mode-matching banner already shown, so the admin sees why
+ * they were signed out — and, for `"set"`, is not told a password was "reset" when
+ * nothing was there to reset.
  */
-const SIGN_IN_PATH = "/login?reset=success";
+function signInPathFor(mode: SetPasswordMode): string {
+  return mode === "set" ? "/login?reset=set" : "/login?reset=success";
+}
 
 /** Seconds the confirmation stays on screen before the automatic sign-out. */
 const SIGN_OUT_DELAY_SECONDS = 8;
@@ -28,23 +37,43 @@ const SIGN_OUT_DELAY_SECONDS = 8;
  * The countdown makes that explicit — the previous page did it silently on a 1.5s
  * timer with no explanation.
  */
-export default function ChangePasswordSuccess() {
+export default function ChangePasswordSuccess({
+  mode,
+}: ChangePasswordSuccessProps) {
   const { t } = useTranslation("account-settings");
   const [secondsLeft, setSecondsLeft] = useState(SIGN_OUT_DELAY_SECONDS);
+  // A primitive string, so recomputing it every render is not worth memoising —
+  // `mode` changing at all would already be unusual mid-lifecycle.
+  const signInPath = signInPathFor(mode);
 
-  const signOutNow = useCallback(() => logout(SIGN_IN_PATH), []);
+  const signOutNow = useCallback(() => logout(signInPath), [signInPath]);
 
   // Re-armed on every tick, and cleared on unmount so leaving the tab before the
   // countdown ends cancels the redirect instead of firing it from another page.
   useEffect(() => {
     if (secondsLeft <= 0) {
-      logout(SIGN_IN_PATH);
+      logout(signInPath);
       return;
     }
 
     const timer = setTimeout(() => setSecondsLeft(secondsLeft - 1), 1000);
     return () => clearTimeout(timer);
-  }, [secondsLeft]);
+  }, [secondsLeft, signInPath]);
+
+  const title =
+    mode === "set"
+      ? t("password.success.setTitle", "Password set")
+      : t("password.success.title", "Password updated");
+  const description =
+    mode === "set"
+      ? t(
+          "password.success.setDescription",
+          "Your password has been set. You'll be signed out so you can sign in with it.",
+        )
+      : t(
+          "password.success.description",
+          "Your password has been changed. You'll be signed out so you can sign in again with the new one.",
+        );
 
   return (
     <div className="flex flex-col gap-4">
@@ -52,11 +81,8 @@ export default function ChangePasswordSuccess() {
         type="success"
         variant="soft"
         color="success"
-        title={t("password.success.title", "Password updated")}
-        description={t(
-          "password.success.description",
-          "Your password has been changed. You'll be signed out so you can sign in again with the new one.",
-        )}
+        title={title}
+        description={description}
       />
 
       <div className="flex flex-wrap items-center justify-between gap-3">

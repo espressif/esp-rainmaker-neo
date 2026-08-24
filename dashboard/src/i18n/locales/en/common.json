@@ -154,6 +154,12 @@
     "invalidPassword": "That password does not meet the password policy. Choose a different one.",
     "cannotReset": "This address cannot be reset automatically. Contact your administrator."
   },
+  "otpErrors": {
+    "codeMismatch": "That code is not correct. Check the code and try again.",
+    "codeExpired": "That code has expired. Request a new one.",
+    "sessionExpired": "That sign-in attempt timed out. Enter your email to start again.",
+    "rateLimited": "Too many attempts. Wait a while before requesting another code."
+  },
   "nodeStatus": {
     "online": "Online",
     "offline": "Offline",

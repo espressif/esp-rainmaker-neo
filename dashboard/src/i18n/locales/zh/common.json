@@ -154,6 +154,12 @@
     "invalidPassword": "该密码不符合密码策略，请更换其他密码。",
     "cannotReset": "此地址无法自动重置密码，请联系您的管理员。"
   },
+  "otpErrors": {
+    "codeMismatch": "验证码不正确，请检查后重试。",
+    "codeExpired": "验证码已过期，请重新获取。",
+    "sessionExpired": "本次登录已超时，请重新输入邮箱。",
+    "rateLimited": "尝试次数过多，请稍后再获取验证码。"
+  },
   "nodeStatus": {
     "online": "在线",
     "offline": "离线",

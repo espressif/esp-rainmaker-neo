@@ -68,6 +68,7 @@ export {
   requestCodeErrorMessage,
   confirmResetErrorMessage,
   changePasswordErrorMessage,
+  otpErrorMessage,
   isIncorrectCurrentPasswordError,
   SESSION_EXPIRED_MESSAGE,
 } from './password-errors'

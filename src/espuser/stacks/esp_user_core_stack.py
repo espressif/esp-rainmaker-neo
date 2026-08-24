@@ -148,65 +148,6 @@ class EspUserCoreStack(Stack):
         account = Stack.of(self).account
         pool_id = common_resources.esp_admin_user_pool_id
         pool_arn = f"arn:aws:cognito-idp:{region}:{account}:userpool/{pool_id}"
-        param_name = "/espuser/admin-temp-password"
-        param_arn = f"arn:aws:ssm:{region}:{account}:parameter{param_name}"
-
-        generated = cr.AwsCustomResource(
-            self, "AdminTempPasswordGenerate",
-            on_create=cr.AwsSdkCall(
-                service="SecretsManager",
-                action="getRandomPassword",
-                parameters={
-                    "PasswordLength": 16,
-                    "RequireEachIncludedType": True,
-                    "ExcludeCharacters": "\"'`\\/@ ",
-                },
-                physical_resource_id=cr.PhysicalResourceId.of("admin-temp-password-generate"),
-            ),
-            policy=cr.AwsCustomResourcePolicy.from_statements([
-                iam.PolicyStatement(actions=["secretsmanager:GetRandomPassword"], resources=["*"]),
-            ]),
-        )
-
-        store_password = cr.AwsCustomResource(
-            self, "AdminTempPasswordStore",
-            on_create=cr.AwsSdkCall(
-                service="SSM",
-                action="putParameter",
-                parameters={
-                    "Name": param_name,
-                    "Value": generated.get_response_field("RandomPassword"),
-                    "Type": "SecureString",
-                },
-                physical_resource_id=cr.PhysicalResourceId.of("admin-temp-password-store"),
-                ignore_error_codes_matching="ParameterAlreadyExists",
-            ),
-            policy=cr.AwsCustomResourcePolicy.from_statements([
-                iam.PolicyStatement(actions=["ssm:PutParameter"], resources=[param_arn]),
-            ]),
-        )
-        store_password.node.add_dependency(generated)
-
-        read_password = cr.AwsCustomResource(
-            self, "AdminTempPasswordRead",
-            on_create=cr.AwsSdkCall(
-                service="SSM",
-                action="getParameter",
-                parameters={"Name": param_name, "WithDecryption": True},
-                physical_resource_id=cr.PhysicalResourceId.of("admin-temp-password-read"),
-            ),
-            on_update=cr.AwsSdkCall(
-                service="SSM",
-                action="getParameter",
-                parameters={"Name": param_name, "WithDecryption": True},
-                physical_resource_id=cr.PhysicalResourceId.of("admin-temp-password-read"),
-            ),
-            policy=cr.AwsCustomResourcePolicy.from_statements([
-                iam.PolicyStatement(actions=["ssm:GetParameter"], resources=[param_arn]),
-            ]),
-        )
-        read_password.node.add_dependency(store_password)
-        temp_password = read_password.get_response_field("Parameter.Value")
 
         # The synth-time list from rmng-inputs.json becomes the parameter DEFAULT (none when the
         # inputs are empty, so the installer flow — which always passes the parameter — must name
@@ -251,7 +192,6 @@ def handler(event, context):
     try:
         props = event['ResourceProperties']
         pool_id = props['UserPoolId']
-        temp_password = props['TempPassword']
         # Accept a list or a comma-separated string: iterating a string would register one bogus user per character.
         raw_emails = props.get('AdminEmails', [])
         if isinstance(raw_emails, str):
@@ -263,10 +203,12 @@ def handler(event, context):
             try:
                 # custom:user_id is what the backend uses as the caller's identity (GetID());
                 # without it every admin API request is rejected as unauthorized.
+                # No TemporaryPassword: the pool advertises EMAIL_OTP, so the account is created
+                # genuinely passwordless and never enters FORCE_CHANGE_PASSWORD (that state
+                # applies only to a user who has a password). Sign-in is the emailed code.
                 idp.admin_create_user(
                     UserPoolId=pool_id,
                     Username=email,
-                    TemporaryPassword=temp_password,
                     UserAttributes=[
                         {'Name': 'email', 'Value': email},
                         {'Name': 'email_verified', 'Value': 'true'},
@@ -275,38 +217,20 @@ def handler(event, context):
                     ],
                     MessageAction='SUPPRESS',
                 )
-            except idp.exceptions.UsernameExistsException:
-                # Never re-seed an existing admin - that would clobber a password they have already changed.
-                results.append({'email': email, 'status': 'exists'})
-                continue
-            except Exception as e:
-                results.append({'email': email, 'error': str(e)})
-                continue
-
-            try:
-                # Promote the same value to a permanent password so the account lands CONFIRMED. A temporary password leaves it FORCE_CHANGE_PASSWORD, and the admin dashboard has no NEW_PASSWORD_REQUIRED challenge screen, so sign-in would fail outright.
-                idp.admin_set_user_password(
-                    UserPoolId=pool_id,
-                    Username=email,
-                    Password=temp_password,
-                    Permanent=True,
-                )
                 results.append({'email': email, 'status': 'created'})
+            except idp.exceptions.UsernameExistsException:
+                # Never re-seed an existing admin. They keep the password they already have
+                # and gain EMAIL_OTP from the pool change; nothing about the account changes.
+                results.append({'email': email, 'status': 'exists'})
             except Exception as e:
-                # The user exists and the password still works, only via the first-sign-in challenge - report it instead of failing the stack.
-                results.append({'email': email, 'status': 'created_force_change_password', 'error': str(e)})
+                results.append({'email': email, 'status': 'error', 'error': str(e)})
         cfnresponse.send(event, context, cfnresponse.SUCCESS, {'Results': json.dumps(results)}, physical_id)
     except Exception as e:
         cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)}, physical_id)
 """),
         )
         register_fn.add_to_role_policy(iam.PolicyStatement(
-            actions=[
-                "cognito-idp:AdminCreateUser",
-                "cognito-idp:AdminSetUserPassword",
-                "cognito-idp:AdminGetUser",
-                "cognito-idp:AdminUpdateUserAttributes",
-            ],
+            actions=["cognito-idp:AdminCreateUser"],
             resources=[pool_arn],
         ))
 
@@ -315,20 +239,14 @@ def handler(event, context):
             service_token=register_fn.function_arn,
             properties={
                 "UserPoolId": pool_id,
-                "TempPassword": temp_password,
                 "AdminEmails": admin_emails_prop,
-                # SeedVersion forces an Update even when the email list is unchanged
-                "SeedVersion": "2",
+                # SeedVersion forces an Update even when the email list is unchanged.
+                # Bumped to 3 when seeding moved to passwordless admins.
+                "SeedVersion": "3",
                 "Trigger": admin_emails_prop,  # re-fire when the effective list changes
             },
         )
-        registration.node.add_dependency(read_password)
 
-        CfnOutput(
-            self, "AdminTempPassword",
-            description="Shared admin sign-in password, usable as-is (change via the dashboard when convenient) [visibility:private]",
-            value=temp_password,
-        )
         CfnOutput(
             self, "AdminUserRegistrationResults",
             description="Per-admin registration status [visibility:private]",

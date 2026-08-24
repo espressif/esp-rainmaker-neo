@@ -109,18 +109,32 @@ def _message_body_text(data: dict) -> str:
 
 
 def _extract_verification_code(body_text: str) -> Optional[str]:
-    """Extract 6-digit verification code from email body text."""
+    """Extract a numeric verification code from email body text.
+
+    Codes are not all six digits. This repo's own sign-up template sends six, but
+    Cognito's managed template for passwordless EMAIL_OTP sign-in ("Your authentication
+    code is 48405273") sends eight, and a `\\d{6}` pattern silently returns the first
+    six of those — a code that looks perfectly well-formed and that Cognito rejects as
+    a CodeMismatchException, which reads like a broken OTP flow rather than a broken
+    parser. Every pattern is therefore bounded by `\\b` on both sides, so a run of
+    digits is matched whole or not at all.
+    """
     if not body_text:
         return None
-    
+
     code_patterns = [
-        r"verification code is\s+(\d{6})",
-        r"code is\s+(\d{6})",
-        r"code:\s*(\d{6})",
-        r"verification code:\s*(\d{6})",
-        r"(\d{6})",
+        r"verification code is\s+\b(\d{4,8})\b",
+        # Cognito's own managed template for passwordless EMAIL_OTP sign-in, configured
+        # nowhere in this stack, so it needs its own pattern rather than falling
+        # through to the generic ones below.
+        r"authentication code is\s+\b(\d{4,8})\b",
+        r"one-time password is\s+\b(\d{4,8})\b",
+        r"code is\s+\b(\d{4,8})\b",
+        r"code:\s*\b(\d{4,8})\b",
+        r"verification code:\s*\b(\d{4,8})\b",
+        r"\b(\d{4,8})\b",
     ]
-    
+
     for pattern in code_patterns:
         match = re.search(pattern, body_text, re.IGNORECASE)
         if match:

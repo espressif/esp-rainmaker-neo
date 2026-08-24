@@ -8,10 +8,12 @@ import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useTranslation } from "react-i18next";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   getChangePasswordRequestSchema,
   getAuthSchemaMessages,
   useChangePassword,
+  useUserAuthFactors,
   type ChangePasswordRequestSchema,
 } from "@/api";
 import {
@@ -24,6 +26,10 @@ import {
 import { evaluatePasswordPolicy } from "@/config/password-policy.config";
 import type { RequirementListItem } from "@espressif/dashboard-ui-components/components";
 import { voidFormSubmit } from "@/lib/void-form-submit";
+import {
+  changePasswordRequestFor,
+  passwordModeFor,
+} from "../../_utils/password-factor";
 
 const EMPTY_VALUES: ChangePasswordRequestSchema = {
   old_password: "",
@@ -47,7 +53,17 @@ export function useChangePasswordForm({
   onSuccess,
 }: UseChangePasswordFormOptions) {
   const { t } = useTranslation("common");
-  const schema = useMemo(() => getChangePasswordRequestSchema(getAuthSchemaMessages(t)), [t]);
+  const queryClient = useQueryClient();
+  const accessTokenForFactors = getAccessToken();
+  const { data: factors } = useUserAuthFactors(accessTokenForFactors);
+  const mode = passwordModeFor(factors);
+  const schema = useMemo(
+    () =>
+      getChangePasswordRequestSchema(getAuthSchemaMessages(t), {
+        requireCurrentPassword: mode === "change",
+      }),
+    [t, mode],
+  );
   const changePasswordMutation = useChangePassword();
 
   /**
@@ -74,14 +90,13 @@ export function useChangePasswordForm({
 
     setPreflightError(null);
     changePasswordMutation.mutate(
-      {
-        access_token: accessToken,
-        old_password: values.old_password,
-        new_password: values.new_password,
-      },
+      changePasswordRequestFor(mode, accessToken, values),
       {
         onSuccess: () => {
           form.reset(EMPTY_VALUES);
+          // The admin who just set a first password now has one; refetch so the
+          // tab (and a later sign-in's factor lookup) reflect it without a reload.
+          void queryClient.invalidateQueries({ queryKey: ['auth', 'user-auth-factors'] });
           onSuccess();
         },
         onError: (error) => {
@@ -121,6 +136,7 @@ export function useChangePasswordForm({
   return {
     form,
     submit,
+    mode,
     requirementItems,
     submitErrorMessage,
     isSubmitting:
