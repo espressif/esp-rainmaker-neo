@@ -32,7 +32,6 @@ PUBLIC_BUCKET_REGION  = "us-east-1"
 SENSITIVE_PATHS = [
     ["espuser-base", "EspVaClientSecret"],             # espuser-base > EspVaClientSecret
     ["rmng-base", "VAClientSecret"],                   # rmng-base > VAClientSecret
-    ["espuser-core", "AdminTempPassword"],             # shared admin bootstrap password (operator-only)
     ["espuser-core", "AdminUserRegistrationResults"]   # names the registered admin emails (operator-only)
 ]
 

@@ -27,6 +27,7 @@ import type { ChangePasswordFieldsProps } from "./change-password-fields.props";
  * would repeat the same sentence twice. The other two fields keep `FormMessage`.
  */
 export default function ChangePasswordFields({
+  mode,
   requirementItems,
 }: ChangePasswordFieldsProps) {
   const { t } = useTranslation("account-settings");
@@ -34,28 +35,30 @@ export default function ChangePasswordFields({
 
   return (
     <div className="flex flex-col gap-5">
-      <FormField
-        control={control}
-        name="old_password"
-        render={({ field, fieldState }) => (
-          <FormItem>
-            <FormControl>
-              <InputPassword
-                {...field}
-                autoComplete="current-password"
-                required
-                label={t("password.currentPasswordLabel", "Current password")}
-                placeholder={t(
-                  "password.currentPasswordPlaceholder",
-                  "Enter your current password",
-                )}
-                error={!!fieldState.error}
-              />
-            </FormControl>
-            <FormMessage />
-          </FormItem>
-        )}
-      />
+      {mode === "change" && (
+        <FormField
+          control={control}
+          name="old_password"
+          render={({ field, fieldState }) => (
+            <FormItem>
+              <FormControl>
+                <InputPassword
+                  {...field}
+                  autoComplete="current-password"
+                  required
+                  label={t("password.currentPasswordLabel", "Current password")}
+                  placeholder={t(
+                    "password.currentPasswordPlaceholder",
+                    "Enter your current password",
+                  )}
+                  error={!!fieldState.error}
+                />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      )}
 
       <FormField
         control={control}

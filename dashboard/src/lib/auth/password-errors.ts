@@ -163,3 +163,42 @@ export function changePasswordErrorMessage(
 ): LocalizedMessage | null {
   return resolve(error, CHANGE_PASSWORD_ERRORS);
 }
+
+const OTP_CODE_MISMATCH: LocalizedMessage = {
+  key: "common:otpErrors.codeMismatch",
+  fallback: "That code is not correct. Check the code and try again.",
+};
+
+const OTP_CODE_EXPIRED: LocalizedMessage = {
+  key: "common:otpErrors.codeExpired",
+  fallback: "That code has expired. Request a new one.",
+};
+
+const OTP_SESSION_EXPIRED: LocalizedMessage = {
+  key: "common:otpErrors.sessionExpired",
+  fallback: "That sign-in attempt timed out. Enter your email to start again.",
+};
+
+const OTP_RATE_LIMITED: LocalizedMessage = {
+  key: "common:otpErrors.rateLimited",
+  fallback: "Too many attempts. Wait a while before requesting another code.",
+};
+
+/**
+ * Cognito exception name -> message for choice-based sign-in.
+ *
+ * `NotAuthorizedException` here means the short-lived auth session is spent, not a
+ * bad credential: the code itself fails as `CodeMismatchException`.
+ */
+const OTP_ERRORS: Record<string, LocalizedMessage> = {
+  CodeMismatchException: OTP_CODE_MISMATCH,
+  ExpiredCodeException: OTP_CODE_EXPIRED,
+  NotAuthorizedException: OTP_SESSION_EXPIRED,
+  TooManyFailedAttemptsException: OTP_RATE_LIMITED,
+  TooManyRequestsException: OTP_RATE_LIMITED,
+};
+
+/** Message for a failure during choice-based sign-in. */
+export function otpErrorMessage(error: unknown): LocalizedMessage | null {
+  return resolve(error, OTP_ERRORS);
+}

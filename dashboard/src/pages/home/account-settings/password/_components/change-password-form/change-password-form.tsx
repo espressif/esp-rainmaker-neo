@@ -24,7 +24,7 @@ export default function ChangePasswordForm({
   onSuccess,
 }: ChangePasswordFormProps) {
   const { t } = useTranslation("account-settings");
-  const { form, submit, requirementItems, submitErrorMessage, isSubmitting } =
+  const { form, submit, mode, requirementItems, submitErrorMessage, isSubmitting } =
     useChangePasswordForm({ onSuccess });
 
   return (
@@ -43,11 +43,14 @@ export default function ChangePasswordForm({
           />
         ) : null}
 
-        <ChangePasswordFields requirementItems={requirementItems} />
+        <ChangePasswordFields mode={mode} requirementItems={requirementItems} />
 
         <FormFooterActions
           primaryAction={{
-            label: t("password.submit", "Update password"),
+            label:
+              mode === "set"
+                ? t("password.setPasswordSubmit", "Set password")
+                : t("password.submit", "Update password"),
             startIcon: <KeyRound className={ICON_CLASS} aria-hidden />,
             type: "submit",
             loading: isSubmitting,

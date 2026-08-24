@@ -21,9 +21,47 @@ how `POST /v1/user/credentials` tells them apart.
 The admin pool declares two custom attributes: `custom:super_admin` (max 4
 characters, so the value is the string `"true"`) and `custom:user_id`.
 
+### Admin sign-in factors
+
+Admins seeded by the registration custom resource are created with **no password**:
+`AdminCreateUser` omits `TemporaryPassword`, which is legal because the pool
+advertises a passwordless factor, and which is why such an account never enters
+`FORCE_CHANGE_PASSWORD`. Their only first factor is the emailed one-time code.
+
+Admins seeded before that change keep the password they were given and gain
+`EMAIL_OTP` alongside it — Cognito offers no way to remove a password once set, so
+they hold both factors permanently.
+
+A passwordless admin can adopt a password from **Account settings → Password**.
+`ChangePassword` accepts no `PreviousPassword` when the user has none, and the
+dashboard picks the form from `GetUserAuthFactors`. Afterwards they hold both
+factors like any pre-existing admin.
+
+One-time password factors are incompatible with **required** MFA, and under the
+pool's optional MFA an admin who enrols MFA stops being eligible for OTP sign-in.
+Nothing in the dashboard enrols MFA today.
+
+**Email-quota lockout.** The pool uses Cognito's default email sender, capped
+around 50 emails/day per pool. `selectOtp` (the `SELECT_CHALLENGE` step) is
+unauthenticated and sends one email per call, so anyone who knows one admin
+address can loop `USER_AUTH` → `SELECT_CHALLENGE` and exhaust that quota.
+Before this feature, exhausting it blocked only `/forgot-password`; now it also
+blocks sign-in outright for every admin whose *sole* factor is `EMAIL_OTP` — the
+`AdminTempPassword` break-glass output no longer exists to fall back on.
+Mitigations, either of which closes the vector: configure an Amazon SES sending
+account for the pool (`EmailSendingAccount: DEVELOPER`, its own daily limits
+under SES rather than Cognito's default sender), or ensure at least one admin
+per pool keeps a password, which sign-in via `USER_PASSWORD_AUTH` does not
+consume any email quota to use.
+
 ## From admin login to AWS credentials
 
-1. The admin signs in against `ESP-Admin-Users` and receives Cognito tokens.
+1. The admin signs in against `ESP-Admin-Users` and receives Cognito tokens. The
+   pool allows two first factors, `PASSWORD` and `EMAIL_OTP`, and the dashboard
+   uses the choice-based `USER_AUTH` flow: it submits the address alone, Cognito
+   answers with the factors that admin actually has, and only those are offered.
+   A one-time code is answered with `RespondToAuthChallenge`, first selecting
+   `EMAIL_OTP` and then supplying `EMAIL_OTP_CODE`.
 2. `POST /v1/user/credentials` exchanges them for Identity-Pool credentials. The
    route carries **no gateway authorizer**; the handler verifies the access token
    (header) and `id_token` (body) against the admin pool's JWKS as a pair. See
