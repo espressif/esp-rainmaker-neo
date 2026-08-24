@@ -26,6 +26,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/config"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/schedule"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
@@ -98,6 +99,90 @@ var _ = Describe("awscommon.IsSQSEvent", func() {
 
 	It("returns false for malformed JSON", func() {
 		Expect(awscommon.IsSQSEvent([]byte(`not valid json`))).To(BeFalse())
+	})
+})
+
+// A node runs this exchange before it has any group: it connects, asks who it
+// belongs to, syncs its clock and uploads its config. None of those answers
+// depend on group membership, so a group-less node must be answered in full.
+var _ = Describe("Publish Input Event Handler for a group-less node", func() {
+	var (
+		ctx       context.Context
+		iotMock   *mock.IoTDataPlaneMock
+		thingName string
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		test_utils.TestSetup()
+		iotMock = mock.NewIoTDataPlaneMock()
+		awscommon.SetIoTDataPlaneClient(iotMock)
+
+		service.Initialize()
+		config.Register()
+
+		// Deliberately no ManuallyAddNodeToGroup.
+		thingName = "test-thing-without-group"
+	})
+
+	send := func(events ...interface{}) map[string]interface{} {
+		event := node.PublishInputEvent{
+			ThingName: thingName,
+			Data:      map[string]interface{}{"event": events},
+		}
+		Expect(handlePublishInputEvent(ctx, event)).To(BeNil())
+		Expect(iotMock.PublishCalls).To(HaveLen(1))
+		Expect(*iotMock.PublishCalls[0].Topic).To(Equal("rainmaker/nodes/" + thingName + "/from_cloud"))
+
+		var published map[string]interface{}
+		Expect(json.Unmarshal(iotMock.PublishCalls[0].Payload, &published)).To(BeNil())
+		return published
+	}
+
+	It("answers getGroupInfo with an empty group rather than an error", func() {
+		published := send("getGroupInfo")
+		Expect(published).To(HaveKey("getGroupInfo"))
+		// No pgrp key at all: the device reads that as "you belong to no group",
+		// which is different from an absent reply (it re-asks on the next batch).
+		Expect(published["getGroupInfo"]).To(BeEmpty())
+	})
+
+	It("answers getTimeSync with the server clock", func() {
+		published := send("getTimeSync")
+		timeSync, ok := published["getTimeSync"].(map[string]interface{})
+		Expect(ok).To(BeTrue())
+		epochMillis, ok := timeSync["time"].(float64)
+		Expect(ok).To(BeTrue())
+		Expect(epochMillis).To(BeNumerically(">", 0))
+	})
+
+	It("accepts setNodeConfig", func() {
+		event := node.PublishInputEvent{
+			ThingName: thingName,
+			Data: map[string]interface{}{
+				"event": []interface{}{"setNodeConfig"},
+				"setNodeConfig": map[string]interface{}{
+					"info": map[string]interface{}{"fw_version": "1.0"},
+				},
+			},
+		}
+		Expect(handlePublishInputEvent(ctx, event)).To(BeNil())
+
+		var published map[string]interface{}
+		Expect(json.Unmarshal(iotMock.PublishCalls[0].Payload, &published)).To(BeNil())
+		setNodeConfig, ok := published["setNodeConfig"].(map[string]interface{})
+		Expect(ok).To(BeTrue())
+		Expect(setNodeConfig).To(HaveKeyWithValue("status", "success"))
+	})
+
+	// The batch firmware actually sends on connect. Answered in a single publish:
+	// a details-dependent event must not hold the group/time answers hostage.
+	It("answers every event in the real bootstrap batch", func() {
+		published := send("getGroupInfo", "getAlexaEn", "getGVAEn", "getSchedVer", "getTriggerVer", "getTimeSync")
+		Expect(published["event"]).To(ConsistOf(
+			"getGroupInfo", "getAlexaEn", "getGVAEn", "getSchedVer", "getTriggerVer", "getTimeSync"))
+		Expect(published["getGroupInfo"]).To(BeEmpty())
+		Expect(published["getSchedVer"]).To(HaveKeyWithValue("version", float64(0)))
 	})
 })
 

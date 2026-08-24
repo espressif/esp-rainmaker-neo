@@ -92,6 +92,89 @@ var _ = Describe("NodeDetailsDB", func() {
 		})
 	})
 
+	// Deliberately no ManuallyAddNodeToGroup: this node belongs to no group, so
+	// its shadow name is the bare "params-" that GetShadowNameForNodeGroups
+	// renders for an empty group — the name such a device reports into.
+	Describe("NodeWriteShadow for a group-less node", func() {
+		var data node.ReportedOrDesiredShadow
+
+		BeforeEach(func() {
+			data = node.ReportedOrDesiredShadow{Params: map[string]interface{}{"key1": "value1"}}
+		})
+
+		It("should write to the 'params-' shadow", func() {
+			err := testNode.WriteToShadow(testUserContext, "reported", data)
+			Expect(err).To(BeNil())
+			Expect(iotDataClient.Shadows[testNodeID]).To(HaveKey("params-"))
+			Expect(iotDataClient.Shadows[testNodeID]["params-"]).To(MatchJSON(`{"state":{"reported":{"params":{"key1":"value1"}}}}`))
+		})
+
+		It("should flip an already-reported online:true to false", func() {
+			iotDataClient.Shadows[testNodeID] = map[string][]byte{
+				"params-": []byte(`{"state":{"reported":{"online":true}}}`),
+			}
+			offline := false
+			err := testNode.WriteToReportedShadow(testUserContext, node.ReportedOrDesiredShadow{Online: &offline})
+			Expect(err).To(BeNil())
+			Expect(iotDataClient.Shadows[testNodeID]["params-"]).To(MatchJSON(`{"state":{"reported":{"online":false}}}`))
+		})
+
+		It("should read back from the 'params-' shadow", func() {
+			Expect(testNode.WriteToShadow(testUserContext, "reported", data)).To(BeNil())
+			read, err := testNode.ReadFromShadow(testUserContext, "reported")
+			Expect(err).To(BeNil())
+			Expect(read.Params).To(HaveKeyWithValue("key1", "value1"))
+		})
+
+		It("should keep writing to the same name on repeated lookups", func() {
+			Expect(testNode.WriteToShadow(testUserContext, "reported", data)).To(BeNil())
+			Expect(testNode.WriteToShadow(testUserContext, "reported", data)).To(BeNil())
+			Expect(iotDataClient.Shadows[testNodeID]).To(HaveLen(1))
+			Expect(iotDataClient.Shadows[testNodeID]).To(HaveKey("params-"))
+		})
+
+		It("should still refuse a write without node access", func() {
+			invalidUserContext := rmngctx.NewRmngContext(user.NewUser("invalid-user-id"))
+			err := testNode.WriteToShadow(invalidUserContext, "reported", data)
+			Expect(err).To(HaveOccurred())
+			Expect(iotDataClient.Shadows[testNodeID]).To(HaveLen(0))
+		})
+
+		It("should report empty groups without error from GetNodesGroups", func() {
+			groups, err := testNode.GetNodesGroups(testUserContext)
+			Expect(err).To(BeNil())
+			Expect(groups.Group).To(BeEmpty())
+			Expect(groups.SubGroups).To(BeEmpty())
+		})
+
+		It("should write admin tags, whose shadow is the group-independent iparams", func() {
+			err := testNode.UpdateTagsMap(testUserContext,
+				map[string]interface{}{"env": "production"}, node.TagTypeAdmin)
+			Expect(err).To(BeNil())
+			Expect(iotDataClient.Shadows[testNodeID]).To(HaveKey("iparams"))
+			Expect(string(iotDataClient.Shadows[testNodeID]["iparams"])).To(ContainSubstring(`"env":"production"`))
+		})
+
+		It("should answer getGroupInfo with an empty group", func() {
+			response := node.NewDataToDevice(testNode)
+			Expect(testNode.HandleGetGroupInfo(testUserContext.Context, response)).To(BeNil())
+			Expect(response.Event).To(ContainElement("getGroupInfo"))
+			// No pgrp: "you belong to no group" is a different answer from silence,
+			// which the device would retry on its next batch.
+			Expect(response.Data["getGroupInfo"]).To(BeEmpty())
+		})
+
+		It("should accept its own node config", func() {
+			response := node.NewDataToDevice(testNode)
+			nodeCtx := rmngctx.NewRmngContext(testNode)
+			err := testNode.HandleSetNodeConfig(nodeCtx.Context, map[string]interface{}{
+				"info": map[string]interface{}{"fw_version": "1.0"},
+			}, response)
+			Expect(err).To(BeNil())
+			Expect(response.Data["setNodeConfig"]).To(HaveKeyWithValue("status", "success"))
+		})
+	})
+
 	Describe("NodeWriteIndexedReportedShadow", func() {
 		BeforeEach(func() {
 			testUser.Permissions.SetAllow(utils.GroupAll.String(), "test-group-id")

@@ -27,7 +27,7 @@ import time
 import boto3
 import pytest
 
-from test.itest.conftest import REGION, IOT_ENDPOINT
+from test.itest.conftest import REGION, wait_for_node_session, wait_for_reported_online
 
 
 NODE_CONN_QUEUE_NAME = "node-conn-queue"
@@ -37,43 +37,6 @@ NODE_TO_CLOUD_QUEUE_NAME = "node-to-cloud-queue"
 def _get_queue_url(queue_name):
     sqs = boto3.client("sqs", region_name=REGION)
     return sqs.get_queue_url(QueueName=queue_name)["QueueUrl"]
-
-
-def _wait_for_session(table, client_id, timeout=30):
-    """Poll the rmng-nodes-online DynamoDB row written by node_connected_rule until
-    the connect-event-driven sessionIdentifier appears. Returns (sessionIdentifier,
-    versionNumber) so the caller can build an exactly-matching disconnect event, or
-    (None, None) on timeout."""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        response = table.get_item(Key={"clientId": client_id})
-        item = response.get("Item")
-        if item and item.get("sessionIdentifier"):
-            return item["sessionIdentifier"], int(item.get("versionNumber", 0))
-        time.sleep(2)
-    return None, None
-
-
-# Comfortably above the handler's presenceOfflineDelay (10s) grace period plus
-# the connect -> nodes-online -> SQS -> lambda -> IoT-shadow round-trip, which
-# runs ~25s in practice; 30s was borderline and flaked under load.
-def _wait_for_indexed_shadow_offline(iot_data_client, thing_name, timeout=60):
-    """Poll the iparams indexed shadow until reported.online == False.
-    Returns True on success, False on timeout."""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        try:
-            response = iot_data_client.get_thing_shadow(
-                thingName=thing_name,
-                shadowName="iparams",
-            )
-            shadow = json.loads(response["payload"].read())
-            if shadow.get("state", {}).get("reported", {}).get("online") is False:
-                return True
-        except iot_data_client.exceptions.ResourceNotFoundException:
-            pass
-        time.sleep(2)
-    return False
 
 
 def test_presence_lambda_processes_sqs_record(session_valid_device_rsa):
@@ -90,9 +53,7 @@ def test_presence_lambda_processes_sqs_record(session_valid_device_rsa):
     device = session_valid_device_rsa
     assert device.connect(), f"Failed to connect device {device.node_thing_name}"
 
-    dynamodb = boto3.resource("dynamodb", region_name=REGION)
-    nodes_online = dynamodb.Table("rmng-nodes-online")
-    session_id, version_number = _wait_for_session(nodes_online, device.node_thing_name)
+    session_id, version_number = wait_for_node_session(device.node_thing_name)
     assert session_id, (
         f"node_connected_rule did not populate rmng-nodes-online for "
         f"{device.node_thing_name} within timeout"
@@ -113,14 +74,10 @@ def test_presence_lambda_processes_sqs_record(session_valid_device_rsa):
     })
     sqs.send_message(QueueUrl=queue_url, MessageBody=body)
 
-    iot_data = boto3.client(
-        "iot-data",
-        region_name=REGION,
-        endpoint_url=f"https://{IOT_ENDPOINT}",
-    )
-    assert _wait_for_indexed_shadow_offline(iot_data, device.node_thing_name), (
+    online = wait_for_reported_online(device.node_thing_name, "iparams", expected=False)
+    assert online is False, (
         f"Timed out waiting for SQS-driven disconnect to flip iparams.online "
-        f"to False for {device.node_thing_name}"
+        f"to False for {device.node_thing_name}; last saw online={online!r}"
     )
 
 

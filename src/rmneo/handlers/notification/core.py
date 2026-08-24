@@ -193,6 +193,9 @@ class NotificationCore(Construct):
             stable_logical_id("IAMRole", error_role_name))
 
         # Create IoT Core rule for shadow-based notifications. Fires on a device-driven notify.version bump OR on a connectivity transition: the presence handler's online-only write never touches notify.version, so without the second branch offline/online never reaches the notification pipeline.
+        # The bare 'params-' shadow (a group-less node) is excluded: recipients are
+        # resolved from group membership, so an update with no group ID in its name
+        # can never route a notification. Every such invoke would be pure waste.
         shadow_notify_rule = create_iot_topic_rule(
             self, "ShadowNotifyDispatchRule",
             rule_name="shadow_notify_rule",
@@ -207,6 +210,7 @@ class NotificationCore(Construct):
                     get(get(get(get(current, 'state'), 'reported'), 'params'), 'notify') as notify
                 FROM '$aws/things/+/shadow/name/+/update/documents'
                 WHERE startswith(topic(6), 'params-')
+                AND topic(6) <> 'params-'
                 AND (
                     (
                         NOT isUndefined(get(get(get(get(get(current, 'state'), 'reported'), 'params'), 'notify'),'version'))

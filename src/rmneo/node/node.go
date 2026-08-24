@@ -45,6 +45,9 @@ type Node struct {
 	Certificates []*iot_types.CertificateDescription
 	GroupID      string
 	SubGroupIDs  []string
+	// Distinguishes a genuinely group-less node (GroupID == "" after a fetch)
+	// from one never loaded; without it every lookup re-queries DynamoDB.
+	groupsFetched bool
 }
 
 // DataToDevice is the data to be sent to the device's topic from the cloud
@@ -298,15 +301,22 @@ func (n *Node) fetchGroups(rmngCtx *rmngctx.RmngContext) error {
 	}
 	n.GroupID = nodesGroups.Group
 	n.SubGroupIDs = nodesGroups.SubGroups[:]
+	n.groupsFetched = true
 	return nil
 }
 
+// ensureGroups loads the node's groups at most once. A caller-populated GroupID
+// counts as loaded, so association paths keep bypassing the read.
+func (n *Node) ensureGroups(rmngCtx *rmngctx.RmngContext) error {
+	if n.GroupID != "" || n.groupsFetched {
+		return nil
+	}
+	return n.fetchGroups(rmngCtx)
+}
+
 func (n *Node) GetNodesGroups(rmngCtx *rmngctx.RmngContext) (group_node_db.NodesGroups, error) {
-	if n.GroupID == "" {
-		err := n.fetchGroups(rmngCtx)
-		if err != nil {
-			return group_node_db.NodesGroups{}, err
-		}
+	if err := n.ensureGroups(rmngCtx); err != nil {
+		return group_node_db.NodesGroups{}, err
 	}
 	return group_node_db.NodesGroups{
 		Group:     n.GroupID,
@@ -332,15 +342,12 @@ func (n *Node) getIndexedShadowName(rmngCtx *rmngctx.RmngContext) (string, error
 	return "iparams", nil
 }
 
+// getShadowName returns the node's shadow name. A group-less node is not a
+// special case: GetShadowNameForNodeGroups renders "params-" for an empty group,
+// which is the name such a node reports into and the one association deletes.
 func (n *Node) getShadowName(rmngCtx *rmngctx.RmngContext) (string, error) {
-	if n.GroupID == "" {
-		err := n.fetchGroups(rmngCtx)
-		if err != nil {
-			return "", rmerror.NewRMError(err, fmt.Sprintf("failed to fetch groups for node %s", n.ThingName))
-		}
-	}
-	if n.GroupID == "" {
-		return "", rmerror.NewRMError(fmt.Errorf("node %s is not associated with any group", n.ThingName), "")
+	if err := n.ensureGroups(rmngCtx); err != nil {
+		return "", rmerror.NewRMError(err, fmt.Sprintf("failed to fetch groups for node %s", n.ThingName))
 	}
 	return GetShadowNameForNodeGroups(group_node_db.NodesGroups{Group: n.GroupID, SubGroups: n.SubGroupIDs}), nil
 }

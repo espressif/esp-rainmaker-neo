@@ -4,7 +4,10 @@
 
 import json
 
-from test.itest.conftest import CA_CERT, IOT_ENDPOINT, REGION, DEBUG, accept_sharing_request_for
+from test.itest.conftest import (
+    CA_CERT, IOT_ENDPOINT, REGION, DEBUG, accept_sharing_request_for,
+    reported_state, wait_for_shadow_absent,
+)
 from py_sdk.test_device import Device
 from py_sdk.test_group import Group
 from py_sdk.test_util import wait_until, seed_node_data, assert_node_data_deleted, describe_thing_attributes
@@ -18,9 +21,43 @@ def _test_user_node_assoc_valid_device(test_user1, device):
     group_id_1 = user1_group_api.create_group("Test Group 1")
     group_id_2 = user1_group_api.create_group("Test Group 2")
 
+    # Shadow content must not be carried across a group change: the device is the
+    # authority for reported state and re-reports after getGroupInfo, so copying
+    # would fabricate a report it never made and reset its metadata timestamps.
+    # Only meaningful when the node starts group-less, i.e. its old shadow is the
+    # bare "params-".
+    started_ungrouped = not describe_thing_attributes(device.node_thing_name, REGION).get("group_id")
+    if started_ungrouped:
+        assert device.shadow_connect(["params-"]), "Failed to connect device shadow client"
+        # Boot reports state into both shadows; only the group-derived one moves.
+        for shadow_name in ("params-", "iparams"):
+            assert device.update_named_shadow(shadow_name, {"params": {"Light": {"power": True}}}), \
+                f"Device failed to report into the {shadow_name} shadow"
+        for shadow_name in ("params-", "iparams"):
+            wait_until(lambda name=shadow_name: reported_state(device.node_thing_name, name).get("params", {}),
+                       f"{shadow_name} shadow to appear")
+
     # Associate the node with the first group
     result = test_user1.do_user_node_assoc(device, group_id_1)
     assert result == None, f"Association failed with error: {result}"
+
+    shadow_1 = f"params-{group_id_1}"
+    if started_ungrouped:
+        assert wait_for_shadow_absent(device.node_thing_name, "params-"), \
+            "ungrouped 'params-' shadow outlived the association"
+        assert "Light" not in reported_state(device.node_thing_name, shadow_1).get("params", {}), \
+            "ungrouped params were copied into the first group's shadow"
+        # iparams is group-independent, so association must leave it alone — it is
+        # the only continuous record of reported state across the transition.
+        assert reported_state(device.node_thing_name, "iparams").get("params", {}).get("Light") == {"power": True}, \
+            "association disturbed the group-independent iparams shadow"
+
+    # The device is what refills the new shadow, once it knows its group.
+    assert device.shadow_connect([shadow_1]), "Failed to connect group-1 shadow client"
+    assert device.update_named_shadow(shadow_1, {"params": {"Fan": {"speed": 3}}}), \
+        "Device failed to report into the first group's shadow"
+    wait_until(lambda: reported_state(device.node_thing_name, shadow_1).get("params", {}),
+               f"device report to land in {shadow_1}")
 
     # Verify that the node is in the first group
     list_groups_data = user1_group_api.list_groups()
@@ -34,6 +71,14 @@ def _test_user_node_assoc_valid_device(test_user1, device):
     # Now associate the same node with the second group
     result = test_user1.do_user_node_assoc(device, group_id_2)
     assert result == None, f"Association failed with error: {result}"
+
+    # Same contract across a group-to-group move, where it also stops one owner's
+    # reported state reaching the next.
+    shadow_2 = f"params-{group_id_2}"
+    assert wait_for_shadow_absent(device.node_thing_name, shadow_1), \
+        f"{shadow_1} outlived the move to the second group"
+    assert "Fan" not in reported_state(device.node_thing_name, shadow_2).get("params", {}), \
+        "first group's params were copied into the second group's shadow"
 
     # Verify that the node is now in the second group
     list_groups_data = user1_group_api.list_groups()

@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/collections"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"maps"
@@ -128,6 +129,36 @@ func notifyVersionChanged(curr, prev node.ReportedOrDesiredShadow) bool {
 	return currVersion != prevVersion
 }
 
+// hasDispatchableService reports whether the notify map names any service.
+// "version" is bookkeeping the dispatch loop skips, so a map holding only it
+// dispatches nothing — same as an empty map.
+func hasDispatchableService(notify map[string]interface{}) bool {
+	for serviceName := range notify {
+		if serviceName != "version" {
+			return true
+		}
+	}
+	return false
+}
+
+// hasConnectivityDispatchTarget gates the group-alignment DynamoDB read: a
+// connectivity-only fire no service listens for dispatches nothing.
+func hasConnectivityDispatchTarget(registry *notification.NotificationServiceRegistry, notify map[string]interface{}) bool {
+	for serviceName := range notify {
+		if serviceName == "version" {
+			continue
+		}
+		service, err := registry.Get(serviceName)
+		if err != nil {
+			continue
+		}
+		if cn, ok := service.(notification.ConnectivityNotifier); ok && cn.NotifyOnConnectivityChange() {
+			return true
+		}
+	}
+	return false
+}
+
 func getUsersForNotification(rmngCtx *rmngctx.RmngContext, notif *notification.Notification) ([]string, error) {
 	// Use the generic method to get group information
 	groupID, subGroupIDs, topicName, err := notif.GetGroupInfo()
@@ -147,6 +178,14 @@ func getUsersForNotification(rmngCtx *rmngctx.RmngContext, notif *notification.N
 func Handler(ctx context.Context, event NotificationEvent) error {
 	rlog.Info(ctx).Msgf("Received notification event: %+v", event)
 
+	// Dispatch iterates over event.Notify skipping "version", so a map with no
+	// service key cannot notify anyone — return before paying for construction
+	// and the group-alignment DDB read.
+	if !hasDispatchableService(event.Notify) {
+		rlog.Debug(ctx).Msgf("No notify services in event for node %s; nothing to dispatch", event.NodeID)
+		return nil
+	}
+
 	var notif *notification.Notification
 	var err error
 	var nodeID string
@@ -162,6 +201,12 @@ func Handler(ctx context.Context, event NotificationEvent) error {
 		notif, err = notification.NewNotificationFromEvent(nodeID, event.TopicName, event.NotificationType, event.CurrState, event.PrevState, event.Notify)
 	}
 	if err != nil {
+		// Drop rather than return: an unroutable name cannot succeed on retry, and
+		// returning err fails the invocation and has the rules engine retry it.
+		if errors.Is(err, notification.ErrNoGroupInName) {
+			rlog.Info(ctx).Msgf("Dropping notification for node %s: topic '%s' carries no group ID", nodeID, event.TopicName)
+			return nil
+		}
 		rlog.Error(ctx).Err(err).Msgf("Failed to create notification: %s", err)
 		return err
 	}
@@ -170,6 +215,18 @@ func Handler(ctx context.Context, event NotificationEvent) error {
 	s := utils.NewSystemActor()
 	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, s)
 	registry := notification.Registry()
+
+	// A shadow event whose notify.version did not move is a connectivity-only
+	// fire (shadow_notify_rule also triggers on reported.online transitions)
+	// and still carries the node's lingering notify map. Only services that
+	// opt in to connectivity changes receive it; dispatching the rest would
+	// re-deliver their last notification on every online flip.
+	connectivityOnly := event.NotificationType == string(notification.NotificationTypeShadowUpdate) &&
+		!notifyVersionChanged(event.CurrState, event.PrevState)
+	if connectivityOnly && !hasConnectivityDispatchTarget(registry, event.Notify) {
+		rlog.Debug(rmngCtx).Msgf("Connectivity-only update for node %s with no connectivity-aware service; nothing to dispatch", nodeID)
+		return nil
+	}
 
 	// Validate node-group alignment for device-originated notifications before
 	// processing. This is critical because group info is embedded in both shadow
@@ -194,13 +251,21 @@ func Handler(ctx context.Context, event NotificationEvent) error {
 		rlog.Info(rmngCtx).Msgf("Node-group validation passed for node %s in group %s with subgroups %v", nodeID, groupID, subGroupIDs)
 	}
 
-	// A shadow event whose notify.version did not move is a connectivity-only
-	// fire (shadow_notify_rule also triggers on reported.online transitions)
-	// and still carries the node's lingering notify map. Only services that
-	// opt in to connectivity changes receive it; dispatching the rest would
-	// re-deliver their last notification on every online flip.
-	connectivityOnly := event.NotificationType == string(notification.NotificationTypeShadowUpdate) &&
-		!notifyVersionChanged(event.CurrState, event.PrevState)
+	// Optimisation: The recipient list depends only on the group, so it is identical for every
+	// user-specific service here: a node with alexa + gva + push would otherwise
+	// run the same ListUsersForGroupOrSubGroup query three times per event.
+	var (
+		resolvedUserIDs  []string
+		resolvedUsersErr error
+		usersResolved    bool
+	)
+	resolveUsers := func() ([]string, error) {
+		if !usersResolved {
+			resolvedUserIDs, resolvedUsersErr = getUsersForNotification(rmngCtx, notif)
+			usersResolved = true
+		}
+		return resolvedUserIDs, resolvedUsersErr
+	}
 
 	// For keys in event.Notify, we need to get the notification service and send the notification
 	for serviceName := range event.Notify {
@@ -228,8 +293,7 @@ func Handler(ctx context.Context, event NotificationEvent) error {
 		}
 
 		if service.GetType() == notification.NotificationServiceTypeUserSpecific {
-			// Get users for the notification using the generic method
-			userIDs, err := getUsersForNotification(rmngCtx, notif)
+			userIDs, err := resolveUsers()
 			if err != nil {
 				rlog.Error(rmngCtx).Err(err).Msgf("Failed to get users for notification: %s", serviceName)
 				continue
