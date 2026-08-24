@@ -41,6 +41,8 @@ export interface RuntimeConfig {
   GVA_ENABLED?: boolean
   /** Whether the Alexa configuration stack (`rmng-alexa-cfg-core`) is deployed. */
   ALEXA_ENABLED?: boolean
+  /** Whether the SmartThings configuration stack (`rmng-st-cfg-core`) is deployed. */
+  SMARTTHINGS_ENABLED?: boolean
   /** Alexa skill endpoint ARN per Alexa region; the per-region `rmng-alexa-core` stacks. */
   ALEXA_SKILL_ARNS?: Record<string, string>
   /** Whether the optional `rmng-bridge-core` stack is deployed. */
@@ -100,6 +102,11 @@ export function isAlexaEnabled(): boolean {
 /** Whether the Google Home stack (`rmng-gva-core`) is deployed, i.e. the integration is available. */
 export function isGvaEnabled(): boolean {
   return useConfigStore.getState().config?.GVA_ENABLED === true
+}
+
+/** Whether the SmartThings configuration stack (`rmng-st-cfg-core`) is deployed, i.e. the integration is available. */
+export function isSmartThingsEnabled(): boolean {
+  return useConfigStore.getState().config?.SMARTTHINGS_ENABLED === true
 }
 
 /** Whether the optional bridge stack (`rmng-bridge-core`) is deployed, i.e. the bridge capability is available. */

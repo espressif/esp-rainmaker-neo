@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export type VoiceAssistantTab = "alexa" | "gva";
+export type VoiceAssistantTab = "alexa" | "gva" | "smartthings";
 
 export interface VoiceAssistantsPageTabsProps {
   activeTab: VoiceAssistantTab;

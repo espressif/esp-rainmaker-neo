@@ -78,6 +78,7 @@ function mapClientOutputs(outputs: ClientOutputs): RuntimeConfig {
     GVA_ENABLED: Boolean(outputs['rmng-gva-core']),
     ALEXA_SKILL_ARNS: alexaSkillArns(outputs, base.StackRegion),
     ALEXA_ENABLED: Boolean(outputs['rmng-alexa-cfg-core']),
+    SMARTTHINGS_ENABLED: Boolean(outputs['rmng-st-cfg-core']),
     BRIDGE_ENABLED: Boolean(outputs['rmng-bridge-core']),
   }
 }

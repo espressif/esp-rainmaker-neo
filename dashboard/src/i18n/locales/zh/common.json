@@ -104,7 +104,8 @@
     "alexa": "Alexa",
     "gva": "GVA",
     "pushNotifications": "推送通知",
-    "postDeployment": "部署后配置"
+    "postDeployment": "部署后配置",
+    "smartthings": "SmartThings"
   },
   "deploymentQr": {
     "showButton": "显示部署二维码",

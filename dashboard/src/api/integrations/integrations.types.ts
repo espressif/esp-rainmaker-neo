@@ -58,6 +58,21 @@ export interface GvaConfigDeleteResponse {
   status: string
 }
 
+export interface SmartThingsConfigGetResponse {
+  client_id?: string
+}
+
+export interface SmartThingsConfigRequest {
+  client_id: string
+  client_secret: string
+}
+
+export interface SmartThingsConfigResponse {
+  message: string
+}
+
+export type SmartThingsConfigDeleteResponse = SmartThingsConfigResponse
+
 export type PushIntegrationType = 'apns' | 'apns_sandbox' | 'gcm'
 
 export const PUSH_INTEGRATION_TYPES: PushIntegrationType[] = ['apns', 'apns_sandbox', 'gcm']

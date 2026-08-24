@@ -11,7 +11,7 @@ import {
   TabsTrigger,
 } from "@espressif/dashboard-ui-components/components";
 import { CustomIcon } from "@/components/custom-icon";
-import { isAlexaEnabled, isGvaEnabled } from "@/lib/config";
+import { isAlexaEnabled, isGvaEnabled, isSmartThingsEnabled } from "@/lib/config";
 import type {
   VoiceAssistantTab,
   VoiceAssistantsPageTabsProps,
@@ -41,6 +41,12 @@ export default function VoiceAssistantsPageTabs({
           <TabsTrigger value="gva">
             <CustomIcon type="google-assistant" size={16} />
             {t("sidebar.gva", "GVA")}
+          </TabsTrigger>
+        )}
+        {isSmartThingsEnabled() && (
+          <TabsTrigger value="smartthings">
+            <CustomIcon type="smartthings" size={16} />
+            {t("sidebar.smartthings", "SmartThings")}
           </TabsTrigger>
         )}
       </TabsList>

@@ -8,6 +8,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { integrationsApi, pushIntegrationsApi } from './integrations.api'
 import type { AlexaConfigGetResponse, AlexaConfigRequest, AlexaConfigResponse } from './integrations.types'
 import type { GvaConfigGetResponse, GvaConfigRequest, GvaConfigResponse, GvaConfigDeleteResponse } from './integrations.types'
+import type { SmartThingsConfigGetResponse, SmartThingsConfigRequest, SmartThingsConfigResponse, SmartThingsConfigDeleteResponse } from './integrations.types'
 import type { PushIntegrationType, PushIntegrationRequest, ListIntegrationsResponse, RegisterIntegrationResponse, IntegrationStatusResponse } from './integrations.types'
 
 /**
@@ -19,6 +20,8 @@ export const integrationsKeys = {
   alexaConfig: () => [...integrationsKeys.alexa(), 'config'] as const,
   gva: () => [...integrationsKeys.all, 'gva'] as const,
   gvaConfig: () => [...integrationsKeys.gva(), 'config'] as const,
+  smartthings: () => [...integrationsKeys.all, 'smartthings'] as const,
+  smartthingsConfig: () => [...integrationsKeys.smartthings(), 'config'] as const,
 }
 
 /**
@@ -103,6 +106,56 @@ export function useDeleteGvaConfig() {
     mutationFn: integrationsApi.deleteGvaConfig,
     onSuccess: () => {
       return queryClient.invalidateQueries({ queryKey: integrationsKeys.gvaConfig() })
+    },
+  })
+}
+
+/**
+ * Query options factory for SmartThings domain
+ */
+export const smartthingsQueries = {
+  config: () => ({
+    queryKey: integrationsKeys.smartthingsConfig(),
+    queryFn: integrationsApi.getSmartThingsConfig,
+    staleTime: 1000 * 60 * 5,
+    retry: 1,
+  }),
+}
+
+/**
+ * Hook for fetching SmartThings integration configuration
+ */
+export function useGetSmartThingsConfig(options?: { enabled?: boolean }) {
+  return useQuery<SmartThingsConfigGetResponse, Error>({
+    ...smartthingsQueries.config(),
+    enabled: options?.enabled ?? true,
+  })
+}
+
+/**
+ * Hook for configuring SmartThings integration
+ */
+export function useConfigureSmartThings() {
+  const queryClient = useQueryClient()
+
+  return useMutation<SmartThingsConfigResponse, Error, SmartThingsConfigRequest>({
+    mutationFn: integrationsApi.configureSmartThings,
+    onSuccess: () => {
+      return queryClient.invalidateQueries({ queryKey: integrationsKeys.smartthingsConfig() })
+    },
+  })
+}
+
+/**
+ * Hook for deleting SmartThings integration configuration
+ */
+export function useDeleteSmartThingsConfig() {
+  const queryClient = useQueryClient()
+
+  return useMutation<SmartThingsConfigDeleteResponse, Error, void>({
+    mutationFn: integrationsApi.deleteSmartThingsConfig,
+    onSuccess: () => {
+      return queryClient.invalidateQueries({ queryKey: integrationsKeys.smartthingsConfig() })
     },
   })
 }

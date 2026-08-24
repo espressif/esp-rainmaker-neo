@@ -129,5 +129,36 @@
         "urlInvalid": "Must be a valid URL."
       }
     }
+  },
+  "smartthings": {
+    "heading": "SmartThings Configuration",
+    "secondaryText": "Schema App credentials issued by the SmartThings Developer Workspace",
+    "notConfiguredTitle": "SmartThings not configured",
+    "notConfiguredDescription": "No SmartThings configuration found yet.",
+    "configureButton": "Configure",
+    "fetchError": "Failed to load SmartThings configuration",
+    "clientId": "Client ID",
+    "clientIdPlaceholder": "Client ID from the SmartThings Developer Workspace",
+    "clientSecret": "Client Secret",
+    "clientSecretPlaceholder": "Client Secret issued with the Client ID",
+    "form": {
+      "editTitle": "Edit SmartThings configuration",
+      "configureTitle": "Configure SmartThings",
+      "updateButton": "Update",
+      "submitSuccess": "SmartThings configuration saved successfully.",
+      "submitError": "Failed to save SmartThings configuration.",
+      "delete": {
+        "title": "Delete SmartThings configuration?",
+        "description": "This permanently removes the SmartThings Schema App credentials. Linked accounts stop working until it is configured again.",
+        "success": "SmartThings configuration deleted successfully.",
+        "error": "Failed to delete SmartThings configuration."
+      },
+      "errors": {
+        "clientIdRequired": "Client ID is required.",
+        "clientIdTooLong": "Client ID must be at most 256 characters.",
+        "clientSecretRequired": "Client Secret is required.",
+        "clientSecretTooLong": "Client Secret must be at most 1024 characters."
+      }
+    }
   }
 }
