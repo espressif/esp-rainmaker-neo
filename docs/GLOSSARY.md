@@ -43,6 +43,7 @@ The Term column lists the canonical form first, with accepted variants and ident
 | Schedule (`Schedules`) | A time-based rule a Node executes locally (managed by the Node's Schedule Service). Distinct from Automation: Schedules are Node-resident; Automations are Cloud-evaluated. |
 | Service (`Services`) | Entity similar to a Device in structure but for ops not necessarily user-visible (e.g., Time, Local Control). |
 | Shadow (`shadow`, AWS IoT Device Shadow) | The JSON document the Cloud maintains per Node holding `reported` (Node-asserted) and `desired` (Cloud-requested) state. ESP RainMaker Neo uses named shadows per Parameter group. Capitalize when used as a named concept; lowercase in code paths (`shadow_db`, MQTT topic `$aws/things/+/shadow/...`). |
+| SmartThings (`smartthings`; never `Smartthings`, `Smart Things`) | Samsung SmartThings Schema (cloud-to-cloud) Smart Home integration. Lambda surfaces: `st-action` (Schema App handler), `st-config` (admin configuration). Always spelled `SmartThings` in prose. |
 | Subgroup (`Subgroups`; never `sub-group`, `sub group`) | One word, capitalized concept. Nested group inside a Group. |
 | Time-Series Data (`timeseries` in identifiers, `ts` allowed in `ts-stream-processor` only) | Timestamped Parameter values with statistics. |
 | TLS (`tls`, Transport Layer Security) | Uppercase always. |

@@ -148,6 +148,7 @@ cdk_synth:
     - CDK_OUTDIR=cdk.out.rmng python3 cdk/apps/rmng.py
     - CDK_OUTDIR=cdk.out.espuser python3 cdk/apps/espuser.py
     - CDK_OUTDIR=cdk.out.alexa python3 cdk/apps/alexa.py
+    - CDK_OUTDIR=cdk.out.smartthings python3 cdk/apps/smartthings.py
   artifacts:
     when: on_failure
     expire_in: 1 week
@@ -155,6 +156,7 @@ cdk_synth:
       - cdk.out.rmng
       - cdk.out.espuser
       - cdk.out.alexa
+      - cdk.out.smartthings
 
 # -------------------------
 # Dashboard check — nothing else builds or tests the frontend, so a broken typecheck or

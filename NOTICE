@@ -78,11 +78,11 @@ this software does not grant permission to use these marks except as
 required for reasonable and customary use in describing the origin of
 this work.
 
-This project integrates with third-party voice-assistant platforms.
-"Amazon", "Alexa", "Google", and "Google Home" are trademarks of their
-respective owners.
+This project integrates with third-party voice-assistant and smart-home
+platforms. "Amazon", "Alexa", "Google", "Google Home", "Samsung", and
+"SmartThings" are trademarks of their respective owners.
 
-Logo assets under misc/logos/ are reproduced solely to identify those
+Logo assets under assets/ are reproduced solely to identify those
 integrations. They remain the property of their respective owners, and
 their use is governed by the applicable trademark and brand guidelines,
 not by this project's Apache-2.0 license.

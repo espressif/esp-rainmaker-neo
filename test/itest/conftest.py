@@ -1389,6 +1389,77 @@ def user_with_1_dev_each_in_2_groups(test_user1, session_valid_device_rsa, sessi
     user1_group_api.delete_group(group2_id)
 
 
+@pytest.fixture
+def user_with_multi_capability_device(test_user1, session_valid_device_rsa):
+    """One device declaring every param type the SmartThings mapping supports.
+
+    Kept separate from user_with_1_dev_each_in_2_groups because adding these params
+    to Light1 would change its deviceHandlerType and break the discovery assertions
+    that fixture's tests make.
+
+    Yields (device, group_id, test_user1). Device ids and their handler types:
+      RGBLight   power+brightness+hue+saturation -> c2c-rgb-color-bulb
+      CCTLight   power+brightness+cct            -> c2c-color-temperature-bulb
+      Fan        power+speed                     -> c2c-fan
+      Thermostat setpoint-temperature            -> c2c-thermostat
+    """
+    user1_group_api = Group(test_user1)
+    group_id = user1_group_api.create_group("Test Capability Group")
+
+    device = session_valid_device_rsa
+    assert device.connect(), "Failed to connect the device"
+
+    config = {
+        "devices": [{
+            "id": "RGBLight",
+            "type": "esp.device.lightbulb",
+            "params": [
+                {"id": "Power", "type": "esp.param.power"},
+                {"id": "Brightness", "type": "esp.param.brightness"},
+                {"id": "Hue", "type": "esp.param.hue"},
+                {"id": "Saturation", "type": "esp.param.saturation"},
+            ]
+        }, {
+            "id": "CCTLight",
+            "type": "esp.device.lightbulb",
+            "params": [
+                {"id": "Power", "type": "esp.param.power"},
+                {"id": "Brightness", "type": "esp.param.brightness"},
+                {"id": "CCT", "type": "esp.param.cct"},
+            ]
+        }, {
+            "id": "Fan",
+            "type": "esp.device.fan",
+            "params": [
+                {"id": "Power", "type": "esp.param.power"},
+                {"id": "Speed", "type": "esp.param.speed"},
+            ]
+        }, {
+            "id": "Thermostat",
+            "type": "esp.device.thermostat",
+            "params": [
+                {"id": "Setpoint", "type": "esp.param.setpoint-temperature"},
+            ]
+        }]
+    }
+    # Same retry rationale as user_with_1_dev_each_in_2_groups: the 5s ack window is
+    # sometimes missed on a cold node-config lambda and the call is idempotent.
+    for attempt in range(3):
+        if device.set_node_config(config):
+            break
+    else:
+        pytest.fail(f"set_node_config never acknowledged for {device.node_thing_name}")
+
+    result = test_user1.do_user_node_assoc(device, group_id)
+    assert result is None, f"Association failed with error: {result}"
+
+    yield device, group_id, test_user1
+
+    # The device is pooled and reset by its own fixture; dropping the group also
+    # removes the association.
+    user1_group_api.delete_group(group_id)
+
+
 @pytest.fixture(scope="function")
 def test_device_new():
     """

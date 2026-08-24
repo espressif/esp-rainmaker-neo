@@ -555,6 +555,19 @@ def handle_user_commands(user):
                 handle_gva_setup(user, config_file)
             else:
                 print("Syntax: gva_setup <service_account.json>")
+        elif main_command == 'st_instruction':
+            print("==============")
+            print("Register the Schema App in the SmartThings Developer Center, then use 'st_setup' to store the credentials it issues")
+            print_smartthings_instructions()
+        elif main_command == 'st_setup':
+            if len(args) == 1:
+                handle_st_setup(user, args[0])
+            else:
+                print('Syntax: st_setup <config_file>  (JSON: {"client_id": "...", "client_secret": "..."})')
+        elif main_command == 'st_get_config':
+            handle_st_get_config(user)
+        elif main_command == 'st_delete_config':
+            handle_st_delete_config(user)
         elif main_command == 'register_client':
             if len(args) == 2:
                 platform = args[0]
@@ -830,6 +843,10 @@ def handle_user_commands(user):
             print("  alexa_instruction")
             print("  gva_setup <service_account.json>")
             print("  gva_instruction")
+            print("  st_setup <config_file>")
+            print("  st_instruction")
+            print("  st_get_config")
+            print("  st_delete_config")
             print("  register_client <platform> <mobile_device_token>")
             print("  register_client_android <android-project-id> <device-token>")
             print("  register_client_ios <ios-bundle-id> <device-token> [sandbox]")
@@ -1226,6 +1243,84 @@ def print_alexa_skill_instructions():
     print(f'   - Edit the "Your Client Id" field to: {va_client_id}')
     print(f'   - Edit the "Your Secret" field to the va-client secret from GET /v1/admin/clients?get_secret=true (or SSM /espuser/base/va-client-secret)')
     print(f'   - Edit the "Scope" field to also add: openid email phone profile')
+
+def print_smartthings_instructions():
+    # Geographies are keyed by SmartThings' own geo codes, derived from each endpoint ARN,
+    # so this reads whichever shape the outputs use (see st_region_arns).
+    st_regions = settings.st_region_arns
+    # Account linking runs against the ESP User OIDC IdP (not Cognito). The voice-assistant
+    # client is the seeded `va-client` registry row, shared with Alexa and GVA; its secret is
+    # not an output — fetch it from the superadmin clients API or SSM.
+    authorize_url, token_url = _oidc_endpoints()
+    va_client_id = 'va-client'
+    print(f"\nSmartThings configuration (https://developer.smartthings.com/):")
+    print(f'1. Device Integrations > New Integration > Cloud Connector > ST Schema')
+    print(f'   - App icon: use the logo at assets/smartthings_logo.png')
+    print(f'2. Set the Target ARN for each geography:')
+    if not st_regions:
+        print(f'   - No STSchemaAppFunctionArn found in {settings.source}; deploy the rmng-st-core stack(s) first')
+    else:
+        for code, label in (('NA', 'North America'), ('EU', 'Europe'), ('AP', 'Asia-Pacific')):
+            if code in st_regions:
+                print(f'     {label}: {st_regions[code]}')
+    print(f'3. Device Cloud Credentials (your cloud, given to SmartThings):')
+    print(f'   - Client ID: {va_client_id}')
+    print(f'   - Client Secret: the va-client secret from GET /v1/admin/clients?get_secret=true (or SSM /espuser/base/va-client-secret)')
+    print(f'   - OAuth URL: {authorize_url}')
+    print(f'   - Token URL: {token_url}')
+    print(f'   - OAuth Scope: openid email phone profile')
+    print(f'4. Save. SmartThings then issues its OWN Client ID and Secret — note the direction,')
+    print(f'   these are different from the credentials in step 3.')
+    print(f'5. Store them: st_setup <config_file>, where the file holds')
+    print(f'   {{"client_id": "<SmartThings client id>", "client_secret": "<SmartThings client secret>"}}')
+    print(f'6. Create a Product referencing the Schema App, with a Device Profile whose handler')
+    print(f'   type matches discovery (e.g. c2c-dimmer), then test via the SmartThings app.')
+
+
+def handle_st_setup(user, config_file):
+    """Store the credentials SmartThings issued for the Schema App.
+
+    Read from a file rather than argv: the client secret is 512 characters and a secret
+    in argv is visible to other processes and lands in shell history.
+    """
+    try:
+        with open(config_file, 'r') as f:
+            config = json.load(f)
+
+        for field in ('client_id', 'client_secret'):
+            if not config.get(field):
+                print(f"Error: '{field}' missing or empty in {config_file}")
+                return
+
+        response = user.st_post_configuration(config['client_id'], config['client_secret'])
+        print(f"Response: {response.status_code}")
+        print(response.text)
+
+    except FileNotFoundError:
+        print(f"Error: Config file not found: {config_file}")
+    except json.JSONDecodeError:
+        print(f"Error: Invalid JSON in config file: {config_file}")
+    except Exception as e:
+        print(f"Error: {str(e)}")
+
+
+def handle_st_get_config(user):
+    try:
+        response = user.st_get_configuration()
+        print(f"Response: {response.status_code}")
+        print(response.text)
+    except Exception as e:
+        print(f"Error: {str(e)}")
+
+
+def handle_st_delete_config(user):
+    try:
+        response = user.st_delete_configuration()
+        print(f"Response: {response.status_code}")
+        print(response.text)
+    except Exception as e:
+        print(f"Error: {str(e)}")
+
 
 def print_gva_instructions():
     # Account linking runs against the ESP User OIDC IdP (not Cognito). The voice-assistant

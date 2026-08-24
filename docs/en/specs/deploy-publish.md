@@ -99,12 +99,13 @@ for Google Home, the fulfillment endpoint. Device control paths and the shared
 API are untouched. Google Home fulfillment resumes without reconfiguring the
 Google Home project: the path is unchanged, so only its availability lapses.
 
-For the Alexa and Google Home split specifically:
+For the integration split specifically:
 
 ```bash
-make deploy          # rmng-core sheds the integration resources
-make deploy-gva      # Google Home fulfillment + config API
-make deploy-alexa    # skill Lambda (3 regions) + config API (backend region)
+make deploy             # rmng-core sheds the integration resources
+make deploy-gva         # Google Home fulfillment + config API
+make deploy-alexa       # skill Lambda (3 regions) + config API (backend region)
+make deploy-smartthings # Schema App Lambda (3 regions) + config API (backend region)
 ```
 
 Outputs move with their stack. `GVAFulfillmentUrl` is published by

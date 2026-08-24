@@ -1880,6 +1880,25 @@ class User:
         response = self.make_api_request('GET', '/v1/admin/integrations/gva/configuration')
         return response
 
+    def st_post_configuration(self, client_id, client_secret):
+        """POST /v1/admin/integrations/smartthings/configuration to store the credentials
+        SmartThings issued for the Schema App. Also registers the SmartThings OAuth callback
+        URLs on the shared va-client OIDC row."""
+        payload = json.dumps({'client_id': client_id, 'client_secret': client_secret})
+        response = self.make_api_request('POST', '/v1/admin/integrations/smartthings/configuration', data=payload)
+        return response
+
+    def st_get_configuration(self):
+        """GET /v1/admin/integrations/smartthings/configuration. Returns client_id only;
+        the secret is never returned."""
+        response = self.make_api_request('GET', '/v1/admin/integrations/smartthings/configuration')
+        return response
+
+    def st_delete_configuration(self):
+        """DELETE /v1/admin/integrations/smartthings/configuration."""
+        response = self.make_api_request('DELETE', '/v1/admin/integrations/smartthings/configuration')
+        return response
+
     def get_node_trigger(self, group_id, node_id):
         """Get trigger data for a node."""
         # Always use the group-level path regardless of subgroup

@@ -890,7 +890,7 @@ class Device:
 
         # Send the getGroupInfo request
         request = {
-            "event": ["getGroupInfo", "getAlexaEn", "getGVAEn", "getSchedVer", "getTriggerVer"]
+            "event": ["getGroupInfo", "getAlexaEn", "getGVAEn", "getSTEn", "getSchedVer", "getTriggerVer"]
         }
         if not self.publish_to_cloud(request):
             device_log("Failed to publish getGroupInfo request")

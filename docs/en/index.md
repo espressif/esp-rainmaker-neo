@@ -74,6 +74,7 @@ specs/kvs-camera-streaming
 
 specs/alexa
 specs/gva
+specs/smartthings
 ```
 
 ```{toctree}
@@ -157,6 +158,7 @@ cover [authentication and permissions](specs/admin/authentication.md),
 
 - [alexa](specs/alexa.md) — the Alexa Smart Home integration.
 - [gva](specs/gva.md) — the Google Voice Assistant integration.
+- [smartthings](specs/smartthings.md) — the Samsung SmartThings integration.
 
 ## Platform
 
