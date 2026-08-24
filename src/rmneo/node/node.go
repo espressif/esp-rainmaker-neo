@@ -1433,6 +1433,23 @@ func RegisterNodeInRmng(rmngCtx *rmngctx.RmngContext, cert string, caCert string
 
 	n := NewNode(nodeId)
 
+	// Cheap pre-check so a duplicate costs one read instead of a full IoT Core
+	// provisioning round trip — re-submitting a 10k-row CSV would otherwise
+	// register 10k certs and things before every row failed. The conditional put
+	// below is still the authoritative check: two concurrent registrations of the
+	// same cert both pass this read, and only one wins the put.
+	// Read scoped to this one node: the callers hold nodeadmin:*, which does not
+	// cover node:get, and granting it deployment-wide would be far wider than the
+	// check needs.
+	rmngCtx.SetAllow(utils.NodeGet, nodeId)
+
+	detailsDB := node_details_db.NewNodeDetailsDB(rmngCtx)
+	if existing, err := detailsDB.GetNodeDetails(nodeId); err != nil {
+		rlog.Warn(rmngCtx).Err(err).Msg("failed to check for an existing node row, continuing")
+	} else if existing != nil {
+		return nodeId, ErrNodeAlreadyRegistered
+	}
+
 	nodeType, err := n.registerInIotCore(rmngCtx, cert, capabilities)
 	if err != nil {
 		return nodeId, rmerror.NewRMError(err, "failed to register")
@@ -1441,8 +1458,8 @@ func RegisterNodeInRmng(rmngCtx *rmngctx.RmngContext, cert string, caCert string
 	// AddNode's conditional put is what detects a re-registration. Other write
 	// failures stay non-fatal: the row is opportunistic and downstream lookups
 	// treat its absence like any other missing row.
-	if err := node_details_db.NewNodeDetailsDB(rmngCtx).
-		AddNode(node_details_db.NodeDetailsEntry{NodeID: nodeId, RegTs: time.Now().Unix(), AdminId: adminId, NodeType: nodeType}); err != nil {
+	if err := detailsDB.AddNode(node_details_db.NodeDetailsEntry{
+		NodeID: nodeId, RegTs: time.Now().Unix(), AdminId: adminId, NodeType: nodeType}); err != nil {
 		if db.IsConditionalCheckFailedException(err) {
 			return nodeId, ErrNodeAlreadyRegistered
 		}

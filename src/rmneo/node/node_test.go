@@ -583,6 +583,22 @@ var _ = Describe("Node", func() {
 				Expect(len(thing.CertificateIds)).To(BeNumerically(">", 0))
 			})
 
+			It("should reject a duplicate before touching IoT Core", func() {
+				_, err := node.RegisterNodeInRmng(testUserContext, nodeCert, "", []string{}, []string{}, "test-user-id", nil)
+				Expect(err).To(BeNil())
+
+				// Drop the Thing so any IoT work in the second attempt is visible:
+				// the duplicate is caught from the node_details row alone, so the
+				// Thing must still be missing afterwards.
+				delete(iotClient.GetThingsDirect(), testNode.GetID())
+				Expect(iotClient.VerifyThingExists(testNode.GetID())).To(BeFalse())
+
+				_, err = node.RegisterNodeInRmng(testUserContext, nodeCert, "", []string{}, []string{}, "test-user-id", nil)
+				Expect(err).To(MatchError(node.ErrNodeAlreadyRegistered))
+				Expect(iotClient.VerifyThingExists(testNode.GetID())).To(BeFalse(),
+					"a duplicate must not re-provision the node in IoT Core")
+			})
+
 			It("should handle invalid certificate format", func() {
 				invalidCert := "invalid-certificate-format"
 				nodeIDRegistered, err := node.RegisterNodeInRmng(testUserContext, invalidCert, "", []string{}, []string{}, "test-user-id", nil)
