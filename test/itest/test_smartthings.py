@@ -264,6 +264,7 @@ def test_smartthings_discovery(user_with_1_dev_each_in_2_groups, st_region_arn):
     shadow_name = f"params-{group1_id}"
     assert device1.shadow_connect([shadow_name]), "Failed to connect to shadow"
     device1.update_named_shadow(shadow_name, {
+        "online": True,
         "Light1": {"Power": False, "Name": "Kitchen Light"},
         "Light2": {"Power": False, "Name": "Bedroom Light"},
     })
@@ -291,7 +292,7 @@ def test_smartthings_command(user_with_1_dev_each_in_2_groups, st_region_arn):
     assert device1.subscribe(topic=params_topic), "Failed to subscribe to params topic"
 
     # Initial state + a discovery so the node is marked online/ST-enabled.
-    device1.update_named_shadow(shadow_name, {"Light1": {"Power": False, "Brightness": 0}})
+    device1.update_named_shadow(shadow_name, {"online": True, "Light1": {"Power": False, "Brightness": 0}})
     discovery = st_discovery_request(region, arn, test_user1.access_token)
     time.sleep(2)
     device1.clear_queues()
@@ -340,7 +341,7 @@ def test_smartthings_state_refresh(user_with_1_dev_each_in_2_groups, st_region_a
     assert device1.connect(), "Failed to connect to MQTT"
     shadow_name = f"params-{group1_id}"
     assert device1.shadow_connect([shadow_name]), "Failed to connect to shadow"
-    device1.update_named_shadow(shadow_name, {"Light1": {"Power": True, "Brightness": 50}})
+    device1.update_named_shadow(shadow_name, {"online": True, "Light1": {"Power": True, "Brightness": 50}})
 
     # Discovery first so the node is registered as online/ST-enabled.
     st_discovery_request(region, arn, test_user1.access_token)
@@ -393,7 +394,7 @@ def victim_device_and_attacker(user_with_1_dev_each_in_2_groups, test_user2, st_
     assert device1.subscribe(topic=params_topic), "Failed to subscribe to params topic"
 
     # Known starting state, and a discovery so the node is ST-enabled/online.
-    device1.update_named_shadow(shadow_name, {"Light1": {"Power": False, "Brightness": 0}})
+    device1.update_named_shadow(shadow_name, {"online": True, "Light1": {"Power": False, "Brightness": 0}})
     st_discovery_request(region, arn, test_user1.access_token)
     time.sleep(2)
     device1.clear_queues()
@@ -480,7 +481,7 @@ def test_smartthings_command_allowed_for_shared_user(user_with_1_dev_each_in_2_g
         params_topic = f"rainmaker/nodes/{device1.node_thing_name}/user/params-{group1_id}/params"
         assert device1.subscribe(topic=params_topic), "Failed to subscribe to params topic"
 
-        device1.update_named_shadow(shadow_name, {"Light1": {"Power": False, "Brightness": 0}})
+        device1.update_named_shadow(shadow_name, {"online": True, "Light1": {"Power": False, "Brightness": 0}})
 
         # The shared user's own discovery is what marks the node ST-enabled for them.
         discovery = st_discovery_request(region, arn, test_user2.access_token)
@@ -537,6 +538,7 @@ def capability_device(user_with_multi_capability_device, st_region_arn):
     assert device.subscribe(topic=params_topic), "Failed to subscribe to params topic"
 
     device.update_named_shadow(shadow_name, {
+        "online": True,
         "RGBLight": {"Power": False, "Brightness": 0, "Hue": 0, "Saturation": 0},
         "CCTLight": {"Power": False, "Brightness": 0, "CCT": 2700},
         "Fan": {"Power": False, "Speed": 0},
@@ -670,12 +672,6 @@ def st_command_request_devices(region, arn, token, devices):
     return _st_invoke(region, arn, request_body)
 
 
-@pytest.mark.xfail(
-    reason="isNodeOnline reads nodes_online_db.EventType, which the disconnect path never "
-           "updates (node_conn/handler.go writes only the shadow), so a node reads as online "
-           "forever after its first connect. Alexa uses reported.online from the shadow instead.",
-    strict=False,
-)
 def test_smartthings_command_offline_device(user_with_1_dev_each_in_2_groups, st_region_arn):
     """A command for a disconnected node reports OFFLINE rather than pretending to succeed."""
     device1, _device2, group1_id, _group2_id, test_user1 = user_with_1_dev_each_in_2_groups
@@ -690,7 +686,7 @@ def test_smartthings_command_offline_device(user_with_1_dev_each_in_2_groups, st
     st_discovery_request(region, arn, test_user1.access_token)
     light1_id = st_external_device_id(device1.node_thing_name, "Light1")
 
-    # Now take it offline and wait for the connectivity event to land in nodes-online.
+    # Now take it offline and wait for the presence handler to write reported.online=false.
     # Poll st.healthCheck rather than sleeping a fixed time: the disconnect event is
     # asynchronous, and this also fails loudly if presence never updates at all.
     device1.disconnect()
@@ -731,7 +727,7 @@ def test_smartthings_command_multiple_devices_are_independent(user_with_1_dev_ea
     params_topic = f"rainmaker/nodes/{device1.node_thing_name}/user/params-{group1_id}/params"
     assert device1.subscribe(topic=params_topic), "Failed to subscribe to params topic"
 
-    device1.update_named_shadow(shadow_name, {"Light1": {"Power": False, "Brightness": 0}})
+    device1.update_named_shadow(shadow_name, {"online": True, "Light1": {"Power": False, "Brightness": 0}})
     st_discovery_request(region, arn, test_user1.access_token)
     time.sleep(2)
     device1.clear_queues()
@@ -770,7 +766,7 @@ def test_smartthings_command_multiple_commands_one_device(user_with_1_dev_each_i
     params_topic = f"rainmaker/nodes/{device1.node_thing_name}/user/params-{group1_id}/params"
     assert device1.subscribe(topic=params_topic), "Failed to subscribe to params topic"
 
-    device1.update_named_shadow(shadow_name, {"Light1": {"Power": False, "Brightness": 0}})
+    device1.update_named_shadow(shadow_name, {"online": True, "Light1": {"Power": False, "Brightness": 0}})
     st_discovery_request(region, arn, test_user1.access_token)
     time.sleep(2)
     device1.clear_queues()

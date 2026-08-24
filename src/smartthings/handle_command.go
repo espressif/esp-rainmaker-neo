@@ -81,9 +81,23 @@ func executeDeviceCommands(rmngCtx *rmngctx.RmngContext, device STCommandDevice,
 		}
 	}
 
-	// Check if node is online
-	online := isNodeOnline(rmngCtx, nodeID)
-	if !online {
+	// Reachability comes from the node's reported shadow, the platform's
+	// connectivity source of truth. Publishing to a node that is not connected
+	// is a silent no-op, so SmartThings is told OFFLINE rather than a success
+	// the user will not see happen.
+	shadow, err := node.NewNode(nodeID).ReadFromReportedShadow(rmngCtx)
+	if err != nil {
+		rlog.Warn(rmngCtx).Err(err).Str("nodeID", nodeID).Msg("failed to read shadow for command")
+		return STDeviceState{
+			ExternalDeviceID: device.ExternalDeviceID,
+			States:           []STState{},
+			DeviceError: []STDeviceError{{
+				ErrorEnum: ErrorDeviceError,
+				Detail:    "failed to read device state",
+			}},
+		}
+	}
+	if !node.ShadowOnline(shadow) {
 		return STDeviceState{
 			ExternalDeviceID: device.ExternalDeviceID,
 			States:           []STState{},
