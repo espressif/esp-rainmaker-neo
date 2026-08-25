@@ -57,24 +57,37 @@ fi
 
 # Parse command parameters
 if [ "$command" == "--setup" ]; then
+    # Bootstrap deliberately does NOT pass --app. Passing it makes the CDK execute
+    # the app, and the alexa/smartthings apps read rmng-outputs.json to resolve
+    # cross-stack parameters — a file that does not exist yet on a first
+    # deployment. That made `make setup` fail for exactly the groups that need a
+    # separate bootstrap, and the failure only surfaced later as
+    # "SSM parameter /cdk-bootstrap/<qualifier>/version not found" during deploy.
+    # An explicit environment is what bootstrap actually needs.
+    set -e
+    ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
+    bootstrap_env() {
+        local qualifier="$1" bootstrap_region="$2"
+        echo "Bootstrapping ${STACK_GROUP} (qualifier ${qualifier}) in region: ${bootstrap_region}"
+        AWS_REGION="$bootstrap_region" cdk bootstrap --qualifier "$qualifier" \
+            --toolkit-stack-name "CDKToolkit-${STACK_GROUP}" \
+            "aws://${ACCOUNT_ID}/${bootstrap_region}"
+    }
+
     if [ "$STACK_GROUP" == "alexa" ]; then
         ALEXA_REGIONS=("us-east-1" "eu-west-1" "us-west-2")
         for ALEXA_REGION in "${ALEXA_REGIONS[@]}"; do
-            echo "Bootstrapping alexa in region: $ALEXA_REGION"
-            AWS_REGION="$ALEXA_REGION" cdk bootstrap --qualifier "$STACK_GROUP" --app "python3 $APP_FILE" \
-                --toolkit-stack-name "CDKToolkit-${STACK_GROUP}"
+            bootstrap_env "$STACK_GROUP" "$ALEXA_REGION"
         done
     elif [ "$STACK_GROUP" == "smartthings" ]; then
         # Qualifier is "sthing" (CDK caps qualifiers at 10 chars), matching the app's synthesizer.
         ST_REGIONS=("us-east-1" "eu-west-1" "ap-northeast-1")
         for ST_REGION in "${ST_REGIONS[@]}"; do
-            echo "Bootstrapping smartthings in region: $ST_REGION"
-            AWS_REGION="$ST_REGION" cdk bootstrap --qualifier "sthing" --app "python3 $APP_FILE" \
-                --toolkit-stack-name "CDKToolkit-${STACK_GROUP}"
+            bootstrap_env "sthing" "$ST_REGION"
         done
     else
-        cdk bootstrap --qualifier "$STACK_GROUP" --app "python3 $APP_FILE" \
-            --toolkit-stack-name "CDKToolkit-${STACK_GROUP}"
+        bootstrap_env "$STACK_GROUP" "$REGION"
     fi
     exit 0
 elif [ "$command" == "--diff" ]; then
