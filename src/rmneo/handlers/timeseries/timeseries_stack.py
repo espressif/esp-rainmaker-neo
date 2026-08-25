@@ -166,7 +166,6 @@ class TimeseriesCore(Construct):
                 sql=f"""
                 SELECT
                     topic(3) as node_id,
-                    topic(5) as topic_name,
                     k as key,
                     dt,
                     tz,

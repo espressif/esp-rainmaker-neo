@@ -77,7 +77,6 @@ node at one instant. As stored in the raw table it carries:
 | `ts` | Sample timestamp (see §2.4 on units) |
 | `tz` | Optional IANA timezone identifier (e.g. `UTC`, `Asia/Kolkata`) |
 | `cumulative` | Optional; `true` for monotonically-increasing counters |
-| `topic_name` | The trailing topic segment the sample arrived on |
 
 `value` is coerced to a floating-point number for aggregation: numbers pass
 through, numeric strings are parsed, and booleans map to `1.0` / `0.0`. A
@@ -181,16 +180,17 @@ first-seen zone. (Weekly windows are additionally Monday-aligned regardless of
 A device publishes a data point to:
 
 ```
-rainmaker/nodes/{node_id}/ts/{topic_name}
+rainmaker/nodes/{node_id}/ts/{topic_suffix}
 ```
 
-The IoT topic rule `node_ts_rule` subscribes to `rainmaker/nodes/+/ts/+` and
-projects the message with SQL version `2016-03-23`:
+The trailing topic segment is a routing detail only — it is not projected into
+the stored item. The IoT topic rule `node_ts_rule` subscribes to
+`rainmaker/nodes/+/ts/+` and projects the message with SQL version
+`2016-03-23`:
 
 ```sql
 SELECT
     topic(3) as node_id,           -- the {node_id} segment
-    topic(5) as topic_name,        -- the {topic_name} segment
     k as key,
     dt,
     tz,
