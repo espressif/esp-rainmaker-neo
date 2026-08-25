@@ -372,6 +372,28 @@ var _ = Describe("MCP Main", func() {
 				Expect(withDevices[0].NodeIDs).To(ConsistOf(nodeID))
 			})
 
+			It("always reports subgroups, empty included", func() {
+				restore := mockAuthSuccess(userID)
+				defer restore()
+				server = createServer()
+
+				rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, user.NewUser(userID))
+				_, err := group.CreateGroupForUser(rmngCtx, "Roomless Home")
+				Expect(err).To(BeNil())
+
+				text := callToolSuccess(server, ctx, "list_groups", map[string]interface{}{}, "test-token")
+
+				// Asserted on the wire, not the decoded struct: an omitted key and an empty array
+				// decode alike, and the whole point is that the key reaches the model.
+				var payload struct {
+					Groups []map[string]interface{} `json:"groups"`
+				}
+				Expect(json.Unmarshal([]byte(text), &payload)).To(Succeed())
+				Expect(payload.Groups).To(HaveLen(1))
+				Expect(payload.Groups[0]).To(HaveKey("subgroups"), "a home with no rooms must still say so")
+				Expect(payload.Groups[0]["subgroups"]).To(BeEmpty())
+			})
+
 			It("filters by group name, ignoring case", func() {
 				restore := mockAuthSuccess(userID)
 				defer restore()

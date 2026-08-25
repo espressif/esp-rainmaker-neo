@@ -47,6 +47,27 @@ Each description therefore names the sibling tool to use for every adjacent inte
 plainly when *not* to call the tool it describes. Those clauses are load-bearing: without
 them models insert redundant lookup calls before every action.
 
+Three further clauses were added after observed failures, and are covered by tests because they
+are behaviour, not prose:
+
+- **`set_params` bounds what a parameter is.** Given a request the device cannot serve, a model
+  would otherwise invent a plausible key — `{"OTA": {"Trigger": true}}` for "run a firmware
+  update" — which the cloud accepts and publishes to a device that ignores it, so the user is
+  told something happened when nothing did. The description states that every device and
+  parameter name must be one `list_devices` reported, and that a made-up key does nothing.
+- **`set_params` hands timed requests to `set_schedule`.** "Every weekday at 7am" names a device
+  and a state, which is enough to look like an immediate write. The description routes anything
+  carrying a time, a delay or a repetition to `set_schedule`.
+- **`list_devices` accepts a node id in `name`.** See the section below — an argument a model
+  cannot fill correctly is a defect in the argument, not in the model.
+- **`list_devices` and `list_groups` say what the server cannot do.** With no tool describing
+  the boundary, "create a room" or "show me last month's energy" draws a speculative tool call
+  instead of a straight answer. Both discovery tools now state that this server does not create,
+  rename or move devices, homes or rooms, and does not read history.
+
+A tool surface has no way to express "we do not do that", so the refusal has to live in the
+description of the tool a model would otherwise reach for.
+
 ## 3. Tools
 
 | Tool | Scope | Purpose |
@@ -69,6 +90,15 @@ and a type, and the name lives in the `Name` parameter. The `name` filter theref
 against params as well as `config.info.name`, which is why shadows are read before filtering
 rather than after.
 
+`name` also matches the **node id**. That is not a semantic slip, it is the only thing that
+works: a rmng node id is an arbitrary string with no distinguishing shape, so a model handed
+`node_switch` cannot tell an id from a name, and the tool text — "call this first whenever the
+user names a device" — points it at `name`. Documenting that `name` excludes ids does not teach
+the model a distinction it has no way to draw; it only turns a resolvable request into an empty
+result, which the model then reports to the user as "that device does not exist". Matching ids
+costs one substring compare and removes the failure, so both argument descriptions say plainly
+that an unclassifiable identifier belongs in `name`.
+
 A device whose config or shadow cannot be read is still returned, with an `error` field. One
 unreachable device must not blind the assistant to the rest of the home.
 
@@ -80,6 +110,11 @@ unreachable device must not blind the assistant to the rest of the home.
 Structure only — ids, names, device counts, and node ids when `include_devices` is set. It
 deliberately returns no parameters, connectivity or config, so there is exactly one tool that
 answers questions about devices.
+
+`subgroups` is always serialised, empty array included. An omitted key reads to an agent as
+"rooms unknown" and earns a second call; `[]` says plainly that the home has no rooms. This is
+why `subgroups` carries no `omitempty` while `node_ids` — which is genuinely opt-in behind
+`include_devices` — does.
 
 ### set_params
 

@@ -21,6 +21,7 @@ from test.itest.mcp_oauth import (
     generate_pkce_pair,
     initiate_authorize,
 )
+from py_sdk.test_mcp import assert_matches_catalogue
 from py_sdk.test_user import User
 from urllib.parse import urlparse, parse_qs
 import json
@@ -360,7 +361,9 @@ def test_full_oauth_flow_with_real_cimd(enable_test_cimd, request):
     rpc = resp.json()
     assert rpc.get("error") is None, f"unexpected JSON-RPC error: {rpc.get('error')}"
     tool_names = [t["name"] for t in rpc["result"]["tools"]]
-    assert "get_groups" in tool_names, f"get_groups not in tools/list response: {tool_names}"
+    # This test is about the token, not any one tool, so it checks the whole surface against the
+    # committed catalogue — a tool rename then lands in one place instead of breaking it here.
+    assert_matches_catalogue(tool_names)
     print(f"[5/5] MCP tools/list succeeded with the OTP-minted token; tools: {tool_names}")
 
 
@@ -497,5 +500,5 @@ def test_fastmcp_client_oauth_interop(enable_test_cimd, request):
             return [tool.name for tool in await mcp_client.list_tools()]
 
     tool_names = asyncio.run(_list_tools())
-    assert "get_groups" in tool_names, f"get_groups not in FastMCP tools/list: {tool_names}"
+    assert_matches_catalogue(tool_names)
     print(f"  [interop] FastMCP authenticated tools/list succeeded; tools: {tool_names}")

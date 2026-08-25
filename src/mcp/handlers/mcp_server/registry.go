@@ -26,7 +26,9 @@ Call this first whenever the user names a device, a type of device, or a room in
 
 Do not call it before set_params or set_schedule when the user has already given you a node_id and group_id, and do not call it to inspect schedules — list_schedules does that.
 
-Filters combine: group_id or subgroup_id to narrow to a home or room, name or type for a kind of device. Reading state fetches each device's shadow, so when you do not need the whole payload pass fields — for example "node_id,group_id,connected" or "params.Light.Power".
+Filters combine: group_id or subgroup_id to narrow to a home or room, name or type for a kind of device. Node ids look like any other string, so when the user gives you an identifier you cannot classify, put it in name — that matches node ids as well as names, and never comes back empty just because the value turned out to be an id. Reading state fetches each device's shadow, so when you do not need the whole payload pass fields — for example "node_id,group_id,connected" or "params.Light.Power".
+
+This server reads and controls devices that already exist, and shows only their state as of now. It cannot add, remove or rename a device, create or rename a home or room, move a device between rooms, or report history, trends or past usage. When the user asks for any of that, tell them it is not available here — there is no tool for it, and no combination of these tools does it.
 
 In replies to the user prefer the human names in params.<Device>.Name; use ids only in tool calls.`,
 			InputSchema: mcpserver.InputSchema{
@@ -34,7 +36,7 @@ In replies to the user prefer the human names in params.<Device>.Name; use ids o
 				Properties: map[string]interface{}{
 					"node_id": map[string]interface{}{
 						"type":        "string",
-						"description": "One node id, or several comma-separated. Omit to search every device the user can reach.",
+						"description": "One node id, or several comma-separated, when you know the values are node ids. Omit to search every device the user can reach. If you are not sure whether a string is a node id or a name, pass it as name instead — that matches ids too.",
 					},
 					"group_id": map[string]interface{}{
 						"type":        "string",
@@ -46,7 +48,7 @@ In replies to the user prefer the human names in params.<Device>.Name; use ids o
 					},
 					"name": map[string]interface{}{
 						"type":        "string",
-						"description": "Match a device name, partially and ignoring case. Matches both the node's own name and the Name parameter of the devices inside it.",
+						"description": "Match whatever the user called the device, partially and ignoring case: the Name parameter they see in the app, the node's own name, or its node id. Safe to use for any identifier you were given but cannot classify.",
 					},
 					"type": map[string]interface{}{
 						"type":        "string",
@@ -69,7 +71,9 @@ In replies to the user prefer the human names in params.<Device>.Name; use ids o
 
 This tool describes placement only. It never returns parameters, connectivity or device configuration, and the node ids it can list carry no names or types. For anything about the devices themselves — including which devices are in a given room — call list_devices with a group_id or subgroup_id filter instead.
 
-Set include_devices when you need the node ids in each group and subgroup but not their state.`,
+Set include_devices when you need the node ids in each group and subgroup but not their state. subgroups is always present: an empty array means this home genuinely has no rooms, so take it at face value rather than looking again.
+
+This tool only reads. Nothing here creates, renames or deletes a home or a room, moves a device between them, or reports history — if the user asks for that, say it is not available rather than reaching for another tool.`,
 			InputSchema: mcpserver.InputSchema{
 				Type: "object",
 				Properties: map[string]interface{}{
@@ -120,13 +124,15 @@ Triggers come back in the device's own form: m is minutes past midnight and d is
 	server.RegisterTool(
 		mcpserver.Tool{
 			Name: "set_params",
-			Description: `Change what a device is doing right now — switch it on or off, set brightness or temperature, trigger a reboot or a factory reset. This is a direct action tool: call it as soon as the user asks for a change and you hold the ids.
+			Description: `Change what a device is doing right now — switch it on or off, set brightness or temperature, or reboot or factory reset it where the device exposes a parameter for that. This is a direct action tool: call it as soon as the user asks for a change and you hold the ids.
 
 If the user gave you node_id and group_id, act on them immediately. Only call list_devices first when the device is identified by name, type or room and you do not have the ids yet. To act on several devices in one go, pass their ids comma-separated in node_id; they must all belong to the group in group_id, and the same params are applied to every one of them, so only batch devices that share the same device names.
 
-params is keyed by the device name inside the node and then by parameter: {"Light": {"Power": true, "Brightness": 80}}. The names are case-sensitive and must match what list_devices returned. Send real booleans for on/off parameters, not "true" or "on".
+params is keyed by the device name inside the node and then by parameter: {"Light": {"Power": true, "Brightness": 80}}. Every device name and every parameter name must be one the device actually reported in list_devices, matched exactly and case-sensitively. Inventing a parameter to stand for something the device does not expose does nothing at all — there is no {"OTA": {"Trigger": true}} that starts a firmware update, and no key that adds a capability the device did not report. If nothing in the device's params covers what the user asked for, tell them this device does not support it rather than guessing at a name. Send real booleans for on/off parameters, not "true" or "on".
 
-Do not use this to read state (list_devices) or to make something happen later (set_schedule). Delivery to the device is asynchronous: success means the change was accepted and published, not that the device has already applied it.`,
+Do not use this to read state — list_devices does that — and do not use it for anything that happens later. If the request carries a time, a delay or a repetition ("at 7am", "every weekday", "in ten minutes", "every night"), it belongs to set_schedule, even when it also names a device and the state to put it in.
+
+Delivery to the device is asynchronous: success means the change was accepted and published, not that the device has already applied it.`,
 			InputSchema: mcpserver.InputSchema{
 				Type: "object",
 				Properties: map[string]interface{}{
@@ -140,7 +146,7 @@ Do not use this to read state (list_devices) or to make something happen later (
 					},
 					"params": map[string]interface{}{
 						"type":        "object",
-						"description": "Device name to parameter name to value: {\"Light\": {\"Power\": true, \"Brightness\": 80}}. Case-sensitive.",
+						"description": "Device name to parameter name to value: {\"Light\": {\"Power\": true, \"Brightness\": 80}}. Case-sensitive. Both names must be ones the device reported in list_devices; a parameter the device never reported does nothing.",
 					},
 				},
 				Required: []string{"node_id", "group_id", "params"},

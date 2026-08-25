@@ -15,8 +15,31 @@ only needs the token itself.
 """
 
 import json
+from pathlib import Path
 
 import requests
+
+# The committed tool catalogue, generated from the server's tool registry and pinned by a Go
+# snapshot test (`make update-mcp-schema`). Tests compare a live server against it rather than
+# against a hand-written list, so a rename has exactly one place to be updated and a stale
+# deployment shows up as a mismatch instead of a puzzling assertion on one tool name.
+CATALOG_PATH = Path(__file__).resolve().parent.parent / "docs" / "mcp" / "rainmaker-mcp.json"
+
+
+def catalog_tool_names():
+    """The tool names this build of the server is expected to expose."""
+    with CATALOG_PATH.open() as handle:
+        return {tool["name"] for tool in json.load(handle)["tools"]}
+
+
+def assert_matches_catalogue(tool_names):
+    """Assert a live server exposes exactly the catalogued tools."""
+    live, expected = set(tool_names), catalog_tool_names()
+    assert live == expected, (
+        f"the server's tools do not match {CATALOG_PATH.name}: "
+        f"missing {sorted(expected - live)}, unexpected {sorted(live - expected)}. "
+        "If the catalogue is the newer of the two, the deployment is stale — rebuild and deploy."
+    )
 
 
 class ToolResult:

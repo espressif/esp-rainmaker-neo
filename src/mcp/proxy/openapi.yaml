@@ -274,7 +274,7 @@ paths:
                   id: 3
                   method: tools/call
                   params:
-                    name: get_groups
+                    name: list_groups
                     arguments: {}
       responses:
         "200":

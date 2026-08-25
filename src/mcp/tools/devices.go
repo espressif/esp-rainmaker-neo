@@ -195,9 +195,20 @@ func deviceMatches(device DeviceInfo, filter DeviceFilter) bool {
 	return true
 }
 
-// matchesDeviceName looks at both names a device can carry: the node-level name in its config
-// and the per-device Name parameter, which is what the user actually sees in the app.
+// matchesDeviceName matches anything a user might call a device by: the per-device Name
+// parameter they see in the app, the node's own name from its config, the device key inside the
+// node, and the node id itself.
+//
+// The node id is in that list deliberately. A rmng node id is an arbitrary string with no
+// distinguishing shape, so a model handed "node_switch" cannot tell an id from a name and puts
+// it in whichever argument the tool text nudges it towards — which is name, since that is what
+// resolves what the user said. Excluding ids here does not teach it the difference; it just
+// turns a resolvable request into an empty result, which then gets reported to the user as
+// "that device does not exist". Matching them costs a substring compare.
 func matchesDeviceName(device DeviceInfo, wanted string) bool {
+	if containsFold(device.NodeID, wanted) {
+		return true
+	}
 	if containsFold(device.Name, wanted) {
 		return true
 	}

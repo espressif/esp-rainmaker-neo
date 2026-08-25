@@ -29,13 +29,11 @@ import pytest
 import requests
 
 from py_sdk.test_group import Group
-from py_sdk.test_mcp import Mcp
+from py_sdk.test_mcp import Mcp, assert_matches_catalogue
 from test.itest.conftest import MCP_API_URL, USER_API_GATEWAY_URL, pkce_pair, cognito_hosted_login
 from test.itest.mcp_oauth import get_mcp_access_token
 
 MCP_CLIENT_ID = "mcp-oauth-client"
-
-TOOL_NAMES = {"list_devices", "list_groups", "list_schedules", "set_params", "set_schedule"}
 
 _mcp_client_secret = None
 
@@ -208,7 +206,7 @@ def test_mcp_unsupported_http_method():
 def test_mcp_tools_list(test_user1, mcp_client):
     """tools/list advertises the whole surface, each tool described and schema'd."""
     tools = mcp_client(test_user1).list_tools()
-    assert set(tools) == TOOL_NAMES, f"unexpected tool surface: {sorted(tools)}"
+    assert_matches_catalogue(tools)
 
     for name, tool in tools.items():
         assert tool.get("description"), f"{name} has no description"
@@ -230,11 +228,27 @@ def test_mcp_tools_list_schemas(test_user1, mcp_client):
     assert not tools["list_groups"]["inputSchema"].get("required")
 
 
+def test_mcp_tool_descriptions_carry_their_guidance(test_user1, mcp_client):
+    """The clauses below exist because models got these cases wrong: inventing parameters for
+    unsupported actions, sending scheduled requests to set_params, and calling a tool for things
+    this server cannot do at all. They are behaviour, so they are asserted like behaviour."""
+    tools = mcp_client(test_user1).list_tools()
+
+    set_params = tools["set_params"]["description"]
+    assert "list_devices" in set_params
+    assert "set_schedule" in set_params, "a timed request must be pointed at set_schedule"
+
+    for tool_name in ("list_devices", "list_groups"):
+        description = tools[tool_name]["description"]
+        assert "not available" in description, \
+            f"{tool_name} must say what this server cannot do, so the model refuses instead of guessing"
+
+
 @pytest.mark.xdist_group("env_mut")
 def test_mcp_tools_list_with_access_token(test_user1, enable_test_cimd):
     """tools/list works with a Cognito access_token (AdminGetUser fallback)."""
     client = Mcp(MCP_API_URL, get_mcp_access_token(test_user1))
-    assert set(client.list_tools()) == TOOL_NAMES
+    assert_matches_catalogue(client.list_tools())
 
 
 @pytest.mark.xdist_group("env_mut")
@@ -274,6 +288,21 @@ def test_mcp_list_groups(test_user1, mcp_client):
     finally:
         group_api.delete_group(group_id_1)
         group_api.delete_group(group_id_2)
+
+
+def test_mcp_list_groups_always_reports_subgroups(test_user1, mcp_client):
+    """A home with no rooms still carries subgroups: [] — an absent key reads as "rooms
+    unknown" and sends the agent back for another look."""
+    group_api = Group(test_user1)
+    group_id = group_api.create_group("MCP Roomless Home")
+
+    try:
+        groups = mcp_client(test_user1).list_groups(group_id=group_id).json()["groups"]
+        assert len(groups) == 1
+        assert "subgroups" in groups[0], "a home with no rooms must still say so"
+        assert groups[0]["subgroups"] == []
+    finally:
+        group_api.delete_group(group_id)
 
 
 def test_mcp_list_groups_filters_by_name(test_user1, mcp_client):
@@ -369,6 +398,20 @@ def test_mcp_list_devices_by_name(associated_device, mcp_client):
     missing = client.list_devices(group_id=group_id, name="no-such-device-anywhere").json()
     assert missing["devices"] == [], "an unmatched filter is an empty list, not an error"
     assert missing["count"] == 0
+
+
+def test_mcp_list_devices_by_node_id_passed_as_name(associated_device, mcp_client):
+    """A node id passed as name resolves to the device.
+
+    Node ids carry no distinguishing shape, so a model handed one cannot tell it from a name and
+    puts it in name — the argument the tool text points at for "whatever the user called it".
+    When that came back empty the model reported the device as non-existent, so the filter has to
+    match ids too."""
+    device, group_id, test_user1, _ = associated_device
+    node_id = device.node_thing_name
+
+    found = mcp_client(test_user1).list_devices(name=node_id).json()["devices"]
+    assert [d["node_id"] for d in found] == [node_id]
 
 
 def test_mcp_list_devices_fields(associated_device, mcp_client):

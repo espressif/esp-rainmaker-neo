@@ -17,13 +17,16 @@ import (
 // GroupInfo is one group (a home) in a list_groups response. It carries structure only —
 // never parameters or connectivity, which belong to the device and are served by ListDevices.
 type GroupInfo struct {
-	GroupID     string                 `json:"group_id"`
-	GroupName   string                 `json:"group_name"`
-	AccessType  string                 `json:"access_type,omitempty"`
-	DeviceCount int                    `json:"device_count"`
-	NodeIDs     []string               `json:"node_ids,omitempty"`
-	Subgroups   []SubGroupInfo         `json:"subgroups,omitempty"`
-	Matter      map[string]interface{} `json:"matter,omitempty"`
+	GroupID     string   `json:"group_id"`
+	GroupName   string   `json:"group_name"`
+	AccessType  string   `json:"access_type,omitempty"`
+	DeviceCount int      `json:"device_count"`
+	NodeIDs     []string `json:"node_ids,omitempty"`
+	// Subgroups is always serialised, empty included: an absent key reads as "rooms unknown"
+	// and sends agents back for another look, whereas [] plainly says this home has no rooms.
+	// node_ids stays omitempty by contrast — it is opt-in behind include_devices.
+	Subgroups []SubGroupInfo         `json:"subgroups"`
+	Matter    map[string]interface{} `json:"matter,omitempty"`
 }
 
 // SubGroupInfo is one subgroup (a room) within a group.

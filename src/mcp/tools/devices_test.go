@@ -39,7 +39,21 @@ var _ = Describe("Device name matching", func() {
 		Entry("the node's own name from config", "hall", true),
 		Entry("the device key inside the node", "light", true),
 		Entry("something the device is not called", "kettle", false),
+		// A model cannot tell a rmng node id from a name by looking at it, so it puts whatever
+		// the user typed in name. These are the exact shapes the eval saw fail.
+		Entry("the node id in full", "node-1", true),
+		Entry("part of the node id", "node-", true),
+		Entry("the node id ignoring case", "NODE-1", true),
 	)
+
+	It("still matches by node id when the device has reported nothing at all", func() {
+		// The worst case: a node that has never reported has no Name parameter and no config, so
+		// its id is the only thing left to match. Missing it here is what told a user their
+		// device does not exist.
+		bare := DeviceInfo{NodeID: "node-silent", GroupID: "group-1"}
+		Expect(matchesDeviceName(bare, "node-silent")).To(BeTrue())
+		Expect(matchesDeviceName(bare, "something-else")).To(BeFalse())
+	})
 
 	It("does not match a device that has reported no params", func() {
 		device := lightDevice()
