@@ -17,6 +17,7 @@ from awsiot import mqtt
 from awsiot import iotshadow
 from scripts.rmng_outputs import DEFAULT_ESP_USER_CLIENT_ID, RmngSettings
 from py_sdk.test_util import shadow_to_unstructured
+from py_sdk import test_smartthings as smartthings
 import random
 import string
 import queue
@@ -1898,6 +1899,46 @@ class User:
         """DELETE /v1/admin/integrations/smartthings/configuration."""
         response = self.make_api_request('DELETE', '/v1/admin/integrations/smartthings/configuration')
         return response
+
+    def st_set_lambda_arn(self, lambda_arn):
+        """Set the default Schema App Lambda ARN for the st_* request helpers."""
+        self.st_lambda_arn = lambda_arn
+
+    def _st_invoke(self, request_body, lambda_arn=None, region=None):
+        """Invoke the Schema App Lambda with this user's ARN and region defaults."""
+        arn = lambda_arn if lambda_arn is not None else getattr(self, 'st_lambda_arn', None)
+        if not arn:
+            raise Exception("SmartThings Schema App Lambda ARN is not set. Call st_set_lambda_arn() or pass lambda_arn.")
+        return smartthings.invoke_schema_app(
+            request_body, arn, region if region is not None else self.region)
+
+    def st_discover_devices(self, lambda_arn=None, region=None):
+        """Send a discoveryRequest with this user's access token."""
+        request_body = smartthings.discovery_request(self.access_token)
+        return self._st_invoke(request_body, lambda_arn=lambda_arn, region=region)
+
+    def st_control_devices(self, devices, lambda_arn=None, region=None):
+        """Send a commandRequest for several devices.
+
+        devices: list of entries from smartthings.command_device().
+        """
+        request_body = smartthings.command_request(self.access_token, devices)
+        return self._st_invoke(request_body, lambda_arn=lambda_arn, region=region)
+
+    def st_control_device(self, external_device_id, commands, device_cookie=None, lambda_arn=None, region=None):
+        """Send a commandRequest for a single device.
+
+        commands: list of {"component", "capability", "command", "arguments"}
+        device_cookie: the cookie discovery returned for this device, which SmartThings
+            echoes back on every command. Omit it to exercise the node-config fallback.
+        """
+        device = smartthings.command_device(external_device_id, commands, device_cookie)
+        return self.st_control_devices([device], lambda_arn=lambda_arn, region=region)
+
+    def st_state_refresh(self, external_device_ids, lambda_arn=None, region=None):
+        """Send a stateRefreshRequest for the given device ids."""
+        request_body = smartthings.state_refresh_request(self.access_token, external_device_ids)
+        return self._st_invoke(request_body, lambda_arn=lambda_arn, region=region)
 
     def get_node_trigger(self, group_id, node_id):
         """Get trigger data for a node."""
