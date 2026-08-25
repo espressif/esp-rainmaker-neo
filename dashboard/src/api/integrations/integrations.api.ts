@@ -9,6 +9,8 @@ import { sigv4Request } from '@/api/sigv4-client'
 import type {
   AlexaConfigGetResponse, AlexaConfigRequest, AlexaConfigResponse,
   GvaConfigGetResponse, GvaConfigRequest, GvaConfigResponse, GvaConfigDeleteResponse,
+  SmartThingsConfigGetResponse, SmartThingsConfigRequest, SmartThingsConfigResponse,
+  SmartThingsConfigDeleteResponse,
   PushIntegrationType, PushIntegrationRequest, ListIntegrationsResponse,
   RegisterIntegrationResponse, IntegrationStatusResponse,
 } from './integrations.types'
@@ -16,6 +18,7 @@ import type {
 const ENDPOINTS = {
   alexaConfig: '/v1/admin/integrations/alexa/configuration',
   gvaConfig: '/v1/admin/integrations/gva/configuration',
+  smartthingsConfig: '/v1/admin/integrations/smartthings/configuration',
 } as const
 
 /**
@@ -71,6 +74,36 @@ export const integrationsApi = {
 
     const url = `${baseUrl.replace(/\/$/, '')}${ENDPOINTS.gvaConfig}`
     return sigv4Request<GvaConfigDeleteResponse>({ method: 'DELETE', url })
+  },
+
+  getSmartThingsConfig: async (): Promise<SmartThingsConfigGetResponse> => {
+    const baseUrl = getApiGatewayUrl()
+    if (!baseUrl) {
+      throw new Error('API Gateway URL is not configured')
+    }
+
+    const url = `${baseUrl.replace(/\/$/, '')}${ENDPOINTS.smartthingsConfig}`
+    return sigv4Request<SmartThingsConfigGetResponse>({ method: 'GET', url })
+  },
+
+  configureSmartThings: async (data: SmartThingsConfigRequest): Promise<SmartThingsConfigResponse> => {
+    const baseUrl = getApiGatewayUrl()
+    if (!baseUrl) {
+      throw new Error('API Gateway URL is not configured')
+    }
+
+    const url = `${baseUrl.replace(/\/$/, '')}${ENDPOINTS.smartthingsConfig}`
+    return sigv4Request<SmartThingsConfigResponse>({ method: 'POST', url, body: data })
+  },
+
+  deleteSmartThingsConfig: async (): Promise<SmartThingsConfigDeleteResponse> => {
+    const baseUrl = getApiGatewayUrl()
+    if (!baseUrl) {
+      throw new Error('API Gateway URL is not configured')
+    }
+
+    const url = `${baseUrl.replace(/\/$/, '')}${ENDPOINTS.smartthingsConfig}`
+    return sigv4Request<SmartThingsConfigDeleteResponse>({ method: 'DELETE', url })
   },
 } as const
 

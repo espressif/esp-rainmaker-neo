@@ -19,6 +19,7 @@ import {
   MatterIcon,
   OauthIcon,
   SecurityIcon,
+  SmartThingsIcon,
   WechatIcon,
 } from "./icons"
 
@@ -45,6 +46,7 @@ export const customIconRegistry = {
   matter: { component: MatterIcon },
   oauth: { component: OauthIcon },
   security: { component: SecurityIcon },
+  smartthings: { component: SmartThingsIcon },
   wechat: { component: WechatIcon },
 } as const
 

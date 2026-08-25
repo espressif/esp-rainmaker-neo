@@ -129,5 +129,36 @@
         "urlInvalid": "请输入有效的 URL。"
       }
     }
+  },
+  "smartthings": {
+    "heading": "SmartThings 配置",
+    "secondaryText": "由 SmartThings 开发者工作区颁发的 Schema App 凭据",
+    "notConfiguredTitle": "尚未配置 SmartThings",
+    "notConfiguredDescription": "尚未找到 SmartThings 配置。",
+    "configureButton": "配置",
+    "fetchError": "加载 SmartThings 配置失败",
+    "clientId": "客户端 ID",
+    "clientIdPlaceholder": "来自 SmartThings 开发者工作区的客户端 ID",
+    "clientSecret": "客户端密钥",
+    "clientSecretPlaceholder": "与客户端 ID 一同颁发的客户端密钥",
+    "form": {
+      "editTitle": "编辑 SmartThings 配置",
+      "configureTitle": "配置 SmartThings",
+      "updateButton": "更新",
+      "submitSuccess": "SmartThings 配置保存成功。",
+      "submitError": "保存 SmartThings 配置失败。",
+      "delete": {
+        "title": "删除 SmartThings 配置？",
+        "description": "此操作将永久删除 SmartThings Schema App 凭据。在重新配置之前，已关联的账号将无法使用。",
+        "success": "SmartThings 配置删除成功。",
+        "error": "删除 SmartThings 配置失败。"
+      },
+      "errors": {
+        "clientIdRequired": "客户端 ID 为必填项。",
+        "clientIdTooLong": "客户端 ID 不得超过 256 个字符。",
+        "clientSecretRequired": "客户端密钥为必填项。",
+        "clientSecretTooLong": "客户端密钥不得超过 1024 个字符。"
+      }
+    }
   }
 }

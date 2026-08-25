@@ -13,16 +13,21 @@ import {
 import { useTranslation } from "react-i18next";
 import { VoiceAssistantsPageHeading } from "./_components/voice-assistants-page-heading";
 import { ConfigurationValues } from "./_components/configuration-values";
-import { isAlexaEnabled, isGvaEnabled } from "@/lib/config";
+import { isAlexaEnabled, isGvaEnabled, isSmartThingsEnabled } from "@/lib/config";
 import type { VoiceAssistantTab } from "./_components/voice-assistants-page-tabs";
 
 const TAB_PATHS: Record<VoiceAssistantTab, string> = {
   alexa: "/home/settings/voice-assistants/alexa",
   gva: "/home/settings/voice-assistants/gva",
+  smartthings: "/home/settings/voice-assistants/smartthings",
 };
 
+/** Resolve the tab from the URL, falling back to Alexa for the bare parent path. */
 function getActiveTab(pathname: string): VoiceAssistantTab {
-  return pathname.includes("/voice-assistants/gva") ? "gva" : "alexa";
+  const match = (Object.keys(TAB_PATHS) as VoiceAssistantTab[]).find((tab) =>
+    pathname.includes(`/voice-assistants/${tab}`),
+  );
+  return match ?? "alexa";
 }
 
 /** Each assistant's route stays reachable by URL after its tab is hidden, so a
@@ -32,7 +37,11 @@ function getActiveTab(pathname: string): VoiceAssistantTab {
 function useRedirectFromDisabledTab(activeTab: VoiceAssistantTab) {
   const navigate = useNavigate();
   const enabled: Record<VoiceAssistantTab, boolean> = useMemo(
-    () => ({ alexa: isAlexaEnabled(), gva: isGvaEnabled() }),
+    () => ({
+      alexa: isAlexaEnabled(),
+      gva: isGvaEnabled(),
+      smartthings: isSmartThingsEnabled(),
+    }),
     [],
   );
   const fallback = (Object.keys(enabled) as VoiceAssistantTab[]).find(

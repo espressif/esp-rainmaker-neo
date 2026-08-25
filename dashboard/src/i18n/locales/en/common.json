@@ -104,7 +104,8 @@
     "alexa": "Alexa",
     "gva": "GVA",
     "pushNotifications": "Push notifications",
-    "postDeployment": "Post-Deployment"
+    "postDeployment": "Post-Deployment",
+    "smartthings": "SmartThings"
   },
   "deploymentQr": {
     "showButton": "Show deployment QR code",

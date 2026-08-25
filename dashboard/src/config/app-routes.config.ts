@@ -306,6 +306,13 @@ export const routesConfig: RouteConfig[] = [
                   fallback: "GVA",
                 },
               },
+              {
+                path: "/smartthings",
+                breadcrumb: {
+                  i18nKey: "common:sidebar.smartthings",
+                  fallback: "SmartThings",
+                },
+              },
             ],
           },
           {
