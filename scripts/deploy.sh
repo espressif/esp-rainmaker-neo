@@ -87,7 +87,7 @@ if [ "$command" == "--setup" ]; then
             bootstrap_env "sthing" "$ST_REGION"
         done
     else
-        bootstrap_env "$STACK_GROUP" "$REGION"
+        bootstrap_env "$STACK_GROUP" "$AWS_REGION"
     fi
     exit 0
 elif [ "$command" == "--diff" ]; then
