@@ -22,7 +22,7 @@ import time
 import pytest
 
 from py_sdk.test_group import Group
-from py_sdk.test_smartthings import st_external_device_id
+from py_sdk.test_smartthings import cookie_for, st_external_device_id
 from test.itest.conftest import REGION, accept_sharing_request_for, rmng_outputs
 
 
@@ -407,7 +407,9 @@ def test_smartthings_command_allowed_for_shared_user(user_with_1_dev_each_in_2_g
         device1.clear_queues()
 
         commands = [{"component": "main", "capability": "st.switch", "command": "on", "arguments": []}]
-        response = test_user2.st_control_device(light1_id, commands, lambda_arn=arn, region=region)
+        response = test_user2.st_control_device(light1_id, commands,
+                                               device_cookie=cookie_for(discovery, light1_id),
+                                               lambda_arn=arn, region=region)
         print(f"shared-user commandRequest response ({region}) is ", response)
 
         message = device1.wait_for_params_message(timeout=5)
@@ -488,7 +490,8 @@ def _run_capability_command(capability_device, device_name, commands, expected_p
     region, arn, device, _group_id, user, _discovery = capability_device
 
     eid = st_external_device_id(device.node_thing_name, device_name)
-    response = user.st_control_device(eid, commands, lambda_arn=arn, region=region)
+    response = user.st_control_device(eid, commands, device_cookie=cookie_for(_discovery, eid),
+                                      lambda_arn=arn, region=region)
     print(f"capability commandRequest ({region}, {device_name}) is ", response)
 
     message = device.wait_for_params_message(timeout=5)
@@ -582,7 +585,7 @@ def test_smartthings_command_offline_device(user_with_1_dev_each_in_2_groups, st
     assert device1.shadow_connect([shadow_name]), "Failed to connect to shadow"
 
     # Discovery while still online, so the node is known and ST-enabled.
-    test_user1.st_discover_devices(lambda_arn=arn, region=region)
+    discovery = test_user1.st_discover_devices(lambda_arn=arn, region=region)
     light1_id = st_external_device_id(device1.node_thing_name, "Light1")
 
     # Now take it offline and wait for the presence handler to write reported.online=false.
@@ -603,7 +606,9 @@ def test_smartthings_command_offline_device(user_with_1_dev_each_in_2_groups, st
     )
 
     commands = [{"component": "main", "capability": "st.switch", "command": "on", "arguments": []}]
-    response = test_user1.st_control_device(light1_id, commands, lambda_arn=arn, region=region)
+    response = test_user1.st_control_device(light1_id, commands,
+                                            device_cookie=cookie_for(discovery, light1_id),
+                                            lambda_arn=arn, region=region)
     print(f"offline commandRequest response ({region}) is ", response)
 
     device_states = response.get("deviceState") or []
@@ -627,7 +632,7 @@ def test_smartthings_command_multiple_devices_are_independent(user_with_1_dev_ea
     assert device1.subscribe(topic=params_topic), "Failed to subscribe to params topic"
 
     device1.update_named_shadow(shadow_name, {"online": True, "Light1": {"Power": False, "Brightness": 0}})
-    test_user1.st_discover_devices(lambda_arn=arn, region=region)
+    discovery = test_user1.st_discover_devices(lambda_arn=arn, region=region)
     time.sleep(2)
     device1.clear_queues()
 
@@ -637,7 +642,8 @@ def test_smartthings_command_multiple_devices_are_independent(user_with_1_dev_ea
 
     response = test_user1.st_control_devices([
         {"externalDeviceId": unknown_id, "commands": switch_on},
-        {"externalDeviceId": good_id, "commands": switch_on},
+        {"externalDeviceId": good_id, "commands": switch_on,
+         "deviceCookie": cookie_for(discovery, good_id)},
     ], lambda_arn=arn, region=region)
     print(f"multi-device commandRequest response ({region}) is ", response)
 
@@ -666,7 +672,7 @@ def test_smartthings_command_multiple_commands_one_device(user_with_1_dev_each_i
     assert device1.subscribe(topic=params_topic), "Failed to subscribe to params topic"
 
     device1.update_named_shadow(shadow_name, {"online": True, "Light1": {"Power": False, "Brightness": 0}})
-    test_user1.st_discover_devices(lambda_arn=arn, region=region)
+    discovery = test_user1.st_discover_devices(lambda_arn=arn, region=region)
     time.sleep(2)
     device1.clear_queues()
 
@@ -674,7 +680,7 @@ def test_smartthings_command_multiple_commands_one_device(user_with_1_dev_each_i
     response = test_user1.st_control_device(light1_id, [
         {"component": "main", "capability": "st.switch", "command": "on", "arguments": []},
         {"component": "main", "capability": "st.switchLevel", "command": "setLevel", "arguments": [50]},
-    ], lambda_arn=arn, region=region)
+    ], device_cookie=cookie_for(discovery, light1_id), lambda_arn=arn, region=region)
     print(f"multi-command commandRequest response ({region}) is ", response)
 
     # Each command publishes separately, so collect both messages.

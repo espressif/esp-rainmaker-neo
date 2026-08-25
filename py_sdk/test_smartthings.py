@@ -67,12 +67,25 @@ def command_device(external_device_id, commands, device_cookie=None):
 
     commands: list of {"component", "capability", "command", "arguments"}
     device_cookie: the cookie discovery returned for this device, which SmartThings echoes
-        back on every command. Omit it to exercise the node-config fallback.
+        back on every command. The connector resolves the params to publish from it, so a
+        command sent without one fails with DEVICE-ERROR.
     """
     device = {'externalDeviceId': external_device_id, 'commands': commands}
     if device_cookie is not None:
         device['deviceCookie'] = device_cookie
     return device
+
+
+def cookie_for(discovery, external_device_id):
+    """Return the deviceCookie discovery issued for a device.
+
+    SmartThings stores it and sends it back with every commandRequest, so a test that
+    commands a device has to replay it the same way.
+    """
+    for device in discovery.get('devices') or []:
+        if device['externalDeviceId'] == external_device_id:
+            return device.get('deviceCookie')
+    raise AssertionError(f'{external_device_id} missing from discovery: {discovery}')
 
 
 def invoke_schema_app(request_body, lambda_arn, region):
