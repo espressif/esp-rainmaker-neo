@@ -190,6 +190,9 @@ class RMNGCoreStack(Stack):
             user_jwks_parameter=USER_SSM_PARAMETERS['ESP_USER_JWKS'],
             mcp_oidc_client_id=common_resources.esp_mcp_client_id,
             mcp_oidc_client_secret=common_resources.esp_mcp_client_secret,
+            # list_devices fans out two reads per device, so the default 10s is not enough for a
+            # large home; the fan-out itself is bounded in the tool, not by this timeout.
+            mcp_timeout=Duration.seconds(30),
             mcp_binary_path=os.path.join(os.path.dirname(__file__), "..", "..", "..", "build", "mcp_server"),
             oauth_proxy_binary_path=os.path.join(os.path.dirname(__file__), "..", "..", "..", "build", "mcp_oauth_proxy"),
             mcp_extra_policies=[
@@ -202,6 +205,12 @@ class RMNGCoreStack(Stack):
                         get_index_arn('USER_GROUP_MAPPING_GROUP_ID', region),
                         get_index_arn('GROUP_DEVICE_MAPPING_NODE_ID', region),
                     ]
+                ),
+                # Node config and schedules live on the nodes table. UpdateItem is needed only by
+                # set_schedule, which rewrites the whole schedule set and bumps its version.
+                iam.PolicyStatement(
+                    actions=["dynamodb:GetItem", "dynamodb:Query", "dynamodb:UpdateItem"],
+                    resources=[get_table_arn(TABLE_NAMES['NODE_DETAILS'], region)],
                 ),
                 iam.PolicyStatement(
                     actions=["iot:GetThingShadow", "iot:UpdateThingShadow", "iot:Publish"],

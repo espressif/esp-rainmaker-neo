@@ -1,0 +1,167 @@
+{
+  "name": "rainmaker-mcp",
+  "version": "1.0.0",
+  "tools": [
+    {
+      "name": "list_devices",
+      "description": "Find ESP RainMaker devices and read their current state. Every device belongs to exactly one group (the user's home) and may sit in subgroups within it (rooms); this tool returns that placement together with the device's live parameters, so one call answers both \"which devices are in the kitchen\" and \"is the kitchen light on\".\n\nCall this first whenever the user names a device, a type of device, or a room instead of giving ids. It is the only tool that turns names into ids, and every row carries both the node_id and the group_id that the other tools require — so one call is always enough. Never follow it with a second lookup to find the group.\n\nDo not call it before set_params or set_schedule when the user has already given you a node_id and group_id, and do not call it to inspect schedules — list_schedules does that.\n\nFilters combine: group_id or subgroup_id to narrow to a home or room, name or type for a kind of device. Reading state fetches each device's shadow, so when you do not need the whole payload pass fields — for example \"node_id,group_id,connected\" or \"params.Light.Power\".\n\nIn replies to the user prefer the human names in params.\u003cDevice\u003e.Name; use ids only in tool calls.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "fields": {
+            "description": "Comma-separated fields to return instead of the whole record. Top level: node_id, group_id, group_name, subgroup_ids, subgroup_names, name, type, model, fw_version, connected, params, config. Dot paths reach inside: params.Light.Power.",
+            "type": "string"
+          },
+          "group_id": {
+            "description": "Restrict to one group (home). Get it from this tool or from list_groups.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Match a device name, partially and ignoring case. Matches both the node's own name and the Name parameter of the devices inside it.",
+            "type": "string"
+          },
+          "node_id": {
+            "description": "One node id, or several comma-separated. Omit to search every device the user can reach.",
+            "type": "string"
+          },
+          "subgroup_id": {
+            "description": "Restrict to one subgroup (room) within the group. Get it from list_groups.",
+            "type": "string"
+          },
+          "type": {
+            "description": "Match a device type, partially and ignoring case. Accepts a bare word (light, switch, sensor) or a full type such as esp.device.lightbulb.",
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "list_groups",
+      "description": "List the groups and subgroups that organise the user's devices — their homes and the rooms inside them — with the number of devices in each. Use it for questions about structure (\"what rooms do I have?\", \"which homes can I see?\") and to turn a group name into a group_id.\n\nThis tool describes placement only. It never returns parameters, connectivity or device configuration, and the node ids it can list carry no names or types. For anything about the devices themselves — including which devices are in a given room — call list_devices with a group_id or subgroup_id filter instead.\n\nSet include_devices when you need the node ids in each group and subgroup but not their state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "group_id": {
+            "description": "Return only this group. Omit both group_id and group_name to list them all.",
+            "type": "string"
+          },
+          "group_name": {
+            "description": "Return only the group with this name, ignoring case. Do not pass it together with group_id.",
+            "type": "string"
+          },
+          "include_devices": {
+            "description": "Add the node ids belonging to each group and subgroup. Defaults to false, which returns counts only.",
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "name": "list_schedules",
+      "description": "List the schedules stored on one device: each schedule's id, name, enabled flag, triggers and the parameters it applies. ESP RainMaker keeps schedules per device, so ask about one node at a time.\n\nCall this to turn a schedule the user described rather than named — \"the morning alarm\", \"the one that shuts the porch light off\" — into the schedule_id that set_schedule needs. Do not use list_devices for that; schedules are not part of a device's parameters.\n\nTriggers come back in the device's own form: m is minutes past midnight and d is a weekday bitmask with Monday as the lowest bit. Translate them when you answer the user — m 420 with d 62 means 07:00 on weekdays.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "group_id": {
+            "description": "The group the device belongs to. list_devices returns it alongside the node_id.",
+            "type": "string"
+          },
+          "node_id": {
+            "description": "The device whose schedules to list.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "node_id",
+          "group_id"
+        ]
+      }
+    },
+    {
+      "name": "set_params",
+      "description": "Change what a device is doing right now — switch it on or off, set brightness or temperature, trigger a reboot or a factory reset. This is a direct action tool: call it as soon as the user asks for a change and you hold the ids.\n\nIf the user gave you node_id and group_id, act on them immediately. Only call list_devices first when the device is identified by name, type or room and you do not have the ids yet. To act on several devices in one go, pass their ids comma-separated in node_id; they must all belong to the group in group_id, and the same params are applied to every one of them, so only batch devices that share the same device names.\n\nparams is keyed by the device name inside the node and then by parameter: {\"Light\": {\"Power\": true, \"Brightness\": 80}}. The names are case-sensitive and must match what list_devices returned. Send real booleans for on/off parameters, not \"true\" or \"on\".\n\nDo not use this to read state (list_devices) or to make something happen later (set_schedule). Delivery to the device is asynchronous: success means the change was accepted and published, not that the device has already applied it.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "group_id": {
+            "description": "The group every listed device belongs to. list_devices returns it alongside the node_id.",
+            "type": "string"
+          },
+          "node_id": {
+            "description": "One node id, or several comma-separated to apply the same change to each.",
+            "type": "string"
+          },
+          "params": {
+            "description": "Device name to parameter name to value: {\"Light\": {\"Power\": true, \"Brightness\": 80}}. Case-sensitive.",
+            "type": "object"
+          }
+        },
+        "required": [
+          "node_id",
+          "group_id",
+          "params"
+        ]
+      }
+    },
+    {
+      "name": "set_schedule",
+      "description": "Create, change, remove, enable or disable a schedule on one device. This is a direct action tool: call it as soon as the user asks for something to happen at a time or on a repeating basis, including loosely specified requests like \"wake me up with the lights\" or \"turn the heater off overnight\" — choose sensible values rather than asking the user for the wire format.\n\noperation is one of add, edit, remove, enable, disable. add needs name, triggers and action; every other operation needs schedule_id. When the user refers to a schedule by description instead of by id, call list_schedules to resolve it — never list_devices.\n\nWrite triggers in human terms and this tool converts them: {\"time\": \"07:00\", \"days\": \"weekdays\"} or {\"time\": \"20:30\", \"days\": [\"sat\",\"sun\"]}. days also accepts \"daily\" and \"weekends\". action takes the same shape as the params argument of set_params: {\"Light\": {\"Power\": true}}.\n\nedit merges into the stored schedule, so send only the fields that change. The device is given its complete schedule set on every write, so avoid issuing concurrent edits to the same node.\n\nDo not use this for an immediate change (set_params) or to read schedules back (list_schedules).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "description": "What it does, in the same shape as the params argument of set_params: {\"Light\": {\"Power\": true}}. Required when adding.",
+            "type": "object"
+          },
+          "enabled": {
+            "description": "Whether the schedule is active. New schedules are enabled unless you set this to false.",
+            "type": "boolean"
+          },
+          "group_id": {
+            "description": "The group the device belongs to. list_devices returns it alongside the node_id.",
+            "type": "string"
+          },
+          "info": {
+            "description": "Free-text note stored with the schedule.",
+            "type": "string"
+          },
+          "name": {
+            "description": "What to call the schedule, up to 32 characters. Required when adding.",
+            "type": "string"
+          },
+          "node_id": {
+            "description": "The device to schedule. One device per call.",
+            "type": "string"
+          },
+          "operation": {
+            "description": "add needs name, triggers and action. edit, remove, enable and disable need schedule_id.",
+            "enum": [
+              "add",
+              "edit",
+              "remove",
+              "enable",
+              "disable"
+            ],
+            "type": "string"
+          },
+          "schedule_id": {
+            "description": "The schedule to act on, from list_schedules. Required for every operation except add, where supplying one pins the new schedule's id instead of generating it.",
+            "type": "string"
+          },
+          "triggers": {
+            "description": "When it fires: [{\"time\": \"07:00\", \"days\": \"weekdays\"}]. days takes daily, weekdays, weekends, or a list like [\"mon\",\"tue\"]. Required when adding.",
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "node_id",
+          "group_id",
+          "operation"
+        ]
+      }
+    }
+  ]
+}

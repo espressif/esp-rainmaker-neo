@@ -72,11 +72,38 @@ type ToolCallParams struct {
 
 type ToolCallResult struct {
 	Content []ToolContent `json:"content"`
+	// IsError marks a tool *execution* failure. Per the MCP spec these come back as a
+	// successful JSON-RPC result so the model can read the message and retry; JSON-RPC
+	// errors stay reserved for protocol-level failures.
+	IsError bool `json:"isError,omitempty"`
 }
 
 type ToolContent struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
+}
+
+// ToolTextResponse marshals data into the single text content block an MCP tool returns.
+// A marshalling failure degrades to a tool error rather than a protocol error, since the
+// caller is a model that can act on the message.
+func ToolTextResponse(id json.RawMessage, data interface{}) events.APIGatewayV2HTTPResponse {
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return ToolErrorResponse(id, "failed to encode tool response: "+err.Error())
+	}
+	return JSONRPCSuccessResponse(id, ToolCallResult{
+		Content: []ToolContent{{Type: "text", Text: string(jsonData)}},
+	})
+}
+
+// ToolErrorResponse reports a tool execution failure to the model. The message is shown to
+// the model verbatim, so it must say what went wrong and what to do instead — never leak
+// internal error detail here; log that separately.
+func ToolErrorResponse(id json.RawMessage, message string) events.APIGatewayV2HTTPResponse {
+	return JSONRPCSuccessResponse(id, ToolCallResult{
+		Content: []ToolContent{{Type: "text", Text: message}},
+		IsError: true,
+	})
 }
 
 // ResourceMetadataURL constructs the OAuth Protected Resource Metadata URL

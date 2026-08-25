@@ -43,6 +43,17 @@ func (s *Server) RegisterTool(tool Tool, handler ToolHandler) {
 	s.tools = append(s.tools, registeredTool{tool: tool, handler: handler})
 }
 
+// Tools returns the registered tool catalog. Exported so offline consumers — the eval
+// framework's schema snapshot, docs generators — can read what the server actually serves
+// without standing up a Lambda.
+func (s *Server) Tools() []Tool {
+	tools := make([]Tool, len(s.tools))
+	for i, rt := range s.tools {
+		tools[i] = rt.tool
+	}
+	return tools
+}
+
 // HandleRequest is the Lambda handler entry point for the MCP server.
 func (s *Server) HandleRequest(ctx context.Context, request events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
 	switch request.RequestContext.HTTP.Method {
@@ -141,11 +152,7 @@ func (s *Server) handleInitialize(id json.RawMessage) events.APIGatewayV2HTTPRes
 }
 
 func (s *Server) handleToolsList(id json.RawMessage) events.APIGatewayV2HTTPResponse {
-	tools := make([]Tool, len(s.tools))
-	for i, rt := range s.tools {
-		tools[i] = rt.tool
-	}
-	return JSONRPCSuccessResponse(id, map[string]interface{}{"tools": tools})
+	return JSONRPCSuccessResponse(id, map[string]interface{}{"tools": s.Tools()})
 }
 
 func (s *Server) handleToolsCall(user UserContext, id json.RawMessage, params json.RawMessage) (events.APIGatewayV2HTTPResponse, error) {

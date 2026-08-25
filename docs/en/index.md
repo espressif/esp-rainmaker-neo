@@ -79,6 +79,14 @@ specs/smartthings
 
 ```{toctree}
 :hidden:
+:caption: AI assistants
+:maxdepth: 1
+
+specs/mcp
+```
+
+```{toctree}
+:hidden:
 :caption: Platform
 :maxdepth: 1
 

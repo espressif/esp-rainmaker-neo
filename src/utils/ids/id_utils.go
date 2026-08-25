@@ -74,6 +74,19 @@ func GenerateGroupID() string {
 	return string(b)
 }
 
+const scheduleIDLength = 4
+
+// GenerateScheduleID mints a schedule ID. Kept short because it travels to the device on
+// every schedule push and firmware bounds the field; drawn from the same lowercase
+// alphanumeric charset as group IDs so it is unambiguous when a user reads it aloud.
+var GenerateScheduleID = func() string {
+	b := make([]byte, scheduleIDLength)
+	for i := range b {
+		b[i] = cryptoRandChar(groupIDCharset)
+	}
+	return string(b)
+}
+
 // GenerateSubGroupID generates a random subgroup ID of 3 characters.
 // The ID consists of lowercase letters and digits.
 func GenerateSubGroupID() string {

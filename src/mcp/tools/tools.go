@@ -6,71 +6,72 @@ package mcp
 
 import (
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
+	"strings"
 
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )
 
-// GroupInfo represents a user's group with its nodes and subgroups.
-type GroupInfo struct {
-	GroupID   string                 `json:"group_id"`
-	GroupName string                 `json:"group_name"`
-	NodeIDs   []string               `json:"node_ids,omitempty"`
-	Subgroups []SubGroupInfo         `json:"subgroups,omitempty"`
-	Matter    map[string]interface{} `json:"matter,omitempty"`
+// NodePlacement is where a node sits in the user's hierarchy: exactly one group (the home)
+// and any subgroups within it (the rooms).
+type NodePlacement struct {
+	GroupID       string   `json:"group_id"`
+	GroupName     string   `json:"group_name"`
+	SubgroupIDs   []string `json:"subgroup_ids,omitempty"`
+	SubgroupNames []string `json:"subgroup_names,omitempty"`
 }
 
-// SubGroupInfo represents a subgroup within a group.
-type SubGroupInfo struct {
-	SubgroupID   string   `json:"subgroup_id"`
-	SubgroupName string   `json:"subgroup_name"`
-	NodeIDs      []string `json:"node_ids,omitempty"`
-}
+// nodeIndex maps every node the caller can reach to its placement. Building it walks the
+// user's groups with nodes loaded, which is also what grants node permissions on the
+// context — so a node absent from the index is one the caller has no access to, and every
+// node present is already authorized for the reads that follow.
+type nodeIndex map[string]NodePlacement
 
-// GetGroups lists all groups for the authenticated user, including nodes,
-// subgroups, and matter capability data.
-func GetGroups(rmngCtx *rmngctx.RmngContext) ([]GroupInfo, error) {
-	groups, err := group.ListGroupsForUser(rmngCtx, true)
+// buildNodeIndex lists the caller's groups and indexes their nodes by ID. Pass a groupID to
+// restrict the walk to one group.
+func buildNodeIndex(rmngCtx *rmngctx.RmngContext, groupID string) (nodeIndex, error) {
+	groups, err := listGroups(rmngCtx, groupID)
 	if err != nil {
 		return nil, err
 	}
 
-	groupInfos := make([]GroupInfo, 0, len(groups))
+	index := make(nodeIndex)
 	for _, grp := range groups {
-		subgroupInfos := make([]SubGroupInfo, 0, len(grp.SubGroups))
-		for _, subgroup := range grp.SubGroups {
-			subgroupInfos = append(subgroupInfos, SubGroupInfo{
-				SubgroupID:   subgroup.SubGroupID,
-				SubgroupName: subgroup.SubGroupName,
-				NodeIDs:      group_node_db.GetNodeIDs(subgroup.NodeGroupEntries),
-			})
+		for nodeID := range grp.NodeGroupEntries {
+			index[nodeID] = NodePlacement{GroupID: grp.GroupID, GroupName: grp.GroupName}
 		}
-
-		groupInfo := GroupInfo{
-			GroupID:   grp.GroupID,
-			GroupName: grp.GroupName,
-			NodeIDs:   group_node_db.GetNodeIDs(grp.NodeGroupEntries),
-			Subgroups: subgroupInfos,
-		}
-
-		// If matter capability is present, populate Matter data
-		if _, hasMatter := grp.CapabilityData[group.MatterCapabilityName]; hasMatter {
-			cap, _ := group.GetCapability(group.MatterCapabilityName)
-			matterData, err := cap.GetResponseData(rmngCtx, &grp)
-			if err != nil {
-				rlog.Error(rmngCtx).Err(err).Msg("Failed to get matter capability data for group")
-			} else {
-				groupInfo.Matter = matterData
+		// Subgroup membership is layered on afterwards: a node listed in a subgroup is always
+		// also listed in the parent group, so the placement above already exists.
+		for _, sub := range grp.SubGroups {
+			for nodeID := range sub.NodeGroupEntries {
+				placement, ok := index[nodeID]
+				if !ok {
+					continue
+				}
+				placement.SubgroupIDs = append(placement.SubgroupIDs, sub.SubGroupID)
+				placement.SubgroupNames = append(placement.SubgroupNames, sub.SubGroupName)
+				index[nodeID] = placement
 			}
 		}
-
-		groupInfos = append(groupInfos, groupInfo)
 	}
+	return index, nil
+}
 
-	return groupInfos, nil
+// listGroups returns the caller's groups with nodes loaded. An empty groupID lists all.
+func listGroups(rmngCtx *rmngctx.RmngContext, groupID string) ([]group.Group, error) {
+	if groupID == "" {
+		return group.ListGroupsForUser(rmngCtx, true)
+	}
+	groups, err := group.ListGroupForUser(rmngCtx, groupID, true)
+	if err != nil {
+		return nil, err
+	}
+	// A non-member yields an empty list, not an error, so absence of error is not access.
+	if len(groups) == 0 {
+		return nil, fmt.Errorf("group %s does not exist or you do not have access to it", groupID)
+	}
+	return groups, nil
 }
 
 // authorizeNodeForUser verifies the user has access to the given group, grants the
@@ -91,31 +92,14 @@ func authorizeNodeForUser(rmngCtx *rmngctx.RmngContext, groupID, nodeID string) 
 	return nil
 }
 
-// GetNodeParams retrieves all parameters for a node from its reported shadow.
-func GetNodeParams(rmngCtx *rmngctx.RmngContext, groupID, nodeID string) (map[string]interface{}, error) {
-	if err := authorizeNodeForUser(rmngCtx, groupID, nodeID); err != nil {
-		return nil, err
+// SplitIDs parses a comma-separated ID list, dropping blanks. Tools accept the comma form so
+// a model can act on several devices in one call.
+func SplitIDs(value string) []string {
+	var ids []string
+	for _, part := range strings.Split(value, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			ids = append(ids, part)
+		}
 	}
-
-	n := node.NewNode(nodeID)
-	shadowData, err := n.ReadFromReportedShadow(rmngCtx)
-	if err != nil {
-		return nil, err
-	}
-
-	if shadowData.Params == nil {
-		return map[string]interface{}{}, nil
-	}
-
-	return shadowData.Params, nil
-}
-
-// SetNodeParams sets parameters for a node by publishing to its desired shadow.
-func SetNodeParams(rmngCtx *rmngctx.RmngContext, groupID, nodeID string, params map[string]interface{}) error {
-	if err := authorizeNodeForUser(rmngCtx, groupID, nodeID); err != nil {
-		return err
-	}
-
-	n := node.NewNode(nodeID)
-	return n.PublishToDeviceDesired(rmngCtx, params)
+	return ids
 }

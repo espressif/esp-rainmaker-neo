@@ -260,6 +260,13 @@ endif
 # Generate one <name>-test target per TEST_SUBMODULES entry, each forwarding to that submodule's own `make test`.
 $(TEST_SUBMODULES:%=%-test): %-test: ; $(MAKE) -C $* test
 
+# The MCP tool catalog (docs/mcp/rainmaker-mcp.json) is what the eval framework and the docs
+# read as "what tools does this server expose". A snapshot test fails whenever the registry
+# and the file disagree; this target is how you settle that, and the diff it produces is the
+# review artifact for any change to a tool description.
+update-mcp-schema:  ## Regenerate docs/mcp/rainmaker-mcp.json from the MCP tool registry
+	@UPDATE_MCP_SCHEMA=1 go test ./src/mcp/handlers/mcp_server/ -run TestToolCatalogMatchesSnapshot -count=1
+
 ITEST_ARGS ?= -n 12 -m "not unsafe and not cognito"
 itest:  ## Run the pytest integration suite against a deployed stack
 	pytest test/itest/ $(OPTIONAL_ITEST_DIRS) -v -s --capture=tee-sys --html=build/tests/report.html --self-contained-html --dist=loadgroup $(ITEST_ARGS)
@@ -301,4 +308,5 @@ githooks:  ## Point git at .githooks so the pre-commit secret scan runs
 .PHONY: all help go_build optional-build admin-dashboard-build \
 	deploy setup diff destroy synth publish \
 	lint vulncheck test itest itest-setup test-infra-destroy plantuml clean githooks \
+	update-mcp-schema \
 	$(TEST_SUBMODULES:%=%-test)

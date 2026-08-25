@@ -84,9 +84,10 @@ func mockAuthSuccess(userID string) func() {
 	return func() { createServerAuth = original }
 }
 
-// callToolSuccess calls a tool via the MCP server and returns the text content
-// of the first result entry. It asserts HTTP 200 and no JSON-RPC error.
-func callToolSuccess(server *mcpserver.Server, ctx context.Context, toolName string, args map[string]interface{}, token string) string {
+// callTool invokes a tool over the full JSON-RPC path and returns the tool result. A tool
+// failure is a successful JSON-RPC response carrying isError, so this asserts only that the
+// transport worked; whether the tool itself succeeded is the caller's assertion.
+func callTool(server *mcpserver.Server, ctx context.Context, toolName string, args map[string]interface{}, token string) mcpserver.ToolCallResult {
 	params := map[string]interface{}{
 		"name":      toolName,
 		"arguments": args,
@@ -110,7 +111,55 @@ func callToolSuccess(server *mcpserver.Server, ctx context.Context, toolName str
 	Expect(err).To(BeNil())
 	Expect(toolResult.Content).To(HaveLen(1))
 
-	return toolResult.Content[0].Text
+	return toolResult
+}
+
+// callToolSuccess calls a tool and returns its text content, asserting the tool succeeded.
+func callToolSuccess(server *mcpserver.Server, ctx context.Context, toolName string, args map[string]interface{}, token string) string {
+	result := callTool(server, ctx, toolName, args, token)
+	Expect(result.IsError).To(BeFalse(), "Unexpected tool error: %s", result.Content[0].Text)
+	return result.Content[0].Text
+}
+
+// callToolError calls a tool and returns the message the model would see, asserting the tool
+// reported a failure rather than a protocol error.
+func callToolError(server *mcpserver.Server, ctx context.Context, toolName string, args map[string]interface{}, token string) string {
+	result := callTool(server, ctx, toolName, args, token)
+	Expect(result.IsError).To(BeTrue(), "Expected a tool error, got: %s", result.Content[0].Text)
+	return result.Content[0].Text
+}
+
+// deviceRows unmarshals a list_devices response into its device rows.
+func deviceRows(text string) []map[string]interface{} {
+	var payload struct {
+		Count   int                      `json:"count"`
+		Devices []map[string]interface{} `json:"devices"`
+	}
+	Expect(json.Unmarshal([]byte(text), &payload)).To(Succeed())
+	Expect(payload.Count).To(Equal(len(payload.Devices)))
+	return payload.Devices
+}
+
+// groupRows unmarshals a list_groups response into its group rows.
+func groupRows(text string) []mcptools.GroupInfo {
+	var payload struct {
+		Count  int                  `json:"count"`
+		Groups []mcptools.GroupInfo `json:"groups"`
+	}
+	Expect(json.Unmarshal([]byte(text), &payload)).To(Succeed())
+	Expect(payload.Count).To(Equal(len(payload.Groups)))
+	return payload.Groups
+}
+
+// scheduleRows unmarshals a list_schedules response into its schedule entries.
+func scheduleRows(text string) []map[string]interface{} {
+	var payload struct {
+		Count     int                      `json:"count"`
+		Schedules []map[string]interface{} `json:"schedules"`
+	}
+	Expect(json.Unmarshal([]byte(text), &payload)).To(Succeed())
+	Expect(payload.Count).To(Equal(len(payload.Schedules)))
+	return payload.Schedules
 }
 
 func mockAuthFailure(errMsg string) func() {
@@ -226,7 +275,7 @@ var _ = Describe("MCP Main", func() {
 		})
 
 		Describe("tools/list", func() {
-			It("returns get_groups tool when authenticated", func() {
+			It("returns the whole tool surface when authenticated", func() {
 				restore := mockAuthSuccess(userID)
 				defer restore()
 				server = createServer()
@@ -250,14 +299,15 @@ var _ = Describe("MCP Main", func() {
 				}
 				err = json.Unmarshal(resultBytes, &toolsList)
 				Expect(err).To(BeNil())
-				Expect(toolsList.Tools).To(HaveLen(3))
 				toolNames := make([]string, len(toolsList.Tools))
 				for i, t := range toolsList.Tools {
 					toolNames[i] = t.Name
+					// A tool the model cannot tell apart from its siblings is worse than no tool,
+					// and an empty schema type breaks strict MCP clients.
+					Expect(t.Description).NotTo(BeEmpty(), "tool %s has no description", t.Name)
+					Expect(t.InputSchema.Type).To(Equal("object"))
 				}
-				Expect(toolNames).To(ContainElement("get_groups"))
-				Expect(toolNames).To(ContainElement("get_params"))
-				Expect(toolNames).To(ContainElement("set_params"))
+				Expect(toolNames).To(ConsistOf("list_devices", "list_groups", "list_schedules", "set_params", "set_schedule"))
 			})
 
 			It("returns 401 when unauthenticated", func() {
@@ -280,13 +330,12 @@ var _ = Describe("MCP Main", func() {
 			})
 		})
 
-		Describe("tools/call get_groups", func() {
-			It("returns groups for authenticated user", func() {
+		Describe("tools/call list_groups", func() {
+			It("returns the caller's groups with device counts", func() {
 				restore := mockAuthSuccess(userID)
 				defer restore()
 				server = createServer()
 
-				// Create test user context and groups
 				testUser := user.NewUser(userID)
 				rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, testUser)
 
@@ -295,134 +344,227 @@ var _ = Describe("MCP Main", func() {
 				group2, err := group.CreateGroupForUser(rmngCtx, "Test Group 2")
 				Expect(err).To(BeNil())
 
-				text := callToolSuccess(server, ctx, "get_groups", map[string]interface{}{}, "test-token")
-
-				var groups []mcptools.GroupInfo
-				err = json.Unmarshal([]byte(text), &groups)
-				Expect(err).To(BeNil())
+				groups := groupRows(callToolSuccess(server, ctx, "list_groups", map[string]interface{}{}, "test-token"))
 				Expect(groups).To(HaveLen(2))
+				Expect([]string{groups[0].GroupID, groups[1].GroupID}).To(ConsistOf(group1.GroupID, group2.GroupID))
+			})
 
-				groupIDs := []string{groups[0].GroupID, groups[1].GroupID}
-				Expect(groupIDs).To(ContainElement(group1.GroupID))
-				Expect(groupIDs).To(ContainElement(group2.GroupID))
+			It("counts devices and lists node ids only when asked", func() {
+				restore := mockAuthSuccess(userID)
+				defer restore()
+				server = createServer()
+
+				rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, user.NewUser(userID))
+				grp, err := group.CreateGroupForUser(rmngCtx, "Counting Group")
+				Expect(err).To(BeNil())
+				nodeID := "counted-node"
+				Expect(rmngCtx.SetAllow(utils.NodeAll, nodeID)).To(Succeed())
+				_, err = group.AddNode(rmngCtx, grp.GroupID, nodeID, nil)
+				Expect(err).To(BeNil())
+
+				groups := groupRows(callToolSuccess(server, ctx, "list_groups", map[string]interface{}{}, "test-token"))
+				Expect(groups).To(HaveLen(1))
+				Expect(groups[0].DeviceCount).To(Equal(1))
+				Expect(groups[0].NodeIDs).To(BeEmpty(), "node ids must stay opt-in")
+
+				withDevices := groupRows(callToolSuccess(server, ctx, "list_groups",
+					map[string]interface{}{"include_devices": true}, "test-token"))
+				Expect(withDevices[0].NodeIDs).To(ConsistOf(nodeID))
+			})
+
+			It("filters by group name, ignoring case", func() {
+				restore := mockAuthSuccess(userID)
+				defer restore()
+				server = createServer()
+
+				rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, user.NewUser(userID))
+				wanted, err := group.CreateGroupForUser(rmngCtx, "Beach House")
+				Expect(err).To(BeNil())
+				_, err = group.CreateGroupForUser(rmngCtx, "City Flat")
+				Expect(err).To(BeNil())
+
+				groups := groupRows(callToolSuccess(server, ctx, "list_groups",
+					map[string]interface{}{"group_name": "beach house"}, "test-token"))
+				Expect(groups).To(HaveLen(1))
+				Expect(groups[0].GroupID).To(Equal(wanted.GroupID))
+			})
+
+			It("reports an unknown group name as a tool error", func() {
+				restore := mockAuthSuccess(userID)
+				defer restore()
+				server = createServer()
+
+				message := callToolError(server, ctx, "list_groups",
+					map[string]interface{}{"group_name": "No Such Home"}, "test-token")
+				Expect(message).To(ContainSubstring("No Such Home"))
+			})
+
+			It("refuses group_id and group_name together", func() {
+				restore := mockAuthSuccess(userID)
+				defer restore()
+				server = createServer()
+
+				message := callToolError(server, ctx, "list_groups",
+					map[string]interface{}{"group_id": "g1", "group_name": "Home"}, "test-token")
+				Expect(message).To(ContainSubstring("not both"))
 			})
 		})
 
-		Describe("tools/call get_params", func() {
-			It("returns params for a node in the user's group", func() {
+		Describe("tools/call list_devices", func() {
+			It("returns placement and live state in one row", func() {
 				restore := mockAuthSuccess(userID)
 				defer restore()
 				server = createServer()
 
-				testUser := user.NewUser(userID)
-				rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, testUser)
-
-				// Create a group and add a node
-				grp, err := group.CreateGroupForUser(rmngCtx, "Params Test Group")
+				rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, user.NewUser(userID))
+				grp, err := group.CreateGroupForUser(rmngCtx, "Devices Group")
 				Expect(err).To(BeNil())
 
-				nodeID := "test-node-params"
-				rmngCtx.SetAllow(utils.NodeAll, nodeID)
+				nodeID := "test-node-devices"
+				Expect(rmngCtx.SetAllow(utils.NodeAll, nodeID)).To(Succeed())
 				_, err = group.AddNode(rmngCtx, grp.GroupID, nodeID, nil)
 				Expect(err).To(BeNil())
 
-				// Set up shadow with params data
-				shadowState := node.IoTNodeShadow{
+				online := true
+				test_utils.SetupShadow(nodeID, node.IoTNodeShadow{
 					State: &node.ShadowState{
 						Reported: &node.ReportedOrDesiredShadow{
+							Online: &online,
 							Params: map[string]interface{}{
-								"Light": map[string]interface{}{
-									"Power":      true,
-									"Brightness": 75,
-								},
-								"Switch": map[string]interface{}{
-									"Power": false,
-								},
+								"Light":  map[string]interface{}{"Name": "Reading Lamp", "Power": true, "Brightness": 75},
+								"Switch": map[string]interface{}{"Power": false},
 							},
 						},
 					},
-				}
-				nodeGroups := group_node_db.NodesGroups{Group: grp.GroupID, SubGroups: []string{}}
-				test_utils.SetupShadow(nodeID, shadowState, nodeGroups)
+				}, group_node_db.NodesGroups{Group: grp.GroupID, SubGroups: []string{}})
 
-				text := callToolSuccess(server, ctx, "get_params",
-					map[string]interface{}{"group_id": grp.GroupID, "node_id": nodeID}, "test-token")
-
-				Expect(text).To(MatchJSON(`{
-					"Light": {"Power": true, "Brightness": 75},
-					"Switch": {"Power": false}
-				}`))
+				devices := deviceRows(callToolSuccess(server, ctx, "list_devices", map[string]interface{}{}, "test-token"))
+				Expect(devices).To(HaveLen(1))
+				Expect(devices[0]["node_id"]).To(Equal(nodeID))
+				Expect(devices[0]["group_id"]).To(Equal(grp.GroupID))
+				Expect(devices[0]["group_name"]).To(Equal("Devices Group"))
+				Expect(devices[0]["connected"]).To(BeTrue())
+				Expect(devices[0]["params"]).To(HaveKey("Light"))
 			})
 
-			It("returns empty params when node has no shadow", func() {
+			It("lists a node that has never reported, rather than failing the call", func() {
 				restore := mockAuthSuccess(userID)
 				defer restore()
 				server = createServer()
 
-				testUser := user.NewUser(userID)
-				rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, testUser)
-
-				grp, err := group.CreateGroupForUser(rmngCtx, "Empty Shadow Group")
+				rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, user.NewUser(userID))
+				grp, err := group.CreateGroupForUser(rmngCtx, "Silent Node Group")
 				Expect(err).To(BeNil())
-
 				nodeID := "test-node-no-shadow"
-				rmngCtx.SetAllow(utils.NodeAll, nodeID)
+				Expect(rmngCtx.SetAllow(utils.NodeAll, nodeID)).To(Succeed())
 				_, err = group.AddNode(rmngCtx, grp.GroupID, nodeID, nil)
 				Expect(err).To(BeNil())
 
-				text := callToolSuccess(server, ctx, "get_params",
-					map[string]interface{}{"group_id": grp.GroupID, "node_id": nodeID}, "test-token")
-
-				Expect(text).To(MatchJSON(`{}`))
+				devices := deviceRows(callToolSuccess(server, ctx, "list_devices", map[string]interface{}{}, "test-token"))
+				Expect(devices).To(HaveLen(1))
+				Expect(devices[0]["node_id"]).To(Equal(nodeID))
+				Expect(devices[0]["connected"]).To(BeFalse())
 			})
 
-			It("returns error when group_id is missing", func() {
+			It("matches a device by the Name parameter its user sees", func() {
 				restore := mockAuthSuccess(userID)
 				defer restore()
 				server = createServer()
 
-				params := map[string]interface{}{
-					"name":      "get_params",
-					"arguments": map[string]interface{}{"node_id": "some-node"},
+				rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, user.NewUser(userID))
+				grp, err := group.CreateGroupForUser(rmngCtx, "Named Devices Group")
+				Expect(err).To(BeNil())
+
+				for nodeID, deviceName := range map[string]string{"node-lamp": "Reading Lamp", "node-fan": "Ceiling Fan"} {
+					Expect(rmngCtx.SetAllow(utils.NodeAll, nodeID)).To(Succeed())
+					_, err = group.AddNode(rmngCtx, grp.GroupID, nodeID, nil)
+					Expect(err).To(BeNil())
+					test_utils.SetupShadow(nodeID, node.IoTNodeShadow{
+						State: &node.ShadowState{Reported: &node.ReportedOrDesiredShadow{
+							Params: map[string]interface{}{"Light": map[string]interface{}{"Name": deviceName}},
+						}},
+					}, group_node_db.NodesGroups{Group: grp.GroupID, SubGroups: []string{}})
 				}
-				request := httpReq("POST", "/v1/mcp")
-				request.Body = makeJSONRPCRequest("tools/call", params)
-				request.Headers = map[string]string{"Authorization": "Bearer test-token"}
 
-				response, err := server.HandleRequest(ctx, request)
-				Expect(err).To(BeNil())
-				Expect(response.StatusCode).To(Equal(http.StatusOK))
-
-				var rpcResp mcpserver.JSONRPCResponse
-				err = json.Unmarshal([]byte(response.Body), &rpcResp)
-				Expect(err).To(BeNil())
-				Expect(rpcResp.Error).ToNot(BeNil())
-				Expect(rpcResp.Error.Code).To(Equal(-32602))
+				devices := deviceRows(callToolSuccess(server, ctx, "list_devices",
+					map[string]interface{}{"name": "reading"}, "test-token"))
+				Expect(devices).To(HaveLen(1))
+				Expect(devices[0]["node_id"]).To(Equal("node-lamp"))
 			})
 
-			It("returns error when user does not have access to group", func() {
+			It("returns an empty list, not an error, when nothing matches", func() {
 				restore := mockAuthSuccess(userID)
 				defer restore()
 				server = createServer()
 
-				params := map[string]interface{}{
-					"name":      "get_params",
-					"arguments": map[string]interface{}{"group_id": "nonexistent-group", "node_id": "unknown-node"},
-				}
-				request := httpReq("POST", "/v1/mcp")
-				request.Body = makeJSONRPCRequest("tools/call", params)
-				request.Headers = map[string]string{"Authorization": "Bearer test-token"}
-
-				response, err := server.HandleRequest(ctx, request)
+				rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, user.NewUser(userID))
+				grp, err := group.CreateGroupForUser(rmngCtx, "Empty Match Group")
 				Expect(err).To(BeNil())
-				Expect(response.StatusCode).To(Equal(http.StatusOK))
-
-				var rpcResp mcpserver.JSONRPCResponse
-				err = json.Unmarshal([]byte(response.Body), &rpcResp)
+				nodeID := "unmatched-node"
+				Expect(rmngCtx.SetAllow(utils.NodeAll, nodeID)).To(Succeed())
+				_, err = group.AddNode(rmngCtx, grp.GroupID, nodeID, nil)
 				Expect(err).To(BeNil())
-				Expect(rpcResp.Error).ToNot(BeNil())
-				Expect(rpcResp.Error.Code).To(Equal(-32603))
-				Expect(rpcResp.Error.Message).To(ContainSubstring("Failed to get params"))
+
+				devices := deviceRows(callToolSuccess(server, ctx, "list_devices",
+					map[string]interface{}{"name": "nothing-like-this"}, "test-token"))
+				Expect(devices).To(BeEmpty())
+			})
+
+			It("returns only the requested fields", func() {
+				restore := mockAuthSuccess(userID)
+				defer restore()
+				server = createServer()
+
+				rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, user.NewUser(userID))
+				grp, err := group.CreateGroupForUser(rmngCtx, "Projection Group")
+				Expect(err).To(BeNil())
+				nodeID := "projected-node"
+				Expect(rmngCtx.SetAllow(utils.NodeAll, nodeID)).To(Succeed())
+				_, err = group.AddNode(rmngCtx, grp.GroupID, nodeID, nil)
+				Expect(err).To(BeNil())
+				test_utils.SetupShadow(nodeID, node.IoTNodeShadow{
+					State: &node.ShadowState{Reported: &node.ReportedOrDesiredShadow{
+						Params: map[string]interface{}{"Light": map[string]interface{}{"Power": true, "Brightness": 40}},
+					}},
+				}, group_node_db.NodesGroups{Group: grp.GroupID, SubGroups: []string{}})
+
+				devices := deviceRows(callToolSuccess(server, ctx, "list_devices",
+					map[string]interface{}{"fields": "node_id,params.Light.Power"}, "test-token"))
+				Expect(devices).To(HaveLen(1))
+				Expect(devices[0]).To(HaveLen(2))
+				Expect(devices[0]["node_id"]).To(Equal(nodeID))
+				Expect(devices[0]["params.Light.Power"]).To(BeTrue())
+			})
+
+			It("does not reveal another user's device", func() {
+				restore := mockAuthSuccess(userID)
+				defer restore()
+				server = createServer()
+
+				otherCtx := rmngctx.NewRmngContextWithCtx(ctx, user.NewUser("other-user-id"))
+				test_utils.SetupTestUser(ctx, "other-user-id", "other-user@example.com")
+				otherGroup, err := group.CreateGroupForUser(otherCtx, "Someone Else's Home")
+				Expect(err).To(BeNil())
+				Expect(otherCtx.SetAllow(utils.NodeAll, "foreign-node")).To(Succeed())
+				_, err = group.AddNode(otherCtx, otherGroup.GroupID, "foreign-node", nil)
+				Expect(err).To(BeNil())
+
+				devices := deviceRows(callToolSuccess(server, ctx, "list_devices", map[string]interface{}{}, "test-token"))
+				Expect(devices).To(BeEmpty())
+
+				message := callToolError(server, ctx, "list_devices",
+					map[string]interface{}{"node_id": "foreign-node"}, "test-token")
+				Expect(message).To(ContainSubstring("foreign-node"))
+			})
+
+			It("reports an inaccessible group as a tool error", func() {
+				restore := mockAuthSuccess(userID)
+				defer restore()
+				server = createServer()
+
+				message := callToolError(server, ctx, "list_devices",
+					map[string]interface{}{"group_id": "nonexistent-group"}, "test-token")
+				Expect(message).To(ContainSubstring("nonexistent-group"))
 			})
 		})
 
@@ -432,22 +574,17 @@ var _ = Describe("MCP Main", func() {
 				defer restore()
 				server = createServer()
 
-				testUser := user.NewUser(userID)
-				rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, testUser)
-
+				rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, user.NewUser(userID))
 				grp, err := group.CreateGroupForUser(rmngCtx, "Set Params Group")
 				Expect(err).To(BeNil())
 
 				nodeID := "test-node-set-params"
-				rmngCtx.SetAllow(utils.NodeAll, nodeID)
+				Expect(rmngCtx.SetAllow(utils.NodeAll, nodeID)).To(Succeed())
 				_, err = group.AddNode(rmngCtx, grp.GroupID, nodeID, nil)
 				Expect(err).To(BeNil())
 
 				setParams := map[string]interface{}{
-					"Light": map[string]interface{}{
-						"Power":      true,
-						"Brightness": 100,
-					},
+					"Light": map[string]interface{}{"Power": true, "Brightness": 100},
 				}
 				text := callToolSuccess(server, ctx, "set_params", map[string]interface{}{
 					"group_id": grp.GroupID,
@@ -455,9 +592,13 @@ var _ = Describe("MCP Main", func() {
 					"params":   setParams,
 				}, "test-token")
 
-				Expect(text).To(MatchJSON(`{"status":"success"}`))
+				var result mcptools.SetParamsResult
+				Expect(json.Unmarshal([]byte(text), &result)).To(Succeed())
+				Expect(result).To(Equal(mcptools.SetParamsResult{
+					Requested: 1, Succeeded: 1, Failed: 0,
+					Results: []mcptools.NodeResult{{NodeID: nodeID, Success: true}},
+				}))
 
-				// Verify the publish was called via IoT mock
 				iotDataClient := awscommon.GetIoTDataPlaneClient().(*mock.IoTDataPlaneMock)
 				Expect(iotDataClient.PublishCalls).To(HaveLen(1))
 				Expect(*iotDataClient.PublishCalls[0].Topic).To(ContainSubstring(nodeID))
@@ -466,84 +607,283 @@ var _ = Describe("MCP Main", func() {
 				}`))
 			})
 
-			It("returns error when group_id is missing", func() {
+			It("applies the same params to every node in a comma-separated list", func() {
 				restore := mockAuthSuccess(userID)
 				defer restore()
 				server = createServer()
 
-				params := map[string]interface{}{
-					"name": "set_params",
-					"arguments": map[string]interface{}{
-						"node_id": "some-node",
-						"params":  map[string]interface{}{"Light": map[string]interface{}{"Power": true}},
-					},
+				rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, user.NewUser(userID))
+				grp, err := group.CreateGroupForUser(rmngCtx, "Multi Node Group")
+				Expect(err).To(BeNil())
+				for _, nodeID := range []string{"multi-node-a", "multi-node-b"} {
+					Expect(rmngCtx.SetAllow(utils.NodeAll, nodeID)).To(Succeed())
+					_, err = group.AddNode(rmngCtx, grp.GroupID, nodeID, nil)
+					Expect(err).To(BeNil())
 				}
-				request := httpReq("POST", "/v1/mcp")
-				request.Body = makeJSONRPCRequest("tools/call", params)
-				request.Headers = map[string]string{"Authorization": "Bearer test-token"}
 
-				response, err := server.HandleRequest(ctx, request)
-				Expect(err).To(BeNil())
+				text := callToolSuccess(server, ctx, "set_params", map[string]interface{}{
+					"group_id": grp.GroupID,
+					"node_id":  "multi-node-a, multi-node-b",
+					"params":   map[string]interface{}{"Light": map[string]interface{}{"Power": false}},
+				}, "test-token")
 
-				var rpcResp mcpserver.JSONRPCResponse
-				err = json.Unmarshal([]byte(response.Body), &rpcResp)
-				Expect(err).To(BeNil())
-				Expect(rpcResp.Error).ToNot(BeNil())
-				Expect(rpcResp.Error.Code).To(Equal(-32602))
+				var result mcptools.SetParamsResult
+				Expect(json.Unmarshal([]byte(text), &result)).To(Succeed())
+				Expect(result.Requested).To(Equal(2))
+				Expect(result.Succeeded).To(Equal(2))
+				Expect(result.Failed).To(BeZero())
+				// The writes run concurrently, so the report has to be re-ordered back to the
+				// caller's list or the model cannot line results up with what it asked for.
+				Expect(result.Results).To(Equal([]mcptools.NodeResult{
+					{NodeID: "multi-node-a", Success: true},
+					{NodeID: "multi-node-b", Success: true},
+				}))
+
+				iotDataClient := awscommon.GetIoTDataPlaneClient().(*mock.IoTDataPlaneMock)
+				Expect(iotDataClient.PublishCalls).To(HaveLen(2))
 			})
 
-			It("returns error when params is missing", func() {
+			It("reports the foreign node and still writes the caller's own", func() {
 				restore := mockAuthSuccess(userID)
 				defer restore()
 				server = createServer()
 
-				params := map[string]interface{}{
-					"name": "set_params",
-					"arguments": map[string]interface{}{
-						"group_id": "some-group",
-						"node_id":  "some-node",
-					},
-				}
-				request := httpReq("POST", "/v1/mcp")
-				request.Body = makeJSONRPCRequest("tools/call", params)
-				request.Headers = map[string]string{"Authorization": "Bearer test-token"}
-
-				response, err := server.HandleRequest(ctx, request)
+				rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, user.NewUser(userID))
+				grp, err := group.CreateGroupForUser(rmngCtx, "Partial Failure Group")
+				Expect(err).To(BeNil())
+				ownNode := "own-node"
+				Expect(rmngCtx.SetAllow(utils.NodeAll, ownNode)).To(Succeed())
+				_, err = group.AddNode(rmngCtx, grp.GroupID, ownNode, nil)
 				Expect(err).To(BeNil())
 
-				var rpcResp mcpserver.JSONRPCResponse
-				err = json.Unmarshal([]byte(response.Body), &rpcResp)
-				Expect(err).To(BeNil())
-				Expect(rpcResp.Error).ToNot(BeNil())
-				Expect(rpcResp.Error.Code).To(Equal(-32602))
+				text := callToolSuccess(server, ctx, "set_params", map[string]interface{}{
+					"group_id": grp.GroupID,
+					"node_id":  ownNode + ",someone-elses-node",
+					"params":   map[string]interface{}{"Light": map[string]interface{}{"Power": true}},
+				}, "test-token")
+
+				var result mcptools.SetParamsResult
+				Expect(json.Unmarshal([]byte(text), &result)).To(Succeed())
+				Expect(result.Succeeded).To(Equal(1))
+				Expect(result.Failed).To(Equal(1))
+
+				// The foreign node must not be published to, whatever the summary says.
+				iotDataClient := awscommon.GetIoTDataPlaneClient().(*mock.IoTDataPlaneMock)
+				Expect(iotDataClient.PublishCalls).To(HaveLen(1))
+				Expect(*iotDataClient.PublishCalls[0].Topic).To(ContainSubstring(ownNode))
 			})
 
-			It("returns error when user does not have access to group", func() {
+			It("tells the caller which identifier is missing", func() {
 				restore := mockAuthSuccess(userID)
 				defer restore()
 				server = createServer()
 
-				params := map[string]interface{}{
-					"name": "set_params",
-					"arguments": map[string]interface{}{
-						"group_id": "nonexistent-group",
-						"node_id":  "unknown-node",
-						"params":   map[string]interface{}{"Light": map[string]interface{}{"Power": true}},
-					},
+				withoutGroup := callToolError(server, ctx, "set_params", map[string]interface{}{
+					"node_id": "some-node",
+					"params":  map[string]interface{}{"Light": map[string]interface{}{"Power": true}},
+				}, "test-token")
+				Expect(withoutGroup).To(ContainSubstring("group_id is required"))
+
+				withoutParams := callToolError(server, ctx, "set_params", map[string]interface{}{
+					"group_id": "some-group",
+					"node_id":  "some-node",
+				}, "test-token")
+				Expect(withoutParams).To(ContainSubstring("params is required"))
+			})
+
+			It("fails the whole call when no node could be written", func() {
+				restore := mockAuthSuccess(userID)
+				defer restore()
+				server = createServer()
+
+				message := callToolError(server, ctx, "set_params", map[string]interface{}{
+					"group_id": "nonexistent-group",
+					"node_id":  "unknown-node",
+					"params":   map[string]interface{}{"Light": map[string]interface{}{"Power": true}},
+				}, "test-token")
+				Expect(message).To(ContainSubstring("unknown-node"))
+
+				iotDataClient := awscommon.GetIoTDataPlaneClient().(*mock.IoTDataPlaneMock)
+				Expect(iotDataClient.PublishCalls).To(BeEmpty())
+			})
+		})
+
+		Describe("tools/call list_schedules and set_schedule", func() {
+			var (
+				rmngCtx *rmngctx.RmngContext
+				groupID string
+				nodeID  string
+			)
+
+			BeforeEach(func() {
+				restore := mockAuthSuccess(userID)
+				DeferCleanup(restore)
+				server = createServer()
+
+				rmngCtx = rmngctx.NewRmngContextWithCtx(ctx, user.NewUser(userID))
+				grp, err := group.CreateGroupForUser(rmngCtx, "Schedule Group")
+				Expect(err).To(BeNil())
+				groupID = grp.GroupID
+
+				nodeID = "test-node-schedules"
+				Expect(rmngCtx.SetAllow(utils.NodeAll, nodeID)).To(Succeed())
+				_, err = group.AddNode(rmngCtx, groupID, nodeID, nil)
+				Expect(err).To(BeNil())
+			})
+
+			addMorningSchedule := func() map[string]interface{} {
+				text := callToolSuccess(server, ctx, "set_schedule", map[string]interface{}{
+					"group_id":  groupID,
+					"node_id":   nodeID,
+					"operation": "add",
+					"name":      "Morning Lights",
+					"triggers":  []interface{}{map[string]interface{}{"time": "07:00", "days": "weekdays"}},
+					"action":    map[string]interface{}{"Light": map[string]interface{}{"Power": true}},
+				}, "test-token")
+
+				var payload struct {
+					Schedule map[string]interface{} `json:"schedule"`
 				}
-				request := httpReq("POST", "/v1/mcp")
-				request.Body = makeJSONRPCRequest("tools/call", params)
-				request.Headers = map[string]string{"Authorization": "Bearer test-token"}
+				Expect(json.Unmarshal([]byte(text), &payload)).To(Succeed())
+				return payload.Schedule
+			}
 
-				response, err := server.HandleRequest(ctx, request)
-				Expect(err).To(BeNil())
+			It("adds a schedule, converting the trigger to the device's form", func() {
+				created := addMorningSchedule()
+				Expect(created["name"]).To(Equal("Morning Lights"))
+				Expect(created["enabled"]).To(BeTrue())
+				Expect(created["id"]).NotTo(BeEmpty())
 
-				var rpcResp mcpserver.JSONRPCResponse
-				err = json.Unmarshal([]byte(response.Body), &rpcResp)
-				Expect(err).To(BeNil())
-				Expect(rpcResp.Error).ToNot(BeNil())
-				Expect(rpcResp.Error.Code).To(Equal(-32603))
-				Expect(rpcResp.Error.Message).To(ContainSubstring("Failed to set params"))
+				triggers, ok := created["triggers"].([]interface{})
+				Expect(ok).To(BeTrue())
+				Expect(triggers).To(HaveLen(1))
+				// 07:00 is 420 minutes past midnight; weekdays is Mon-Fri = 1+2+4+8+16.
+				Expect(triggers[0]).To(Equal(map[string]interface{}{"m": float64(420), "d": float64(31)}))
+			})
+
+			It("lists the schedules stored on the node", func() {
+				created := addMorningSchedule()
+
+				schedules := scheduleRows(callToolSuccess(server, ctx, "list_schedules",
+					map[string]interface{}{"group_id": groupID, "node_id": nodeID}, "test-token"))
+				Expect(schedules).To(HaveLen(1))
+				Expect(schedules[0]["id"]).To(Equal(created["id"]))
+				Expect(schedules[0]["name"]).To(Equal("Morning Lights"))
+			})
+
+			It("returns an empty list for a node with no schedules", func() {
+				schedules := scheduleRows(callToolSuccess(server, ctx, "list_schedules",
+					map[string]interface{}{"group_id": groupID, "node_id": nodeID}, "test-token"))
+				Expect(schedules).To(BeEmpty())
+			})
+
+			It("edits only the fields it is given", func() {
+				created := addMorningSchedule()
+
+				callToolSuccess(server, ctx, "set_schedule", map[string]interface{}{
+					"group_id":    groupID,
+					"node_id":     nodeID,
+					"operation":   "edit",
+					"schedule_id": created["id"],
+					"triggers":    []interface{}{map[string]interface{}{"time": "07:30", "days": "daily"}},
+				}, "test-token")
+
+				schedules := scheduleRows(callToolSuccess(server, ctx, "list_schedules",
+					map[string]interface{}{"group_id": groupID, "node_id": nodeID}, "test-token"))
+				Expect(schedules).To(HaveLen(1))
+				Expect(schedules[0]["name"]).To(Equal("Morning Lights"), "an edit must not clear untouched fields")
+				Expect(schedules[0]["action"]).To(Equal(map[string]interface{}{"Light": map[string]interface{}{"Power": true}}))
+				Expect(schedules[0]["triggers"]).To(Equal([]interface{}{
+					map[string]interface{}{"m": float64(450), "d": float64(127)},
+				}))
+			})
+
+			It("disables and re-enables a schedule", func() {
+				created := addMorningSchedule()
+
+				callToolSuccess(server, ctx, "set_schedule", map[string]interface{}{
+					"group_id": groupID, "node_id": nodeID,
+					"operation": "disable", "schedule_id": created["id"],
+				}, "test-token")
+				schedules := scheduleRows(callToolSuccess(server, ctx, "list_schedules",
+					map[string]interface{}{"group_id": groupID, "node_id": nodeID}, "test-token"))
+				Expect(schedules[0]["enabled"]).To(BeFalse())
+
+				callToolSuccess(server, ctx, "set_schedule", map[string]interface{}{
+					"group_id": groupID, "node_id": nodeID,
+					"operation": "enable", "schedule_id": created["id"],
+				}, "test-token")
+				schedules = scheduleRows(callToolSuccess(server, ctx, "list_schedules",
+					map[string]interface{}{"group_id": groupID, "node_id": nodeID}, "test-token"))
+				Expect(schedules[0]["enabled"]).To(BeTrue())
+			})
+
+			It("removes a schedule without disturbing the others", func() {
+				first := addMorningSchedule()
+				callToolSuccess(server, ctx, "set_schedule", map[string]interface{}{
+					"group_id": groupID, "node_id": nodeID, "operation": "add",
+					"name":     "Evening Lights",
+					"triggers": []interface{}{map[string]interface{}{"time": "20:00", "days": "daily"}},
+					"action":   map[string]interface{}{"Light": map[string]interface{}{"Power": false}},
+				}, "test-token")
+
+				callToolSuccess(server, ctx, "set_schedule", map[string]interface{}{
+					"group_id": groupID, "node_id": nodeID,
+					"operation": "remove", "schedule_id": first["id"],
+				}, "test-token")
+
+				schedules := scheduleRows(callToolSuccess(server, ctx, "list_schedules",
+					map[string]interface{}{"group_id": groupID, "node_id": nodeID}, "test-token"))
+				Expect(schedules).To(HaveLen(1))
+				Expect(schedules[0]["name"]).To(Equal("Evening Lights"))
+			})
+
+			It("rejects an edit to a schedule the node does not have", func() {
+				message := callToolError(server, ctx, "set_schedule", map[string]interface{}{
+					"group_id": groupID, "node_id": nodeID,
+					"operation": "edit", "schedule_id": "nope",
+				}, "test-token")
+				Expect(message).To(ContainSubstring("nope"))
+				Expect(message).To(ContainSubstring("list_schedules"))
+			})
+
+			It("names the field an add is missing", func() {
+				withoutName := callToolError(server, ctx, "set_schedule", map[string]interface{}{
+					"group_id": groupID, "node_id": nodeID, "operation": "add",
+					"triggers": []interface{}{map[string]interface{}{"time": "07:00", "days": "daily"}},
+					"action":   map[string]interface{}{"Light": map[string]interface{}{"Power": true}},
+				}, "test-token")
+				Expect(withoutName).To(ContainSubstring("name is required"))
+
+				withoutTriggers := callToolError(server, ctx, "set_schedule", map[string]interface{}{
+					"group_id": groupID, "node_id": nodeID, "operation": "add",
+					"name":   "No Triggers",
+					"action": map[string]interface{}{"Light": map[string]interface{}{"Power": true}},
+				}, "test-token")
+				Expect(withoutTriggers).To(ContainSubstring("trigger"))
+			})
+
+			It("rejects an unparseable trigger time", func() {
+				message := callToolError(server, ctx, "set_schedule", map[string]interface{}{
+					"group_id": groupID, "node_id": nodeID, "operation": "add",
+					"name":     "Bad Time",
+					"triggers": []interface{}{map[string]interface{}{"time": "25:00", "days": "daily"}},
+					"action":   map[string]interface{}{"Light": map[string]interface{}{"Power": true}},
+				}, "test-token")
+				Expect(message).To(ContainSubstring("hours"))
+			})
+
+			It("rejects an unknown operation", func() {
+				message := callToolError(server, ctx, "set_schedule", map[string]interface{}{
+					"group_id": groupID, "node_id": nodeID, "operation": "reschedule",
+				}, "test-token")
+				Expect(message).To(ContainSubstring("reschedule"))
+			})
+
+			It("refuses a node outside the caller's group", func() {
+				message := callToolError(server, ctx, "list_schedules",
+					map[string]interface{}{"group_id": groupID, "node_id": "not-my-node"}, "test-token")
+				Expect(message).To(ContainSubstring("not-my-node"))
 			})
 		})
 
@@ -685,11 +1025,7 @@ var _ = Describe("MCP Main", func() {
 			grp, err := group.CreateGroupForUser(rmngCtx, "OIDC Auth Group")
 			Expect(err).To(BeNil())
 
-			text := callToolSuccess(server, ctx, "get_groups", map[string]interface{}{}, token)
-
-			var groups []mcptools.GroupInfo
-			err = json.Unmarshal([]byte(text), &groups)
-			Expect(err).To(BeNil())
+			groups := groupRows(callToolSuccess(server, ctx, "list_groups", map[string]interface{}{}, token))
 			Expect(groups).To(HaveLen(1))
 			Expect(groups[0].GroupID).To(Equal(grp.GroupID))
 		})
@@ -722,10 +1058,12 @@ var _ = Describe("MCP Main", func() {
 			nodeGroups := group_node_db.NodesGroups{Group: grp.GroupID, SubGroups: []string{}}
 			test_utils.SetupShadow(nodeID, shadowState, nodeGroups)
 
-			text := callToolSuccess(server, ctx, "get_params",
-				map[string]interface{}{"group_id": grp.GroupID, "node_id": nodeID}, token)
-
-			Expect(text).To(MatchJSON(`{"Fan": {"Speed": 3}}`))
+			devices := deviceRows(callToolSuccess(server, ctx, "list_devices",
+				map[string]interface{}{"node_id": nodeID, "group_id": grp.GroupID}, token))
+			Expect(devices).To(HaveLen(1))
+			Expect(devices[0]["params"]).To(Equal(map[string]interface{}{
+				"Fan": map[string]interface{}{"Speed": float64(3)},
+			}))
 		})
 
 		It("rejects an expired ESP User token", func() {

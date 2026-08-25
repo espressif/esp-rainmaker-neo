@@ -13,12 +13,14 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )
 
-// apiScheduleKey is the snake_case key clients use on the REST API.
+// APIScheduleKey is the snake_case key clients use on the REST API, and the key Get returns
+// and Put accepts. Exported because the MCP tools read and write through this service and
+// would otherwise carry their own copy of the string.
 // firmwareScheduleKey is the PascalCase key the device firmware reads on MQTT.
 // The cloud translates between the two so the device-side wire shape stays
 // untouched while the API uses idiomatic snake_case.
 const (
-	apiScheduleKey      = "schedules"
+	APIScheduleKey      = "schedules"
 	firmwareScheduleKey = "Schedules"
 )
 
@@ -66,7 +68,7 @@ func (s *ScheduleService) Get(rmngCtx *rmngctx.RmngContext, nodeID string) (inte
 				translated[k] = v
 			}
 			delete(translated, firmwareScheduleKey)
-			translated[apiScheduleKey] = arr
+			translated[APIScheduleKey] = arr
 			return translated, nil
 		}
 	}
@@ -86,12 +88,12 @@ func (s *ScheduleService) Put(rmngCtx *rmngctx.RmngContext, nodeID string, data 
 	// shape the device expects on MQTT.
 	storeData := data
 	if asMap, ok := data.(map[string]interface{}); ok {
-		if arr, exists := asMap[apiScheduleKey]; exists {
+		if arr, exists := asMap[APIScheduleKey]; exists {
 			translated := make(map[string]interface{}, len(asMap))
 			for k, v := range asMap {
 				translated[k] = v
 			}
-			delete(translated, apiScheduleKey)
+			delete(translated, APIScheduleKey)
 			translated[firmwareScheduleKey] = arr
 			storeData = translated
 		}
