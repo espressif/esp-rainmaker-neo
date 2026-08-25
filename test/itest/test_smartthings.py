@@ -6,31 +6,23 @@
 
 Mirrors test_alexa.py / test_gva.py for parity. Two layers are covered:
 
-1. Config API CRUD at /v1/admin/integrations/smartthings/configuration. This is a
-   normal admin REST API (super-admin only), exactly like the Alexa/GVA config tests.
-   We drive it directly via User.make_api_request because, unlike Alexa/GVA, there are
-   no st_post_configuration/st_get_configuration helpers on the User class and the hard
-   requirement forbids modifying test_user.py.
+1. Config API CRUD at /v1/admin/integrations/smartthings/configuration, a super-admin
+   REST API driven through User.st_post_configuration and friends.
 
-2. Schema App interactions. The st_action Lambda is invoked DIRECTLY by SmartThings
-   (NOT via API Gateway), so — exactly like alexa_discover_devices/alexa_control_device
-   invoke the Alexa skill Lambda with boto3 lambda.invoke — we build the SmartThings
-   Schema request envelope (STRequest) and invoke the rmng-st-action Lambda with boto3.
-   The OAuth token SmartThings would send is the user's Cognito access token, which is
-   precisely what the Schema App validates (st_action.GetUserIDFromToken -> Cognito JWKS);
-   this is the same token Alexa/GVA tests pass as the BearerToken, obtained via the shared
-   fixtures (user_with_1_dev_each_in_2_groups -> test_user1.access_token).
+2. Schema App interactions. SmartThings invokes the st_action Lambda directly, not
+   through API Gateway, so User.st_discover_devices / st_control_device / st_state_refresh
+   build the Schema envelope and invoke that Lambda with boto3. The OAuth token
+   SmartThings would send is the user's Cognito access token, which is what the Schema
+   App validates (st_action.GetUserIDFromToken -> Cognito JWKS).
 
 Run all: pytest test/itest/test_smartthings.py -v -s
 """
-import json
 import time
-import uuid
 
-import boto3
 import pytest
 
 from py_sdk.test_group import Group
+from py_sdk.test_smartthings import st_external_device_id
 from test.itest.conftest import REGION, accept_sharing_request_for, rmng_outputs
 
 
@@ -73,86 +65,8 @@ def st_region_arn(request):
 
 
 # ---------------------------------------------------------------------------
-# Schema App request helpers (build the SmartThings Schema STRequest envelope and
-# invoke the st_action Lambda directly, the way SmartThings Cloud would).
-# ---------------------------------------------------------------------------
-ST_SCHEMA = "st-schema"
-ST_VERSION = "1.0"
-
-
-def _st_headers(interaction_type):
-    return {
-        "schema": ST_SCHEMA,
-        "version": ST_VERSION,
-        "interactionType": interaction_type,
-        "requestId": str(uuid.uuid4()),
-    }
-
-
-def _st_invoke(region, arn, request_body):
-    """Invoke the st_action Schema App Lambda and return the parsed response."""
-    lambda_client = boto3.client('lambda', region_name=region)
-    response = lambda_client.invoke(
-        FunctionName=arn,
-        InvocationType='RequestResponse',
-        Payload=json.dumps(request_body),
-    )
-    return json.loads(response['Payload'].read())
-
-
-def st_discovery_request(region, arn, token):
-    """Send a SmartThings discoveryRequest with the given user access token."""
-    request_body = {
-        "headers": _st_headers("discoveryRequest"),
-        "authentication": {"tokenType": "Bearer", "token": token},
-    }
-    return _st_invoke(region, arn, request_body)
-
-
-def st_command_request(region, arn, token, external_device_id, commands, device_cookie=None):
-    """Send a SmartThings commandRequest for a single device.
-
-    commands: list of {component, capability, command, arguments}
-    device_cookie: the cookie returned for this device at discovery, which
-        SmartThings echoes back on every command. Omit it to exercise the
-        node-config fallback.
-    """
-    device = {"externalDeviceId": external_device_id, "commands": commands}
-    if device_cookie is not None:
-        device["deviceCookie"] = device_cookie
-    request_body = {
-        "headers": _st_headers("commandRequest"),
-        "authentication": {"tokenType": "Bearer", "token": token},
-        "devices": [device],
-    }
-    return _st_invoke(region, arn, request_body)
-
-
-def st_state_refresh_request(region, arn, token, external_device_ids):
-    """Send a SmartThings stateRefreshRequest for the given device ids."""
-    request_body = {
-        "headers": _st_headers("stateRefreshRequest"),
-        "authentication": {"tokenType": "Bearer", "token": token},
-        "devices": [{"externalDeviceId": eid} for eid in external_device_ids],
-    }
-    return _st_invoke(region, arn, request_body)
-
-
-def st_external_device_id(node_thing_name, device_name):
-    """SmartThings externalDeviceId format is <nodeID>#<deviceName>.
-
-    "#" cannot appear in a node ID, so splitting on the first occurrence always
-    recovers the node even when the device name contains one.
-    """
-    return f"{node_thing_name}#{device_name}"
-
-
-# ---------------------------------------------------------------------------
 # 1. Config API CRUD (super-admin REST API)
 # ---------------------------------------------------------------------------
-ST_CONFIG_PATH = "/v1/admin/integrations/smartthings/configuration"
-
-
 @pytest.mark.xdist_group("smartthings_config")
 def test_smartthings_configuration_round_trip(super_admin_user):
     """POST stores the credentials, GET returns client_id only, a second POST updates them,
@@ -160,26 +74,24 @@ def test_smartthings_configuration_round_trip(super_admin_user):
     admin = super_admin_user
     admin.get_aws_credentials()
 
-    cfg = {"client_id": "test-st-client-id", "client_secret": "test-st-client-secret"}
-    post_response = admin.make_api_request('POST', ST_CONFIG_PATH, data=json.dumps(cfg))
+    post_response = admin.st_post_configuration("test-st-client-id", "test-st-client-secret")
     assert post_response.status_code == 200, f"POST failed: {post_response.text}"
 
-    get_response = admin.make_api_request('GET', ST_CONFIG_PATH)
+    get_response = admin.st_get_configuration()
     assert get_response.status_code == 200, f"GET failed: {get_response.text}"
     body = get_response.json()
     assert body['client_id'] == 'test-st-client-id'
     # Secret must never be returned by GET.
     assert 'client_secret' not in body, f"client_secret must be omitted from GET response: {body}"
 
-    updated = {"client_id": "updated-st-client-id", "client_secret": "updated-st-client-secret"}
-    post_response = admin.make_api_request('POST', ST_CONFIG_PATH, data=json.dumps(updated))
+    post_response = admin.st_post_configuration("updated-st-client-id", "updated-st-client-secret")
     assert post_response.status_code == 200, f"update POST failed: {post_response.text}"
 
-    get_response = admin.make_api_request('GET', ST_CONFIG_PATH)
+    get_response = admin.st_get_configuration()
     assert get_response.status_code == 200, f"GET after update failed: {get_response.text}"
     assert get_response.json()['client_id'] == 'updated-st-client-id'
 
-    delete_response = admin.make_api_request('DELETE', ST_CONFIG_PATH)
+    delete_response = admin.st_delete_configuration()
     assert delete_response.status_code == 200, f"DELETE failed: {delete_response.text}"
 
 
@@ -187,11 +99,10 @@ def test_smartthings_config_non_admin_forbidden(test_user1):
     """A non-admin user must not be able to read/write the SmartThings config (403)."""
     test_user1.get_aws_credentials()
 
-    cfg = {"client_id": "hacker-client-id", "client_secret": "hacker-client-secret"}
-    post_response = test_user1.make_api_request('POST', ST_CONFIG_PATH, data=json.dumps(cfg))
+    post_response = test_user1.st_post_configuration("hacker-client-id", "hacker-client-secret")
     assert post_response.status_code == 403, f"expected 403 for non-admin POST, got {post_response.status_code}: {post_response.text}"
 
-    get_response = test_user1.make_api_request('GET', ST_CONFIG_PATH)
+    get_response = test_user1.st_get_configuration()
     assert get_response.status_code == 403, f"expected 403 for non-admin GET, got {get_response.status_code}: {get_response.text}"
 
 
@@ -220,7 +131,7 @@ def test_smartthings_discovery(user_with_1_dev_each_in_2_groups, st_region_arn):
     device1.clear_queues()
     device2.clear_queues()
 
-    response = st_discovery_request(region, arn, test_user1.access_token)
+    response = test_user1.st_discover_devices(lambda_arn=arn, region=region)
     print(f"SmartThings discovery response ({region}) is ", response)
 
     assert response['headers']['interactionType'] == 'discoveryResponse', f"region {region}: {response}"
@@ -270,7 +181,7 @@ def test_smartthings_discovery(user_with_1_dev_each_in_2_groups, st_region_arn):
     })
     time.sleep(2)
 
-    by_id = {d['externalDeviceId']: d for d in (st_discovery_request(region, arn, test_user1.access_token).get('devices') or [])}
+    by_id = {d['externalDeviceId']: d for d in (test_user1.st_discover_devices(lambda_arn=arn, region=region).get('devices') or [])}
     assert by_id[light1_id]['friendlyName'] == 'Kitchen Light', f"region {region}: {by_id[light1_id]}"
     assert by_id[light2_id]['friendlyName'] == 'Bedroom Light', f"region {region}: {by_id[light2_id]}"
 
@@ -293,7 +204,7 @@ def test_smartthings_command(user_with_1_dev_each_in_2_groups, st_region_arn):
 
     # Initial state + a discovery so the node is marked online/ST-enabled.
     device1.update_named_shadow(shadow_name, {"online": True, "Light1": {"Power": False, "Brightness": 0}})
-    discovery = st_discovery_request(region, arn, test_user1.access_token)
+    discovery = test_user1.st_discover_devices(lambda_arn=arn, region=region)
     time.sleep(2)
     device1.clear_queues()
 
@@ -308,8 +219,8 @@ def test_smartthings_command(user_with_1_dev_each_in_2_groups, st_region_arn):
 
     def validate_switch_command(command, expected_power):
         commands = [{"component": "main", "capability": "st.switch", "command": command, "arguments": []}]
-        response = st_command_request(region, arn, test_user1.access_token, light1_id, commands,
-                                      device_cookie=cookie)
+        response = test_user1.st_control_device(light1_id, commands, device_cookie=cookie,
+                                                lambda_arn=arn, region=region)
         print(f"SmartThings command response ({region}, {command}) is ", response)
 
         assert response['headers']['interactionType'] == 'commandResponse', f"region {region}: {response}"
@@ -344,11 +255,11 @@ def test_smartthings_state_refresh(user_with_1_dev_each_in_2_groups, st_region_a
     device1.update_named_shadow(shadow_name, {"online": True, "Light1": {"Power": True, "Brightness": 50}})
 
     # Discovery first so the node is registered as online/ST-enabled.
-    st_discovery_request(region, arn, test_user1.access_token)
+    test_user1.st_discover_devices(lambda_arn=arn, region=region)
     time.sleep(2)
 
     light1_id = st_external_device_id(device1.node_thing_name, "Light1")
-    response = st_state_refresh_request(region, arn, test_user1.access_token, [light1_id])
+    response = test_user1.st_state_refresh([light1_id], lambda_arn=arn, region=region)
     print(f"SmartThings state refresh response ({region}) is ", response)
 
     assert response['headers']['interactionType'] == 'stateRefreshResponse', f"region {region}: {response}"
@@ -379,7 +290,7 @@ def test_smartthings_state_refresh(user_with_1_dev_each_in_2_groups, st_region_a
 def victim_device_and_attacker(user_with_1_dev_each_in_2_groups, test_user2, st_region_arn):
     """user1 owns device1; user2 is a legitimate but unrelated account.
 
-    Returns (region, arn, device1, group1_id, victim_device_id, attacker_token).
+    Returns (region, arn, device1, group1_id, victim_device_id, attacker).
     """
     device1, _device2, group1_id, _group2_id, test_user1 = user_with_1_dev_each_in_2_groups
     region, arn = st_region_arn
@@ -395,23 +306,24 @@ def victim_device_and_attacker(user_with_1_dev_each_in_2_groups, test_user2, st_
 
     # Known starting state, and a discovery so the node is ST-enabled/online.
     device1.update_named_shadow(shadow_name, {"online": True, "Light1": {"Power": False, "Brightness": 0}})
-    st_discovery_request(region, arn, test_user1.access_token)
+    test_user1.st_discover_devices(lambda_arn=arn, region=region)
     time.sleep(2)
     device1.clear_queues()
 
     victim_device_id = st_external_device_id(device1.node_thing_name, "Light1")
-    return region, arn, device1, group1_id, victim_device_id, test_user2.access_token
+    return region, arn, device1, group1_id, victim_device_id, test_user2
 
 
 def test_smartthings_command_rejects_foreign_device(victim_device_and_attacker):
     """user2's token must not actuate user1's device."""
-    region, arn, device1, _group1_id, victim_device_id, attacker_token = victim_device_and_attacker
+    region, arn, device1, _group1_id, victim_device_id, attacker = victim_device_and_attacker
 
     commands = [{"component": "main", "capability": "st.switch", "command": "on", "arguments": []}]
     # Carrying a cookie must not help: it only names params, authorization still
     # comes from the caller's own groups.
-    response = st_command_request(region, arn, attacker_token, victim_device_id, commands,
-                                  device_cookie={"esp.param.power": "Power"})
+    response = attacker.st_control_device(victim_device_id, commands,
+                                          device_cookie={"esp.param.power": "Power"},
+                                          lambda_arn=arn, region=region)
     print(f"cross-user commandRequest response ({region}) is ", response)
 
     # Collect the MQTT evidence BEFORE asserting on the response: whether the device
@@ -433,9 +345,9 @@ def test_smartthings_command_rejects_foreign_device(victim_device_and_attacker):
 
 def test_smartthings_state_refresh_rejects_foreign_device(victim_device_and_attacker):
     """user2's token must not read user1's device state."""
-    region, arn, _device1, _group1_id, victim_device_id, attacker_token = victim_device_and_attacker
+    region, arn, _device1, _group1_id, victim_device_id, attacker = victim_device_and_attacker
 
-    response = st_state_refresh_request(region, arn, attacker_token, [victim_device_id])
+    response = attacker.st_state_refresh([victim_device_id], lambda_arn=arn, region=region)
     print(f"cross-user stateRefreshRequest response ({region}) is ", response)
 
     device_states = response.get("deviceState") or []
@@ -484,7 +396,7 @@ def test_smartthings_command_allowed_for_shared_user(user_with_1_dev_each_in_2_g
         device1.update_named_shadow(shadow_name, {"online": True, "Light1": {"Power": False, "Brightness": 0}})
 
         # The shared user's own discovery is what marks the node ST-enabled for them.
-        discovery = st_discovery_request(region, arn, test_user2.access_token)
+        discovery = test_user2.st_discover_devices(lambda_arn=arn, region=region)
         light1_id = st_external_device_id(device1.node_thing_name, "Light1")
         discovered = {d["externalDeviceId"] for d in (discovery.get("devices") or [])}
         assert light1_id in discovered, (
@@ -495,7 +407,7 @@ def test_smartthings_command_allowed_for_shared_user(user_with_1_dev_each_in_2_g
         device1.clear_queues()
 
         commands = [{"component": "main", "capability": "st.switch", "command": "on", "arguments": []}]
-        response = st_command_request(region, arn, test_user2.access_token, light1_id, commands)
+        response = test_user2.st_control_device(light1_id, commands, lambda_arn=arn, region=region)
         print(f"shared-user commandRequest response ({region}) is ", response)
 
         message = device1.wait_for_params_message(timeout=5)
@@ -525,7 +437,7 @@ def test_smartthings_command_allowed_for_shared_user(user_with_1_dev_each_in_2_g
 @pytest.fixture
 def capability_device(user_with_multi_capability_device, st_region_arn):
     """Connect the multi-capability device, run discovery, and return the pieces
-    every capability test needs: (region, arn, device, group_id, token, discovery)."""
+    every capability test needs: (region, arn, device, group_id, user, discovery)."""
     device, group_id, test_user1 = user_with_multi_capability_device
     region, arn = st_region_arn
 
@@ -545,16 +457,16 @@ def capability_device(user_with_multi_capability_device, st_region_arn):
         "Thermostat": {"Setpoint": 20},
     })
 
-    discovery = st_discovery_request(region, arn, test_user1.access_token)
+    discovery = test_user1.st_discover_devices(lambda_arn=arn, region=region)
     time.sleep(2)
     device.clear_queues()
 
-    return region, arn, device, group_id, test_user1.access_token, discovery
+    return region, arn, device, group_id, test_user1, discovery
 
 
 def test_smartthings_discovery_handler_types(capability_device):
     """Each device profile maps to the handler type SmartThings needs to render controls."""
-    region, _arn, device, _group_id, _token, discovery = capability_device
+    region, _arn, device, _group_id, _user, discovery = capability_device
 
     by_id = {d["externalDeviceId"]: d for d in (discovery.get("devices") or [])}
     expected = {
@@ -573,10 +485,10 @@ def test_smartthings_discovery_handler_types(capability_device):
 
 def _run_capability_command(capability_device, device_name, commands, expected_params):
     """Send commands to one device and assert the params the device receives."""
-    region, arn, device, _group_id, token, _discovery = capability_device
+    region, arn, device, _group_id, user, _discovery = capability_device
 
     eid = st_external_device_id(device.node_thing_name, device_name)
-    response = st_command_request(region, arn, token, eid, commands)
+    response = user.st_control_device(eid, commands, lambda_arn=arn, region=region)
     print(f"capability commandRequest ({region}, {device_name}) is ", response)
 
     message = device.wait_for_params_message(timeout=5)
@@ -659,19 +571,6 @@ def test_smartthings_command_thermostat_setpoint(capability_device):
 # ---------------------------------------------------------------------------
 
 
-def st_command_request_devices(region, arn, token, devices):
-    """Send a commandRequest carrying several devices.
-
-    devices: list of {"externalDeviceId": str, "commands": [...]}
-    """
-    request_body = {
-        "headers": _st_headers("commandRequest"),
-        "authentication": {"tokenType": "Bearer", "token": token},
-        "devices": devices,
-    }
-    return _st_invoke(region, arn, request_body)
-
-
 def test_smartthings_command_offline_device(user_with_1_dev_each_in_2_groups, st_region_arn):
     """A command for a disconnected node reports OFFLINE rather than pretending to succeed."""
     device1, _device2, group1_id, _group2_id, test_user1 = user_with_1_dev_each_in_2_groups
@@ -683,7 +582,7 @@ def test_smartthings_command_offline_device(user_with_1_dev_each_in_2_groups, st
     assert device1.shadow_connect([shadow_name]), "Failed to connect to shadow"
 
     # Discovery while still online, so the node is known and ST-enabled.
-    st_discovery_request(region, arn, test_user1.access_token)
+    test_user1.st_discover_devices(lambda_arn=arn, region=region)
     light1_id = st_external_device_id(device1.node_thing_name, "Light1")
 
     # Now take it offline and wait for the presence handler to write reported.online=false.
@@ -693,7 +592,7 @@ def test_smartthings_command_offline_device(user_with_1_dev_each_in_2_groups, st
     deadline = time.time() + 90
     health = None
     while time.time() < deadline:
-        refresh = st_state_refresh_request(region, arn, test_user1.access_token, [light1_id])
+        refresh = test_user1.st_state_refresh([light1_id], lambda_arn=arn, region=region)
         states = (refresh.get("deviceState") or [{}])[0].get("states") or []
         health = next((s["value"] for s in states if s["capability"] == "st.healthCheck"), None)
         if health == "offline":
@@ -704,7 +603,7 @@ def test_smartthings_command_offline_device(user_with_1_dev_each_in_2_groups, st
     )
 
     commands = [{"component": "main", "capability": "st.switch", "command": "on", "arguments": []}]
-    response = st_command_request(region, arn, test_user1.access_token, light1_id, commands)
+    response = test_user1.st_control_device(light1_id, commands, lambda_arn=arn, region=region)
     print(f"offline commandRequest response ({region}) is ", response)
 
     device_states = response.get("deviceState") or []
@@ -728,7 +627,7 @@ def test_smartthings_command_multiple_devices_are_independent(user_with_1_dev_ea
     assert device1.subscribe(topic=params_topic), "Failed to subscribe to params topic"
 
     device1.update_named_shadow(shadow_name, {"online": True, "Light1": {"Power": False, "Brightness": 0}})
-    st_discovery_request(region, arn, test_user1.access_token)
+    test_user1.st_discover_devices(lambda_arn=arn, region=region)
     time.sleep(2)
     device1.clear_queues()
 
@@ -736,10 +635,10 @@ def test_smartthings_command_multiple_devices_are_independent(user_with_1_dev_ea
     unknown_id = st_external_device_id("test-rsa-device-does-not-exist", "Light1")
     switch_on = [{"component": "main", "capability": "st.switch", "command": "on", "arguments": []}]
 
-    response = st_command_request_devices(region, arn, test_user1.access_token, [
+    response = test_user1.st_control_devices([
         {"externalDeviceId": unknown_id, "commands": switch_on},
         {"externalDeviceId": good_id, "commands": switch_on},
-    ])
+    ], lambda_arn=arn, region=region)
     print(f"multi-device commandRequest response ({region}) is ", response)
 
     message = device1.wait_for_params_message(timeout=5)
@@ -767,15 +666,15 @@ def test_smartthings_command_multiple_commands_one_device(user_with_1_dev_each_i
     assert device1.subscribe(topic=params_topic), "Failed to subscribe to params topic"
 
     device1.update_named_shadow(shadow_name, {"online": True, "Light1": {"Power": False, "Brightness": 0}})
-    st_discovery_request(region, arn, test_user1.access_token)
+    test_user1.st_discover_devices(lambda_arn=arn, region=region)
     time.sleep(2)
     device1.clear_queues()
 
     light1_id = st_external_device_id(device1.node_thing_name, "Light1")
-    response = st_command_request(region, arn, test_user1.access_token, light1_id, [
+    response = test_user1.st_control_device(light1_id, [
         {"component": "main", "capability": "st.switch", "command": "on", "arguments": []},
         {"component": "main", "capability": "st.switchLevel", "command": "setLevel", "arguments": [50]},
-    ])
+    ], lambda_arn=arn, region=region)
     print(f"multi-command commandRequest response ({region}) is ", response)
 
     # Each command publishes separately, so collect both messages.
