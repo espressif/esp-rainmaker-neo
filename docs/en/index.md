@@ -118,7 +118,7 @@ contribute/testing
 
 ## Admin Dashboard
 
-Everything an admin or super admin can reach. See
+Everything an admin can reach. See
 [the section overview](specs/admin/index.md) for the reading order; the pages
 cover [authentication and permissions](specs/admin/authentication.md),
 [the admin APIs](specs/admin/apis.md), [the data model](specs/admin/data-model.md),

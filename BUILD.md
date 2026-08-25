@@ -143,7 +143,7 @@ Both integrations are cloud-side and live in this repo, so they deploy with ever
 
 ## CLI (Morpheus)
 
-`cli/morpheus.py` is an interactive CLI to exercise a deployment end-to-end — as a user, a super admin, or a simulated device — without needing a phone app or real hardware.
+`cli/morpheus.py` is an interactive CLI to exercise a deployment end-to-end — as a user, an admin, or a simulated device — without needing a phone app or real hardware.
 
 It reuses the same Python 3.12 venv as the backend, and needs AWS credentials for the target account/region plus the deployment's outputs — either a local `rmng-outputs.json` at the repo root, or the published URL:
 

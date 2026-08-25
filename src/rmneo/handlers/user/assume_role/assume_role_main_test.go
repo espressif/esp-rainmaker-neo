@@ -544,7 +544,7 @@ var _ = Describe("Assume Role Main", func() {
 			}
 		})
 
-		It("should let super-admin assume role for any node", func() {
+		It("should let an admin assume role for any node", func() {
 			nodeID := "admin-target-node"
 			putNodeInGroup(ctx, testGroup.GroupID, nodeID)
 

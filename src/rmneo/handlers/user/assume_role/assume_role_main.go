@@ -245,8 +245,8 @@ func authorizeNodeAccess(ctx context.Context, rmng_context *rmngctx.RmngContext,
 		return &resp
 	}
 
-	// Super-admins are allowed to assume role for any node.
-	if accessor, ok := rmng_context.GetAccessor().(*user.User); ok && accessor != nil && accessor.IsSuperAdmin(rmng_context) {
+	// Admins are allowed to assume role for any node.
+	if accessor, ok := rmng_context.GetAccessor().(*user.User); ok && accessor != nil && accessor.IsAdmin(rmng_context) {
 		return nil
 	}
 
@@ -425,9 +425,8 @@ func resolveAssumeRoleGroupAccess(ctx context.Context, rmng_context *rmngctx.Rmn
 			return groupAccess{}, &resp
 		}
 
-		isSuperAdmin := adminUser.IsSuperAdmin(rmng_context)
-		if !isSuperAdmin {
-			rlog.Error(rmng_context).Str("user_id", adminUser.GetID()).Msg("User is not a super admin but tried to use admin assume_role")
+		if !adminUser.IsAdmin(rmng_context) {
+			rlog.Error(rmng_context).Str("user_id", adminUser.GetID()).Msg("Non-admin tried to use admin assume_role")
 			resp := utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("Admin privileges required"))
 			return groupAccess{}, &resp
 		}

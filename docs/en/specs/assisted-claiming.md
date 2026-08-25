@@ -53,9 +53,9 @@ Matter is enabled) a Matter attestation certificate: IoT does not require
 
 ### 2.1 What claiming replaces, and what it does not
 
-The established superadmin onboarding paths — single-node certificate upload on
+The established admin onboarding paths — single-node certificate upload on
 `POST /v1/admin/nodes` and bulk registration from a certificate CSV — are
-unaffected and remain superadmin-only in every deployment mode. Assisted
+unaffected and remain admin-only in every deployment mode. Assisted
 claiming is an additional path, enabled per deployment.
 
 ### 2.2 Variants
@@ -171,7 +171,7 @@ key held in a database cannot provide.
 
 The CA certificate cannot be produced at synth time — it must be signed by the
 KMS key, which only exists after deployment. It is therefore minted at runtime
-through the superadmin bootstrap API (§3.9), not at deploy time. Mint-once is
+through the admin bootstrap API (§3.9), not at deploy time. Mint-once is
 enforced by the write itself (SSM no-overwrite), not a check, so concurrent or
 repeated mint calls cannot replace an existing CA; replacing it is a separately
 authorized rotation. When no subject is configured, the CA subject is derived
@@ -247,10 +247,10 @@ There is no delete method on the data layer, and the initiate Lambda has no
 ### 3.9 CA configuration and bootstrap
 
 The whole claiming feature is configured and the CA minted at runtime through a
-superadmin-only API, not at deploy time. This keeps operator-chosen configuration
+admin-only API, not at deploy time. This keeps operator-chosen configuration
 out of the deploy inputs (the claim group has no `rmng-inputs.json` dependency)
 and mirrors the other admin configuration endpoints: every call is gated on the
-caller being a superadmin, and a regular user is refused.
+caller being a admin, and a regular user is refused.
 
 Claiming configuration is a single JSON document held in SSM:
 
@@ -300,7 +300,7 @@ module ships with every release and can be enabled per install.
 
 Enablement is a runtime step, not a deploy-time gate. Deploying the group stands
 up the infrastructure but leaves claiming inert: the initiate/verify handlers
-fail closed until a superadmin sets a `mode` in the claiming configuration (§3.9)
+fail closed until a admin sets a `mode` in the claiming configuration (§3.9)
 **and** mints the CA. The variant and the per-claimant quota live in that
 runtime configuration document, not in `rmng-inputs.json` — the claim group has
 no dependency on that file at all.
@@ -309,7 +309,7 @@ no dependency on that file at all.
   Destroying either is unrecoverable — the key cannot be regenerated, and losing
   the table would re-assign every claimed device a fresh node ID, orphaning the
   Thing, certificate and shadow it already has.
-- `ClaimCore` (core stack): the claim Lambda and its routes, plus the superadmin
+- `ClaimCore` (core stack): the claim Lambda and its routes, plus the admin
   CA configuration and bootstrap API (§3.9). Certificate identity and validity
   are set through that API at runtime, never through `rmng-inputs.json`.
 - `kms:Sign` and `kms:GetPublicKey` are granted to the claim handler (leaf
@@ -372,7 +372,7 @@ by challenge-response; re-claim replacing the certificate and the superseded one
 no longer connecting; cross-user impersonation refused at the broker; unique
 node per `{user, MAC}`; admin visibility of all three provenance tags;
 `registered_at` surviving a re-claim. CA bootstrap is exercised through the
-superadmin API — configuring identity, a first mint, an idempotent repeat, and a
+admin API — configuring identity, a first mint, an idempotent repeat, and a
 forced rotation that replaces the published CA — and a non-admin caller is
 refused.
 
@@ -384,7 +384,7 @@ claiming is enabled costs no quota.
 
 ## 7. What Does Not Change
 
-Superadmin single-node and bulk registration, node association, OTA, shadow and
+Admin single-node and bulk registration, node association, OTA, shadow and
 group flows are untouched. A deployment with claiming disabled creates no
 claiming resources at all — no KMS key, no table, no Lambdas, no routes — and
 behaves exactly as before.

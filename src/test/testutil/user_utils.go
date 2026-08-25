@@ -119,8 +119,8 @@ func (h *ESPUserTokenHarness) Close() {
 }
 
 // SetupTestAdminUser sets up an admin user in the Cognito admin pool. Admins are
-// Cognito-only: their identity (custom:user_id) and privilege (custom:super_admin)
-// live entirely in the pool
+// Cognito-only: their identity (custom:user_id) lives entirely in the pool, and
+// membership of that pool is the whole privilege — there is no tier above it.
 // Returns the user object and rmng context for convenience
 func SetupTestAdminUser(ctx context.Context, userID, email string) (*user.User, *rmngctx.RmngContext) {
 	cognitoMock := awscommon.GetCognitoProviderClient().(*mock.CognitoProviderMock)
@@ -129,26 +129,23 @@ func SetupTestAdminUser(ctx context.Context, userID, email string) (*user.User, 
 	userState := cognitoMock.GetUserByUsername(adminUserPoolID, userID)
 	if userState != nil {
 		userState.Attributes["custom:user_id"] = userID
-		userState.Attributes["custom:super_admin"] = "true"
 	}
 
 	testUser := user.NewUser(userID)
 	return testUser, rmngctx.NewRmngContext(testUser)
 }
 
-// SetupTestNonAdminUserInAdminPool sets up a non-admin user in the Cognito admin pool
-// This is useful for testing authorization scenarios where a user is in the admin pool but doesn't have super admin privileges
-// Returns the user object and rmng context for convenience
-func SetupTestNonAdminUserInAdminPool(ctx context.Context, userID, email string) (*user.User, *rmngctx.RmngContext) {
-	cognitoMock := awscommon.GetCognitoProviderClient().(*mock.CognitoProviderMock)
-	adminUserPoolID := os.Getenv("ADMIN_USER_POOL_ID")
-	cognitoMock.AddTestUserDirect(adminUserPoolID, userID, email, "TestPassword123!", true)
-	userState := cognitoMock.GetUserByUsername(adminUserPoolID, userID)
-	if userState != nil {
-		userState.Attributes["custom:user_id"] = userID
-		// Don't set custom:super_admin - user is in admin pool but not a super admin
-	}
+// SetupTestNonAdminUser seeds an ordinary end user for authorization tests that must
+// be refused by an admin endpoint. Admin privilege is admin-pool membership, so the
+// only caller an admin endpoint refuses is one resolved through the OIDC end-user
+// path — pair this with OIDCAuthProvider when building the request.
+func SetupTestNonAdminUser(ctx context.Context, userID, email string) (*user.User, *rmngctx.RmngContext) {
+	return SetupTestUser(ctx, userID, email)
+}
 
-	testUser := user.NewUser(userID)
-	return testUser, rmngctx.NewRmngContext(testUser)
+// OIDCAuthProvider builds the CognitoAuthenticationProvider string API Gateway stamps on
+// a request from a federated end user, which routes auth to the OIDC user service (and so
+// to IsAdmin == false). Admin-pool callers carry a ":CognitoSignIn:<id>" provider instead.
+func OIDCAuthProvider(userID string) string {
+	return "https://issuer.example:" + userID
 }

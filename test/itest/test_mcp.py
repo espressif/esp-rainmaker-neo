@@ -38,18 +38,18 @@ MCP_CLIENT_ID = "mcp-oauth-client"
 _mcp_client_secret = None
 
 
-def _get_mcp_client_secret(super_admin):
+def _get_mcp_client_secret(admin):
     global _mcp_client_secret
     if _mcp_client_secret:
         return _mcp_client_secret
-    resp = super_admin.list_oauth_clients(get_secret=True)
+    resp = admin.list_oauth_clients(get_secret=True)
     assert resp.status_code == 200, f"listing clients failed: {resp.status_code} {resp.text}"
     row = next(c for c in resp.json()["clients"] if c["client_id"] == MCP_CLIENT_ID)
     _mcp_client_secret = row["client_secret"]
     return _mcp_client_secret
 
 
-def _mint_mcp_token(user, super_admin):
+def _mint_mcp_token(user, admin):
     """Mint OUR access token with aud=mcp-oauth-client for `user`'s subject via the real flows
     (authorize → federation → hosted-UI login → code exchange). See module docstring."""
     verifier, challenge = pkce_pair()
@@ -78,7 +78,7 @@ def _mint_mcp_token(user, super_admin):
     code = parse_qs(urlparse(loc).query)["code"][0]
 
     tok = requests.post(f"{base}/oauth2/token",
-                        auth=(MCP_CLIENT_ID, _get_mcp_client_secret(super_admin)),
+                        auth=(MCP_CLIENT_ID, _get_mcp_client_secret(admin)),
                         data={"grant_type": "authorization_code", "code": code,
                               "redirect_uri": proxy_callback, "client_id": MCP_CLIENT_ID,
                               "code_verifier": verifier})
@@ -87,11 +87,11 @@ def _mint_mcp_token(user, super_admin):
 
 
 @pytest.fixture
-def mcp_client(super_admin_user):
+def mcp_client(admin_user):
     """Callable turning a pooled user into an authenticated MCP client, caching the token."""
     def _client(user):
         if not getattr(user, "_mcp_access_token", None):
-            user._mcp_access_token = _mint_mcp_token(user, super_admin_user)
+            user._mcp_access_token = _mint_mcp_token(user, admin_user)
         return Mcp(MCP_API_URL, user._mcp_access_token)
     return _client
 

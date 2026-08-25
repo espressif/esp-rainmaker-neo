@@ -39,7 +39,7 @@ export function useOAuthClients(options?: { getSecret?: boolean; enabled?: boole
 }
 
 /**
- * Hook for one registered client, secret included. The listing is superadmin-only, so callers get
+ * Hook for one registered client, secret included. The listing is admin-only, so callers get
  * `undefined` — never a thrown error — when the request is refused or the client is gone; these
  * are values to display when available, not something to fail a page over.
  */

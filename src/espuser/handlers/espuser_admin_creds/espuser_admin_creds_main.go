@@ -78,11 +78,6 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Invalid request body")), nil
 	}
 
-	if !isSuperAdmin(request) {
-		rlog.Error(ctx).Msg("Non-super-admin attempted to fetch admin credentials")
-		return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("Super admin privileges required")), nil
-	}
-
 	roleArn := os.Getenv("ADMIN_CREDS_ROLE_ARN")
 	if roleArn == "" {
 		rlog.Error(ctx).Msg("ADMIN_CREDS_ROLE_ARN environment variable is not set")
@@ -96,20 +91,6 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 	}
 
 	return utils.APIGwRespJSON(http.StatusOK, resp), nil
-}
-
-// isSuperAdmin reads the custom:super_admin claim the admin Cognito authorizer
-// injected into the request context. The authorizer has already validated the
-// token, so the claim is trusted here without re-verification.
-func isSuperAdmin(request events.APIGatewayProxyRequest) bool {
-	if request.RequestContext.Authorizer == nil {
-		return false
-	}
-	claims, ok := request.RequestContext.Authorizer["claims"].(map[string]interface{})
-	if !ok {
-		return false
-	}
-	return claims["custom:super_admin"] == "true"
 }
 
 func assumeAdminCredsRole(ctx context.Context, roleArn, sessionSuffix string) (Response, error) {

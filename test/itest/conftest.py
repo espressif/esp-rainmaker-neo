@@ -418,7 +418,7 @@ def _init_admin_user():
     email = generate_random_email()
 
     password = generate_test_password()
-    user = User(email, password, REGION, IDENTITY_POOL_ID, API_GATEWAY_URL, USER_API_GATEWAY_URL, IOT_ENDPOINT, admin_user_pool_id=ADMIN_USER_POOL_ID, admin_client_id=ADMIN_CLIENT_ID, is_super_admin=True)
+    user = User(email, password, REGION, IDENTITY_POOL_ID, API_GATEWAY_URL, USER_API_GATEWAY_URL, IOT_ENDPOINT, admin_user_pool_id=ADMIN_USER_POOL_ID, admin_client_id=ADMIN_CLIENT_ID, is_admin=True)
     user.mailosaur_email = email
 
     # Try to authenticate first - if successful, admin user already exists and we can reuse it
@@ -449,7 +449,7 @@ def _init_admin_user():
     # Admin user doesn't exist or authentication failed - create new admin user.
     # Admins are provisioned directly in the admin Cognito pool (no admin-auth API, no DB record).
     print(f"[User] Creating new admin user: {email}")
-    user.create_super_admin_via_cognito(email=email, password=password)
+    user.create_admin_via_cognito(email=email, password=password)
     user.register_client("ios-dummy", "ios-user-device-token")
     user.get_aws_credentials()
     return user
@@ -459,10 +459,10 @@ _node_registrar_provider = None
 
 
 def node_registrar_identity():
-    """CognitoAuthenticationProvider string of a real superadmin, for direct-invoke node
+    """CognitoAuthenticationProvider string of a real admin, for direct-invoke node
     registration. The admin-node-reg handler resolves its caller from this identity and enforces
-    the superadmin gate (the main-era "unknown-user" backdoor — any identity-less direct invoke
-    became a superadmin — is gone). Provisions a fixed superadmin in the admin pool once per
+    the admin gate (the main-era "unknown-user" backdoor — any identity-less direct invoke
+    became a admin — is gone). Provisions a fixed admin in the admin pool once per
     session (idempotent across sessions: creation tolerates UsernameExists) and caches the string.
     """
     global _node_registrar_provider
@@ -475,7 +475,7 @@ def node_registrar_identity():
     # nodes registered by earlier runs keep resolving to the same caller.
     provisioner = User(email, "", REGION, IDENTITY_POOL_ID, API_GATEWAY_URL, USER_API_GATEWAY_URL,
                        IOT_ENDPOINT, admin_user_pool_id=ADMIN_USER_POOL_ID, admin_client_id=ADMIN_CLIENT_ID)
-    assert provisioner.create_super_admin_via_cognito(
+    assert provisioner.create_admin_via_cognito(
         email=email, password=False, user_id="node-registrar-itest",
     ), "failed to provision the node-registrar identity"
 
@@ -899,9 +899,9 @@ def test_user5():
 
 
 @pytest.fixture
-def super_admin_user():
+def admin_user():
     user = admin_user_pool.acquire()
-    print("[User] Acquired super-admin user:", user.sub)
+    print("[User] Acquired admin user:", user.sub)
     try:
         yield user
     finally:

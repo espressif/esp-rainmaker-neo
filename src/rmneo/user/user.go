@@ -145,8 +145,10 @@ func (u *User) UnregisterClient(ctx *rmngctx.RmngContext, integrationID, endpoin
 	return user_integration_db.NewUserDB(ctx).UnregisterClient(integrationID, endpointID)
 }
 
-func (u *User) IsSuperAdmin(ctx *rmngctx.RmngContext) bool {
-	return u.UserInfo.IsSuperAdmin
+// IsAdmin reports whether the caller was resolved through the admin Cognito pool.
+// Pool membership is the entire admin privilege — there is no tier above it.
+func (u *User) IsAdmin(ctx *rmngctx.RmngContext) bool {
+	return u.UserInfo.IsAdmin
 }
 
 // LoadNodePermissions loads the node access for the user either through the group or a sub-group that the node may belong to

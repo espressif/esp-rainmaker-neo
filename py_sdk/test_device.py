@@ -88,7 +88,7 @@ class Device:
         """Register this device as a node via a direct invoke of the rmng-admin-node-reg Lambda.
 
         caller_identity is the API-Gateway CognitoAuthenticationProvider string of a REAL
-        superadmin"""
+        admin"""
         node_thing_name = self.node_thing_name
 
         if not node_thing_name or not self.node_cert:

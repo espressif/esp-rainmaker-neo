@@ -37,7 +37,7 @@ nodeadmin:getreservation, nodeadmin:countreservations
 ```
 
 **Admin config actions** — gate the `rmng_admin_config` table, granted only to
-`SystemActor` and super-admin callers:
+`SystemActor` and admin callers:
 ```
 adminconfig:*, adminconfig:get, adminconfig:set
 ```
@@ -57,8 +57,10 @@ A secondary user gets **no** `group:delete`, `group:share`, or
 `group:editnodes` — it can manage subgroups and automations but cannot add or
 remove nodes, share the group onward, or delete it.
 
-## Super Admin Check
+## Admin Check
 
-Every admin endpoint checks the caller's super-admin status before doing anything
-else and answers `403` if it does not hold. The check is on the caller resolved
-from the request, not on a value in the request body.
+Every admin endpoint establishes that the caller came through the admin Cognito
+pool before doing anything else, and answers `403` if it did not. The check is on
+the caller resolved from the request, not on a value in the request body.
+Admin-pool membership is the whole privilege — there is no tier above it, so no
+admin endpoint distinguishes one admin from another.

@@ -287,9 +287,12 @@ class CreateIdentityPool(Construct):
         # rule is plugin-sourced, so Annotations.acknowledge_warning cannot silence it.
 
         # Role mapping below: only the admin Cognito pool has one, and it exists solely to
-        # promote a `custom:super_admin == true` identity to AdminDeviceUsersRole. The OIDC
-        # provider has no role mapping — every federated end user lands on the pool's
-        # default `authenticated` role (DeviceUsersRole), regardless of the token's `aud`.
+        # put every admin-pool identity on AdminDeviceUsersRole. Admin-pool membership is the
+        # whole privilege — there is no second tier — so the rule matches the pool's own app
+        # client id (`aud`, always present on the ID token the identity pool logs in with)
+        # rather than any per-user claim. The OIDC provider has no role mapping — every
+        # federated end user lands on the pool's default `authenticated` role
+        # (DeviceUsersRole), regardless of the token's `aud`.
 
         # Create Cognito Identity Pool
         identity_pool = cognito.CfnIdentityPool(
@@ -328,9 +331,9 @@ class CreateIdentityPool(Construct):
                     rules_configuration=cognito.CfnIdentityPoolRoleAttachment.RulesConfigurationTypeProperty(
                         rules=[
                             cognito.CfnIdentityPoolRoleAttachment.MappingRuleProperty(
-                                claim="custom:super_admin",
+                                claim="aud",
                                 match_type="Equals",
-                                value="true",
+                                value=common_resources.esp_admin_user_pool_client_id,
                                 role_arn=admin_device_users_role.admin_device_users_role.role_arn
                             )
                         ]

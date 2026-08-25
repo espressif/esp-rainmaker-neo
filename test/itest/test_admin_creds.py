@@ -3,14 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Integration tests for the superadmin admin-credentials APIs.
+Integration tests for the admin admin-credentials APIs.
 
 Endpoints under test:
   POST /v1/admin/credentials  (rmng API, SigV4)        -> Lambda concurrency read
   POST /v1/admin/credentials  (ESP User API, Cognito)  -> SES + SMS sandbox reads
 
 Each returns short-lived STS credentials whose session policy is scoped to the account states
-the post-deployment page displays. The tests assert the credentials reach a superadmin, are
+the post-deployment page displays. The tests assert the credentials reach a admin, are
 denied to a non-admin, and — end to end — can perform their own read, cannot perform the other
 stack's, and cannot change any setting.
 """
@@ -58,10 +58,10 @@ def test_rmng_admin_creds_denied_for_non_admin(test_user1):
     assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
 
 
-def test_rmng_admin_creds_are_scoped(super_admin_user):
+def test_rmng_admin_creds_are_scoped(admin_user):
     """The rmng credentials read the Lambda concurrency limit and nothing else: SES and SMS
     belong to the espuser stack, and the limit is reported, never changed."""
-    creds = super_admin_user.admin_get_rmng_creds().json()
+    creds = admin_user.admin_get_rmng_creds().json()
 
     settings = _client("lambda", creds).get_account_settings()
     assert "AccountLimit" in settings, "in-scope lambda:GetAccountSettings should succeed"
@@ -85,10 +85,10 @@ def test_espuser_admin_creds_denied_for_non_admin(test_user1):
         f"Expected 401/403, got {resp.status_code}: {resp.text}"
 
 
-def test_espuser_admin_creds_are_scoped(super_admin_user):
+def test_espuser_admin_creds_are_scoped(admin_user):
     """The espuser credentials read the two sandbox states the page displays, cannot reach
     Lambda (the rmng stack's), and cannot change either setting."""
-    creds = super_admin_user.admin_get_espuser_creds().json()
+    creds = admin_user.admin_get_espuser_creds().json()
 
     account = _client("sesv2", creds).get_account()
     assert "ProductionAccessEnabled" in account, "in-scope ses:GetAccount should succeed"

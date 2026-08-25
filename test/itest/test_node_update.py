@@ -108,7 +108,7 @@ def _poll_until_completed(user, request_id, status_fn, max_attempts=20, sleep_se
 # ---------------------------------------------------------------------------
 
 
-def test_update_node_metadata(super_admin_user, node_csv_uploader):
+def test_update_node_metadata(admin_user, node_csv_uploader):
     """Pre-register a node via the bulk-register flow, then run an update job
     that adds new tags and a new admin group; verify both land on the node.
 
@@ -128,14 +128,14 @@ def test_update_node_metadata(super_admin_user, node_csv_uploader):
         "subtype": "Tunable",
         "key_type": "ec",
     }]
-    register_s3_path, certs = node_csv_uploader(super_admin_user, register_nodes, return_certs=True)
+    register_s3_path, certs = node_csv_uploader(admin_user, register_nodes, return_certs=True)
 
     # Pre-register the node so node_details exists and the update path's
     # existence check passes.
-    reg_resp = super_admin_user.bulk_register_nodes(register_s3_path, tags=["env:initial"])
+    reg_resp = admin_user.bulk_register_nodes(register_s3_path, tags=["env:initial"])
     assert reg_resp is not None, "Pre-registration failed"
-    _poll_until_completed(super_admin_user, reg_resp["request_id"],
-                          super_admin_user.get_bulk_register_status)
+    _poll_until_completed(admin_user, reg_resp["request_id"],
+                          admin_user.get_bulk_register_status)
 
     # Build an update CSV with no certs column -- metadata-only update.
     # admin_groups is supplied in the request body (not the per-row CSV column)
@@ -147,12 +147,12 @@ def test_update_node_metadata(super_admin_user, node_csv_uploader):
         rows=[{"node_id": node_id, "env": "updated", "ring": "phase1"}],
         header=["node_id", "env", "ring"],
     )
-    update_s3_path = _upload_csv_via_user(super_admin_user, update_csv, "node_update")
+    update_s3_path = _upload_csv_via_user(admin_user, update_csv, "node_update")
 
     update_request_id = None
     iot_client = boto3.client("iot", region_name=REGION)
     try:
-        update_resp = super_admin_user.bulk_update_nodes(
+        update_resp = admin_user.bulk_update_nodes(
             update_s3_path,
             admin_group_names=[update_group],
             tags=["batch:itest"],
@@ -161,8 +161,8 @@ def test_update_node_metadata(super_admin_user, node_csv_uploader):
         update_request_id = update_resp.get("request_id")
         assert update_request_id, "No request_id in bulk_update_nodes response"
 
-        terminal = _poll_until_completed(super_admin_user, update_request_id,
-                                          super_admin_user.get_bulk_update_status)
+        terminal = _poll_until_completed(admin_user, update_request_id,
+                                          admin_user.get_bulk_update_status)
         assert terminal.get("job_type") == "update", f"job_type wrong: {terminal}"
         assert terminal.get("total_nodes") == 1
         assert terminal.get("success_count") == 1
@@ -215,7 +215,7 @@ def test_update_node_metadata(super_admin_user, node_csv_uploader):
         _delete_s3_object(update_s3_path)
 
 
-def test_update_node_cert(super_admin_user):
+def test_update_node_cert(admin_user):
     """Pre-register a node with cert A, run an update job with cert B for the
     same node, then verify:
       - cert B is ACTIVE and attached to the Thing
@@ -241,7 +241,7 @@ def test_update_node_cert(super_admin_user):
     # Pre-register via the single-node Lambda path so we can keep cert A's
     # private key around for connectivity assertions.
     device_a = Device(node_id, key_a_pem, cert_a_pem, CA_CERT, IOT_ENDPOINT, REGION, DEBUG)
-    assert super_admin_user.register_node(device_a), \
+    assert admin_user.register_node(device_a), \
         f"Pre-registration of {node_id} with cert A failed"
     assert connect_device_with_retry(device_a), \
         f"Pre-registered device {node_id} could not connect with cert A"
@@ -272,16 +272,16 @@ def test_update_node_cert(super_admin_user):
         rows=[{"node_id": node_id, "certs": cert_b_only}],
         header=["node_id", "certs"],
     )
-    update_s3_path = _upload_csv_via_user(super_admin_user, update_csv, "node_cert_update")
+    update_s3_path = _upload_csv_via_user(admin_user, update_csv, "node_cert_update")
     update_request_id = None
     try:
-        update_resp = super_admin_user.bulk_update_nodes(update_s3_path)
+        update_resp = admin_user.bulk_update_nodes(update_s3_path)
         assert update_resp is not None, "Bulk update API returned None"
         update_request_id = update_resp.get("request_id")
         assert update_request_id, "No request_id in bulk_update_nodes response"
 
-        terminal = _poll_until_completed(super_admin_user, update_request_id,
-                                          super_admin_user.get_bulk_update_status)
+        terminal = _poll_until_completed(admin_user, update_request_id,
+                                          admin_user.get_bulk_update_status)
         assert terminal.get("success_count") == 1
         assert terminal.get("failed_count") == 0
 

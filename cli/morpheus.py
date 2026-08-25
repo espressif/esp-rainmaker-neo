@@ -140,7 +140,7 @@ def parse_args():
     parser.add_argument('--password',
                         help='Password for a --user identity that is not in test_config.json. Prompted for securely if omitted; also read from RMNG_PASSWORD. Prefer the prompt or the env var, since a password in argv is visible to other processes and lands in shell history.')
     parser.add_argument('--is-admin', action='store_true',
-                        help='Qualifies --user: the given identity is a super admin, so authenticate it against the admin pool. Only needed for identities not in test_config.json, where the super_admin flag already says so.')
+                        help='Qualifies --user: the given identity is a admin, so authenticate it against the admin pool. Only needed for identities not in test_config.json, where the admin flag already says so.')
     parser.add_argument('--skip-account-check', action='store_true',
                         help='Do not verify that the configured AWS credentials match the account and region in the outputs. For deliberate cross-account use, e.g. reading a published outputs file only to print configuration instructions.')
     parser.add_argument('--gen-device', nargs=2, metavar=('NODE_NAME', 'KEY_TYPE'),
@@ -292,9 +292,9 @@ def handle_user_auth(user: User) -> bool:
     else:
         print(f"Authentication failed for user: {user.username}")
 
-    # Super admins go into the admin pool; end users into the provider pool they sign in against.
-    if user.is_super_admin:
-        user.create_super_admin_via_cognito()
+    # Admins go into the admin pool; end users into the provider pool they sign in against.
+    if user.is_admin:
+        user.create_admin_via_cognito()
     else:
         user.register_user_via_lambda(email=user.username if '@' in user.username else None)
     return success
@@ -411,23 +411,24 @@ def get_user(user_id):
         if not password:
             print(f"Error: no password supplied for '{user_id}'")
             return None
-        user_config = {'name': user_id, 'password': password, 'super_admin': args.is_admin}
+        user_config = {'name': user_id, 'password': password, 'admin': args.is_admin}
 
     username = user_config.get('name')
     password = user_config.get('password')
-    is_super_admin = user_config.get('super_admin', False)
+    # 'admin' is the pre-rename key; still honoured so an existing test_config.json keeps working.
+    is_admin = user_config.get('admin', user_config.get('admin', False))
 
     if not username:
         print(f"Error: user {user_id} is missing 'name'")
         return None
 
-    if is_super_admin:
+    if is_admin:
         # Admins authenticate against the admin Cognito pool (USER_PASSWORD_AUTH), so a password is required.
         if not password:
-            print(f"Error: super admin {username} is missing 'password'")
+            print(f"Error: admin {username} is missing 'password'")
             return None
         return User(username, password, REGION, IDENTITY_POOL_ID, API_GATEWAY_URL, USER_API_GATEWAY_URL, IOT_ENDPOINT,
-                    admin_user_pool_id=ADMIN_USER_POOL_ID, admin_client_id=ADMIN_USER_POOL_CLIENT_ID, is_super_admin=True)
+                    admin_user_pool_id=ADMIN_USER_POOL_ID, admin_client_id=ADMIN_USER_POOL_CLIENT_ID, is_admin=True)
 
     if '@' not in username:
         print(f"Error: end user {username} must have an email 'name'")
@@ -851,7 +852,7 @@ def handle_user_commands(user):
         elif main_command == 'request_sns_production':
             request_sns_production_access()
         elif main_command == 'enable_claim':
-            # enable_claim [config_file.json] -- superadmin: mint the claiming CA
+            # enable_claim [config_file.json] -- admin: mint the claiming CA
             # (after deploying the claim stacks) to turn claiming on, optionally
             # applying a certificate configuration first.
             handle_enable_claim(user, args[0] if args else None)
@@ -915,7 +916,7 @@ def handle_user_commands(user):
             print("  setup_ses_sender")
             print("  request_ses_production")
             print("  request_sns_production")
-            print("  enable_claim [config_file.json]  (superadmin: mint the claiming CA)")
+            print("  enable_claim [config_file.json]  (admin: mint the claiming CA)")
 
 def handle_device_commands(device):
     while True:
@@ -1279,7 +1280,7 @@ def print_alexa_skill_instructions():
     default_arn = settings.default_alexa_arn or '<AlexaSkillFunctionArn>'
     # Account linking runs against the ESP User OIDC IdP (not Cognito). The voice-assistant
     # client is the seeded `va-client` registry row; its secret is not an output — fetch it
-    # from the superadmin clients API or SSM (see docs/en/specs/alexa.md).
+    # from the admin clients API or SSM (see docs/en/specs/alexa.md).
     authorize_url, token_url = _oidc_endpoints()
     va_client_id = 'va-client'
     print(f"\nYou may now update the Alexa Skill configuration as follows:")
@@ -1305,7 +1306,7 @@ def print_smartthings_instructions():
     st_regions = settings.st_region_arns
     # Account linking runs against the ESP User OIDC IdP (not Cognito). The voice-assistant
     # client is the seeded `va-client` registry row, shared with Alexa and GVA; its secret is
-    # not an output — fetch it from the superadmin clients API or SSM.
+    # not an output — fetch it from the admin clients API or SSM.
     authorize_url, token_url = _oidc_endpoints()
     va_client_id = 'va-client'
     print(f"\nSmartThings configuration (https://developer.smartthings.com/):")
@@ -1382,7 +1383,7 @@ def handle_st_delete_config(user):
 def print_gva_instructions():
     # Account linking runs against the ESP User OIDC IdP (not Cognito). The voice-assistant
     # client is the seeded `va-client` registry row; its secret is not an output — fetch it
-    # from the superadmin clients API or SSM (see docs/en/specs/gva.md).
+    # from the admin clients API or SSM (see docs/en/specs/gva.md).
     authorize_url, token_url = _oidc_endpoints()
     va_client_id = 'va-client'
     fulfillment_url = settings.gva_fulfillment_url or '<GVAFulfillmentUrl>'
@@ -1497,13 +1498,13 @@ def _import_alexa_setup():
 
 def handle_alexa_setup_auto(user, config_file, skill_name=None):
     """Create/update + fully configure an Alexa skill via SMAPI, then POST the backend
-    config as this super-admin user (no AWS creds needed). Inputs come from config_file;
+    config as this admin user (no AWS creds needed). Inputs come from config_file;
     skill_name, if given, overrides the config's skill_name."""
     try:
         config = _alexa_config_to_env(config_file)
         alexa_setup = _import_alexa_setup()
 
-        # Config-API POST goes through this super-admin user's session, not AWS SigV4.
+        # Config-API POST goes through this admin user's session, not AWS SigV4.
         def post_config_fn(skill_id, client_id, client_secret, redirect_uris):
             response = user.alexa_post_configuration(
                 redirect_uris=redirect_uris, client_id=client_id,
@@ -1742,10 +1743,10 @@ def setup_users():
     print("Setting up users...")
     for user in users:
         if user:
-            # Super admins go into the admin pool; end users into the provider pool they sign in against.
-            if user.is_super_admin:
-                user.create_super_admin_via_cognito()
-                print(f"Super admin {user.username} provisioned in Cognito")
+            # Admins go into the admin pool; end users into the provider pool they sign in against.
+            if user.is_admin:
+                user.create_admin_via_cognito()
+                print(f"Admin {user.username} provisioned in Cognito")
             else:
                 user.register_user_via_lambda(email=user.username if '@' in user.username else None)
                 print(f"User {user.username} provisioned in the provider pool")
@@ -2001,13 +2002,13 @@ def setup_nodes(user_map: dict[str, User]):
     nodes = config.get('nodes', [])
     admin_group_name = config.get('admin_group_name', None)
 
-    # Register through the admin API as the super admin rather than invoking the registration
+    # Register through the admin API as the admin rather than invoking the registration
     # Lambda directly: API Gateway supplies the caller identity the handler authorizes against, so
     # nothing here needs the Lambda's physical name or a synthesised request context. Re-registering
     # an existing cert is idempotent server-side, which keeps repeated --setup-test-data runs safe.
-    superadmin = next((u for u in user_map.values() if u.is_super_admin), None)
-    if not superadmin:
-        print("No super admin configured; node registration would be unauthorized.")
+    admin = next((u for u in user_map.values() if u.is_admin), None)
+    if not admin:
+        print("No admin configured; node registration would be unauthorized.")
         return
 
     print("Setting up devices...")
@@ -2017,8 +2018,8 @@ def setup_nodes(user_map: dict[str, User]):
             print("Failed to create a device")
             continue
 
-        if superadmin.register_node(device, tags=["created_by:test"],
-                                    admin_group_names=[admin_group_name]):
+        if admin.register_node(device, tags=["created_by:test"],
+                               admin_group_names=[admin_group_name]):
             print(f"Node {device.node_thing_name} registered successfully")
         else:
             # Most often the node is already registered here -- from an earlier run, or by another
@@ -2377,7 +2378,7 @@ def handle_register_ios_platform(user, p8_key_file, key_id, team_id, bundle_id, 
     """Handle iOS platform registration.
 
     Args:
-        user (User): Super admin user object
+        user (User): Admin user object
         p8_key_file (str): Path to P8 key file
         key_id (str): Key ID
         team_id (str): Team ID
@@ -2405,7 +2406,7 @@ def handle_register_android_platform(user, json_file_path):
     """Handle Android platform registration.
 
     Args:
-        user (User): Super admin user object
+        user (User): Admin user object
         json_file_path (str): Path to JSON file containing GCM service account key
     """
     if not os.path.exists(json_file_path):
@@ -2435,7 +2436,7 @@ def handle_list_mobile_platforms(user):
     """Handle listing mobile platforms.
 
     Args:
-        user (User): Super admin user object
+        user (User): Admin user object
     """
     user.list_mobile_platforms()
 
@@ -2444,7 +2445,7 @@ def handle_get_iot_event_mode(user):
     node_offline_rule and device_to_cloud_rule.
 
     Args:
-        user (User): Super admin user object
+        user (User): Admin user object
     """
     result = user.admin_get_iot_event_mode()
     if isinstance(result, dict):
@@ -2459,7 +2460,7 @@ def handle_set_iot_event_mode(user, mode):
     device_to_cloud_rule. Both rules switch together.
 
     Args:
-        user (User): Super admin user object
+        user (User): Admin user object
         mode (str): "direct" or "sqs"
     """
     if mode not in ("direct", "sqs"):
@@ -2475,7 +2476,7 @@ def handle_set_iot_event_mode(user, mode):
 
 
 def handle_enable_claim(user, config_file=None):
-    """Enable assisted claiming (superadmin only).
+    """Enable assisted claiming (admin only).
 
     The claim stack group stands up the CA key and API but leaves claiming off:
     it is on only once a mode is configured AND the CA is minted, both through
@@ -2485,7 +2486,7 @@ def handle_enable_claim(user, config_file=None):
     re-applies the configuration.
 
     Args:
-        user (User): super admin user object
+        user (User): admin user object
         config_file (str): optional path to a JSON claiming-config file
 
     Config file format (every field optional; omit one and its default applies):
@@ -2551,7 +2552,7 @@ def handle_update_ios_platform(user, p8_key_file, key_id, team_id, bundle_id, sa
     """Handle iOS platform update.
 
     Args:
-        user (User): Super admin user object
+        user (User): Admin user object
         p8_key_file (str): Path to P8 key file
         key_id (str): Key ID
         team_id (str): Team ID
@@ -2586,7 +2587,7 @@ def handle_update_android_platform(user, json_file_path):
     """Handle Android platform update.
 
     Args:
-        user (User): Super admin user object
+        user (User): Admin user object
         json_file_path (str): Path to JSON file containing GCM service account key
     """
     if not os.path.exists(json_file_path):

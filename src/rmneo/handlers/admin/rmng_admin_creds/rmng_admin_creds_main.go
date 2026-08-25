@@ -55,7 +55,7 @@ const lambdaSessionPolicy = `{
 }`
 
 // handleRequest is reached via AWS_IAM (SigV4) auth using the dashboard's
-// identity-pool credentials, mirroring rmneo/handlers/admin/iot_event_mode. Super-admin is
+// identity-pool credentials, mirroring rmneo/handlers/admin/iot_event_mode. The admin gate is
 // resolved from the request identity, not from a Cognito authorizer context
 // (there is none on an AWS_IAM route).
 func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
@@ -71,9 +71,9 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Unauthorized")), nil
 	}
 	authedUser, ok := rctx.GetAccessor().(*user.User)
-	if !ok || !authedUser.IsSuperAdmin(rctx) {
-		rlog.Error(rctx).Msg("Non-super-admin attempted to fetch admin credentials")
-		return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("Super admin privileges required")), nil
+	if !ok || !authedUser.IsAdmin(rctx) {
+		rlog.Error(rctx).Msg("Non-admin attempted to fetch admin credentials")
+		return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("Admin privileges required")), nil
 	}
 
 	roleArn := os.Getenv("ADMIN_CREDS_ROLE_ARN")

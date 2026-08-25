@@ -75,7 +75,7 @@ var _ = Describe("Claim Verify", func() {
 			RequestContext: events.APIGatewayProxyRequestContext{
 				Identity: events.APIGatewayRequestIdentity{
 					CognitoIdentityID:             userID,
-					CognitoAuthenticationProvider: ":CognitoSignIn:" + userID,
+					CognitoAuthenticationProvider: test_utils.OIDCAuthProvider(userID),
 				},
 			},
 		}
@@ -129,8 +129,8 @@ var _ = Describe("Claim Verify", func() {
 		iotMock = awscommon.GetIoTClient().(*mock.IoTClientMock)
 
 		storeClaimingConfig(ctx, enabledConfig())
-		test_utils.SetupTestNonAdminUserInAdminPool(ctx, callerA, "a@example.com")
-		test_utils.SetupTestNonAdminUserInAdminPool(ctx, callerB, "b@example.com")
+		test_utils.SetupTestNonAdminUser(ctx, callerA, "a@example.com")
+		test_utils.SetupTestNonAdminUser(ctx, callerB, "b@example.com")
 
 		// Real KMS-backed issuance against an in-memory key, so the
 		// certificates these specs inspect are genuinely signed.

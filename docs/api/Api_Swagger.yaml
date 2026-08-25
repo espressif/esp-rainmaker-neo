@@ -448,8 +448,12 @@ paths:
         **Regular User Flow:**
         Returns credentials with IAM permissions scoped to all groups and subgroups the user has access to.
 
-        **Admin User Flow:**
-        Super admin users can use group and subgroup scoped APIs, `/v1/groups/{groupId}/assumed-roles` or `/v1/groups/{groupId}/subgroups/{subGroupId}/assumed-roles` variants instead.
+        **Scoped Flow:**
+        Because this route encodes every accessible group into one STS session policy, a caller
+        with more than ~4 groups cannot be served at all (500). Callers in that position — and any
+        client that only needs one group — should use the scoped variants
+        `/v1/groups/{groupId}/assumed-roles` or `/v1/groups/{groupId}/subgroups/{subGroupId}/assumed-roles`,
+        which encode a single group at a constant size.
 
         **MQTT client ID:** the returned credentials permit `iot:Connect` only with client id
         `user:<email|phone>:<session>` — the caller's own login username plus a per-session suffix.
@@ -482,13 +486,18 @@ paths:
 
   /v1/groups/{groupId}/assumed-roles:
     post:
-      summary: Assume IoT user role scoped to a group (super admin only)
+      summary: Assume IoT user role scoped to a group
       description: |
         Assumes an IoT user role scoped to the specified group. The returned
-        credentials are restricted to this group instead of all of the caller's groups.
+        credentials are restricted to this group instead of all of the caller's groups,
+        which keeps the STS session policy at a constant size no matter how many
+        groups the caller can reach.
 
-        Requires the user to have `custom:super_admin` set to "true" in Cognito,
-        and the specified group must exist.
+        Open to any authenticated caller. The scope is resolved from the caller's own
+        access, never widened: an admin caller gets the whole named group, a member
+        with full-group access gets that group, and a member holding only shared
+        subgroups of it gets exactly those subgroups. A caller with no access to the
+        group is refused with 403.
       tags:
         - Role Assumption
       security:
@@ -519,27 +528,27 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
-          description:
-            Forbidden - user is not a super admin but tried to use admin
-            parameters
+          description: Forbidden - the caller has no access to this group
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
               example:
-                message: "Admin privileges required"
+                message: "User does not have access to this group"
         "500":
           $ref: "#/components/responses/InternalServerError"
 
   /v1/groups/{groupId}/subgroups/{subGroupId}/assumed-roles:
     post:
-      summary: Assume IoT user role scoped to a subgroup (super admin only)
+      summary: Assume IoT user role scoped to a subgroup
       description: |
         Assumes an IoT user role scoped to the specified subgroup. The returned
         credentials are restricted to this subgroup only.
 
-        Requires the user to have `custom:super_admin` set to "true" in Cognito,
-        and the specified group and subgroup must exist.
+        Open to any authenticated caller that can reach the subgroup: an admin caller
+        or a member with full access to the group may name any subgroup of it (the
+        subgroup must exist), while a member holding only shared subgroups may name
+        one that was shared with it. Any other caller is refused with 403.
       tags:
         - Role Assumption
       security:
@@ -577,14 +586,19 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           description:
-            Forbidden - user is not a super admin but tried to use admin
-            parameters
+            Forbidden - the caller has no access to this group, or the subgroup
+            was not shared with it
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-              example:
-                message: "Admin privileges required"
+              examples:
+                noGroupAccess:
+                  value:
+                    message: "User does not have access to this group"
+                noSubgroupAccess:
+                  value:
+                    message: "User does not have access to this subgroup"
         "500":
           $ref: "#/components/responses/InternalServerError"
 
@@ -600,7 +614,7 @@ paths:
         The caller is identified via the SigV4-signed request. Access is granted
         when the node belongs to the path group AND the caller has access to that
         group (full-group access, or a shared subgroup the node belongs to).
-        Super admins may assume role for any node.
+        Admins may assume role for any node.
       tags:
         - Role Assumption
       security:
@@ -2536,7 +2550,7 @@ paths:
       description: |
         Returns the group and subgroups that a node belongs to.
         If the node is not in any group, returns an empty group and empty sub_groups array.
-        Only super admin users can call this endpoint.
+        Only admin users can call this endpoint.
       tags:
         - Node Administration
       security:
@@ -2587,7 +2601,7 @@ paths:
         the assigned `integration_id` which subsequent operations (GET /
         PUT / DELETE / endpoint registration) address by.
 
-        Super-admin only.
+        Admin only.
       tags:
         - Integrations
       security:
@@ -2683,7 +2697,7 @@ paths:
       summary: List integrations
       description: |
         Returns all configured integrations, optionally filtered by
-        `integration_type`. Super-admin only.
+        `integration_type`. Admin only.
       tags:
         - Integrations
       security:
@@ -2723,7 +2737,7 @@ paths:
       summary: Get an integration
       description: |
         Retrieves the configuration for one integration. Client secrets
-        are never returned. Super-admin only.
+        are never returned. Admin only.
       tags:
         - Integrations
       security:
@@ -2793,7 +2807,7 @@ paths:
       description: |
         Rotates the credentials for an existing integration. Existing
         endpoints are unaffected. The request body must match the
-        integration's type. Super-admin only.
+        integration's type. Admin only.
       tags:
         - Integrations
       security:
@@ -2888,7 +2902,7 @@ paths:
       summary: Delete an integration
       description: |
         Deletes an integration. Existing endpoints registered against it
-        will start failing on the next delivery. Super-admin only.
+        will start failing on the next delivery. Admin only.
       tags:
         - Integrations
       security:
@@ -2920,7 +2934,7 @@ paths:
         Stores the SmartThings Schema App OAuth credentials (client ID and
         client secret). Also registers the three SmartThings OAuth callback
         URLs (`https://c2c-us.smartthings.com/oauth/callback`, `c2c-eu`,
-        `c2c-ap`) on the voice-assistant OIDC client. Super-admin only.
+        `c2c-ap`) on the voice-assistant OIDC client. Admin only.
       tags:
         - SmartThings
       security:
@@ -2972,7 +2986,7 @@ paths:
       summary: Get SmartThings configuration
       description: |
         Retrieves the stored SmartThings client ID. The client secret is
-        never returned. Super-admin only.
+        never returned. Admin only.
       tags:
         - SmartThings
       security:
@@ -2999,7 +3013,7 @@ paths:
       summary: Delete SmartThings configuration
       description: |
         Removes the SmartThings client ID and client secret. This effectively
-        disables the SmartThings integration until reconfigured. Super-admin only.
+        disables the SmartThings integration until reconfigured. Admin only.
       tags:
         - SmartThings
       security:
@@ -3029,7 +3043,7 @@ paths:
         directly) or `sqs` (IoT rule writes to an SQS queue that the lambda
         consumes in batches).
         Both modes are pre-provisioned at deploy time; this endpoint reports
-        which one is currently active. Only super admin users can access this
+        which one is currently active. Only admin users can access this
         endpoint.
       tags:
         - Node Administration
@@ -3058,7 +3072,7 @@ paths:
         The change takes effect immediately and does not require a redeploy.
         SQL, SQL version, description, disabled flag, and error_action on
         each rule are preserved across the flip.
-        Only super admin users can access this endpoint.
+        Only admin users can access this endpoint.
       tags:
         - Node Administration
       security:
@@ -3131,7 +3145,7 @@ paths:
       summary: Read the assisted-claiming configuration
       description: |
         Returns the stored claiming configuration and whether the CA has been
-        minted. Only super admin users can access this endpoint.
+        minted. Only admin users can access this endpoint.
       tags:
         - Assisted Claiming
       security:
@@ -3163,7 +3177,7 @@ paths:
         it. There is no delete.
 
         This is the step that turns claiming on after the claim stacks are
-        deployed. Only super admin users can access this endpoint.
+        deployed. Only admin users can access this endpoint.
       tags:
         - Assisted Claiming
       security:
@@ -3199,7 +3213,7 @@ paths:
       x-feature-flag: assisted-claiming
       summary: Return the published assisted-claiming CA certificate
       description: |
-        Returns the CA certificate PEM once minted. Only super admin users can
+        Returns the CA certificate PEM once minted. Only admin users can
         access this endpoint.
       tags:
         - Assisted Claiming
@@ -3787,7 +3801,7 @@ paths:
       summary: Get all tags for a node (admin)
       description: |
         Returns all tags (admin, device, and user) for a specific node.
-        Only super admin users can access this endpoint.
+        Only admin users can access this endpoint.
       tags:
         - Node Tags
       security:
@@ -3834,7 +3848,7 @@ paths:
       summary: Update admin and/or user tags for a node (admin)
       description: |
         Creates or updates admin and/or user tags for a specific node.
-        Only super admin users can access this endpoint.
+        Only admin users can access this endpoint.
         Admin can write both admin and user tags. Set a tag value to null to delete it.
       tags:
         - Node Tags
@@ -6765,7 +6779,8 @@ components:
       type: oauth2
       description: |
         Cognito User Pool OAuth2 with tiered scopes. Server-side authorization
-        verifies the `custom:super_admin` claim for `super_admin`-scoped operations.
+        verifies that the caller's token was issued by the admin user pool for
+        admin-scoped operations.
       flows:
         implicit:
           authorizationUrl: https://example.com/oauth2/authorize

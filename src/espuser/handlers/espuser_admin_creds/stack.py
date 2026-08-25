@@ -58,8 +58,7 @@ class AdminCredsAPI(Construct):
             aws_function_name=f"{common_resources.prefix}admin-creds",
         )
 
-        # POST /v1/admin/credentials behind the admin authorizer; the handler
-        # additionally requires the custom:super_admin claim.
+        # POST /v1/admin/credentials behind the admin authorizer.
         v1_id = get_or_create_api_resource(
             self, "V1Resource", common_resources,
             common_resources.esp_user_api_root_resource_id, "v1",

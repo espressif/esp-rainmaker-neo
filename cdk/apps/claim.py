@@ -9,7 +9,7 @@ Deploying this group *is* the enablement: it stands up the reservation table,
 the CA KMS key, the claim handler, and the admin/claim routes. It carries no
 deploy-time inputs and never reads rmng-inputs.json — the claiming variant,
 per-claimant quota, certificate subject/validity and CA are all set at runtime
-through the superadmin configuration API (stored in SSM). Until an admin sets a
+through the admin configuration API (stored in SSM). Until an admin sets a
 mode and mints the CA, the handlers fail closed, so the group is safe to deploy
 ahead of being configured.
 

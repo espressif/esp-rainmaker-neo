@@ -3,7 +3,7 @@
 ## Admin Lambda API Endpoints
 
 
-All require super admin authentication (`IsSuperAdmin` check).
+All require admin authentication (`IsAdmin` check).
 
 ### Node Registration
 

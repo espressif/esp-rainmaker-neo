@@ -8,7 +8,7 @@
 //   - ESP User OIDC access tokens (end users): RS256 verified against ESPUSER_ISSUER's JWKS.
 //   - Cognito access/id tokens (admins): verified against the admin pool JWKS.
 //
-// The identity pool's role mapping (authenticated -> DeviceUsersRole, admin super_admin
+// The identity pool's role mapping (authenticated -> DeviceUsersRole, admin pool
 // rule -> AdminDeviceUsersRole) runs downstream at GetCredentialsForIdentity.
 package main
 

@@ -29,7 +29,7 @@ Account linking runs against the ESP User OIDC identity provider, not Cognito. A
 - **Scopes**: `openid`, `email`, `phone`, `profile`
 - **Redirect URIs**: registered dynamically by the config API (there are no hardcoded initial values); each POST unions its URIs onto the client's existing set, so the Google and Alexa redirect URIs coexist on the shared `va-client` row
 - **Client ID**: `va-client` — the registry client id (also available in SSM `/espuser/base/va-client-id`)
-- **Client Secret**: the generated secret for `va-client`, retrievable via the superadmin clients API (`GET /v1/admin/clients?get_secret=true`) or SSM `/espuser/base/va-client-secret`
+- **Client Secret**: the generated secret for `va-client`, retrievable via the admin clients API (`GET /v1/admin/clients?get_secret=true`) or SSM `/espuser/base/va-client-secret`
 - **OIDC endpoints**: the `authorization_endpoint` and `token_endpoint` published in the discovery document (`/.well-known/openid-configuration`). Both are served on the ESP User API Gateway base (`EspUserApiUrl`): `<api-url>/oauth2/authorize` and `<api-url>/oauth2/token`.
 
 ### Google Console Setup
@@ -49,7 +49,7 @@ This must be done before calling the Store Configuration API.
 3. Add a **Cloud-to-cloud** integration
 4. Under **Develop > Setup**:
    - **OAuth Client ID**: `va-client` (the OIDC client id; SSM `/espuser/base/va-client-id`)
-   - **OAuth Client Secret**: the `va-client` secret from the superadmin clients API (`GET /v1/admin/clients?get_secret=true`) or SSM `/espuser/base/va-client-secret`
+   - **OAuth Client Secret**: the `va-client` secret from the admin clients API (`GET /v1/admin/clients?get_secret=true`) or SSM `/espuser/base/va-client-secret`
    - **Authorization URL**: the discovery document's `authorization_endpoint` (`<api-url>/oauth2/authorize`)
    - **Token URL**: the discovery document's `token_endpoint` (`<api-url>/oauth2/token`)
    - **Fulfillment URL**: `https://<api_gateway_url>/v1/integrations/gva` where api_gateway_url is from rmng-outputs.json (ApiGatewayUrl)

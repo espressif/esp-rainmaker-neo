@@ -40,10 +40,10 @@ This spec is the design-level companion to the user-facing
    admins authenticate against a Cognito admin user pool. A single Identity
    Pool federates both — the OIDC issuer as a registered IAM OIDC identity
    provider, the admin pool as a Cognito provider — and, via a role-mapping
-   rule on the `custom:super_admin` claim, hands each identity a different IAM
-   role at credential-exchange time. Admin privilege is therefore an
-   *infrastructure* fact (which role you can assume), not only an application
-   flag.
+   rule matching the admin pool's own app client id on the `aud` claim, hands
+   each identity a different IAM role at credential-exchange time. Admin
+   privilege is therefore an *infrastructure* fact (which role you can assume),
+   and admin-pool membership is the whole of it.
 2. **Credential exchange is explicit, not implicit.** A client does not sign
    API calls with its login tokens. It first exchanges them — an access token
    plus its matching id token, OIDC for end users or Cognito for admins — for
@@ -82,8 +82,9 @@ both federated by one Identity Pool (§2.2):
   `src/espuser/docs/specs/oidc-oauth2.md`.
   ESP RainMaker Neo only *consumes* that access token to vend AWS credentials and resolve
   the caller.
-- **Admins** authenticate against a Cognito **admin user pool**, whose users
-  may carry a custom Cognito attribute `custom:super_admin`. Authentication
+- **Admins** authenticate against a Cognito **admin user pool**. Its schema
+  still carries a `custom:super_admin` attribute, but nothing authorises on it —
+  admin-pool membership is the whole privilege. Authentication
   (sign-in, MFA, token refresh) is handled by Cognito itself; ESP RainMaker Neo consumes
   the admin **ID token**.
 
@@ -123,31 +124,33 @@ id — **not** the login provider, so the role's trust depends only on the
 Identity Pool.
 
 The pool decides *which IAM role* those credentials belong to via a
-**role-mapping rule** keyed on the admin pool's `custom:super_admin` claim:
+**role-mapping rule** matching the admin pool's own app client id on the
+`aud` claim:
 
 - Any authenticated identity defaults to **`DeviceUsersRole`**
   (`rmng-cognito-identity-role-<region>`). **Every federated end user maps
   here unconditionally** — there is no per-user or claim-driven role branching
   on the OIDC-federated end-user path.
-- An identity from the **admin pool** whose token carries
-  `custom:super_admin == "true"` is mapped to **`AdminDeviceUsersRole`**
-  (`rmng-admin-cognito-identity-role-<region>`) instead. This `super_admin`
-  role-mapping is **admin-only**: end users never reach it, because they do not
-  federate through the admin surface.
+- **Every** identity from the **admin pool** is mapped to
+  **`AdminDeviceUsersRole`** (`rmng-admin-cognito-identity-role-<region>`)
+  instead. The rule matches `aud` — the pool's app client id, always present on
+  the ID token the identity pool logs in with — rather than any per-user claim,
+  so pool membership alone decides the role. This mapping is **admin-only**: end
+  users never reach it, because they do not federate through the admin surface.
 - If the rule does not match, the identity falls back to the default
   authenticated role.
 
-So **super-admin vs. regular-user is decided at the Identity-Pool
-role-mapping layer**, before any ESP RainMaker Neo Lambda runs. The application-level
-super-admin check (§5.3) is a second, in-code gate over the same fact,
-surfaced through the admin's Cognito claims.
+So **admin vs. regular-user is decided at the Identity-Pool role-mapping
+layer**, before any ESP RainMaker Neo Lambda runs. The application-level admin
+check (§5.3) is a second, in-code gate over the same fact — which pool the
+caller came through. There is no tier above admin.
 
 ### 2.3 The three IAM roles
 
 | Role | Trust | What it grants |
 |---|---|---|
 | **`DeviceUsersRole`** (end users, OIDC-federated) | `AssumeRoleWithWebIdentity` from `cognito-identity.amazonaws.com`, scoped to this pool + `amr=authenticated` (trust targets the Identity Pool, not the OIDC login provider) | `cognito-identity:GetCredentialsForIdentity`, `sts:TagSession` on the IoT role, `execute-api:Invoke` on the API. **Explicitly denies `sts:AssumeRole`.** |
-| **`AdminDeviceUsersRole`** (super-admins) | Same federated trust | Everything `DeviceUsersRole` has, **plus** IoT management (`iot:ListThings`, `DescribeThing`, `SearchIndex`, thing-group and job/stream management) and S3 access for firmware upload / node-registration CSV download. Also denies `sts:AssumeRole`. |
+| **`AdminDeviceUsersRole`** (admins) | Same federated trust | Everything `DeviceUsersRole` has, **plus** IoT management (`iot:ListThings`, `DescribeThing`, `SearchIndex`, thing-group and job/stream management) and S3 access for firmware upload / node-registration CSV download. Also denies `sts:AssumeRole`. |
 | **`IoTUserRole`** (`<node-role>-<region>`) | `sts:AssumeRole` from the `iot.amazonaws.com` service principal, **and** (added during assume-role setup, §4.2) from the assume-role Lambda's role | Broad `iot:Connect/Publish/Receive/Subscribe` on `*`, `cognito-identity:GetCredentialsForIdentity`, and S3. This is the role the assume-role Lambda vends **through a narrowing session policy** — never directly. |
 
 The two Identity-Pool roles both `execute-api:Invoke` (so their SigV4
@@ -247,7 +250,7 @@ Credential exchange against the Identity Pool is a two-step sequence:
 The role mapping (§2.2) is applied by Cognito inside
 `GetCredentialsForIdentity`, so the returned credentials already belong to the
 correct role — `DeviceUsersRole` unconditionally for every federated end user,
-`AdminDeviceUsersRole` only for a `super_admin` admin identity. The handler
+`AdminDeviceUsersRole` for every admin-pool identity. The handler
 returns:
 
 ```json
@@ -421,7 +424,7 @@ context from the incoming API-Gateway request:
    (This field is populated by API Gateway for both token- and IAM-authorized
    requests, which is why the `AWS_IAM` endpoints can still recover the user.)
 2. The username is resolved against the auth layer to load the user's profile
-   (including whether they are a super-admin).
+   (including whether they are an admin).
 3. It sets the logging user context and returns a request context whose
    **accessor** is a freshly built user identity.
 
@@ -441,13 +444,13 @@ Loading node permissions is the typical pre-flight before a node operation:
 the user's group/subgroup access and the group's nodes are loaded so
 subsequent DB calls have the permission set populated.
 
-### 5.3 Super-admin resolution
+### 5.3 Admin resolution
 
-The super-admin check returns the flag set by the auth layer: admin-pool
-identities whose token carries `super_admin == "true"` resolve to super-admin;
-regular-pool users never do. This is the same `custom:super_admin` fact the
-Identity-Pool role mapping keys on (§2.2) — one deciding the IAM role, the
-other deciding in-code branches such as the admin assume-role routes (§3.3).
+The admin check returns the flag set by the auth layer: admin-pool identities
+resolve to admin, regular-pool users never do. Admin-pool membership is the same
+fact the Identity-Pool role mapping keys on via `aud` (§2.2) — one deciding the
+IAM role, the other deciding in-code branches such as the group-scoped
+assume-role routes (§3.3). There is no tier above admin.
 
 ### 5.4 User resolution and identity helpers
 

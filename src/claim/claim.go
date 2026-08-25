@@ -8,7 +8,7 @@ Lambdas: the configured variant, MAC normalization, claim-key construction,
 and the per-caller quota.
 
 The variant and the quota are read at runtime from the claiming configuration
-document in SSM (ca_bootstrap.ParamConfig), set through the superadmin config
+document in SSM (ca_bootstrap.ParamConfig), set through the admin config
 API — not from deploy-time inputs. Deploying the claim stack group stands up
 the infrastructure; the configuration (plus a minted CA) is what turns claiming
 on. A configuration with no variant reads as off, and the handlers fail closed.

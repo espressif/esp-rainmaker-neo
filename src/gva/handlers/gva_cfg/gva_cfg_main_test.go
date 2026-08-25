@@ -71,11 +71,11 @@ var _ = Describe("GVA Config", func() {
 		seedVAClient(ctx)
 		userID := "51bbf520-70a1-70ac-627f-07d1af2a930c"
 
-		// Set up super admin user using helper function
+		// Set up admin user using helper function
 		_, _ = test_utils.SetupTestAdminUser(ctx, userID, "test-user-email")
 
-		// Set up dummy non-admin user (in the admin pool) for the authorization test
-		_, _ = test_utils.SetupTestNonAdminUserInAdminPool(ctx, "test-dummy-user-id", "test-dummy-user-email")
+		// Set up a federated end user (outside the admin pool) for the authorization test
+		_, _ = test_utils.SetupTestNonAdminUser(ctx, "test-dummy-user-id", "test-dummy-user-email")
 
 		// Setup default request (service account JSON)
 		req = gva.ServiceAccount{
@@ -237,7 +237,7 @@ var _ = Describe("GVA Config", func() {
 				Body:       string(requestBody),
 				RequestContext: events.APIGatewayProxyRequestContext{
 					Identity: events.APIGatewayRequestIdentity{
-						CognitoAuthenticationProvider: ":CognitoSignIn:test-dummy-user-id",
+						CognitoAuthenticationProvider: test_utils.OIDCAuthProvider("test-dummy-user-id"),
 					},
 				},
 			}

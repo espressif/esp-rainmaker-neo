@@ -161,6 +161,6 @@ runtime by the firmware (`esp_rmaker_node_init`), not stored in the image header
   no `iot:GetThingShadow` or `iot:ListNamedShadowsForThing`, and fleet indexing
   filters `namedShadowNames` to `iparams`, so other named shadows
   (`params-<group>`, `notify`, …) are not visible here.
-- **Admin access is not scoped to specific groups.** A super-admin sees the
+- **Admin access is not scoped to specific groups.** A admin sees the
   whole fleet; per-group scoping would need IAM resource conditions.
 - **Shadows are read-only from the dashboard** — no `iot:UpdateThingShadow`.

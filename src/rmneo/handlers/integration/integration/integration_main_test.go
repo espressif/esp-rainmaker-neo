@@ -245,10 +245,10 @@ var _ = Describe("Admin Integrations", func() {
 		})
 
 		Context("authorization", func() {
-			It("requires super-admin", func() {
+			It("requires an admin", func() {
 				nonAdminUserID := "non-admin-user"
-				_, _ = test_utils.SetupTestNonAdminUserInAdminPool(ctx, nonAdminUserID, "non-admin-user-email")
-				request.RequestContext.Identity.CognitoAuthenticationProvider = ":CognitoSignIn:" + nonAdminUserID
+				_, _ = test_utils.SetupTestNonAdminUser(ctx, nonAdminUserID, "non-admin-user-email")
+				request.RequestContext.Identity.CognitoAuthenticationProvider = test_utils.OIDCAuthProvider(nonAdminUserID)
 				request.QueryStringParameters = map[string]string{"integration_type": "apns"}
 				request.Body = `{}`
 
@@ -349,10 +349,10 @@ var _ = Describe("Admin Integrations", func() {
 			Expect(response.Body).NotTo(ContainSubstring(`"private_key":`))
 		})
 
-		It("requires super-admin", func() {
+		It("requires an admin", func() {
 			nonAdminUserID := "non-admin-user"
-			_, _ = test_utils.SetupTestNonAdminUserInAdminPool(ctx, nonAdminUserID, "non-admin-user-email")
-			request.RequestContext.Identity.CognitoAuthenticationProvider = ":CognitoSignIn:" + nonAdminUserID
+			_, _ = test_utils.SetupTestNonAdminUser(ctx, nonAdminUserID, "non-admin-user-email")
+			request.RequestContext.Identity.CognitoAuthenticationProvider = test_utils.OIDCAuthProvider(nonAdminUserID)
 			request.HTTPMethod = "GET"
 
 			response, err := handleRequest(ctx, request)
@@ -592,7 +592,7 @@ var _ = Describe("Public Integrations (non-admin)", func() {
 		userID = "non-admin-user"
 
 		// A plain, non-admin user: the public list must succeed for them.
-		_, _ = test_utils.SetupTestNonAdminUserInAdminPool(ctx, userID, "non-admin-user-email")
+		_, _ = test_utils.SetupTestNonAdminUser(ctx, userID, "non-admin-user-email")
 
 		snsClient := awscommon.GetSNSClient().(*mock.SNSMock)
 		snsClient.SetMockPlatformApplications([]types.PlatformApplication{
@@ -607,7 +607,7 @@ var _ = Describe("Public Integrations (non-admin)", func() {
 			Resource: "/v1/integrations",
 			RequestContext: events.APIGatewayProxyRequestContext{
 				Identity: events.APIGatewayRequestIdentity{
-					CognitoAuthenticationProvider: ":CognitoSignIn:" + userID,
+					CognitoAuthenticationProvider: test_utils.OIDCAuthProvider(userID),
 				},
 			},
 		}

@@ -14,12 +14,12 @@ from py_sdk.test_user import user_log
 from py_sdk.test_group import Group
 
 
-def test_admin_get_tags_empty(super_admin_user, associated_device):
+def test_admin_get_tags_empty(admin_user, associated_device):
     """Admin GET tags on a node with no tags returns empty maps."""
     device, group_id, _, _ = associated_device
     node_id = device.node_thing_name
 
-    result = super_admin_user.admin_get_node_tags(node_id)
+    result = admin_user.admin_get_node_tags(node_id)
     assert result is not None, "Admin get node tags should succeed"
     assert result.get("admin") == {} or result.get("admin") is not None
     assert result.get("device") == {} or result.get("device") is not None
@@ -28,13 +28,13 @@ def test_admin_get_tags_empty(super_admin_user, associated_device):
     user_log("Admin GET tags (empty) succeeded")
 
 
-def test_admin_put_and_get_admin_tags(super_admin_user, associated_device):
+def test_admin_put_and_get_admin_tags(admin_user, associated_device):
     """Admin can write and read back admin tags."""
     device, group_id, _, _ = associated_device
     node_id = device.node_thing_name
 
     # Write admin tags
-    result = super_admin_user.admin_put_node_tags(
+    result = admin_user.admin_put_node_tags(
         node_id, admin_tags={"env": "production", "region": "us-west-2"}
     )
     assert result is not None, "Admin put tags should succeed"
@@ -42,7 +42,7 @@ def test_admin_put_and_get_admin_tags(super_admin_user, associated_device):
     # Read back - shadow update is async, give it a moment
     time.sleep(1)
 
-    result = super_admin_user.admin_get_node_tags(node_id)
+    result = admin_user.admin_get_node_tags(node_id)
     assert result is not None, "Admin get tags should succeed"
     assert result["admin"]["env"] == "production"
     assert result["admin"]["region"] == "us-west-2"
@@ -50,33 +50,33 @@ def test_admin_put_and_get_admin_tags(super_admin_user, associated_device):
     user_log("Admin PUT/GET admin tags succeeded")
 
 
-def test_admin_put_and_get_user_tags(super_admin_user, associated_device):
+def test_admin_put_and_get_user_tags(admin_user, associated_device):
     """Admin can write and read back user tags."""
     device, group_id, _, _ = associated_device
     node_id = device.node_thing_name
 
     # Write user tags as admin
-    result = super_admin_user.admin_put_node_tags(
+    result = admin_user.admin_put_node_tags(
         node_id, user_tags={"room": "kitchen", "nickname": "main-light"}
     )
     assert result is not None, "Admin put user tags should succeed"
 
     time.sleep(1)
 
-    result = super_admin_user.admin_get_node_tags(node_id)
+    result = admin_user.admin_get_node_tags(node_id)
     assert result is not None
     assert result["user"]["room"] == "kitchen"
     assert result["user"]["nickname"] == "main-light"
 
     # Update room tag to "living room"
-    result = super_admin_user.admin_put_node_tags(
+    result = admin_user.admin_put_node_tags(
         node_id, user_tags={"room": "living room"}
     )
     assert result is not None, "Admin put updated user tags should succeed"
 
     time.sleep(1)
 
-    result = super_admin_user.admin_get_node_tags(node_id)
+    result = admin_user.admin_get_node_tags(node_id)
     assert result is not None
     assert result["user"]["room"] == "living room"
     assert result["user"]["nickname"] == "main-light"
@@ -84,12 +84,12 @@ def test_admin_put_and_get_user_tags(super_admin_user, associated_device):
     user_log("Admin PUT/GET user tags succeeded")
 
 
-def test_admin_put_both_tag_types(super_admin_user, associated_device):
+def test_admin_put_both_tag_types(admin_user, associated_device):
     """Admin can write both admin and user tags in a single request."""
     device, group_id, _, _ = associated_device
     node_id = device.node_thing_name
 
-    result = super_admin_user.admin_put_node_tags(
+    result = admin_user.admin_put_node_tags(
         node_id,
         admin_tags={"priority": "high"},
         user_tags={"label": "sensor-1"}
@@ -98,7 +98,7 @@ def test_admin_put_both_tag_types(super_admin_user, associated_device):
 
     time.sleep(1)
 
-    result = super_admin_user.admin_get_node_tags(node_id)
+    result = admin_user.admin_get_node_tags(node_id)
     assert result is not None
     assert result["admin"]["priority"] == "high"
     assert result["user"]["label"] == "sensor-1"
@@ -106,26 +106,26 @@ def test_admin_put_both_tag_types(super_admin_user, associated_device):
     user_log("Admin PUT both tag types succeeded")
 
 
-def test_admin_delete_tag_via_null(super_admin_user, associated_device):
+def test_admin_delete_tag_via_null(admin_user, associated_device):
     """Admin can delete a tag by setting its value to null."""
     device, group_id, _, _ = associated_device
     node_id = device.node_thing_name
 
     # First set some admin tags
-    super_admin_user.admin_put_node_tags(
+    admin_user.admin_put_node_tags(
         node_id, admin_tags={"to_keep": "yes", "to_delete": "temporary"}
     )
     time.sleep(1)
 
     # Delete one tag
-    result = super_admin_user.admin_put_node_tags(
+    result = admin_user.admin_put_node_tags(
         node_id, admin_tags={"to_delete": None}
     )
     assert result is not None
 
     time.sleep(1)
 
-    result = super_admin_user.admin_get_node_tags(node_id)
+    result = admin_user.admin_get_node_tags(node_id)
     assert result is not None
     assert result["admin"].get("to_keep") == "yes"
     assert "to_delete" not in result["admin"], "Deleted tag should not be present"
@@ -215,7 +215,7 @@ def test_user_tags_denied_for_non_group_member(two_tenants):
     user_log("User tags correctly denied for non-member and cross-tenant paths")
 
 
-def test_admin_reads_device_tags_set_by_device(super_admin_user, associated_device):
+def test_admin_reads_device_tags_set_by_device(admin_user, associated_device):
     """Admin can read device tags that were written by the device via shadow update."""
     device, group_id, _, _ = associated_device
     node_id = device.node_thing_name
@@ -241,7 +241,7 @@ def test_admin_reads_device_tags_set_by_device(super_admin_user, associated_devi
     time.sleep(2)
 
     # Admin reads tags via REST API
-    result = super_admin_user.admin_get_node_tags(node_id)
+    result = admin_user.admin_get_node_tags(node_id)
     assert result is not None, "Admin get tags should succeed"
     assert result["device"]["type"] == "Light"
     assert result["device"]["model"] == "Led"
@@ -250,13 +250,13 @@ def test_admin_reads_device_tags_set_by_device(super_admin_user, associated_devi
     user_log("Admin read device tags set by device succeeded")
 
 
-def test_user_tags_do_not_expose_admin_or_device_tags(super_admin_user, associated_device):
+def test_user_tags_do_not_expose_admin_or_device_tags(admin_user, associated_device):
     """User GET tags endpoint only returns user tags, not admin or device tags."""
     device, group_id, test_user, _ = associated_device
     node_id = device.node_thing_name
 
     # Admin sets admin tags
-    super_admin_user.admin_put_node_tags(node_id, admin_tags={"secret": "admin-only"})
+    admin_user.admin_put_node_tags(node_id, admin_tags={"secret": "admin-only"})
     time.sleep(1)
 
     # User reads tags

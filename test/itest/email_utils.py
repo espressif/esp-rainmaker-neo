@@ -150,7 +150,7 @@ def generate_mailosaur_email(user_index: Optional[int] = None, is_admin: bool = 
 
     Deterministic (per pytest-xdist worker + auto-incrementing index) so a user can be reused across
     runs. The 'user'/'admin' role segment keeps the two sequences disjoint, so a regular signup never
-    reuses an address a prior admin test created (which would inherit a stale super_admin DB record).
+    reuses an address a prior admin test created (which would inherit a stale admin DB record).
 
     Args:
         user_index: Explicit index (1, 2, …). If None, auto-increments per (worker, role).

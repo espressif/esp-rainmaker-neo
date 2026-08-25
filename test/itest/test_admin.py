@@ -74,12 +74,12 @@ def test_ensure_privilege_escalation_not_possible(test_user1):
     user_log("✅ Legitimate assume_role API works with group-based access control")
 
 
-def test_admin_assume_role_with_group(super_admin_user, test_user1):
+def test_admin_assume_role_with_group(admin_user, test_user1):
     """
-    Test that super admin users can use assume_role_admin to get access to any group.
+    Test that admin users can use assume_role_admin to get access to any group.
 
     This test validates:
-    1. Super admin can call assume_role with a group parameter
+    1. Admin can call assume_role with a group parameter
     2. The returned credentials have access to the specified group
     """
     user_log("🔑 Testing admin assume_role with group...")
@@ -90,9 +90,9 @@ def test_admin_assume_role_with_group(super_admin_user, test_user1):
     assert group_id is not None, "Failed to create test group"
     user_log(f"Created test group: {group_id}")
 
-    # Super admin should be able to assume role for this group
-    assumed_credentials = super_admin_user.assume_role_admin(group_id)
-    assert assumed_credentials is not None, "Admin assume_role should succeed for super admin"
+    # Admin should be able to assume role for this group
+    assumed_credentials = admin_user.assume_role_admin(group_id)
+    assert assumed_credentials is not None, "Admin assume_role should succeed for admin"
     assert "access_key" in assumed_credentials, "Response should contain access_key"
     assert "secret_key" in assumed_credentials, "Response should contain secret_key"
     assert "session_token" in assumed_credentials, "Response should contain session_token"
@@ -103,12 +103,12 @@ def test_admin_assume_role_with_group(super_admin_user, test_user1):
     user1_group_api.delete_group(group_id)
 
 
-def test_admin_assume_role_with_subgroup(super_admin_user, test_user1):
+def test_admin_assume_role_with_subgroup(admin_user, test_user1):
     """
-    Test that super admin users can use assume_role_admin to get access to a specific subgroup.
+    Test that admin users can use assume_role_admin to get access to a specific subgroup.
 
     This test validates:
-    1. Super admin can call assume_role with both group and subgroup parameters
+    1. Admin can call assume_role with both group and subgroup parameters
     2. The returned credentials have access limited to the specified subgroup
     """
     user_log("🔑 Testing admin assume_role with subgroup...")
@@ -123,9 +123,9 @@ def test_admin_assume_role_with_subgroup(super_admin_user, test_user1):
     assert subgroup_id is not None, "Failed to create test subgroup"
     user_log(f"Created test subgroup: {subgroup_id}")
 
-    # Super admin should be able to assume role for this specific subgroup
-    assumed_credentials = super_admin_user.assume_role_admin(group_id, subgroup_id)
-    assert assumed_credentials is not None, "Admin assume_role with subgroup should succeed for super admin"
+    # Admin should be able to assume role for this specific subgroup
+    assumed_credentials = admin_user.assume_role_admin(group_id, subgroup_id)
+    assert assumed_credentials is not None, "Admin assume_role with subgroup should succeed for admin"
     assert "access_key" in assumed_credentials, "Response should contain access_key"
     assert "secret_key" in assumed_credentials, "Response should contain secret_key"
     assert "session_token" in assumed_credentials, "Response should contain session_token"
@@ -138,7 +138,7 @@ def test_admin_assume_role_with_subgroup(super_admin_user, test_user1):
 
 def test_admin_assume_role_denied_for_non_admin(test_user1, test_user2):
     """
-    Test that non-super admin users cannot use assume_role with group parameter.
+    Test that non-admin users cannot use assume_role with group parameter.
 
     This is a negative test that validates:
     1. Regular users cannot use the admin assume_role functionality
@@ -152,7 +152,7 @@ def test_admin_assume_role_denied_for_non_admin(test_user1, test_user2):
     assert group_id is not None, "Failed to create test group"
     user_log(f"Created test group: {group_id}")
 
-    # test_user2 (not a super admin) should NOT be able to use admin assume_role
+    # test_user2 (not a admin) should NOT be able to use admin assume_role
     assumed_credentials = test_user2.assume_role_admin(group_id)
     assert assumed_credentials is None, "Non-admin user should not be able to use admin assume_role"
 
@@ -162,7 +162,7 @@ def test_admin_assume_role_denied_for_non_admin(test_user1, test_user2):
     user1_group_api.delete_group(group_id)
 
 
-def test_admin_assume_role_nonexistent_group(super_admin_user):
+def test_admin_assume_role_nonexistent_group(admin_user):
     """
     Test that admin assume_role fails with a proper error for non-existent groups.
 
@@ -174,13 +174,13 @@ def test_admin_assume_role_nonexistent_group(super_admin_user):
 
     # Try to assume role for a non-existent group
     nonexistent_group = "nonexistent-group-" + str(uuid.uuid4())[:8]
-    assumed_credentials = super_admin_user.assume_role_admin(nonexistent_group)
+    assumed_credentials = admin_user.assume_role_admin(nonexistent_group)
     assert assumed_credentials is None, "Admin assume_role should fail for non-existent group"
 
     user_log("✅ Admin assume_role correctly fails for non-existent group")
 
 
-def test_admin_assume_role_nonexistent_subgroup(super_admin_user, test_user1):
+def test_admin_assume_role_nonexistent_subgroup(admin_user, test_user1):
     """
     Test that admin assume_role fails with a proper error for non-existent subgroups.
 
@@ -198,7 +198,7 @@ def test_admin_assume_role_nonexistent_subgroup(super_admin_user, test_user1):
 
     # Try to assume role for a non-existent subgroup within the existing group
     nonexistent_subgroup = "nonexistent-subgroup-" + str(uuid.uuid4())[:8]
-    assumed_credentials = super_admin_user.assume_role_admin(group_id, nonexistent_subgroup)
+    assumed_credentials = admin_user.assume_role_admin(group_id, nonexistent_subgroup)
     assert assumed_credentials is None, "Admin assume_role should fail for non-existent subgroup"
 
     user_log("✅ Admin assume_role correctly fails for non-existent subgroup")
@@ -208,7 +208,7 @@ def test_admin_assume_role_nonexistent_subgroup(super_admin_user, test_user1):
 
 
 @pytest.mark.unsafe
-def test_admin_assume_role_group_mqtt_access(super_admin_user, associated_device):
+def test_admin_assume_role_group_mqtt_access(admin_user, associated_device):
     """
     Test that admin assume_role with a group grants MQTT access to nodes in that group.
 
@@ -227,20 +227,20 @@ def test_admin_assume_role_group_mqtt_access(super_admin_user, associated_device
     device.update_named_shadow(shadow_name, {"status": device.node_thing_name})
 
     # Admin assumes role for this group
-    assumed_credentials = super_admin_user.assume_role_admin(group_id)
+    assumed_credentials = admin_user.assume_role_admin(group_id)
     assert assumed_credentials is not None, "Admin assume_role should succeed"
 
     # Admin connects to MQTT with assumed credentials and verifies shadow access
     try:
-        super_admin_user.mqtt_connect(credentials=assumed_credentials)
+        admin_user.mqtt_connect(credentials=assumed_credentials)
     except Exception as e:
         print(f"Failed to connect to MQTT: {e}, retrying in 3 seconds...")
         time.sleep(3)
-        super_admin_user.mqtt_connect(credentials=assumed_credentials)
+        admin_user.mqtt_connect(credentials=assumed_credentials)
 
-    super_admin_user.subscribe_to_named_shadows(device.node_thing_name, [shadow_name])
-    super_admin_user.read_shadow(device.node_thing_name, shadow_name)
-    shadow_data = super_admin_user.read_shadow_queue()
+    admin_user.subscribe_to_named_shadows(device.node_thing_name, [shadow_name])
+    admin_user.read_shadow(device.node_thing_name, shadow_name)
+    shadow_data = admin_user.read_shadow_queue()
 
     assert shadow_data is not None, "Admin should be able to read shadow for the group node"
     assert shadow_data['state']['reported']['status'] == device.node_thing_name
@@ -248,11 +248,11 @@ def test_admin_assume_role_group_mqtt_access(super_admin_user, associated_device
     user_log("Admin assume_role group MQTT access verified")
 
     # Cleanup
-    super_admin_user.mqtt_disconnect_and_wait()
+    admin_user.mqtt_disconnect_and_wait()
 
 
 @pytest.mark.unsafe
-def test_admin_assume_role_subgroup_mqtt_access(super_admin_user, device_with_2_subgroups):
+def test_admin_assume_role_subgroup_mqtt_access(admin_user, device_with_2_subgroups):
     """
     Test that admin assume_role with a subgroup grants MQTT access ONLY to
     nodes in that subgroup, not to nodes in a sibling subgroup of the same group.
@@ -280,59 +280,59 @@ def test_admin_assume_role_subgroup_mqtt_access(super_admin_user, device_with_2_
     device.update_named_shadow(shadow_ab, {"status": f"{device.node_thing_name}-ab"})
 
     # Admin assumes role for first subgroup only
-    assumed_credentials = super_admin_user.assume_role_admin(group_id, subgroup_aa_id)
+    assumed_credentials = admin_user.assume_role_admin(group_id, subgroup_aa_id)
     assert assumed_credentials is not None, "Admin assume_role with subgroup should succeed"
 
     # Positive test: admin CAN access the shadow for first subgroup
     try:
-        super_admin_user.mqtt_connect(credentials=assumed_credentials)
+        admin_user.mqtt_connect(credentials=assumed_credentials)
     except Exception as e:
         print(f"Failed to connect to MQTT: {e}, retrying in 3 seconds...")
         time.sleep(3)
-        super_admin_user.mqtt_connect(credentials=assumed_credentials)
+        admin_user.mqtt_connect(credentials=assumed_credentials)
 
-    super_admin_user.subscribe_to_named_shadows(device.node_thing_name, [shadow_aa])
-    super_admin_user.read_shadow(device.node_thing_name, shadow_aa)
-    shadow_data = super_admin_user.read_shadow_queue()
+    admin_user.subscribe_to_named_shadows(device.node_thing_name, [shadow_aa])
+    admin_user.read_shadow(device.node_thing_name, shadow_aa)
+    shadow_data = admin_user.read_shadow_queue()
 
     assert shadow_data is not None, "Admin should be able to read shadow for first subgroup"
     assert shadow_data['state']['reported']['status'] == f"{device.node_thing_name}-aa"
     user_log("Admin CAN access first subgroup shadow - correct")
 
-    super_admin_user.mqtt_disconnect_and_wait()
+    admin_user.mqtt_disconnect_and_wait()
 
     # Negative test: admin CANNOT access the shadow for second subgroup
     try:
-        super_admin_user.mqtt_connect(credentials=assumed_credentials)
+        admin_user.mqtt_connect(credentials=assumed_credentials)
     except Exception as e:
         print(f"Failed to connect to MQTT: {e}, retrying in 3 seconds...")
         time.sleep(3)
-        super_admin_user.mqtt_connect(credentials=assumed_credentials)
-    super_admin_user.disable_reconnect = True
+        admin_user.mqtt_connect(credentials=assumed_credentials)
+    admin_user.disable_reconnect = True
 
     with pytest.raises(Exception):
-        super_admin_user.subscribe_to_named_shadows(device.node_thing_name, [shadow_ab])
+        admin_user.subscribe_to_named_shadows(device.node_thing_name, [shadow_ab])
 
-    connection_status = super_admin_user.read_connection_queue()
+    connection_status = admin_user.read_connection_queue()
     assert connection_status == "interrupted", "Admin should get disconnected when accessing unauthorized subgroup shadow"
     user_log("Admin CANNOT access second subgroup shadow - correct")
 
-    super_admin_user.mqtt_disconnect_and_wait()
-    super_admin_user.disable_reconnect = False
+    admin_user.mqtt_disconnect_and_wait()
+    admin_user.disable_reconnect = False
 
 
-def test_admin_get_node_groups(super_admin_user, associated_device):
+def test_admin_get_node_groups(admin_user, associated_device):
     """
-    Test that super admin can get group info for a node.
+    Test that admin can get group info for a node.
 
     Validates:
-    1. Super admin can call GET /v1/admin/nodes/{nodeId}/groups
+    1. Admin can call GET /v1/admin/nodes/{nodeId}/groups
     2. The response contains the correct group for the node
     """
     device, group_id, test_user1, user1_group_api = associated_device
     user_log("Testing admin get node groups...")
 
-    result = super_admin_user.admin_get_node_groups(device.node_thing_name)
+    result = admin_user.admin_get_node_groups(device.node_thing_name)
     assert result is not None, "Admin get node groups should succeed"
     assert result.get("group") == group_id, f"Expected group {group_id}, got {result.get('group')}"
 
@@ -355,7 +355,7 @@ def test_admin_get_node_groups_denied_for_non_admin(test_user1, associated_devic
     user_log("Admin get node groups correctly denied for non-admin user")
 
 
-def test_admin_get_node_groups_no_group(super_admin_user):
+def test_admin_get_node_groups_no_group(admin_user):
     """
     Test that admin gets empty result for a node not in any group.
 
@@ -365,7 +365,7 @@ def test_admin_get_node_groups_no_group(super_admin_user):
     user_log("Testing admin get node groups for node with no group...")
 
     nonexistent_node = "nonexistent-node-" + str(uuid.uuid4())[:8]
-    result = super_admin_user.admin_get_node_groups(nonexistent_node)
+    result = admin_user.admin_get_node_groups(nonexistent_node)
     assert result is not None, "Admin get node groups should return a response"
     assert result.get("group") == "", f"Expected empty group, got {result.get('group')}"
 
@@ -376,20 +376,20 @@ def test_admin_get_node_groups_no_group(super_admin_user):
 # Admin OAuth Client Registry (/v1/admin/clients)
 # ==========================================
 
-def _find_client(super_admin_user, client_id, get_secret=False):
+def _find_client(admin_user, client_id, get_secret=False):
     """Return the client dict from the list, or None."""
-    listed = super_admin_user.list_oauth_clients(get_secret=get_secret)
+    listed = admin_user.list_oauth_clients(get_secret=get_secret)
     assert listed.status_code == 200, listed.text
     return next((c for c in listed.json()["clients"] if c["client_id"] == client_id), None)
 
 
-def test_admin_client_crud_lifecycle(super_admin_user):
+def test_admin_client_crud_lifecycle(admin_user):
     """Full create -> list -> update -> delete lifecycle for a public client."""
     if not USER_API_GATEWAY_URL:
         pytest.skip("USER_API_GATEWAY_URL not configured")
 
     client_id = "itest_" + str(uuid.uuid4())[:8]
-    create = super_admin_user.create_oauth_client({
+    create = admin_user.create_oauth_client({
         "client_id": client_id,
         "client_name": "itest client",
         "client_type": "public",
@@ -406,14 +406,14 @@ def test_admin_client_crud_lifecycle(super_admin_user):
 
     try:
         # List includes it; PKCE forced true; no secret.
-        gc = _find_client(super_admin_user, client_id)
+        gc = _find_client(admin_user, client_id)
         assert gc is not None, "created client must appear in the list"
         assert gc["require_pkce"] is True
         assert not gc.get("client_secret")
 
         # PUT is a full replace of the mutable fields (client_id/client_type are immutable
         # and rejected if sent): resend the whole intended state with the new name.
-        updated = super_admin_user.put_oauth_client(client_id, {
+        updated = admin_user.put_oauth_client(client_id, {
             "client_name": "renamed",
             "redirect_uris": ["com.espressif.itest://callback"],
             "grant_types": ["authorization_code", "refresh_token"],
@@ -423,20 +423,20 @@ def test_admin_client_crud_lifecycle(super_admin_user):
         assert updated.status_code == 200, updated.text
         assert updated.json()["client_name"] == "renamed"
     finally:
-        deleted = super_admin_user.delete_oauth_client(client_id)
+        deleted = admin_user.delete_oauth_client(client_id)
         assert deleted.status_code == 200, deleted.text
 
     # Hard delete: the client is gone from the list.
-    assert _find_client(super_admin_user, client_id) is None, "deleted client must be gone"
+    assert _find_client(admin_user, client_id) is None, "deleted client must be gone"
 
 
-def test_admin_client_confidential_secret_retrievable(super_admin_user):
+def test_admin_client_confidential_secret_retrievable(admin_user):
     """A confidential client gets a plaintext secret at create; it's retrievable via list get_secret, hidden without."""
     if not USER_API_GATEWAY_URL:
         pytest.skip("USER_API_GATEWAY_URL not configured")
 
     client_id = "itest_conf_" + str(uuid.uuid4())[:8]
-    create = super_admin_user.create_oauth_client({
+    create = admin_user.create_oauth_client({
         "client_id": client_id,
         "client_name": "itest confidential",
         "client_type": "confidential",
@@ -448,20 +448,20 @@ def test_admin_client_confidential_secret_retrievable(super_admin_user):
 
     try:
         # Without get_secret the secret is omitted...
-        hidden = _find_client(super_admin_user, client_id, get_secret=False)
+        hidden = _find_client(admin_user, client_id, get_secret=False)
         assert not hidden.get("client_secret"), "secret must be hidden by default"
 
         # ...and returned (matching the created value) with get_secret=true.
-        shown = _find_client(super_admin_user, client_id, get_secret=True)
+        shown = _find_client(admin_user, client_id, get_secret=True)
         assert shown.get("client_secret") == created_secret
     finally:
-        super_admin_user.delete_oauth_client(client_id)
+        admin_user.delete_oauth_client(client_id)
 
 def test_admin_clients_forbidden_for_non_admin(test_user1):
-    """A non-admin user's token cannot reach the superadmin client registry."""
+    """A non-admin user's token cannot reach the admin client registry."""
     if not USER_API_GATEWAY_URL:
         pytest.skip("USER_API_GATEWAY_URL not configured")
 
     resp = test_user1.list_oauth_clients()
-    # Rejected either at the admin Cognito authorizer (401/403) or the super_admin gate (403).
+    # Rejected either at the admin Cognito authorizer (401/403) or the admin gate (403).
     assert resp.status_code in (401, 403), resp.text

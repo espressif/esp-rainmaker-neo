@@ -4,7 +4,7 @@
 
 // Package ca_bootstrap mints and publishes the assisted-claiming CA and holds
 // the operator certificate configuration it mints from. It is the logic behind
-// the superadmin CA bootstrap API (see docs/en/specs/assisted-claiming.md §3.9).
+// the admin CA bootstrap API (see docs/en/specs/assisted-claiming.md §3.9).
 //
 // The CA certificate cannot be produced at synth time: it has to be signed by
 // the KMS key, which only exists after the base stack is deployed. Mint-once is
