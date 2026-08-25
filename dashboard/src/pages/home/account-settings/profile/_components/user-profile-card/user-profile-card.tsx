@@ -29,7 +29,7 @@ export default function UserProfileCard({
     >
       <div className="flex flex-col min-w-0 items-center p-3 py-6 gap-5">
         <div className="shrink-0">
-          <IconAvatar size={100} color="info" ring={{show: true, color: "info"}}>
+          <IconAvatar size={100} color="primary" ring={{show: true, color: "primary"}}>
             <UserRound size={56} />
           </IconAvatar>
         </div>

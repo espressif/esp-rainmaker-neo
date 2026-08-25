@@ -24,6 +24,7 @@ import { RegistrationResultAlert } from "../registration-result-alert";
 import type { RegisterNodesFormProps } from "./register-nodes-form.props";
 import { StepErrorActions } from "./step-error-actions";
 import { voidFormSubmit } from "@/lib/void-form-submit";
+import { ExtensionSlot } from "@/enterprise/extension-slot";
 
 export default function RegisterNodesForm({
   initialCertificateFile,
@@ -149,6 +150,10 @@ export default function RegisterNodesForm({
                   variant="outline"
                 >
                   <SectionContent />
+                  <ExtensionSlot
+                    id={`nodes.register.${id}.extra`}
+                    context={{ form }}
+                  />
                 </SectionCard>
               </ScrollableSections.Content>
             ))}

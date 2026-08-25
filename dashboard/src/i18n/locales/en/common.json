@@ -253,5 +253,11 @@
       "ota": "Upload firmware and roll out an OTA job",
       "voiceAssistants": "Set up Alexa and Google Home"
     }
+  },
+  "enterprise": {
+    "notFound": "This page is not available in this deployment.",
+    "unavailable": "This enterprise feature could not be loaded.",
+    "incompatible": "This enterprise feature requires a newer dashboard version and was not loaded.",
+    "badge": "Enterprise feature"
   }
 }

@@ -10,6 +10,7 @@ import { rootRoute } from './routes/__root'
 import type { RouteConfig } from '../src/config/app-routes.config';
 import { routesConfig } from '../src/config/app-routes.config'
 import { requireAuth } from '../src/lib/auth'
+import { matchPathTemplate } from '../src/lib/navigation/match-path-template'
 import { PageLoader } from '@espressif/dashboard-ui-components/common'
 import React from 'react'
 
@@ -33,35 +34,14 @@ function pathToComponentPath(path: string): string {
     '$groupName': '$groupName/group-details',
     '$thingName': '$thingName/thing-details',
     '$jobId': '$jobId/job-details',
+    // Bare splat: the enterprise catch-all (/home/ent/$) renders the runtime plugin outlet.
+    '$': 'enterprise-outlet',
   }
   const pathSegments = lastSegment.startsWith('$')
     ? [...segments.slice(0, -1), dynamicSegmentMap[lastSegment] ?? 'details']
     : [...segments, lastSegment]
 
   return `../src/pages/${pathSegments.join('/')}.tsx`
-}
-
-/**
- * Matches a path template (with `$paramName` tokens) against a real pathname
- * and extracts param values. Returns null when the shape doesn't match.
- */
-function matchPathTemplate(
-  template: string,
-  pathname: string,
-): Record<string, string> | null {
-  const tSeg = template.split('/').filter(Boolean)
-  const pSeg = pathname.split('/').filter(Boolean)
-  if (tSeg.length !== pSeg.length) {return null}
-  const params: Record<string, string> = {}
-  for (let i = 0; i < tSeg.length; i++) {
-    const token = tSeg[i]
-    if (token.startsWith('$')) {
-      params[token.slice(1)] = decodeURIComponent(pSeg[i])
-    } else if (token !== pSeg[i]) {
-      return null
-    }
-  }
-  return params
 }
 
 /**

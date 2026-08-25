@@ -8,8 +8,10 @@ import _bootstrap  # noqa: F401 — sys.path setup; must precede every repo-loca
 import importlib
 import json
 import os
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Optional
 
 import aws_cdk as cdk
 
@@ -33,6 +35,13 @@ def make_common_resources(prefix):
     )
 
 
+# Ids double as capability strings on registered nodes and as i18n key fragments.
+_CAPABILITY_ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
+
+# CloudFormation caps an output value at 1024 bytes.
+_CAPABILITY_MAX_BYTES = 1024
+
+
 @dataclass
 class ModuleContext:
     """Everything an optional module needs to synthesize its stacks, handed to
@@ -50,6 +59,55 @@ class ModuleContext:
         reading ctx.synthesizer once per stack therefore gets one per stack, which is
         what keeps each add-on's asset manifest to its own assets."""
         return self.synthesizer_factory()
+
+    def add_dashboard_capability(
+        self,
+        stack: cdk.Stack,
+        *,
+        id: str,
+        label_fallback: str,
+        icon: str = "",
+        description_fallback: Optional[str] = None,
+        label_key: Optional[str] = None,
+        description_key: Optional[str] = None,
+    ) -> None:
+        """Surface a node-registration capability card in the admin dashboard.
+
+        Emitted as a `DashboardCapability<Id>` output on `stack`, so the card
+        exists exactly while that stack is deployed: the outputs pipeline
+        publishes it into the deployment's client-outputs document, where the
+        dashboard collects every `DashboardCapability*` key into
+        EXTRA_CAPABILITIES. Output values are world-readable — never put
+        secrets in a capability.
+
+        `id` is the capability string the module's register hook receives for
+        nodes registered with this card selected. The fallbacks are the floor
+        presentation for deployments where no plugin loads; translations come
+        from the module's dashboard plugin under i18n keys the dashboard
+        derives by convention (`enterprise-<id>:capabilities.<id>.label` /
+        `.description`) — pass `label_key`/`description_key` only to override
+        that convention (e.g. a module contributing several capabilities).
+        `icon` names an entry in the dashboard's enterprise icon registry.
+        """
+        if not _CAPABILITY_ID_RE.match(id):
+            raise ValueError(
+                f"dashboard capability id {id!r} must match {_CAPABILITY_ID_RE.pattern}"
+            )
+        entry = {"id": id, "labelFallback": label_fallback, "icon": icon}
+        if label_key:
+            entry["labelKey"] = label_key
+        if description_key:
+            entry["descriptionKey"] = description_key
+        if description_fallback:
+            entry["descriptionFallback"] = description_fallback
+        value = json.dumps(entry, separators=(",", ":"))
+        if len(value.encode()) > _CAPABILITY_MAX_BYTES:
+            raise ValueError(
+                f"dashboard capability {id!r} serializes to {len(value.encode())} bytes "
+                f"(CloudFormation output cap is {_CAPABILITY_MAX_BYTES})"
+            )
+        suffix = "".join(part.capitalize() for part in id.split("-"))
+        cdk.CfnOutput(stack, f"DashboardCapability{suffix}", value=value)
 
 
 def discover_optional_modules():

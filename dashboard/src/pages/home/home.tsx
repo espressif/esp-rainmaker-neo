@@ -27,6 +27,9 @@ import { useGetUserCreds, toAwsCredentials } from "@/api";
 import { logout, loginHrefWithRedirect } from "@/lib/auth";
 import { useSessionKeeper } from "@/hooks/use-session-keeper";
 import { buildBreadcrumbs } from "@/lib/breadcrumbs/build-breadcrumbs";
+import { useEnterpriseStore } from "@/enterprise/enterprise.store";
+import { mergeEnterpriseSidebar } from "@/enterprise/enterprise-sidebar";
+import { withEnterpriseBreadcrumb } from "@/enterprise/enterprise-breadcrumbs";
 import { assertSidebarGroupRedirects } from "@/lib/navigation/assert-sidebar-group-redirects";
 import { TanstackRouterLink } from "@/lib/navigation/router-link-adapters";
 import { ExpiredCredentialsError } from "@/components/expired-credentials-error";
@@ -64,6 +67,24 @@ export default function Home() {
   // before they lapse, for users who asked to stay signed in.
   useSessionKeeper();
 
+  // Enterprise plugins load only after S3-capable credentials exist. The loader lives in a lazy chunk so community users never download it, and it never blocks the community UI.
+  const credsReady = !needsCreds || Boolean(credsQuery.data);
+  useEffect(() => {
+    if (credsReady) {
+      // The catch covers the chunk fetch itself failing (e.g. a stale cached index.html
+      // referencing pruned chunk hashes). Without it the rejection is silent and an entitled
+      // deployment is indistinguishable from community mode — silence is reserved for
+      // "no access at all", never for breakage.
+      import("@/enterprise/loader")
+        .then((m) => m.ensureEnterpriseLoaded())
+        .catch((error: unknown) => {
+          console.error("[enterprise] loader chunk failed to load:", error);
+          useEnterpriseStore.getState().setStatus("error");
+        });
+    }
+  }, [credsReady]);
+  const enterpriseFeatures = useEnterpriseStore((s) => s.features);
+
   const goToAccountSettings = useCallback(() => {
     void navigate({ to: ACCOUNT_SETTINGS_BASE_PATH });
   }, [navigate]);
@@ -93,16 +114,26 @@ export default function Home() {
     [t, goToChangePassword],
   );
 
-  const sidebarEntries = useMemo(() => getSidebarConfig(t), [t]);
+  const sidebarEntries = useMemo(
+    () => mergeEnterpriseSidebar(getSidebarConfig(t), enterpriseFeatures, t),
+    [t, enterpriseFeatures],
+  );
 
   const breadcrumbs = useMemo(
-    () => buildBreadcrumbs(routesConfig, location.pathname, t),
-    [location.pathname, t],
+    () =>
+      withEnterpriseBreadcrumb(
+        buildBreadcrumbs(routesConfig, location.pathname, t),
+        enterpriseFeatures,
+        location.pathname,
+        t,
+      ),
+    [location.pathname, t, enterpriseFeatures],
   );
 
   if (import.meta.env.DEV) {
+    // Asserted against the static config only: runtime-contributed enterprise entries are exempt from the redirect contract (their parents are catch-all routes, not redirects).
     assertSidebarGroupRedirects(
-      sidebarEntries.filter(isSidebarGroup),
+      getSidebarConfig(t).filter(isSidebarGroup),
       routesConfig,
     );
   }
@@ -143,6 +174,7 @@ export default function Home() {
         userEmail: loggedInUserName || "",
         breadcrumbs,
         rightContent: <HeaderRightContent />,
+        collapseBreadcrumbsOnMobile: true,
       }}
       footerConfig={{
         hidden: appConfig.hideFooter,

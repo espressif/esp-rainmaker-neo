@@ -103,6 +103,12 @@ void i18n
     interpolation: {
       escapeValue: false,
     },
+    // Enterprise plugins register their i18n bundles at load time (after
+    // login); re-render consumers when a bundle lands so already-mounted
+    // screens pick up the translations without a language toggle.
+    react: {
+      bindI18nStore: 'added',
+    },
   })
 
 // Keep <html lang> in step with the active language. The build-time value comes

@@ -253,5 +253,11 @@
       "ota": "上传固件并发布 OTA 任务",
       "voiceAssistants": "配置 Alexa 与 Google Home"
     }
+  },
+  "enterprise": {
+    "notFound": "此部署中不提供该页面。",
+    "unavailable": "该企业功能暂时无法加载。",
+    "incompatible": "该企业功能需要更新版本的管理面板，未能加载。",
+    "badge": "企业功能"
   }
 }

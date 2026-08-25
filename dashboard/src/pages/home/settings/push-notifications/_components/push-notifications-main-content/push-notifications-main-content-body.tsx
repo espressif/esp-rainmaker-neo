@@ -48,7 +48,7 @@ export default function PushNotificationsMainContentBody({
   }
 
   if (integrations.length === 0) {
-    return <NoDataCard heading={t("noIntegrations", "No push integrations configured yet.")} />;
+    return <NoDataCard className="mx-auto max-w-md" heading={t("noIntegrations", "No push integrations configured yet.")} />;
   }
 
   return (

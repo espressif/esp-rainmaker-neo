@@ -5,6 +5,7 @@
  */
 
 import { useCallback, useState } from "react";
+import { ExtensionSlot } from "@/enterprise/extension-slot";
 import { ColorThemeCard } from "./_components/color-theme-card";
 import { LanguageCard } from "./_components/language-card";
 import { LanguagePickerSheet } from "./_components/language-picker-sheet";
@@ -27,6 +28,7 @@ export default function Preferences() {
     <div className="flex flex-col gap-6">
       <PreferencesScopeNotice />
       <ColorThemeCard />
+      <ExtensionSlot id="account-settings.preferences.extra" />
       <LanguageCard onChangeLanguage={openLanguageSheet} />
 
       {isLanguageSheetOpen && (

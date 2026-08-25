@@ -29,6 +29,7 @@ node_modules/
 .vite/
 agent/
 .claude/settings*json
+.claude/launch.json
 rmng-inputs.json
 dist/
 misc/plans/IMPLEMENTATION_PLAN.md

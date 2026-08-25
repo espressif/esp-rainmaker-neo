@@ -15,6 +15,7 @@
  */
 
 import { useConfigStore } from '@/stores/config.store'
+import type { ExtraCapability } from '@/lib/extra-capabilities'
 
 export interface RuntimeConfig {
   API_GATEWAY_URL?: string
@@ -49,6 +50,10 @@ export interface RuntimeConfig {
   BRIDGE_ENABLED?: boolean
   /** Whether the optional `rmng-controller-base` stack, which owns the controller IoT policy, is deployed. */
   CONTROLLER_ENABLED?: boolean
+  /** Stack keys present in the client-outputs document; enterprise features gate on their backends' presence. */
+  DEPLOYED_STACKS?: string[]
+  /** Capability cards contributed by deployed optional modules via `DashboardCapability*` stack outputs. */
+  EXTRA_CAPABILITIES?: ExtraCapability[]
   /** URL of the published client-outputs document this config was fetched from. */
   SERVER_URL?: string
 }
@@ -119,6 +124,18 @@ export function isBridgeEnabled(): boolean {
 /** Whether the optional controller stack (`rmng-controller-base`) is deployed, i.e. the controller capability is available. */
 export function isControllerEnabled(): boolean {
   return useConfigStore.getState().config?.CONTROLLER_ENABLED === true
+}
+
+/** Stack keys present in the deployment's client-outputs document. */
+export function getDeployedStacks(): string[] {
+  const value = useConfigStore.getState().config?.DEPLOYED_STACKS
+  return Array.isArray(value) ? value : []
+}
+
+/** Capability cards contributed by deployed optional modules (absent from stale persisted configs). */
+export function getExtraCapabilities(): ExtraCapability[] {
+  const value = useConfigStore.getState().config?.EXTRA_CAPABILITIES
+  return Array.isArray(value) ? value : []
 }
 
 /** Get ESP User API base URL. */

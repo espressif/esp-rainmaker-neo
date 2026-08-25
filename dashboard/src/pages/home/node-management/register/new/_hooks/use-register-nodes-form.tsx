@@ -17,6 +17,12 @@ import {
 import { getRegisterNodesSections } from "../_config/sections.config";
 import { mapFormValuesToMutationParams } from "../_components/register-nodes-form/register-nodes-form.utils";
 import { useRegistrationOrchestration } from "./use-registration-orchestration";
+import { getExtraCapabilities } from "@/lib/config";
+import { useEnterpriseStore } from "@/enterprise/enterprise.store";
+import { collectEnterpriseSections } from "@/enterprise/extension-sections";
+
+/** Section-shaped extension slot: a plugin contribution here becomes a whole form section. */
+const SECTIONS_SLOT_ID = "nodes.register.sections";
 
 const DEFAULT_VALUES: RegisterNodesFormValues = {
   certificateFiles: [],
@@ -31,9 +37,20 @@ export function useRegisterNodesForm(initialCertificateFile?: File) {
   const navigate = useNavigate();
   const orchestration = useRegistrationOrchestration();
 
+  // Deploy-time contributed capability ids join the allowed set (config store
+  // hydrates before render, matching how the cards themselves are gated).
+  const extraCapabilityIds = useMemo(
+    () => getExtraCapabilities().map((capability) => capability.id),
+    [],
+  );
+
   const schema = useMemo(
-    () => buildRegisterNodesFormSchema(getRegisterNodesFormSchemaMessages(t)),
-    [t],
+    () =>
+      buildRegisterNodesFormSchema(
+        getRegisterNodesFormSchemaMessages(t),
+        extraCapabilityIds,
+      ),
+    [t, extraCapabilityIds],
   );
 
   const form = useForm<RegisterNodesFormValues>({
@@ -45,7 +62,14 @@ export function useRegisterNodesForm(initialCertificateFile?: File) {
     mode: "onSubmit",
   });
 
-  const sections = useMemo(() => getRegisterNodesSections(t), [t]);
+  const enterpriseFeatures = useEnterpriseStore((s) => s.features);
+  const sections = useMemo(
+    () => [
+      ...getRegisterNodesSections(t),
+      ...collectEnterpriseSections(enterpriseFeatures, SECTIONS_SLOT_ID, t, { form }),
+    ],
+    [t, enterpriseFeatures, form],
+  );
 
   const handleSubmit = useCallback(
     (values: RegisterNodesFormValues) => {

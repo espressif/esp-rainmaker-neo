@@ -5,6 +5,7 @@
  */
 
 import type { RuntimeConfig } from '@/lib/config'
+import { collectExtraCapabilities } from '@/lib/extra-capabilities'
 
 /**
  * Runtime config is fetched from a published `rmng-client-outputs.json` document.
@@ -81,6 +82,8 @@ function mapClientOutputs(outputs: ClientOutputs): RuntimeConfig {
     SMARTTHINGS_ENABLED: Boolean(outputs['rmng-st-cfg-core']),
     BRIDGE_ENABLED: Boolean(outputs['rmng-bridge-core']),
     CONTROLLER_ENABLED: Boolean(outputs['rmng-controller-base']),
+    DEPLOYED_STACKS: Object.keys(outputs),
+    EXTRA_CAPABILITIES: collectExtraCapabilities(outputs),
   }
 }
 

@@ -101,24 +101,54 @@ class AdminDashboardStack(Stack):
         ]
         
 
-        # Deploy the frontend code and invalidate the cache.
+        # Deploy the frontend in two passes so every object carries an explicit Cache-Control.
+        # Without one, browsers cache index.html heuristically; after a redeploy (which prunes
+        # the bucket) a stale cached index.html references chunk files that no longer exist, and
+        # the SPA 404→index.html rewrite serves HTML where JS was expected — every lazily loaded
+        # chunk then fails until a hard reload. CloudFront invalidation cannot fix this: the
+        # stale copy lives in the browser.
+        #
+        # Pass 1 — Vite's content-hashed files (everything under assets/): immutable, cached for
+        # a year. A changed file always gets a new name, so staleness is impossible. The
+        # include/exclude filters scope pruning as well, so neither pass deletes the other's files.
+        assets_deployment = s3deploy.BucketDeployment(
+            self,
+            "DeploymentAdminDashboardAssets",
+            sources            = [s3deploy.Source.asset(LOCAL_FRONTEND_BUILD)],
+            destination_bucket = frontend_bucket,
+            exclude            = ["*"],
+            include            = ["assets/*"],
+            cache_control      = [s3deploy.CacheControl.from_string("public, max-age=31536000, immutable")],
+            memory_limit       = DEPLOYMENT_MEMORY_LIMIT_MIB,
+        )
+
+        # Pass 2 — the mutable entry points (index.html, config.json): no-cache makes the browser
+        # revalidate on every load (a cheap 304 while unchanged), so redeploys are picked up
+        # immediately. Ordered after the assets pass so a fresh index.html never references
+        # chunks that are not uploaded yet; the CloudFront invalidation rides on this pass.
         bucket_deployment = s3deploy.BucketDeployment(
             self,
             "DeploymentAdminDashboardFiles",
             sources            = cloudfront_sources,
             destination_bucket = frontend_bucket,
+            exclude            = ["assets/*"],
+            cache_control      = [s3deploy.CacheControl.from_string("no-cache")],
             distribution       = cloudfront_distribution,
             distribution_paths = ["/*"],
             memory_limit       = DEPLOYMENT_MEMORY_LIMIT_MIB,
         )
+        bucket_deployment.node.add_dependency(assets_deployment)
 
-        deployment_cr = next(
-            (child for child in bucket_deployment.node.children if isinstance(child, CustomResource)), None)
-        if deployment_cr is None:
-            raise RuntimeError("BucketDeployment 'DeploymentAdminDashboardFiles' has no CustomResource child")
-        deployment_cr.node.default_child.override_logical_id(
-            stable_logical_id("CustomCDKBucketDeploy",
-                              f"rmng-admin-dashboard-{DEPLOYMENT_MEMORY_LIMIT_MIB}mib"))
+        for deployment, pin_name in (
+            (assets_deployment, f"rmng-admin-dashboard-assets-{DEPLOYMENT_MEMORY_LIMIT_MIB}mib"),
+            (bucket_deployment, f"rmng-admin-dashboard-{DEPLOYMENT_MEMORY_LIMIT_MIB}mib"),
+        ):
+            deployment_cr = next(
+                (child for child in deployment.node.children if isinstance(child, CustomResource)), None)
+            if deployment_cr is None:
+                raise RuntimeError(f"BucketDeployment '{deployment.node.id}' has no CustomResource child")
+            deployment_cr.node.default_child.override_logical_id(
+                stable_logical_id("CustomCDKBucketDeploy", pin_name))
 
         custom_domain, dashboard_host = discover_cloudfront_custom_domain(
             self, "AdminDashboardCustomDomain",
