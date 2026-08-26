@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import time
 
 from test.itest.conftest import (
     CA_CERT, IOT_ENDPOINT, REGION, DEBUG, accept_sharing_request_for,
@@ -519,3 +520,143 @@ def test_node_config_cross_tenant_denied(two_tenants):
             f"Wrote config to foreign node via {label} returned "
             f"{resp.status_code}: {resp.text[:150]}"
         )
+
+
+# ncfg_ver: the node-config-version cache key the app sequence relies on.
+#
+# The device publishes it as an integer in the reported params of its
+# `params-<groupId>[-<subgroupId>...]` shadow, alongside the shadow-level
+# specials `online` and `notify`. The app reads every node's shadow on launch
+# anyway, so ncfg_ver is a one-integer cache key that lets it skip refetching a
+# heavy, mostly-static node config from
+# GET /v1/groups/{groupId}/nodes/{nodeId}/config. See test/app_sim.py for the
+# caching flow and test/device_sim.py for the producer; the device, not the
+# cloud, owns the value today.
+
+
+def _ncfg_ver(thing_name, shadow_name):
+    """The reported ncfg_ver, or None. It sits under reported.params, since the
+    conftest get_shadow() returns the raw document without flattening params."""
+    return reported_state(thing_name, shadow_name).get("params", {}).get("ncfg_ver")
+
+
+def test_ncfg_ver_drives_app_config_cache(associated_device):
+    """The full app launch sequence, twice, around a config change.
+
+    Mirrors app_sim's _read_device_shadows -> _fetch_node_configs flow rather
+    than reading the shadow out of band, because the app's cache key comes off
+    the MQTT shadow read it performs as the user:
+
+      launch 1: list groups -> read each node's shadow over MQTT -> ncfg_ver is
+                unknown, so fetch the config and cache it under that version
+      launch 2: same sweep, config unchanged -> version matches the cache, so
+                the config is served locally and no fetch is needed
+      launch 3: after the device pushes a new config and bumps the version ->
+                version differs, the cache is invalidated, and the refetch
+                returns the changed config
+
+    Note the shape difference from the tests above: read_shadow's queued payload
+    goes through shadow_to_unstructured, so on this path ncfg_ver sits directly
+    under state.reported, not under state.reported.params.
+    """
+    device, group_id, test_user, user_group_api = associated_device
+    node_id = device.node_thing_name
+    shadow_name = f"params-{group_id}"
+
+    def set_config(param_id):
+        """A minimal node config varying only in a param id, so a cache keyed on
+        ncfg_ver must refetch to observe the difference. Retried for the same
+        reason as the conftest fixtures: the ack window is sometimes missed on a
+        cold node-config lambda, and the call is idempotent."""
+        config = {
+            "node_id": "ncfg-ver-itest",
+            "config_version": "2020-03-20",
+            "devices": [{
+                "name": "Thermostat",
+                "type": "esp.device.thermostat",
+                "params": [{"id": param_id, "type": "esp.param.setpoint-temperature"}],
+            }],
+        }
+        for _ in range(3):
+            if device.set_node_config(config):
+                return
+        assert False, f"set_node_config never acknowledged for {node_id}"
+
+    def app_launch(cache):
+        """One app launch. Returns (config_in_use, fetched), where `fetched` says
+        whether the config came off the network or out of `cache`."""
+        # The app discovers its nodes through the group listing.
+        groups = user_group_api.list_groups()
+        assert groups is not None, "app could not list groups"
+        node_ids = next((g.get("node_ids", []) for g in groups.get("groups", [])
+                         if g.get("group_id") == group_id), None)
+        assert node_ids and node_id in node_ids, \
+            f"node {node_id} missing from group {group_id} listing: {groups}"
+
+        # Then reads each node's shadow over MQTT to learn its config version.
+        assert test_user.read_shadow(node_id, shadow_name), \
+            "app could not request the node shadow"
+        shadow = test_user.read_shadow_queue(timeout=10)
+        assert shadow is not None, f"no shadow response for {shadow_name}"
+        reported = shadow.get("state", {}).get("reported", {})
+        version = reported.get("ncfg_ver")
+        assert version is not None, f"ncfg_ver missing from app shadow read: {reported}"
+
+        # Cache hit only when the cached version matches what the node reports.
+        if cache.get("ncfg_ver") == version and "config" in cache:
+            return cache["config"], False
+
+        config = test_user.get_node_config(group_id, "", node_id)
+        assert config is not None, "app could not fetch the node config"
+        cache["ncfg_ver"] = version
+        cache["config"] = config
+        return config, True
+
+    def param_ids(config):
+        params = (config.get("devices") or [{}])[0].get("params", [])
+        return {p.get("id") or p.get("name") for p in params}
+
+    assert device.shadow_connect([shadow_name]), "Failed to connect shadow client"
+    assert test_user.mqtt_connect(), "app could not connect to MQTT"
+    assert test_user.subscribe_to_named_shadows(node_id, [shadow_name]), \
+        "app could not subscribe to the node shadow"
+
+    # The device publishes its config and stamps the version that describes it.
+    set_config("Setpoint")
+    first_version = int(time.time())
+    assert device.update_named_shadow(shadow_name, {"ncfg_ver": first_version})
+    wait_until(lambda: _ncfg_ver(node_id, shadow_name) == first_version,
+               "first ncfg_ver to settle")
+
+    # Launch 1: cold cache, so the config is fetched and cached.
+    cache = {}
+    config, fetched = app_launch(cache)
+    assert fetched, "cold cache should have fetched the config"
+    assert cache["ncfg_ver"] == first_version
+    assert "Setpoint" in param_ids(config), f"unexpected initial config: {config}"
+
+    # Launch 2: nothing changed, so the version matches and the cache serves it.
+    config, fetched = app_launch(cache)
+    assert not fetched, \
+        "unchanged ncfg_ver should have been a cache hit, but the app refetched"
+    assert "Setpoint" in param_ids(config)
+
+    # The device changes its config and bumps the version. first_version + 1
+    # rather than a second time.time(), which could collide within the same second.
+    set_config("TargetTemp")
+    second_version = first_version + 1
+    assert device.update_named_shadow(shadow_name, {"ncfg_ver": second_version})
+    wait_until(lambda: _ncfg_ver(node_id, shadow_name) == second_version,
+               "bumped ncfg_ver to appear in the shadow")
+
+    # Launch 3: the version moved, so the cache is invalidated and the refetch
+    # must show the new param. The config read is retried because the shadow
+    # bump and the config write settle independently.
+    def relaunch_sees_new_param():
+        config, fetched = app_launch(cache)
+        return fetched and "TargetTemp" in param_ids(config)
+
+    wait_until(relaunch_sees_new_param,
+               "app relaunch to invalidate its cache and refetch the new config")
+    assert cache["ncfg_ver"] == second_version, \
+        f"cache should have been rekeyed to {second_version}, got {cache['ncfg_ver']}"
