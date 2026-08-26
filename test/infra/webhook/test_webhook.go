@@ -79,6 +79,40 @@ func IssueToken(refreshToken string) (TokenResponse, error) {
 	}, nil
 }
 
+// STTokenResponse is the Schema-shaped accessTokenResponse the SmartThings
+// connector expects back from an accessTokenRequest: the tokens live under a
+// nested callbackAuthentication block, not at the top level like OAuth.
+type STTokenResponse struct {
+	Headers                map[string]string `json:"headers"`
+	CallbackAuthentication STCallbackAuth    `json:"callbackAuthentication"`
+}
+
+type STCallbackAuth struct {
+	AccessToken  string `json:"accessToken"`
+	RefreshToken string `json:"refreshToken"`
+	ExpiresIn    int64  `json:"expiresIn"`
+}
+
+// IssueSTToken mints the Schema-shaped token bundle for a grantCallbackAccess
+// (or refresh) exchange. accessToken is echoed from the caller's code so the
+// test can predict the value the state callback will carry, which is the key
+// the capture endpoint stores under.
+func IssueSTToken(requestID, accessToken, refreshToken string) STTokenResponse {
+	return STTokenResponse{
+		Headers: map[string]string{
+			"schema":          "st-schema",
+			"version":         "1.0",
+			"interactionType": "accessTokenResponse",
+			"requestId":       requestID,
+		},
+		CallbackAuthentication: STCallbackAuth{
+			AccessToken:  accessToken,
+			RefreshToken: refreshToken,
+			ExpiresIn:    tokenTTLSeconds,
+		},
+	}
+}
+
 // IssueGVAToken mints a signed bearer token for the GVA HomeGraph flow.
 func IssueGVAToken() (GVATokenResponse, error) {
 	access, err := signToken("gva_access")
@@ -111,6 +145,14 @@ func StoreGVAData(ctx *rmngctx.RmngContext, uuid string, body map[string]interfa
 	return storeBlob(ctx, webhookdb.ChannelGVA, uuid, body)
 }
 
+// StoreSTData tags the body as SmartThings data and persists it under uuid. A
+// state callback carries no user id of its own — the recipient is implied by the
+// bearer token — so the controller keys the capture by that token instead.
+func StoreSTData(ctx *rmngctx.RmngContext, uuid string, body map[string]interface{}) error {
+	body["smartthings"] = true
+	return storeBlob(ctx, webhookdb.ChannelST, uuid, body)
+}
+
 // ValidateCoreData reads back the payload captured under uuid, or ErrGone.
 func ValidateCoreData(ctx *rmngctx.RmngContext, uuid string) (json.RawMessage, error) {
 	return readBlob(ctx, webhookdb.ChannelCore, uuid)
@@ -122,6 +164,10 @@ func ValidateAlexaData(ctx *rmngctx.RmngContext, uuid string) (json.RawMessage, 
 
 func ValidateGVAData(ctx *rmngctx.RmngContext, uuid string) (json.RawMessage, error) {
 	return readBlob(ctx, webhookdb.ChannelGVA, uuid)
+}
+
+func ValidateSTData(ctx *rmngctx.RmngContext, uuid string) (json.RawMessage, error) {
+	return readBlob(ctx, webhookdb.ChannelST, uuid)
 }
 
 // Pair derives the deterministic endpoint id from the four commissioning fields.

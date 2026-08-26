@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/ssmutil"
@@ -25,6 +26,14 @@ const (
 	// stPlatform is the integration_id under which SmartThings callback tokens are stored in rmng-user-endpoints.
 	stPlatform = "smartthings"
 )
+
+// isTestMode reports whether this Lambda is pointed at the in-cloud webhook mock,
+// switching on the same env var the notifications Lambda uses (see
+// rmneo/handlers/notification/notifications: resolveMockBaseURL). Unset — the
+// production default — means the real SmartThings token endpoint is in play.
+func isTestMode() bool {
+	return os.Getenv("webhook_mock_base_url") != ""
+}
 
 // accessTokenRequest is the request body sent to SmartThings to exchange a code or refresh token.
 type accessTokenRequest struct {
@@ -149,9 +158,17 @@ func getSTClientCredentials(ctx context.Context) (clientID string, clientSecret 
 // exchangeCodeForTokens sends an accessTokenRequest to SmartThings to exchange
 // an authorization code for access and refresh tokens.
 func exchangeCodeForTokens(ctx context.Context, code, oauthTokenURL string) (*accessTokenResponse, error) {
-	clientID, clientSecret, err := getSTClientCredentials(ctx)
-	if err != nil {
-		return nil, err
+	// The mock token endpoint answers from callbackAuthentication.code alone and never
+	// reads clientId/clientSecret, so demanding the SSM parameters in test mode would
+	// leave these the only integration tests needing account configuration — GVA and
+	// Alexa both bypass their real credentials the same way.
+	var clientID, clientSecret string
+	if !isTestMode() {
+		var err error
+		clientID, clientSecret, err = getSTClientCredentials(ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	reqBody := accessTokenRequest{

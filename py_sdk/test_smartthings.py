@@ -62,6 +62,29 @@ def state_refresh_request(token, external_device_ids):
     }
 
 
+def grant_callback_request(token, code, oauth_token_url, state_callback_url):
+    """Build a grantCallbackAccess envelope.
+
+    SmartThings sends this after account linking so the connector can exchange
+    `code` at `oauth_token_url` for the callback tokens it later presents on
+    state callbacks. `state_callback_url` identifies the endpoint row the tokens
+    are stored against.
+    """
+    return {
+        'headers': st_headers('grantCallbackAccess'),
+        'authentication': {'tokenType': 'Bearer', 'token': token},
+        'callbackAuthentication': {
+            'grantType': 'authorization_code',
+            'code': code,
+            'clientId': 'test-client-id',
+        },
+        'callbackUrls': {
+            'oauthToken': oauth_token_url,
+            'stateCallback': state_callback_url,
+        },
+    }
+
+
 def command_device(external_device_id, commands, device_cookie=None):
     """Build one commandRequest device entry.
 

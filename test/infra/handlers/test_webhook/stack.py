@@ -221,6 +221,78 @@ class WebhookApi(Construct):
             allowed_methods=["GET"]
         )
 
+    def _create_smartthings_test_apis(self, common_resources: CommonResources, v1_parent_id: str, lambda_function: lambda_.Function) -> None:
+        """
+            Create following APIs
+            POST /v1/smartthings/token    - Answer a Schema accessTokenRequest
+            POST /v1/smartthings/data     - Capture a state callback keyed by bearer token
+            GET /v1/smartthings/validate - Read back a captured state callback
+        """
+        st_parent_id = get_or_create_api_resource(self, "StResource", common_resources, v1_parent_id, "smartthings", common_resources.api_gateway_id)
+
+        # /smartthings/token
+        token_resource_id = get_or_create_api_resource(self, "StTokenResource", common_resources, st_parent_id, "token", common_resources.api_gateway_id)
+        # POST /smartthings/token
+        create_cfn_api_method(
+            self,
+            "StTokenPostMethod",
+            common_resources,
+            token_resource_id,
+            "POST",
+            lambda_function,
+            api_key_required=True,
+            authorization_type="NONE"
+        )
+        add_cors_options(
+            self,
+            "StTokenOptionsMethod",
+            common_resources,
+            token_resource_id,
+            allowed_methods=["POST"]
+        )
+
+        # /smartthings/data
+        data_resource_id = get_or_create_api_resource(self, "StDataResource", common_resources, st_parent_id, "data", common_resources.api_gateway_id)
+        # POST /smartthings/data
+        create_cfn_api_method(
+            self,
+            "StDataPostMethod",
+            common_resources,
+            data_resource_id,
+            "POST",
+            lambda_function,
+            api_key_required=True,
+            authorization_type="NONE"
+        )
+        add_cors_options(
+            self,
+            "StDataOptionsMethod",
+            common_resources,
+            data_resource_id,
+            allowed_methods=["POST"]
+        )
+
+        # /smartthings/validate
+        validate_resource_id = get_or_create_api_resource(self, "StValidateResource", common_resources, st_parent_id, "validate", common_resources.api_gateway_id)
+        # GET /smartthings/validate
+        create_cfn_api_method(
+            self,
+            "StValidateGetMethod",
+            common_resources,
+            validate_resource_id,
+            "GET",
+            lambda_function,
+            api_key_required=True,
+            authorization_type="NONE"
+        )
+        add_cors_options(
+            self,
+            "StValidateOptionsMethod",
+            common_resources,
+            validate_resource_id,
+            allowed_methods=["GET"]
+        )
+
     def _create_matter_test_apis(self, common_resources: CommonResources, v1_parent_id: str, lambda_function: lambda_.Function) -> None:
         """
             Create the following APIs
@@ -331,5 +403,6 @@ class WebhookApi(Construct):
         self._create_webhook_test_apis(common_resources, v1_parent_id, self.test_webhook_function)
         self._create_alexa_test_apis(common_resources, v1_parent_id, self.test_webhook_function)
         self._create_gva_test_apis(common_resources, v1_parent_id, self.test_webhook_function)
+        self._create_smartthings_test_apis(common_resources, v1_parent_id, self.test_webhook_function)
         self._create_matter_test_apis(common_resources, v1_parent_id, self.test_webhook_function)
         

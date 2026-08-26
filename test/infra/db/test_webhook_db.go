@@ -79,6 +79,7 @@ const (
 	ChannelCore  = "core"
 	ChannelAlexa = "alexa"
 	ChannelGVA   = "gva"
+	ChannelST    = "smartthings"
 )
 
 // ErrNotFound is returned when no live row exists for the requested key. The

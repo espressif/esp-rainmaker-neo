@@ -118,6 +118,37 @@ func handleGVAToken(ctx context.Context, request events.APIGatewayProxyRequest) 
 	return utils.APIGwRespJSON(http.StatusOK, resp), nil
 }
 
+// handleSTToken answers a SmartThings accessTokenRequest. The Schema flow posts
+// an envelope carrying either a code (grantCallbackAccess) or a refreshToken, and
+// expects the tokens nested under callbackAuthentication. The code/refresh value
+// is echoed back as the access token so a test can predict what the state
+// callback will present, which is the key the capture endpoint stores under.
+func handleSTToken(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+	body, err := parseBody(request)
+	if err != nil {
+		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Invalid request body")), nil
+	}
+
+	auth, _ := body["callbackAuthentication"].(map[string]interface{})
+	if auth == nil {
+		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("callbackAuthentication is required")), nil
+	}
+	grant, _ := auth["code"].(string)
+	if grant == "" {
+		grant, _ = auth["refreshToken"].(string)
+	}
+	if grant == "" {
+		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("code or refreshToken is required")), nil
+	}
+
+	requestID := ""
+	if headers, ok := body["headers"].(map[string]interface{}); ok {
+		requestID, _ = headers["requestId"].(string)
+	}
+
+	return utils.APIGwRespJSON(http.StatusOK, webhook.IssueSTToken(requestID, grant, grant)), nil
+}
+
 // --- Capture (data) endpoints ---------------------------------------------
 
 func handleCoreData(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
@@ -187,6 +218,30 @@ func handleGVAData(ctx context.Context, request events.APIGatewayProxyRequest) (
 	return utils.APIGwRespJSON(http.StatusOK, nil), nil
 }
 
+// handleSTData captures a SmartThings state callback. Unlike Alexa (uuid header)
+// and GVA (agentUserId in the body), the ST envelope names no user: the callback
+// URL and bearer token are what identify the recipient. The token is therefore
+// the capture key, and the test reads back with the same value it seeded on the
+// user's callback row.
+func handleSTData(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+	token := bearerToken(request)
+	if token == "" {
+		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Bearer token is required")), nil
+	}
+	rmngCtx := newContext(ctx)
+
+	body, err := parseBody(request)
+	if err != nil {
+		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Invalid request body")), nil
+	}
+
+	if err := webhook.StoreSTData(rmngCtx, token, body); err != nil {
+		rlog.Error(rmngCtx).Err(err).Send()
+		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Failed to store data")), nil
+	}
+	return utils.APIGwRespJSON(http.StatusOK, nil), nil
+}
+
 // --- Validate (read-back) endpoints ---------------------------------------
 
 func handleValidate(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
@@ -206,6 +261,8 @@ func handleValidate(ctx context.Context, request events.APIGatewayProxyRequest) 
 		payload, err = webhook.ValidateAlexaData(rmngCtx, uuid)
 	case "/v1/gva/validate":
 		payload, err = webhook.ValidateGVAData(rmngCtx, uuid)
+	case "/v1/smartthings/validate":
+		payload, err = webhook.ValidateSTData(rmngCtx, uuid)
 	default:
 		payload, err = webhook.ValidateCoreData(rmngCtx, uuid)
 	}
@@ -287,7 +344,7 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		if request.HTTPMethod == "POST" {
 			return handleToken(ctx, request)
 		}
-	case "/v1/validate", "/v1/alexa/validate", "/v1/gva/validate":
+	case "/v1/validate", "/v1/alexa/validate", "/v1/gva/validate", "/v1/smartthings/validate":
 		if request.HTTPMethod == "GET" {
 			return handleValidate(ctx, request)
 		}
@@ -306,6 +363,14 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	case "/v1/gva/data":
 		if request.HTTPMethod == "POST" {
 			return handleGVAData(ctx, request)
+		}
+	case "/v1/smartthings/token":
+		if request.HTTPMethod == "POST" {
+			return handleSTToken(ctx, request)
+		}
+	case "/v1/smartthings/data":
+		if request.HTTPMethod == "POST" {
+			return handleSTData(ctx, request)
 		}
 	case "/v1/pair":
 		if request.HTTPMethod == "POST" {
