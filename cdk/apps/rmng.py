@@ -38,10 +38,17 @@ class ModuleContext:
     its register() function. Core exposes only these generic seams — it holds no
     knowledge of what any module builds."""
     app: cdk.App
-    synthesizer: cdk.IStackSynthesizer
+    synthesizer_factory: Callable[[], cdk.IStackSynthesizer]
     base_stack: cdk.Stack
     inputs: dict
     common_resources: Callable[[str], CommonResources]
+
+    @property
+    def synthesizer(self) -> cdk.IStackSynthesizer:
+        """A *fresh* synthesizer on every access -- see custom_synthesizer(). A module
+        reading ctx.synthesizer once per stack therefore gets one per stack, which is
+        what keeps each add-on's asset manifest to its own assets."""
+        return self.synthesizer_factory()
 
 
 def discover_optional_modules():
@@ -87,10 +94,15 @@ def get_rmng_inputs():
 app = cdk.App()
 apply_common_tags(app)
 
-custom_synthesizer = cdk.DefaultStackSynthesizer(
-    qualifier="rmng",
-    file_assets_bucket_name="cdk-${Qualifier}-assets-${AWS::AccountId}-${AWS::Region}",
-)
+# A fresh synthesizer per stack, never one shared instance: DefaultStackSynthesizer keeps its
+# asset manifest on the instance and reusableBind() inherits that same object through the
+# prototype chain, so one shared synthesizer makes every stack publish every *other* stack's
+# assets too. rmng-base was shipping a 41-asset, 429 MB manifest for the 7 assets it references.
+def custom_synthesizer() -> cdk.DefaultStackSynthesizer:
+    return cdk.DefaultStackSynthesizer(
+        qualifier="rmng",
+        file_assets_bucket_name="cdk-${Qualifier}-assets-${AWS::AccountId}-${AWS::Region}",
+    )
 
 # A published template must not carry any operator's opt-ins, so publishing
 # synthesizes with empty inputs. Every optional feature reads its own key off
@@ -126,7 +138,7 @@ base_stack = RMNGBaseStack(
     app,
     "rmng-base",
     common_resources_base,
-    synthesizer=custom_synthesizer,
+    synthesizer=custom_synthesizer(),
     description="RMNG Base Stack - Storage, Networking, and Infrastructure Resources"
 )
 
@@ -134,7 +146,7 @@ core_stack = RMNGCoreStack(
     app,
     "rmng-core",
     common_resources_core,
-    synthesizer=custom_synthesizer,
+    synthesizer=custom_synthesizer(),
     description="RMNG Core Stack - Compute Resources (Lambda, ECS, API Gateway Integrations)"
 )
 
@@ -143,7 +155,7 @@ core_stack.add_stack_dependency(base_stack)
 # Optional add-on modules
 module_ctx = ModuleContext(
     app=app,
-    synthesizer=custom_synthesizer,
+    synthesizer_factory=custom_synthesizer,
     base_stack=base_stack,
     inputs=rmng_inputs,
     common_resources=make_common_resources,
@@ -156,7 +168,7 @@ if not os.environ.get("DASHBOARD_SKIP"):
         app,
         "rmng-admin-dashboard",
         common_resources_admin_dashboard,
-        synthesizer=custom_synthesizer,
+        synthesizer=custom_synthesizer(),
         description="RMNG Admin Dashboard - Frontend Deployment",
     )
     admin_dashboard_stack.add_stack_dependency(base_stack)
