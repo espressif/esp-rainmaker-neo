@@ -72,7 +72,7 @@ func listGroups(rmngCtx *rmngctx.RmngContext, groupID string) ([]group.Group, er
 	}
 	// A non-member yields an empty list, not an error, so absence of error is not access.
 	if len(groups) == 0 {
-		return nil, fmt.Errorf("group %s does not exist or you do not have access to it", groupID)
+		return nil, guidancef("group %s does not exist or you do not have access to it", groupID)
 	}
 	return groups, nil
 }
@@ -92,7 +92,7 @@ func authorizeGroupForUser(rmngCtx *rmngctx.RmngContext, groupID string) error {
 	}
 	// A non-member yields an empty list, not an error, so absence of error is not access.
 	if len(groups) == 0 {
-		return fmt.Errorf("user does not have access to group %s", groupID)
+		return guidancef("user does not have access to group %s", groupID)
 	}
 	return nil
 }

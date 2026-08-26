@@ -20,8 +20,17 @@ import (
 
 // toolFailure logs the real error and hands the model a message it can act on. The two are
 // deliberately different: internal detail stays in the log, guidance goes to the caller.
-func toolFailure(rmngCtx *rmngctx.RmngContext, id json.RawMessage, err error, message string) events.APIGatewayV2HTTPResponse {
+//
+// An error the tools package wrote for the model carries its own guidance and is forwarded as
+// it is. Anything else is a DynamoDB read, an IoT publish or a shadow fetch that failed, whose
+// text says nothing the model can act on and leaks how the service is built — that gets the
+// fallback the caller supplied.
+func toolFailure(rmngCtx *rmngctx.RmngContext, id json.RawMessage, err error, fallback string) events.APIGatewayV2HTTPResponse {
 	rlog.Error(rmngCtx).Err(err).Send()
+	message := fallback
+	if mcptools.IsGuidance(err) {
+		message = err.Error()
+	}
 	return mcpserver.ToolErrorResponse(id, message)
 }
 
@@ -58,7 +67,7 @@ func handleListDevices(userCtx mcpserver.UserContext, id json.RawMessage, args j
 		Fields:     toolArgs.Fields,
 	})
 	if err != nil {
-		return toolFailure(rmngCtx, id, err, err.Error()), nil
+		return toolFailure(rmngCtx, id, err, "could not list the devices right now — try again in a moment."), nil
 	}
 
 	return mcpserver.ToolTextResponse(id, map[string]interface{}{
@@ -85,7 +94,7 @@ func handleListGroups(userCtx mcpserver.UserContext, id json.RawMessage, args js
 		IncludeDevices: toolArgs.IncludeDevices,
 	})
 	if err != nil {
-		return toolFailure(rmngCtx, id, err, err.Error()), nil
+		return toolFailure(rmngCtx, id, err, "could not list the groups right now — try again in a moment."), nil
 	}
 
 	return mcpserver.ToolTextResponse(id, map[string]interface{}{
@@ -110,7 +119,7 @@ func handleListSchedules(userCtx mcpserver.UserContext, id json.RawMessage, args
 
 	schedules, err := mcptools.ListSchedules(rmngCtx, toolArgs.GroupID, toolArgs.NodeID)
 	if err != nil {
-		return toolFailure(rmngCtx, id, err, "could not read the schedules for "+toolArgs.NodeID+": it is not a device in group "+toolArgs.GroupID+", or it is unreachable. Call list_devices to confirm the node_id and group_id."), nil
+		return toolFailure(rmngCtx, id, err, unreachableNode(toolArgs.NodeID, toolArgs.GroupID)), nil
 	}
 
 	return mcpserver.ToolTextResponse(id, map[string]interface{}{
@@ -141,7 +150,7 @@ func handleSetParams(userCtx mcpserver.UserContext, id json.RawMessage, args jso
 	nodeIDs := mcptools.SplitIDs(toolArgs.NodeID)
 	result, err := mcptools.SetNodeParams(rmngCtx, toolArgs.GroupID, nodeIDs, toolArgs.Params)
 	if err != nil {
-		return toolFailure(rmngCtx, id, err, err.Error()), nil
+		return toolFailure(rmngCtx, id, err, unreachableNode(toolArgs.NodeID, toolArgs.GroupID)), nil
 	}
 	// Every device failing is a failed call, not a partial success — say so plainly so the
 	// model does not report a change that never happened.
@@ -195,7 +204,7 @@ func handleSetSchedule(userCtx mcpserver.UserContext, id json.RawMessage, args j
 			Info:       toolArgs.Info,
 		})
 	if err != nil {
-		return toolFailure(rmngCtx, id, err, err.Error()), nil
+		return toolFailure(rmngCtx, id, err, unreachableNode(toolArgs.NodeID, toolArgs.GroupID)), nil
 	}
 
 	return mcpserver.ToolTextResponse(id, map[string]interface{}{
@@ -203,6 +212,14 @@ func handleSetSchedule(userCtx mcpserver.UserContext, id json.RawMessage, args j
 		"operation": toolArgs.Operation,
 		"schedule":  schedule,
 	}), nil
+}
+
+// unreachableNode is the fallback for an infrastructure failure on a node-scoped tool. It
+// names the two things the model can actually check, since it cannot be told what really
+// broke and a wrong node_id or group_id is the likelier cause anyway.
+func unreachableNode(nodeID, groupID string) string {
+	return "could not reach " + nodeID + ": it is not a device in group " + groupID +
+		", or it is unreachable. Call list_devices to confirm the node_id and group_id."
 }
 
 // missingIDs returns the guidance for whichever identifier the caller left out. Both come

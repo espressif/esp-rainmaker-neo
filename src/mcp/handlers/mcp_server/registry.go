@@ -58,7 +58,7 @@ In replies to the user prefer the human names in params.<Device>.Name; use ids o
 					},
 					"fields": map[string]interface{}{
 						"type":        "string",
-						"description": "Comma-separated fields to return instead of the whole record. Top level: node_id, group_id, group_name, subgroup_ids, subgroup_names, name, type, model, fw_version, connected, params, spec, config. Dot paths reach inside: params.Light.Power. Keep spec whenever the next step is a write — it is what set_params validates against.",
+						"description": "Comma-separated fields to return instead of the whole record. Top level: node_id, group_id, group_name, subgroup_ids, subgroup_names, name, type, model, fw_version, connected, params, spec, config, error. A device whose read failed carries error and is always returned with it, so connected false on a record without error is a genuinely offline device. Dot paths reach inside: params.Light.Power. Keep spec whenever the next step is a write — it is what set_params validates against.",
 					},
 				},
 			},
@@ -104,7 +104,7 @@ This tool only reads. Nothing here creates, renames or deletes a home or a room,
 
 Call this to turn a schedule the user described rather than named — "the morning alarm", "the one that shuts the porch light off" — into the schedule_id that set_schedule needs. Do not use list_devices for that; schedules are not part of a device's parameters.
 
-Triggers come back in the device's own form: m is minutes past midnight and d is a weekday bitmask with Monday as the lowest bit. Translate them when you answer the user — m 420 with d 62 means 07:00 on weekdays.`,
+Triggers come back in the device's own form: m is minutes past midnight and d is a weekday bitmask with Monday as the lowest bit. Translate them when you answer the user — m 420 with d 31 means 07:00 on weekdays.`,
 			InputSchema: mcpserver.InputSchema{
 				Type: "object",
 				Properties: map[string]interface{}{
@@ -189,7 +189,7 @@ Do not use this for an immediate change (set_params) or to read schedules back (
 					},
 					"schedule_id": map[string]interface{}{
 						"type":        "string",
-						"description": "The schedule to act on, from list_schedules. Required for every operation except add, where supplying one pins the new schedule's id instead of generating it.",
+						"description": "The schedule to act on, from list_schedules. Required for every operation except add, where supplying one pins the new schedule's id instead of generating it — 8 characters or fewer, since the device keys the schedule by it. Leave it out and a free one is generated.",
 					},
 					"name": map[string]interface{}{
 						"type":        "string",

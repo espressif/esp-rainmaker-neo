@@ -5,7 +5,6 @@
 package mcp
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -18,8 +17,19 @@ import (
 // device push that every schedule write must trigger.
 var scheduleService = schedule.NewScheduleService()
 
-// maxScheduleNameLen is the firmware's bound on a schedule name.
+// maxScheduleNameLen is the firmware's bound on a schedule name (esp_rmaker_schedule.c,
+// MAX_NAME_LEN). A longer name is not truncated: the device's JSON parser refuses the
+// over-length value, the name reads back empty, and the add is dropped.
 const maxScheduleNameLen = 32
+
+// maxScheduleIDLen is the firmware's bound on a schedule id (esp_rmaker_schedule.c,
+// MAX_ID_LEN). The id is not cloud-side bookkeeping — the device copies it into the
+// esp_schedule name and uses it verbatim as the NVS key, so an over-length one is refused the
+// same way a name is, and the device drops the schedule while the cloud keeps it.
+const maxScheduleIDLen = 8
+
+// maxScheduleIDAttempts bounds the retries generateUnusedScheduleID makes before giving up.
+const maxScheduleIDAttempts = 5
 
 // ScheduleOperation is one edit to a node's schedule set.
 type ScheduleOperation string
@@ -65,7 +75,7 @@ func SetSchedule(rmngCtx *rmngctx.RmngContext, groupID, nodeID string, operation
 	// invented parameter through a schedule instead, and the failure would surface at 7am.
 	if len(input.Action) > 0 {
 		if message := validateParamsForNode(rmngCtx, nodeID, input.Action); message != "" {
-			return nil, fmt.Errorf("%s", message)
+			return nil, guidancef("%s", message)
 		}
 	}
 
@@ -91,13 +101,23 @@ func readSchedules(rmngCtx *rmngctx.RmngContext, nodeID string) ([]interface{}, 
 		return nil, err
 	}
 
-	asMap, ok := stored.(map[string]interface{})
-	if !ok {
+	if stored == nil {
 		return []interface{}{}, nil
 	}
-	schedules, ok := asMap[schedule.APIScheduleKey].([]interface{})
+	asMap, ok := stored.(map[string]interface{})
 	if !ok {
+		return nil, guidancef("stored schedules for %s are malformed", nodeID)
+	}
+	value, present := asMap[schedule.APIScheduleKey]
+	if !present || value == nil {
 		return []interface{}{}, nil
+	}
+	// Not a list means the stored value is something this code cannot merge into. Reporting it
+	// keeps the read-modify-write in SetSchedule from Putting a one-element array over whatever
+	// is really there.
+	schedules, ok := value.([]interface{})
+	if !ok {
+		return nil, guidancef("stored schedules for %s are malformed", nodeID)
 	}
 	return schedules, nil
 }
@@ -117,22 +137,22 @@ func applyScheduleOperation(existing []interface{}, operation ScheduleOperation,
 	case ScheduleDisable:
 		return setScheduleEnabled(existing, input.ScheduleID, false)
 	default:
-		return nil, nil, fmt.Errorf("unknown operation %q — use add, edit, remove, enable or disable", operation)
+		return nil, nil, guidancef("unknown operation %q — use add, edit, remove, enable or disable", operation)
 	}
 }
 
 func addSchedule(existing []interface{}, input ScheduleInput) ([]interface{}, map[string]interface{}, error) {
 	if input.Name == "" {
-		return nil, nil, fmt.Errorf("name is required to add a schedule")
+		return nil, nil, guidancef("name is required to add a schedule")
 	}
 	if len(input.Name) > maxScheduleNameLen {
-		return nil, nil, fmt.Errorf("schedule name must be %d characters or fewer, got %d", maxScheduleNameLen, len(input.Name))
+		return nil, nil, guidancef("schedule name must be %d characters or fewer, got %d", maxScheduleNameLen, len(input.Name))
 	}
 	if len(input.Triggers) == 0 {
-		return nil, nil, fmt.Errorf("at least one trigger is required to add a schedule, for example {\"time\": \"07:00\", \"days\": \"weekdays\"}")
+		return nil, nil, guidancef("at least one trigger is required to add a schedule, for example {\"time\": \"07:00\", \"days\": \"weekdays\"}")
 	}
 	if len(input.Action) == 0 {
-		return nil, nil, fmt.Errorf("action is required to add a schedule, for example {\"Light\": {\"Power\": true}}")
+		return nil, nil, guidancef("action is required to add a schedule, for example {\"Light\": {\"Power\": true}}")
 	}
 
 	triggers, err := convertTriggers(input.Triggers)
@@ -141,10 +161,17 @@ func addSchedule(existing []interface{}, input ScheduleInput) ([]interface{}, ma
 	}
 
 	scheduleID := input.ScheduleID
+	if len(scheduleID) > maxScheduleIDLen {
+		return nil, nil, guidancef("schedule_id must be %d characters or fewer, got %d — omit it and one will be generated", maxScheduleIDLen, len(scheduleID))
+	}
 	if scheduleID == "" {
-		scheduleID = ids.GenerateScheduleID()
+		generated, err := generateUnusedScheduleID(existing)
+		if err != nil {
+			return nil, nil, err
+		}
+		scheduleID = generated
 	} else if _, index := findSchedule(existing, scheduleID); index >= 0 {
-		return nil, nil, fmt.Errorf("schedule %s already exists on this device — use operation edit to change it", scheduleID)
+		return nil, nil, guidancef("schedule %s already exists on this device — use operation edit to change it", scheduleID)
 	}
 
 	enabled := true
@@ -174,7 +201,7 @@ func editSchedule(existing []interface{}, input ScheduleInput) ([]interface{}, m
 
 	if input.Name != "" {
 		if len(input.Name) > maxScheduleNameLen {
-			return nil, nil, fmt.Errorf("schedule name must be %d characters or fewer, got %d", maxScheduleNameLen, len(input.Name))
+			return nil, nil, guidancef("schedule name must be %d characters or fewer, got %d", maxScheduleNameLen, len(input.Name))
 		}
 		target["name"] = input.Name
 	}
@@ -225,17 +252,30 @@ func setScheduleEnabled(existing []interface{}, scheduleID string, enabled bool)
 
 func requireSchedule(existing []interface{}, scheduleID, operation string) (map[string]interface{}, int, error) {
 	if scheduleID == "" {
-		return nil, -1, fmt.Errorf("schedule_id is required to %s a schedule — call list_schedules to find it", operation)
+		return nil, -1, guidancef("schedule_id is required to %s a schedule — call list_schedules to find it", operation)
 	}
 	target, index := findSchedule(existing, scheduleID)
 	if index < 0 {
-		return nil, -1, fmt.Errorf("this device has no schedule %s — call list_schedules to see the schedules it does have", scheduleID)
+		return nil, -1, guidancef("this device has no schedule %s — call list_schedules to see the schedules it does have", scheduleID)
 	}
 	return target, index, nil
 }
 
 // findSchedule returns a copy of the matching schedule so an operation that fails part-way
 // cannot leave the stored set half-edited.
+// generateUnusedScheduleID mints an ID no schedule on this node already holds. The IDs are
+// short enough to collide, and a duplicate is silent: findSchedule returns the first match, so
+// a later edit or remove would act on the wrong schedule.
+func generateUnusedScheduleID(existing []interface{}) (string, error) {
+	for attempt := 0; attempt < maxScheduleIDAttempts; attempt++ {
+		candidate := ids.GenerateScheduleID()
+		if _, index := findSchedule(existing, candidate); index < 0 {
+			return candidate, nil
+		}
+	}
+	return "", guidancef("could not mint a free schedule id for this device — remove an unused schedule and try again")
+}
+
 func findSchedule(existing []interface{}, scheduleID string) (map[string]interface{}, int) {
 	for index, item := range existing {
 		asMap, ok := item.(map[string]interface{})
@@ -302,50 +342,64 @@ func convertTrigger(trigger map[string]interface{}) (map[string]interface{}, err
 		}
 	}
 
-	if _, alreadyDeviceForm := trigger["m"]; alreadyDeviceForm {
-		return converted, nil
-	}
-
+	_, hasMinutes := trigger["m"]
+	_, hasBitmask := trigger["d"]
 	timeValue, hasTime := trigger["time"]
-	if !hasTime {
-		if _, hasRelative := trigger["rsec"]; hasRelative {
-			return converted, nil
-		}
-		return nil, fmt.Errorf("a trigger needs a time, for example {\"time\": \"07:00\", \"days\": \"weekdays\"}")
+	days, hasDays := trigger["days"]
+
+	// A model that lists a schedule and edits it can send the two forms mixed. Honouring both
+	// halves separately is what keeps "the 07:00 one, but every weekday" from silently losing
+	// its recurrence; the same field in both forms is a contradiction only the caller can settle.
+	if hasMinutes && hasTime {
+		return nil, guidancef("a trigger carries either m or time, not both — drop one")
+	}
+	if hasBitmask && hasDays {
+		return nil, guidancef("a trigger carries either d or days, not both — drop one")
 	}
 
-	timeStr, ok := timeValue.(string)
-	if !ok {
-		return nil, fmt.Errorf("trigger time must be a string in HH:MM form")
-	}
-	minutes, err := parseTimeToMinutes(timeStr)
-	if err != nil {
-		return nil, err
-	}
-	converted["m"] = minutes
-
-	if days, hasDays := trigger["days"]; hasDays {
+	if hasDays {
 		bitmask, err := parseDaysToBitmask(days)
 		if err != nil {
 			return nil, err
 		}
 		converted["d"] = bitmask
 	}
+
+	if hasMinutes {
+		return converted, nil
+	}
+
+	if !hasTime {
+		if _, hasRelative := trigger["rsec"]; hasRelative {
+			return converted, nil
+		}
+		return nil, guidancef("a trigger needs a time, for example {\"time\": \"07:00\", \"days\": \"weekdays\"}")
+	}
+
+	timeStr, ok := timeValue.(string)
+	if !ok {
+		return nil, guidancef("trigger time must be a string in HH:MM form")
+	}
+	minutes, err := parseTimeToMinutes(timeStr)
+	if err != nil {
+		return nil, err
+	}
+	converted["m"] = minutes
 	return converted, nil
 }
 
 func parseTimeToMinutes(value string) (int, error) {
 	parts := strings.Split(strings.TrimSpace(value), ":")
 	if len(parts) != 2 {
-		return 0, fmt.Errorf("time must be in HH:MM form, got %q", value)
+		return 0, guidancef("time must be in HH:MM form, got %q", value)
 	}
 	hours, err := strconv.Atoi(parts[0])
 	if err != nil || hours < 0 || hours > 23 {
-		return 0, fmt.Errorf("hours must be between 00 and 23, got %q", value)
+		return 0, guidancef("hours must be between 00 and 23, got %q", value)
 	}
 	minutes, err := strconv.Atoi(parts[1])
 	if err != nil || minutes < 0 || minutes > 59 {
-		return 0, fmt.Errorf("minutes must be between 00 and 59, got %q", value)
+		return 0, guidancef("minutes must be between 00 and 59, got %q", value)
 	}
 	return hours*60 + minutes, nil
 }
@@ -355,7 +409,7 @@ func parseDaysToBitmask(days interface{}) (int, error) {
 	case string:
 		bitmask, ok := dayPresets[strings.ToLower(strings.TrimSpace(value))]
 		if !ok {
-			return 0, fmt.Errorf("unknown day preset %q — use daily, weekdays, weekends, or a list of day names", value)
+			return 0, guidancef("unknown day preset %q — use daily, weekdays, weekends, or a list of day names", value)
 		}
 		return bitmask, nil
 
@@ -364,11 +418,11 @@ func parseDaysToBitmask(days interface{}) (int, error) {
 		for _, day := range value {
 			name, ok := day.(string)
 			if !ok {
-				return 0, fmt.Errorf("day list must contain day names such as [\"mon\", \"tue\"]")
+				return 0, guidancef("day list must contain day names such as [\"mon\", \"tue\"]")
 			}
 			bit, ok := dayBits[strings.ToLower(strings.TrimSpace(name))]
 			if !ok {
-				return 0, fmt.Errorf("unknown day %q — use mon, tue, wed, thu, fri, sat or sun", name)
+				return 0, guidancef("unknown day %q — use mon, tue, wed, thu, fri, sat or sun", name)
 			}
 			bitmask |= bit
 		}
@@ -379,5 +433,5 @@ func parseDaysToBitmask(days interface{}) (int, error) {
 	case int:
 		return value, nil
 	}
-	return 0, fmt.Errorf("days must be a preset name, a list of day names, or a numeric bitmask")
+	return 0, guidancef("days must be a preset name, a list of day names, or a numeric bitmask")
 }

@@ -41,7 +41,7 @@ const maxParamsFanout = 10
 // alongside their own.
 func SetNodeParams(rmngCtx *rmngctx.RmngContext, groupID string, nodeIDs []string, params map[string]interface{}) (SetParamsResult, error) {
 	if len(nodeIDs) == 0 {
-		return SetParamsResult{}, fmt.Errorf("no node_id given")
+		return SetParamsResult{}, guidancef("no node_id given")
 	}
 
 	// Resolved once for the whole call: every node named must be in this one group, so doing it

@@ -5,7 +5,6 @@
 package mcp
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
@@ -48,7 +47,7 @@ type GroupFilter struct {
 // listing the node IDs in each.
 func ListGroups(rmngCtx *rmngctx.RmngContext, filter GroupFilter) ([]GroupInfo, error) {
 	if filter.GroupID != "" && filter.GroupName != "" {
-		return nil, fmt.Errorf("pass either group_id or group_name, not both")
+		return nil, guidancef("pass either group_id or group_name, not both")
 	}
 
 	groups, err := listGroups(rmngCtx, filter.GroupID)
@@ -65,7 +64,7 @@ func ListGroups(rmngCtx *rmngctx.RmngContext, filter GroupFilter) ([]GroupInfo, 
 	}
 
 	if filter.GroupName != "" && len(groupInfos) == 0 {
-		return nil, fmt.Errorf("no group named %q — call list_groups without filters to see the available groups", filter.GroupName)
+		return nil, guidancef("no group named %q — call list_groups without filters to see the available groups", filter.GroupName)
 	}
 	return groupInfos, nil
 }

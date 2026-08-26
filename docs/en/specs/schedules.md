@@ -70,8 +70,9 @@ The payload is the ESP RainMaker built-in Schedules structure — the exact shap
 ```
 
 Notes:
-- `id` is the unique identifier and is **mandatory for the device**: it must be 16 characters or fewer, and the device rejects schedules with a missing, empty, non-string, or oversized `id`. (The device stores each schedule under a fixed-length NVS key derived by hashing the `id`.)
-- `name` is display-only metadata; the device ignores it but the cloud stores it.
+- `id` is the unique identifier and is **mandatory for the device** on every operation: it must be 8 characters or fewer, and the device drops schedules with a missing, empty, non-string, or oversized `id`. (The firmware copies it into the `esp_schedule` name and uses it verbatim as the NVS key — there is no hashing. The NVS key itself allows 16 characters, but the RainMaker layer's own `MAX_ID_LEN` of 8 binds first.)
+- `name` is display metadata, but the device is not indifferent to it: it is **mandatory on `add`** — a schedule with no `name` is dropped — and limited to 32 characters. On `edit` it is optional, and an absent or over-length one leaves the stored name unchanged.
+- Neither field is truncated. The device's JSON parser refuses an over-length value outright, leaving the field empty, so the schedule fails the emptiness check and is skipped — logged, confusingly, as "ID not found" or "Name not found". Other schedules in the same payload still apply.
 - A trigger's kind is discriminated by which keys are present (`rsec` one-shot; `m` + `d`/`dd` date-based; `lat`/`lon` + `sr`/`ss` solar) — there is no explicit `type` field.
 - `action` is a node parameter-update payload. For a Matter node it mirrors the parameter-control payload (`{ "0x<endpoint>": { "c": { "s": { "0x<cluster>": { "c": { "0x<command>": "<TLV hex>" } } } } } }`).
 

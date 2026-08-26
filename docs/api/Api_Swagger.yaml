@@ -6302,23 +6302,30 @@ components:
     Schedule:
       type: object
       description: |
-        A single schedule entry. The firmware uses `name` as an NVS key and
-        requires it to be 16 characters or fewer. Additional keys (including
-        `id`) are ignored by the device but stored by the cloud.
+        A single schedule entry. `id` is the device's own key for the schedule:
+        the firmware copies it into the esp_schedule name and uses it verbatim
+        as the NVS key, so it is mandatory on every operation and limited to 8
+        characters. `name` is display metadata, mandatory when adding and
+        limited to 32 characters. Neither is truncated — the device refuses an
+        over-length value and drops that schedule entry.
       required:
+        - id
         - name
         - triggers
         - action
       properties:
         id:
           type: string
+          maxLength: 8
           description: |
-            Cloud-side identifier. Opaque; the device ignores this field.
+            The schedule's identifier, and the key the device stores it under.
+            Required for every operation, including `add`.
         name:
           type: string
-          maxLength: 16
+          maxLength: 32
           description:
-            Unique schedule name (also used as an NVS key on the device).
+            Display name for the schedule. Stored by the cloud and reported
+            back by the device, which does not otherwise act on it.
         enabled:
           type: boolean
           description: Whether the schedule is active.

@@ -5,7 +5,6 @@
 package mcp
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 
@@ -104,9 +103,9 @@ func ListDevices(rmngCtx *rmngctx.RmngContext, filter DeviceFilter) ([]map[strin
 // either not the caller's or not in the group they named.
 func deviceNotFoundError(nodeID, groupID string) error {
 	if groupID != "" {
-		return fmt.Errorf("device %s is not in group %s — call list_devices without filters to see the devices you can reach", nodeID, groupID)
+		return guidancef("device %s is not in group %s — call list_devices without filters to see the devices you can reach", nodeID, groupID)
 	}
-	return fmt.Errorf("device %s does not exist or you do not have access to it", nodeID)
+	return guidancef("device %s does not exist or you do not have access to it", nodeID)
 }
 
 // selectCandidates narrows the caller's reachable nodes to those the filter can exclude
@@ -162,7 +161,14 @@ func readDevice(rmngCtx *rmngctx.RmngContext, nodeID string, placement NodePlace
 		}
 	}
 
-	shadow, err := node.NewNode(nodeID).ReadFromReportedShadow(rmngCtx)
+	// Handing over the group and subgroups the index already resolved spares getShadowName a
+	// second read of this node's row through the by-node-id GSI, once per device in the list.
+	// ensureGroups treats a populated GroupID as loaded. publishParams does the same.
+	target := node.NewNode(nodeID)
+	target.GroupID = placement.GroupID
+	target.SubGroupIDs = placement.SubgroupIDs
+
+	shadow, err := target.ReadFromReportedShadow(rmngCtx)
 	if err != nil {
 		if device.Error == "" {
 			device.Error = "failed to read device state"
@@ -278,6 +284,11 @@ func projectFields(row map[string]interface{}, fields string) map[string]interfa
 		if value := lookupPath(row, field); value != nil {
 			projected[field] = value
 		}
+	}
+	// error is never projected away: without it a record whose read failed is indistinguishable
+	// from a device that is genuinely offline, and the model reports the wrong thing.
+	if value, present := row["error"]; present {
+		projected["error"] = value
 	}
 	return projected
 }

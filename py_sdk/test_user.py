@@ -369,7 +369,6 @@ class User:
                 data=json.dumps({"id_token": self.token}),
                 token=self.access_token)
 
-            print(f"access_token: {self.access_token}")
             if response.status_code not in (200, 201):
                 user_log(f"Failed to get user credentials. Status code: {response.status_code}")
                 user_log(f"Response: {response.text}")

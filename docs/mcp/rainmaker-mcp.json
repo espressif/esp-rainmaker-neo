@@ -9,7 +9,7 @@
         "type": "object",
         "properties": {
           "fields": {
-            "description": "Comma-separated fields to return instead of the whole record. Top level: node_id, group_id, group_name, subgroup_ids, subgroup_names, name, type, model, fw_version, connected, params, spec, config. Dot paths reach inside: params.Light.Power. Keep spec whenever the next step is a write — it is what set_params validates against.",
+            "description": "Comma-separated fields to return instead of the whole record. Top level: node_id, group_id, group_name, subgroup_ids, subgroup_names, name, type, model, fw_version, connected, params, spec, config, error. A device whose read failed carries error and is always returned with it, so connected false on a record without error is a genuinely offline device. Dot paths reach inside: params.Light.Power. Keep spec whenever the next step is a write — it is what set_params validates against.",
             "type": "string"
           },
           "group_id": {
@@ -58,7 +58,7 @@
     },
     {
       "name": "list_schedules",
-      "description": "List the schedules stored on one device: each schedule's id, name, enabled flag, triggers and the parameters it applies. ESP RainMaker keeps schedules per device, so ask about one node at a time.\n\nCall this to turn a schedule the user described rather than named — \"the morning alarm\", \"the one that shuts the porch light off\" — into the schedule_id that set_schedule needs. Do not use list_devices for that; schedules are not part of a device's parameters.\n\nTriggers come back in the device's own form: m is minutes past midnight and d is a weekday bitmask with Monday as the lowest bit. Translate them when you answer the user — m 420 with d 62 means 07:00 on weekdays.",
+      "description": "List the schedules stored on one device: each schedule's id, name, enabled flag, triggers and the parameters it applies. ESP RainMaker keeps schedules per device, so ask about one node at a time.\n\nCall this to turn a schedule the user described rather than named — \"the morning alarm\", \"the one that shuts the porch light off\" — into the schedule_id that set_schedule needs. Do not use list_devices for that; schedules are not part of a device's parameters.\n\nTriggers come back in the device's own form: m is minutes past midnight and d is a weekday bitmask with Monday as the lowest bit. Translate them when you answer the user — m 420 with d 31 means 07:00 on weekdays.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -145,7 +145,7 @@
             "type": "string"
           },
           "schedule_id": {
-            "description": "The schedule to act on, from list_schedules. Required for every operation except add, where supplying one pins the new schedule's id instead of generating it.",
+            "description": "The schedule to act on, from list_schedules. Required for every operation except add, where supplying one pins the new schedule's id instead of generating it — 8 characters or fewer, since the device keys the schedule by it. Leave it out and a free one is generated.",
             "type": "string"
           },
           "triggers": {

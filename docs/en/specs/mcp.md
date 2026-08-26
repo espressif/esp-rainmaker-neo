@@ -150,7 +150,9 @@ A device whose config or shadow cannot be read is still returned, with an `error
 unreachable device must not blind the assistant to the rest of the home.
 
 `fields` projects the response, accepting both top-level keys and dot paths
-(`params.Light.Power`), and returns each value under the path it was asked for.
+(`params.Light.Power`), and returns each value under the path it was asked for. `error` survives
+the projection whether or not it was asked for: without it a device whose read failed is
+indistinguishable from one that is genuinely offline, and the assistant reports the wrong thing.
 
 ### list_groups
 
@@ -201,7 +203,10 @@ The server distinguishes two kinds of failure, and clients must too.
   find it").
 
 That split is what lets an assistant recover in one turn instead of reporting a dead end.
-Internal error detail never reaches the client; it is logged instead.
+Internal error detail never reaches the client; it is logged instead. The one exception is an
+error about the caller's own arguments — a JSON decode failure names the field and the shape it
+expected, which is the thing that lets the model fix its next call, and reveals nothing about
+how the service is built.
 
 A partly-failed `set_params` is the one case that is neither: some devices were written and some
 refused the parameters, which is an ordinary success response. It carries a `summary` naming what

@@ -5,6 +5,7 @@
 package mcp
 
 import (
+	"github.com/espressif/esp-rainmaker-neo/src/utils/ids"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -111,6 +112,24 @@ var _ = Describe("Trigger conversion", func() {
 		_, err := convertTrigger(map[string]interface{}{"time": float64(7)})
 		Expect(err).To(HaveOccurred())
 	})
+
+	// A model that lists a schedule and edits it gets m back but writes days, so the two forms
+	// arrive mixed. Dropping the half it did not expect would silently lose the recurrence.
+	It("converts days even when the time arrived in device form", func() {
+		converted, err := convertTrigger(map[string]interface{}{"m": float64(420), "days": "weekdays"})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(converted).To(Equal(map[string]interface{}{"m": float64(420), "d": 31}))
+	})
+
+	It("rejects a trigger carrying both m and time", func() {
+		_, err := convertTrigger(map[string]interface{}{"m": float64(420), "time": "08:00"})
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("rejects a trigger carrying both d and days", func() {
+		_, err := convertTrigger(map[string]interface{}{"time": "07:00", "d": float64(62), "days": "weekdays"})
+		Expect(err).To(HaveOccurred())
+	})
 })
 
 var _ = Describe("Schedule operations", func() {
@@ -155,6 +174,43 @@ var _ = Describe("Schedule operations", func() {
 			_, created, err := applyScheduleOperation(existing, ScheduleAdd, validInput)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(created["id"]).To(HaveLen(4))
+		})
+
+		// Duplicate ids are silent: findSchedule returns the first match, so a later edit or
+		// remove would act on the wrong schedule.
+		It("skips a generated id that is already taken", func() {
+			original := ids.GenerateScheduleID
+			defer func() { ids.GenerateScheduleID = original }()
+
+			minted := []string{"aaaa", "bbbb", "cccc"}
+			ids.GenerateScheduleID = func() string {
+				next := minted[0]
+				minted = minted[1:]
+				return next
+			}
+
+			_, created, err := applyScheduleOperation(existing, ScheduleAdd, validInput)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(created["id"]).To(Equal("cccc"))
+		})
+
+		It("reports exhaustion rather than minting a duplicate id", func() {
+			original := ids.GenerateScheduleID
+			defer func() { ids.GenerateScheduleID = original }()
+			ids.GenerateScheduleID = func() string { return "aaaa" }
+
+			_, _, err := applyScheduleOperation(existing, ScheduleAdd, validInput)
+			Expect(err).To(HaveOccurred())
+		})
+
+		// The device keys the schedule by id and refuses an over-length one, so it would drop
+		// the schedule while the cloud kept it and reported success.
+		It("rejects a pinned id longer than the device allows", func() {
+			input := validInput
+			input.ScheduleID = "waytoolongid"
+			_, _, err := applyScheduleOperation(existing, ScheduleAdd, input)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("8 characters or fewer"))
 		})
 
 		It("uses the id the caller pinned", func() {
