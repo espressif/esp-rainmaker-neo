@@ -2,16 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from datetime import datetime
 
 from aws_cdk import (
     Stack,
     aws_ssm as ssm,
-    aws_iam as iam,
-    custom_resources as cr,
 )
 from constructs import Construct
-from app_common import CommonResources, stable_logical_id
+from app_common import CommonResources, create_api_deployment
 from src.rmneo.stacks.base_res_constants import SSM_PARAMETERS
 from src.smartthings.handlers.st_cfg.stack import STCfgAPI
 
@@ -77,40 +74,12 @@ class RMNGSTCfgCoreStack(Stack):
         self.st_cfg = STCfgAPI(self, "STCfgAPI", common_resources,
                                admin_integrations_resource_id=admin_integrations_resource_id)
 
-        # Publish the routes to the shared API's prod stage. rmng-base owns the
-        # stage and snapshots its deployment before these methods exist, so —
-        # as rmng-core, claim, GVA and Alexa all do — force a fresh deployment.
-        deployment_timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-        deploy_params = {
-            "restApiId": common_resources.api_gateway_id,
-            "stageName": "prod",
-            "description": f"Auto-deploy SmartThings cfg routes via CDK: {deployment_timestamp}",
-        }
-        api_deploy = cr.AwsCustomResource(
+        # Publish the routes to the shared API's prod stage — rmng-base owns that stage
+        # and snapshotted it before these methods existed. See create_api_deployment.
+        api_deploy = create_api_deployment(
             self, "STCfgApiGatewayDeploy",
-            on_create=cr.AwsSdkCall(
-                service="APIGateway",
-                action="createDeployment",
-                parameters=deploy_params,
-                physical_resource_id=cr.PhysicalResourceId.of(f"st-cfg-api-deploy-{deployment_timestamp}"),
-            ),
-            on_update=cr.AwsSdkCall(
-                service="APIGateway",
-                action="createDeployment",
-                parameters=deploy_params,
-                physical_resource_id=cr.PhysicalResourceId.of(f"st-cfg-api-deploy-{deployment_timestamp}"),
-            ),
-            policy=cr.AwsCustomResourcePolicy.from_statements([
-                iam.PolicyStatement(
-                    actions=["apigateway:POST"],
-                    resources=["arn:aws:apigateway:*::/restapis/*/deployments"],
-                ),
-                iam.PolicyStatement(
-                    actions=["apigateway:PATCH"],
-                    resources=["arn:aws:apigateway:*::/restapis/*/stages/prod"],
-                ),
-            ]),
+            api_id=common_resources.api_gateway_id,
+            description="Auto-deploy SmartThings cfg routes via CDK",
+            logical_name="st-cfg-api-gateway-deploy",
         )
-        api_deploy.node.default_child.node.default_child.override_logical_id(
-            stable_logical_id("CustomAwsSdk", "st-cfg-api-gateway-deploy"))
         api_deploy.node.add_dependency(self.st_cfg)

@@ -2,17 +2,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from datetime import datetime
 
 from aws_cdk import (
     Stack,
     CfnOutput,
     aws_ssm as ssm,
-    aws_iam as iam,
-    custom_resources as cr,
 )
 from constructs import Construct
-from app_common import CommonResources, stable_logical_id
+from app_common import CommonResources, create_api_deployment
 from src.rmneo.stacks.base_res_constants import SSM_PARAMETERS
 from src.gva.handlers.core import GVAActionCore
 
@@ -98,44 +95,14 @@ class RMNGGVACoreStack(Stack):
             admin_integrations_resource_id=admin_integrations_resource_id,
         )
 
-        # Publish the GVA methods to the shared API's prod stage. RestApi(
-        # deploy=True) in rmng-base snapshots its deployment before these
-        # methods exist and owns the stage, so — exactly as rmng-core and the
-        # claim stack do for their own methods — force a fresh deployment via
-        # the SDK. The timestamp makes it re-run on every deploy.
-        deployment_timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-        deploy_params = {
-            "restApiId": common_resources.api_gateway_id,
-            "stageName": "prod",
-            "description": f"Auto-deploy GVA routes via CDK: {deployment_timestamp}",
-        }
-        api_deploy = cr.AwsCustomResource(
+        # Publish the GVA methods to the shared API's prod stage — rmng-base owns that
+        # stage and snapshotted it before these methods existed. See create_api_deployment.
+        api_deploy = create_api_deployment(
             self, "GVAApiGatewayDeploy",
-            on_create=cr.AwsSdkCall(
-                service="APIGateway",
-                action="createDeployment",
-                parameters=deploy_params,
-                physical_resource_id=cr.PhysicalResourceId.of(f"gva-api-deploy-{deployment_timestamp}"),
-            ),
-            on_update=cr.AwsSdkCall(
-                service="APIGateway",
-                action="createDeployment",
-                parameters=deploy_params,
-                physical_resource_id=cr.PhysicalResourceId.of(f"gva-api-deploy-{deployment_timestamp}"),
-            ),
-            policy=cr.AwsCustomResourcePolicy.from_statements([
-                iam.PolicyStatement(
-                    actions=["apigateway:POST"],
-                    resources=["arn:aws:apigateway:*::/restapis/*/deployments"],
-                ),
-                iam.PolicyStatement(
-                    actions=["apigateway:PATCH"],
-                    resources=["arn:aws:apigateway:*::/restapis/*/stages/prod"],
-                ),
-            ]),
+            api_id=common_resources.api_gateway_id,
+            description="Auto-deploy GVA routes via CDK",
+            logical_name="gva-api-gateway-deploy",
         )
-        api_deploy.node.default_child.node.default_child.override_logical_id(
-            stable_logical_id("CustomAwsSdk", "gva-api-gateway-deploy"))
         api_deploy.node.add_dependency(self.gva_action_core)
 
         # The fulfillment URL Google Home is configured with. Published here now

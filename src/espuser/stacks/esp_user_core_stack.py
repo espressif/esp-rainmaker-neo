@@ -11,12 +11,10 @@ from aws_cdk import (
     aws_apigateway as apigateway,
     aws_iam as iam,
     aws_lambda as lambda_,
-    custom_resources as cr,
 )
 from app_common import get_or_create_api_resource
 from constructs import Construct
-from app_common import CommonResources
-from datetime import datetime
+from app_common import CommonResources, create_api_deployment
 from ..handlers.user_common.stack import UserCommonAPI
 from ..handlers.token.stack import TokenAPI
 from ..handlers.userinfo.stack import UserinfoAPI
@@ -98,40 +96,11 @@ class EspUserCoreStack(Stack):
 
         admin_creds_api = AdminCredsAPI(self, "AdminCredsAPI", common_resources)
 
-        deployment_timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-        esp_user_api_deploy = cr.AwsCustomResource(
+        esp_user_api_deploy = create_api_deployment(
             self, "EspUserApiGatewayDeploy",
-            on_create=cr.AwsSdkCall(
-                service="APIGateway",
-                action="createDeployment",
-                parameters={
-                    "restApiId": common_resources.esp_user_api_id,
-                    "stageName": "prod",
-                    "description": f"Auto-deploy via CDK: {deployment_timestamp}",
-                },
-                physical_resource_id=cr.PhysicalResourceId.of(f"esp-user-api-deploy-{deployment_timestamp}"),
-            ),
-            on_update=cr.AwsSdkCall(
-                service="APIGateway",
-                action="createDeployment",
-                parameters={
-                    "restApiId": common_resources.esp_user_api_id,
-                    "stageName": "prod",
-                    "description": f"Auto-deploy via CDK: {deployment_timestamp}",
-                },
-                physical_resource_id=cr.PhysicalResourceId.of(f"esp-user-api-deploy-{deployment_timestamp}"),
-            ),
-            policy=cr.AwsCustomResourcePolicy.from_statements([
-                iam.PolicyStatement(
-                    actions=["apigateway:POST"],
-                    resources=["arn:aws:apigateway:*::/restapis/*/deployments"],
-                ),
-                iam.PolicyStatement(
-                    actions=["apigateway:PATCH"],
-                    resources=["arn:aws:apigateway:*::/restapis/*/stages/prod"],
-                ),
-            ]
-            ),
+            api_id=common_resources.esp_user_api_id,
+            description="Auto-deploy ESP User routes via CDK",
+            logical_name="espuser-api-gateway-deploy",
         )
 
         esp_user_api_deploy.node.add_dependency(user_common_api)

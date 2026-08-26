@@ -1066,6 +1066,132 @@ def create_ssm_string_parameter(
 _DISCOVERY_SALT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+_API_DEPLOYMENT_CODE = """
+import json
+import time
+import boto3
+import cfnresponse
+from botocore.config import Config
+
+# createDeployment is rate-limited per account-region, and every stack that adds routes to the
+# shared REST API redeploys its prod stage. Those stacks are independent of each other, so the
+# deploy sweep runs them concurrently and their calls land together. Adaptive mode rides out the
+# TooManyRequestsException throttle the same way the domain-discovery handler does.
+_RETRY = Config(retries={'max_attempts': 10, 'mode': 'adaptive'})
+
+# A throttle is not the only way these collide: API Gateway rejects a createDeployment while
+# another deployment on the same API is still in flight, and that ConflictException is not
+# something botocore retries. Backing off and re-trying is correct — the other stack's
+# deployment finishing does not make ours unnecessary, it only means we have to queue behind it.
+_CONFLICT_ATTEMPTS = 12
+_CONFLICT_BACKOFF = 10
+
+
+def handler(event, context):
+    try:
+        if event['RequestType'] == 'Delete':
+            # The stage outlives any one stack's routes; deleting a deployment record here
+            # would be at best a no-op and at worst would strand the stage.
+            cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+            return
+
+        props = event['ResourceProperties']
+        client = boto3.client('apigateway', config=_RETRY)
+
+        last_error = None
+        for attempt in range(_CONFLICT_ATTEMPTS):
+            try:
+                result = client.create_deployment(
+                    restApiId=props['RestApiId'],
+                    stageName=props['StageName'],
+                    description=props['Description'],
+                )
+                cfnresponse.send(event, context, cfnresponse.SUCCESS,
+                                 {'DeploymentId': result['id']},
+                                 physicalResourceId=props['PhysicalId'])
+                return
+            except client.exceptions.ConflictException as exc:
+                last_error = exc
+                print('createDeployment conflicted (attempt %d/%d): %s'
+                      % (attempt + 1, _CONFLICT_ATTEMPTS, exc))
+                time.sleep(_CONFLICT_BACKOFF)
+
+        raise last_error
+    except Exception as exc:
+        print('createDeployment failed: %s' % exc)
+        cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(exc)})
+"""
+
+
+def create_api_deployment(scope, id: str, *, api_id: str, description: str,
+                          logical_name: str, stage_name: str = "prod"):
+    """Redeploy the shared REST API's stage so this stack's routes go live.
+
+    RestApi(deploy=True) in the base stack snapshots its deployment before any other stack's
+    methods exist and owns the stage, so every stack that adds routes has to force a fresh
+    deployment. CfnDeployment with stage_name is unreliable here — it conflicts with the
+    base stack's stage and CloudFormation can silently fail to reassociate it, leaving you to
+    press "Deploy API" in the console — so this calls the SDK directly.
+
+    Deliberately not cr.AwsCustomResource: several stacks do this to the *same* API and the
+    deploy sweep runs them concurrently, which needs throttle- and conflict-aware retries that
+    AwsCustomResource gives no way to configure. See _API_DEPLOYMENT_CODE.
+
+    ``description`` is what shows up against the deployment in the console; a per-synth
+    timestamp is appended here so every deploy is an Update and the routes are always
+    republished. Returns the CustomResource, so callers can add_dependency() the constructs
+    whose methods must exist first.
+    """
+    shared_id = "ApiDeploymentShared"
+    stack = Stack.of(scope)
+    fn = stack.node.try_find_child(shared_id)
+    if fn is None:
+        role = iam.Role(
+            stack, f"{shared_id}Role",
+            assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
+            managed_policies=[
+                iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "service-role/AWSLambdaBasicExecutionRole"),
+            ],
+        )
+        role.node.default_child.override_logical_id(
+            stable_logical_id("IAMRole", "api-deployment"))
+        role.add_to_policy(iam.PolicyStatement(
+            actions=["apigateway:POST"],
+            resources=["arn:aws:apigateway:*::/restapis/*/deployments"],
+        ))
+        role.add_to_policy(iam.PolicyStatement(
+            actions=["apigateway:PATCH"],
+            resources=[f"arn:aws:apigateway:*::/restapis/*/stages/{stage_name}"],
+        ))
+
+        fn = lambda_.Function(
+            stack, shared_id,
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            handler="index.handler",
+            role=role,
+            code=lambda_.Code.from_inline(_API_DEPLOYMENT_CODE),
+            # _CONFLICT_ATTEMPTS * _CONFLICT_BACKOFF, plus room for the call itself.
+            timeout=Duration.seconds(180),
+        )
+        fn.node.default_child.override_logical_id(
+            stable_logical_id("LambdaFunc", "api-deployment"))
+
+    resource = CustomResource(
+        scope, id,
+        service_token=fn.function_arn,
+        properties={
+            "RestApiId": api_id,
+            "StageName": stage_name,
+            "Description": f"{description}: {_DISCOVERY_SALT}",
+            "PhysicalId": f"{logical_name}-{_DISCOVERY_SALT}",
+        },
+    )
+    resource.node.default_child.override_logical_id(
+        stable_logical_id("CustomResource", logical_name))
+    return resource
+
+
 _API_DOMAIN_DISCOVERY_CODE = """
 import json
 import boto3
