@@ -24,6 +24,8 @@ func registerTools(server *mcpserver.Server) {
 
 Call this first whenever the user names a device, a type of device, or a room instead of giving ids. It is the only tool that turns names into ids, and every row carries both the node_id and the group_id that the other tools require — so one call is always enough. Never follow it with a second lookup to find the group.
 
+Each row carries two different things about parameters, and they are not interchangeable. params is what the device is reporting right now, which is what you read to answer a question about its state. spec is what the device will accept a write for — parameter name to type, range and meaning — and it is what set_params checks against, so it is the one to consult before changing anything. A device names its own parameters, so a colour light may call its hue "H"; spec is where you find that out.
+
 Do not call it before set_params or set_schedule when the user has already given you a node_id and group_id, and do not call it to inspect schedules — list_schedules does that.
 
 Filters combine: group_id or subgroup_id to narrow to a home or room, name or type for a kind of device. Node ids look like any other string, so when the user gives you an identifier you cannot classify, put it in name — that matches node ids as well as names, and never comes back empty just because the value turned out to be an id. Reading state fetches each device's shadow, so when you do not need the whole payload pass fields — for example "node_id,group_id,connected" or "params.Light.Power".
@@ -56,7 +58,7 @@ In replies to the user prefer the human names in params.<Device>.Name; use ids o
 					},
 					"fields": map[string]interface{}{
 						"type":        "string",
-						"description": "Comma-separated fields to return instead of the whole record. Top level: node_id, group_id, group_name, subgroup_ids, subgroup_names, name, type, model, fw_version, connected, params, config. Dot paths reach inside: params.Light.Power.",
+						"description": "Comma-separated fields to return instead of the whole record. Top level: node_id, group_id, group_name, subgroup_ids, subgroup_names, name, type, model, fw_version, connected, params, spec, config. Dot paths reach inside: params.Light.Power. Keep spec whenever the next step is a write — it is what set_params validates against.",
 					},
 				},
 			},
@@ -128,7 +130,9 @@ Triggers come back in the device's own form: m is minutes past midnight and d is
 
 If the user gave you node_id and group_id, act on them immediately. Only call list_devices first when the device is identified by name, type or room and you do not have the ids yet. To act on several devices in one go, pass their ids comma-separated in node_id; they must all belong to the group in group_id, and the same params are applied to every one of them, so only batch devices that share the same device names.
 
-params is keyed by the device name inside the node and then by parameter: {"Light": {"Power": true, "Brightness": 80}}. Every device name and every parameter name must be one the device actually reported in list_devices, matched exactly and case-sensitively. Inventing a parameter to stand for something the device does not expose does nothing at all — there is no {"OTA": {"Trigger": true}} that starts a firmware update, and no key that adds a capability the device did not report. If nothing in the device's params covers what the user asked for, tell them this device does not support it rather than guessing at a name. Send real booleans for on/off parameters, not "true" or "on".
+params is keyed by the device name inside the node and then by parameter: {"Light": {"Power": true, "Brightness": 80}}. Names are matched exactly and case-sensitively against the device's own configuration, and a write that names a device or parameter the device did not declare is rejected in full — nothing is sent. The rejection lists the parameters the device does have, so if you are unsure, send the call and read the error rather than asking the user. There is no {"OTA": {"Trigger": true}} that starts a firmware update and no key that adds a capability the device never reported; if nothing covers what the user asked for, tell them this device does not support it.
+
+The spec field on each list_devices row is what a device accepts — parameter name to type, range and meaning, as in {"Colour Light": {"H": "int 0-360, hue", "V": "int 0-100, brightness"}}. Use it rather than the params field, which is only what the device currently reports: a light whose hue is named "H" will not accept "Hue". Values are checked too — send real booleans for on/off parameters, not "true" or "on", and keep numbers inside the stated range.
 
 Do not use this to read state — list_devices does that — and do not use it for anything that happens later. If the request carries a time, a delay or a repetition ("at 7am", "every weekday", "in ten minutes", "every night"), it belongs to set_schedule, even when it also names a device and the state to put it in.
 
@@ -146,7 +150,7 @@ Delivery to the device is asynchronous: success means the change was accepted an
 					},
 					"params": map[string]interface{}{
 						"type":        "object",
-						"description": "Device name to parameter name to value: {\"Light\": {\"Power\": true, \"Brightness\": 80}}. Case-sensitive. Both names must be ones the device reported in list_devices; a parameter the device never reported does nothing.",
+						"description": "Device name to parameter name to value: {\"Light\": {\"Power\": true, \"Brightness\": 80}}. Case-sensitive. Both names must appear in the device's spec from list_devices; a write naming anything else, or a value of the wrong type or out of range, is rejected in full and the error names what the device does accept.",
 					},
 				},
 				Required: []string{"node_id", "group_id", "params"},

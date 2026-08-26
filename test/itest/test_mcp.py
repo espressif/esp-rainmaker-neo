@@ -237,6 +237,15 @@ def test_mcp_tool_descriptions_carry_their_guidance(test_user1, mcp_client):
     set_params = tools["set_params"]["description"]
     assert "list_devices" in set_params
     assert "set_schedule" in set_params, "a timed request must be pointed at set_schedule"
+    # Invented parameters are now refused rather than silently published, and the description has
+    # to say so: a model told the write "does nothing" has no reason to read the error, while one
+    # told it is rejected with the alternatives can fix the call in a single turn.
+    assert "rejected" in set_params, "set_params must say an undeclared parameter is refused"
+    assert "spec" in set_params, "set_params must point at spec, not params, for what it accepts"
+
+    list_devices = tools["list_devices"]["description"]
+    assert "spec" in list_devices, \
+        "list_devices must distinguish what a device reports from what it will accept"
 
     for tool_name in ("list_devices", "list_groups"):
         description = tools[tool_name]["description"]
@@ -509,6 +518,113 @@ def test_mcp_set_params_reports_each_node(associated_device, mcp_client):
     assert "not-a-real-node" in outcomes["not-a-real-node"]["error"]
 
     assert device.wait_for_params_message(timeout=10) == set_data
+
+
+def test_mcp_set_params_rejects_a_parameter_the_device_never_declared(associated_device, mcp_client):
+    """An invented parameter is refused, names the real ones, and reaches no device.
+
+    set_params is a generic write, so a model can name anything. Before the cloud checked the
+    node's config it published whatever it was handed: firmware ignored the unknown key, nothing
+    acknowledged it either way, and the tool still reported succeeded=1. The user was told a
+    change happened that never did — which is why this is asserted at the wire, not just in the
+    response.
+    """
+    device, group_id, test_user1, _ = associated_device
+    node_id = device.node_thing_name
+
+    device.connect()
+    device.get_group_info()
+    # A config that positively declares its devices: with no `devices` key there is nothing to
+    # contradict, and validation correctly stands aside (see test_mcp_set_params).
+    assert device.set_node_config({
+        "devices": [{
+            "id": "Light",
+            "type": "esp.device.lightbulb",
+            "primary": "Power",
+            "params": [
+                {"id": "Power", "type": "esp.param.power", "data_type": "bool",
+                 "properties": ["read", "write"]},
+                {"id": "Brightness", "type": "esp.param.brightness", "data_type": "int",
+                 "properties": ["read", "write"], "bounds": {"min": 0, "max": 100}},
+            ],
+        }],
+        "info": {"fw_version": "1.0"},
+    })
+
+    shadow_name = _shadow_name(device, group_id)
+    assert device.shadow_connect([shadow_name])
+    params_topic = f"rainmaker/nodes/{node_id}/user/{shadow_name}/params"
+    assert device.subscribe(topic=params_topic)
+
+    client = mcp_client(test_user1)
+
+    unknown_device = client.set_params(group_id, node_id, {"OTA": {"Trigger": True}})
+    assert unknown_device.is_error
+    assert "Light" in unknown_device.text, "the error must name the devices the node does have"
+
+    unknown_param = client.set_params(group_id, node_id, {"Light": {"Hue": 120}})
+    assert unknown_param.is_error
+    assert "Brightness" in unknown_param.text, "the error must name the writable parameters"
+
+    wrong_type = client.set_params(group_id, node_id, {"Light": {"Power": "on"}})
+    assert wrong_type.is_error
+    assert "boolean" in wrong_type.text
+
+    out_of_bounds = client.set_params(group_id, node_id, {"Light": {"Brightness": 150}})
+    assert out_of_bounds.is_error
+    assert "0-100" in out_of_bounds.text
+
+    # The point of rejecting before publishing: none of the four reached the device.
+    assert device.wait_for_params_message(timeout=5) is None, \
+        "a rejected write must not be published"
+
+    # And a declared parameter still lands, so validation is not simply refusing everything.
+    accepted = {"Light": {"Power": True, "Brightness": 80}}
+    result = client.set_params(group_id, node_id, accepted).json()
+    assert result["succeeded"] == 1
+    assert device.wait_for_params_message(timeout=10) == accepted
+
+
+def test_mcp_list_devices_reports_what_a_write_will_accept(associated_device, mcp_client):
+    """spec tells the model what set_params validates against, so it can get it right first time.
+
+    params is the reported shadow — current values — and a device may report a parameter its
+    config never declared. Only spec is built from the config the write is checked against, so
+    those two must not be confused: a light whose hue is named "H" will refuse "Hue".
+    """
+    device, group_id, test_user1, _ = associated_device
+    node_id = device.node_thing_name
+
+    device.connect()
+    device.get_group_info()
+    assert device.set_node_config({
+        "devices": [{
+            "id": "Colour Light",
+            "type": "esp.device.lightbulb",
+            "primary": "Power",
+            "params": [
+                {"id": "Power", "type": "esp.param.power", "data_type": "bool",
+                 "properties": ["read", "write"]},
+                {"id": "H", "type": "esp.param.hue", "data_type": "int",
+                 "properties": ["read", "write"], "bounds": {"min": 0, "max": 360}},
+                {"id": "Temperature", "type": "esp.param.temperature", "data_type": "float",
+                 "properties": ["read"]},
+            ],
+        }],
+        "info": {"fw_version": "1.0"},
+    })
+
+    client = mcp_client(test_user1)
+    devices = client.call_tool("list_devices", node_id=node_id).json()["devices"]
+    spec = next(d for d in devices if d["node_id"] == node_id)["spec"]
+
+    assert spec["Colour Light"]["H"] == "int 0-360, hue", \
+        "the model needs the range and the meaning, since the name alone is unguessable"
+    assert "Temperature" not in spec["Colour Light"], "a read-only parameter is not writable"
+
+    # The name the spec gives is accepted; the one a model would guess is not.
+    assert client.set_params(group_id, node_id, {"Colour Light": {"Hue": 120}}).is_error
+    assert client.set_params(group_id, node_id, {"Colour Light": {"H": 120}}).json()["succeeded"] == 1
 
 
 def test_mcp_set_params_unauthorized(test_user1, test_user2, mcp_client):

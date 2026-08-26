@@ -369,6 +369,7 @@ class User:
                 data=json.dumps({"id_token": self.token}),
                 token=self.access_token)
 
+            print(f"access_token: {self.access_token}")
             if response.status_code not in (200, 201):
                 user_log(f"Failed to get user credentials. Status code: {response.status_code}")
                 user_log(f"Response: {response.text}")
@@ -460,7 +461,7 @@ class User:
             headers=headers,
             data=data if data is not None else None
         )
-        
+
         if "signin" not in path:
             print(f"Response: {response.status_code} {response.text}")
         print(f"-----------------------------------------")
@@ -470,14 +471,14 @@ class User:
     def _verify_cors(self, path, intended_method, expected_cors_origin="*", api_gateway_url=None):
         """
         Internal helper: verifies CORS preflight configuration for a path.
-        
+
         Performs a complete CORS preflight check according to W3C CORS specification:
         - Verifies OPTIONS request returns 200/204
         - Validates Access-Control-Allow-Origin header
         - Validates Access-Control-Allow-Methods includes the intended method
         - Validates Access-Control-Allow-Headers includes required headers
         - Optionally validates Access-Control-Max-Age if present
-        
+
         Args:
             path: API path to verify
             intended_method: HTTP method that will be used in the actual request
@@ -485,17 +486,17 @@ class User:
             api_gateway_url: Optional API gateway URL (defaults to self.api_gateway_url)
         """
         api_url = api_gateway_url or self.api_gateway_url
-        
+
         # Track verified paths per API gateway URL and HTTP method
         key = (api_url, intended_method)
         if key not in _verified_cors_paths:
             _verified_cors_paths[key] = set()
-        
+
         if path in _verified_cors_paths[key] or intended_method == "OPTIONS":
             return
 
         request_origin = "http://localhost:3000" if expected_cors_origin == "*" else expected_cors_origin
-        
+
         # Headers that will be sent in actual requests (SigV4Auth adds these)
         request_headers = [
             "Content-Type",
@@ -504,13 +505,13 @@ class User:
             "X-Api-Key",
             "X-Amz-Security-Token"
         ]
-        
+
         if request_logging:
             print(f"[INFO] Verifying CORS Preflight for {path} (method: {intended_method})...")
-    
+
         clean_path = path.lstrip('/')
         url = f"{api_url}/{clean_path}"
-        
+
         try:
             # Send proper CORS preflight request with required headers
             response = requests.options(
@@ -522,14 +523,14 @@ class User:
                 },
                 timeout=5
             )
-            
+
             # CORS preflight should return 200 or 204
             if response.status_code not in (200, 204):
                 error_msg = f"CORS preflight failed: {path} OPTIONS returned {response.status_code}"
                 if request_logging:
                     print(f"[CORS FAILURE] {error_msg}")
                 raise AssertionError(error_msg)
-            
+
             # Verify Access-Control-Allow-Origin
             allow_origin = response.headers.get('Access-Control-Allow-Origin')
             if not allow_origin:
@@ -537,9 +538,9 @@ class User:
                 if request_logging:
                     print(f"[CORS FAILURE] {error_msg}")
                 raise AssertionError(error_msg)
-            
+
             is_valid_origin = (
-                allow_origin == "*" or 
+                allow_origin == "*" or
                 allow_origin == request_origin
             )
             if not is_valid_origin:
@@ -547,7 +548,7 @@ class User:
                 if request_logging:
                     print(f"[CORS FAILURE] {error_msg}")
                 raise AssertionError(error_msg)
-            
+
             # Verify Access-Control-Allow-Methods includes the intended method
             allow_methods = response.headers.get('Access-Control-Allow-Methods', '')
             allowed_methods_list = [m.strip().upper() for m in allow_methods.split(',')]
@@ -556,12 +557,12 @@ class User:
                 if request_logging:
                     print(f"[CORS FAILURE] {error_msg}")
                 raise AssertionError(error_msg)
-            
+
             # Verify Access-Control-Allow-Headers includes required headers
             allow_headers = response.headers.get('Access-Control-Allow-Headers', '')
             allowed_headers_list = [h.strip().lower() for h in allow_headers.split(',')]
             missing_headers = [
-                h for h in request_headers 
+                h for h in request_headers
                 if h.lower() not in allowed_headers_list
             ]
             if missing_headers:
@@ -569,7 +570,7 @@ class User:
                 if request_logging:
                     print(f"[CORS FAILURE] {error_msg}")
                 raise AssertionError(error_msg)
-            
+
             # Log success
             if request_logging:
                 max_age = response.headers.get('Access-Control-Max-Age', 'not set')
@@ -578,10 +579,10 @@ class User:
                 print(f"  Allow-Methods: {allow_methods}")
                 print(f"  Allow-Headers: {allow_headers}")
                 print(f"  Max-Age: {max_age}")
-            
+
             # Mark as verified
             _verified_cors_paths[key].add(path)
-            
+
         except requests.exceptions.RequestException as e:
             error_msg = f"CORS preflight failed: Could not verify options for {path}: {e}"
             print(f"[CORS ERROR] {error_msg}")
@@ -945,13 +946,13 @@ class User:
 
     def assume_role_admin(self, group_id, subgroup_id=None):
         """Assume role with admin privileges for a specific group/subgroup.
-        
+
         This is only available for super admin users.
-        
+
         Args:
             group_id (str): The group ID to get access to
             subgroup_id (str, optional): The subgroup ID to get access to (for more restrictive access)
-            
+
         Returns:
             dict: Assumed credentials with access to the specified group/subgroup, or None if failed
         """
@@ -1152,7 +1153,7 @@ class User:
             self.mqtt_credentials['secret_key'],
             self.mqtt_credentials['session_token']
         )
-    
+
     def mqtt_refresh_credentials(self):
         self.mqtt_credentials = self.assume_role()
         if not self.mqtt_credentials:
@@ -1683,7 +1684,7 @@ class User:
         """
         # Always use the root group URL pattern for setting schedules
         url = f'/v1/groups/{group_id}/nodes/{node_id}/schedules'
-            
+
         response = self.make_api_request('PUT', url, json.dumps(schedule_data))
         if response.status_code not in (200, 201):
             user_log(f"Failed to set node schedule. Status code: {response.status_code}")
@@ -2708,7 +2709,7 @@ class User:
             params['start_date'] = start_date
         if end_date is not None:
             params['end_date'] = end_date
-            
+
         response = self.make_api_request('GET', f'/v1/groups/{group_id}/nodes/{node_id}/timeseries', params=params)
         if response.status_code in (200, 201):
             return response.json()
@@ -2789,7 +2790,7 @@ class User:
             params['end_time'] = end_time
         if page_size is not None:
             params['page_size'] = page_size
-        
+
         response = self.make_api_request('GET', f'/v1/groups/{group_id}/nodes/{node_id}/timeseries/raw', params=params)
         if response.status_code in (200, 201):
             return response.json()
@@ -2844,7 +2845,7 @@ class User:
             'data_type': data_type,
             'window': window
         }
-        
+
         response = self.make_api_request('GET', f'/v1/groups/{group_id}/nodes/{node_id}/timeseries/aggregates', params=params)
         if response.status_code in (200, 201):
             return response.json()
@@ -2880,7 +2881,7 @@ class User:
         }
         if date is not None:
             params['date'] = date
-        
+
         response = self.make_api_request('GET', f'/v1/groups/{group_id}/nodes/{node_id}/timeseries/aggregates', params=params)
         if response.status_code in (200, 201):
             return response.json()
@@ -2923,7 +2924,7 @@ class User:
             params['end_date'] = end_date
         if page_size is not None:
             params['page_size'] = page_size
-        
+
         response = self.make_api_request('GET', f'/v1/groups/{group_id}/nodes/{node_id}/timeseries/aggregates', params=params)
         if response.status_code in (200, 201):
             return response.json()

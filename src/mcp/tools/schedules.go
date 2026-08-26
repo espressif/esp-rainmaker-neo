@@ -60,6 +60,15 @@ func SetSchedule(rmngCtx *rmngctx.RmngContext, groupID, nodeID string, operation
 		return nil, err
 	}
 
+	// A schedule's action is a params payload, so it carries the same risk as set_params and is
+	// checked the same way. Without this, a model refused by set_params would simply route the
+	// invented parameter through a schedule instead, and the failure would surface at 7am.
+	if len(input.Action) > 0 {
+		if message := validateParamsForNode(rmngCtx, nodeID, input.Action); message != "" {
+			return nil, fmt.Errorf("%s", message)
+		}
+	}
+
 	existing, err := readSchedules(rmngCtx, nodeID)
 	if err != nil {
 		return nil, err

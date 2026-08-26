@@ -9,7 +9,10 @@ import (
 	"strings"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_details_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/config"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )
 
@@ -74,10 +77,16 @@ func listGroups(rmngCtx *rmngctx.RmngContext, groupID string) ([]group.Group, er
 	return groups, nil
 }
 
-// authorizeNodeForUser verifies the user has access to the given group, grants the
-// necessary node permissions on the context, and asserts the node belongs to that group.
-func authorizeNodeForUser(rmngCtx *rmngctx.RmngContext, groupID, nodeID string) error {
-	groups, err := group.ListGroupForUser(rmngCtx, groupID, true)
+// authorizeGroupForUser proves the caller can reach the group, which is also what grants the
+// group permissions every check below tests against.
+//
+// Split from the node check so a call spanning several nodes resolves the group once rather than
+// once per node — the group is the same for all of them, and this is two DynamoDB reads.
+func authorizeGroupForUser(rmngCtx *rmngctx.RmngContext, groupID string) error {
+	// Without the nodes: this only has to establish access. Loading them reads the group's whole
+	// node listing and discards it, and the node the caller actually named is checked below by
+	// key, which is both cheaper and stricter.
+	groups, err := group.ListGroupForUser(rmngCtx, groupID, false)
 	if err != nil {
 		return fmt.Errorf("failed to resolve access to group %s: %w", groupID, err)
 	}
@@ -85,11 +94,30 @@ func authorizeNodeForUser(rmngCtx *rmngctx.RmngContext, groupID, nodeID string) 
 	if len(groups) == 0 {
 		return fmt.Errorf("user does not have access to group %s", groupID)
 	}
-	// Group access does not imply access to this node.
-	if _, err := group_node_db.NewGroupNodeDB(rmngCtx).GetGroupNode(groupID, nodeID); err != nil {
-		return fmt.Errorf("node %s is not a member of group %s: %w", nodeID, groupID, err)
-	}
 	return nil
+}
+
+// authorizeNodeInGroup asserts the node belongs to the group, and returns the placement recorded
+// on its row. Group access does not imply access to a node, so this is a separate check.
+//
+// The placement is returned rather than discarded because the row it comes from is the same one
+// node.Node would otherwise fetch again through the by-node-id index to build a shadow name.
+func authorizeNodeInGroup(rmngCtx *rmngctx.RmngContext, groupID, nodeID string) (group_node_db.NodesGroups, error) {
+	groupNode, err := group_node_db.NewGroupNodeDB(rmngCtx).GetGroupNode(groupID, nodeID)
+	if err != nil {
+		return group_node_db.NodesGroups{}, fmt.Errorf("node %s is not a member of group %s: %w", nodeID, groupID, err)
+	}
+	return groupNode.ToNodesGroups(), nil
+}
+
+// authorizeNodeForUser verifies the user has access to the given group, grants the
+// necessary node permissions on the context, and asserts the node belongs to that group.
+func authorizeNodeForUser(rmngCtx *rmngctx.RmngContext, groupID, nodeID string) error {
+	if err := authorizeGroupForUser(rmngCtx, groupID); err != nil {
+		return err
+	}
+	_, err := authorizeNodeInGroup(rmngCtx, groupID, nodeID)
+	return err
 }
 
 // SplitIDs parses a comma-separated ID list, dropping blanks. Tools accept the comma form so
@@ -102,4 +130,54 @@ func SplitIDs(value string) []string {
 		}
 	}
 	return ids
+}
+
+// validateParamsForNode checks a params payload against what the node declared in its config,
+// returning the message to hand back to the model, or "" when the write may proceed.
+//
+// The whole point is that set_params is a generic write: a model can name a device or parameter
+// the node never had, and the cloud used to publish it, get ignored by firmware, and report
+// success. Checking here is the only place it can be caught — there is no acknowledgement from
+// the device to check afterwards.
+//
+// Every branch that cannot judge the write lets it through, and says why in the log. Config is
+// firmware-reported and its ingest is never schema-checked, so sparse and malformed configs are
+// normal; refusing on missing metadata would make working devices uncontrollable, which is worse
+// than the silent no-op being fixed. Only a config that positively contradicts the write rejects.
+func validateParamsForNode(rmngCtx *rmngctx.RmngContext, nodeID string, params map[string]interface{}) string {
+	skip := func(reason string) string {
+		rlog.Debug(rmngCtx).Str("node_id", nodeID).Str("validation_skipped", reason).
+			Msg("Publishing params without validating them against node config")
+		return ""
+	}
+
+	nodeDetails, err := node_details_db.NewNodeDetailsDB(rmngCtx).GetNodeDetails(nodeID)
+	if err != nil || nodeDetails == nil {
+		// A DynamoDB blip must not make a lamp uncontrollable: availability of the write path
+		// must not become worse than it was before this check existed.
+		return skip("config_unreadable")
+	}
+	cfgData, err := nodeDetails.GetServiceData(configService.GetName())
+	if err != nil || cfgData == nil {
+		// A node registered but never connected has no config and is still worth writing to.
+		return skip("config_absent")
+	}
+	nodeCfg, err := config.ToNodeCfg(cfgData)
+	if err != nil {
+		return skip("config_undecodable")
+	}
+	if nodeCfg.SkipValidation() {
+		return skip("config_not_judgeable")
+	}
+
+	violations := nodeCfg.ValidateParams(params)
+	if len(violations) == 0 {
+		return ""
+	}
+	for _, violation := range violations {
+		rlog.Info(rmngCtx).Str("node_id", nodeID).Str("validation_rejected", string(violation.Kind)).
+			Str("device", violation.Device).Str("param", violation.Param).
+			Msg("Refused a params write the node's config contradicts")
+	}
+	return config.ViolationsMessage(nodeID, violations)
 }

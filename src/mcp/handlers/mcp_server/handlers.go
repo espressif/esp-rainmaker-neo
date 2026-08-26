@@ -6,6 +6,8 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 
 	mcpserver "mcp-server"
 
@@ -144,7 +146,15 @@ func handleSetParams(userCtx mcpserver.UserContext, id json.RawMessage, args jso
 	// Every device failing is a failed call, not a partial success — say so plainly so the
 	// model does not report a change that never happened.
 	if result.Succeeded == 0 {
-		return mcpserver.ToolErrorResponse(id, firstError(result)), nil
+		return mcpserver.ToolErrorResponse(id, failureReasons(result)), nil
+	}
+
+	// A mixed result is a successful response, so nothing marks it as needing attention: a model
+	// reading `succeeded` alone would report the whole request done. Tolerable when a node was
+	// merely unreachable, not when it refused the parameters, so say it in words.
+	if result.Failed > 0 {
+		result.Summary = fmt.Sprintf("%d of %d devices updated; %d did not accept the parameters: %s",
+			result.Succeeded, result.Requested, result.Failed, failureReasons(result))
 	}
 
 	return mcpserver.ToolTextResponse(id, result), nil
@@ -209,11 +219,28 @@ func missingIDs(nodeID, groupID string) string {
 	return ""
 }
 
-func firstError(result mcptools.SetParamsResult) string {
+// failureReasons joins the distinct reasons a call failed. Before params were validated every
+// failing node produced the same "unreachable" sentence, so the first one stood for all of them.
+// A rejected write does not: two nodes can refuse the same params for different reasons, and a
+// model shown only the first would fix one and resend the other unchanged.
+func failureReasons(result mcptools.SetParamsResult) string {
+	var reasons []string
+	seen := make(map[string]bool, len(result.Results))
 	for _, nodeResult := range result.Results {
-		if nodeResult.Error != "" {
-			return nodeResult.Error
+		if nodeResult.Error == "" || seen[nodeResult.Error] {
+			continue
+		}
+		seen[nodeResult.Error] = true
+		reasons = append(reasons, nodeResult.Error)
+		if len(reasons) == maxFailureReasons {
+			break
 		}
 	}
-	return "the parameters could not be set on any of the devices given"
+	if len(reasons) == 0 {
+		return "the parameters could not be set on any of the devices given"
+	}
+	return strings.Join(reasons, " ")
 }
+
+// maxFailureReasons caps how many distinct causes one message carries.
+const maxFailureReasons = 3

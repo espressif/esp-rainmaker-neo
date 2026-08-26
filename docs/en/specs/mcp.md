@@ -47,14 +47,14 @@ Each description therefore names the sibling tool to use for every adjacent inte
 plainly when *not* to call the tool it describes. Those clauses are load-bearing: without
 them models insert redundant lookup calls before every action.
 
-Three further clauses were added after observed failures, and are covered by tests because they
+Four further clauses were added after observed failures, and are covered by tests because they
 are behaviour, not prose:
 
 - **`set_params` bounds what a parameter is.** Given a request the device cannot serve, a model
   would otherwise invent a plausible key — `{"OTA": {"Trigger": true}}` for "run a firmware
-  update" — which the cloud accepts and publishes to a device that ignores it, so the user is
-  told something happened when nothing did. The description states that every device and
-  parameter name must be one `list_devices` reported, and that a made-up key does nothing.
+  update" — so the description states that every device and parameter name must be one the
+  device declared. Description alone could not carry this, though: see [Validating a
+  write](#validating-a-write).
 - **`set_params` hands timed requests to `set_schedule`.** "Every weekday at 7am" names a device
   and a state, which is enough to look like an immediate write. The description routes anything
   carrying a time, a delay or a repetition to `set_schedule`.
@@ -67,6 +67,53 @@ are behaviour, not prose:
 
 A tool surface has no way to express "we do not do that", so the refusal has to live in the
 description of the tool a model would otherwise reach for.
+
+### Validating a write
+
+`set_params` is a generic write — `{"<device>": {"<param>": value}}` — not a typed `set_hsv()`, so
+nothing about its shape constrains what a model may put in it. For a while the only guard was the
+description quoted above, and that was not enough for three reasons that no wording fixes:
+
+- The description tells the model to skip discovery when it already holds the ids, which is the
+  right instruction — so it can reach `set_params` having never seen the device's parameter list.
+  "Use only what `list_devices` reported" is then a precondition the model cannot check.
+- `list_devices`' `params` is the reported shadow: current values, not a specification. It carries
+  no types, no ranges and no indication of what is writable.
+- Device parameters are named by firmware, so the obvious name is often wrong. A colour light in
+  the wild calls its hue, saturation and brightness `H`, `S` and `V`; asked to make the light red,
+  a model sends `Hue` — semantically correct and unusable.
+
+The consequence was the worst available failure. There is no acknowledgement from a device, so an
+undeclared parameter was accepted, published, ignored by firmware, and reported as
+`succeeded: 1` — the user was told a change happened that never did.
+
+Writes are therefore validated against the node's own config before publishing, in
+`NodeCfg.ValidateParams`. Two things make it safe to enforce:
+
+- **Only a positive contradiction rejects.** Config is firmware-reported and its ingest is never
+  schema-checked, so sparse and malformed configs are normal. A missing `data_type`, an absent
+  `properties` list, degenerate bounds, an undecodable config, a Matter node — each means the
+  config cannot judge the write, and the write proceeds. Refusing on absent metadata would make
+  working devices uncontrollable, which is a worse failure than the one being fixed.
+- **A rejection is per node and total.** Nothing is published for a node whose write was refused,
+  so a device is never left half-set, and the message names the parameters it does have. That
+  turns a silent no-op into something a model corrects in one turn — the same reasoning as
+  [§4 Errors](#4-errors).
+
+`list_devices` gained `spec` for the same reason: parameter id to type, range and semantic type
+(`{"Colour Light": {"H": "int 0-360, hue"}}`), built from the same `NodeCfg` the validator reads.
+That last point is a constraint, not an implementation detail — a model told about a parameter in
+`spec` and then refused for using it would be worse off than with no `spec` at all. The semantic
+type is what makes a generic write usable: an id is whatever firmware chose, but `esp.param.hue`
+is stable across every device, which is the mapping a typed API would have supplied for free.
+
+Schedules are validated identically. A schedule's `action` is a params payload, so leaving it
+unchecked would simply teach a refused model to route the same invented parameter through
+`set_schedule` and surface the failure at 7am.
+
+This covers the MCP caller only. Apps publish params straight to MQTT with scoped STS credentials
+and no Lambda in the path, and the voice integrations publish through
+`Node.PublishToDeviceDesired` unchecked, so neither is affected.
 
 ## 3. Tools
 
@@ -149,11 +196,17 @@ The server distinguishes two kinds of failure, and clients must too.
   tool, missing or wrong-audience token — are JSON-RPC errors (`-32700`, `-32600`, `-32601`,
   `-32602`, `-32001`). No argument change fixes these.
 - **Tool failures** — a device the caller cannot reach, a missing argument, an unparseable
-  trigger — are successful JSON-RPC responses whose result carries `isError: true` and a
-  message written for the model to act on ("call list_schedules to find it").
+  trigger, a parameter the device never declared — are successful JSON-RPC responses whose result
+  carries `isError: true` and a message written for the model to act on ("call list_schedules to
+  find it").
 
 That split is what lets an assistant recover in one turn instead of reporting a dead end.
 Internal error detail never reaches the client; it is logged instead.
+
+A partly-failed `set_params` is the one case that is neither: some devices were written and some
+refused the parameters, which is an ordinary success response. It carries a `summary` naming what
+did not land, because a model reading `succeeded` alone would otherwise report the whole request
+done — tolerable when a node was merely unreachable, not when it rejected the write.
 
 ## 5. Authentication
 

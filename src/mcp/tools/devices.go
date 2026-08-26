@@ -40,7 +40,13 @@ type DeviceInfo struct {
 	FWVersion     string                 `json:"fw_version,omitempty"`
 	Connected     bool                   `json:"connected"`
 	Params        map[string]interface{} `json:"params,omitempty"`
-	Config        map[string]interface{} `json:"config,omitempty"`
+	// Spec is what may be *written*, as parameter id to what it accepts. Params above is the
+	// reported shadow — current values — and a device can report a parameter its config never
+	// declared, so the two are not interchangeable: only Spec is authoritative for a write, and
+	// it is built from the same NodeCfg that set_params validates against. Telling a model about
+	// a parameter here and then refusing it would be worse than saying nothing at all.
+	Spec   map[string]map[string]string `json:"spec,omitempty"`
+	Config map[string]interface{}       `json:"config,omitempty"`
 	// Error records a per-device read failure. One unreachable device must not blind the
 	// caller to the rest of the home, so the row is returned with whatever was resolved.
 	Error string `json:"error,omitempty"`
@@ -177,6 +183,7 @@ func applyConfig(device *DeviceInfo, cfgData interface{}) {
 	if err != nil {
 		return
 	}
+	device.Spec = nodeCfg.ParamSpec()
 	device.Name = nodeCfg.Info.Name
 	device.Type = nodeCfg.Info.Type
 	device.Model = nodeCfg.Info.Model

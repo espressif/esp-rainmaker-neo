@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_details_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"net/http"
 	"net/http/httptest"
@@ -713,6 +714,218 @@ var _ = Describe("MCP Main", func() {
 				Expect(withoutParams).To(ContainSubstring("params is required"))
 			})
 
+			It("refuses a parameter the device never declared, and publishes nothing", func() {
+				restore := mockAuthSuccess(userID)
+				defer restore()
+				server = createServer()
+
+				rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, user.NewUser(userID))
+				grp, err := group.CreateGroupForUser(rmngCtx, "Validated Group")
+				Expect(err).To(BeNil())
+				configuredNode := "configured-node"
+				Expect(rmngCtx.SetAllow(utils.NodeAll, configuredNode)).To(Succeed())
+				_, err = group.AddNode(rmngCtx, grp.GroupID, configuredNode, nil)
+				Expect(err).To(BeNil())
+				seedNodeConfig(ctx, configuredNode)
+
+				// The hallucination the tool description was written to prevent and could not:
+				// before this was validated the cloud published it and reported success.
+				message := callToolError(server, ctx, "set_params", map[string]interface{}{
+					"group_id": grp.GroupID,
+					"node_id":  configuredNode,
+					"params":   map[string]interface{}{"OTA": map[string]interface{}{"Trigger": true}},
+				}, "test-token")
+				Expect(message).To(ContainSubstring("no device or service named"))
+				Expect(message).To(ContainSubstring("Colour Light"))
+				Expect(message).To(ContainSubstring("Nothing was changed"))
+
+				iotDataClient := awscommon.GetIoTDataPlaneClient().(*mock.IoTDataPlaneMock)
+				Expect(iotDataClient.PublishCalls).To(BeEmpty())
+			})
+
+			It("names the parameter the device actually has when the model guesses", func() {
+				restore := mockAuthSuccess(userID)
+				defer restore()
+				server = createServer()
+
+				rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, user.NewUser(userID))
+				grp, err := group.CreateGroupForUser(rmngCtx, "Hue Group")
+				Expect(err).To(BeNil())
+				configuredNode := "hue-node"
+				Expect(rmngCtx.SetAllow(utils.NodeAll, configuredNode)).To(Succeed())
+				_, err = group.AddNode(rmngCtx, grp.GroupID, configuredNode, nil)
+				Expect(err).To(BeNil())
+				seedNodeConfig(ctx, configuredNode)
+
+				// "Hue" is the obvious name and the wrong one: this device calls it "H".
+				message := callToolError(server, ctx, "set_params", map[string]interface{}{
+					"group_id": grp.GroupID,
+					"node_id":  configuredNode,
+					"params":   map[string]interface{}{"Colour Light": map[string]interface{}{"Hue": 120}},
+				}, "test-token")
+				Expect(message).To(ContainSubstring(`"Hue" is not a parameter`))
+				Expect(message).To(ContainSubstring("H (int 0-360, hue)"))
+
+				iotDataClient := awscommon.GetIoTDataPlaneClient().(*mock.IoTDataPlaneMock)
+				Expect(iotDataClient.PublishCalls).To(BeEmpty())
+			})
+
+			It("still writes a device whose config declares the parameter", func() {
+				restore := mockAuthSuccess(userID)
+				defer restore()
+				server = createServer()
+
+				rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, user.NewUser(userID))
+				grp, err := group.CreateGroupForUser(rmngCtx, "Valid Write Group")
+				Expect(err).To(BeNil())
+				configuredNode := "valid-write-node"
+				Expect(rmngCtx.SetAllow(utils.NodeAll, configuredNode)).To(Succeed())
+				_, err = group.AddNode(rmngCtx, grp.GroupID, configuredNode, nil)
+				Expect(err).To(BeNil())
+				seedNodeConfig(ctx, configuredNode)
+
+				text := callToolSuccess(server, ctx, "set_params", map[string]interface{}{
+					"group_id": grp.GroupID,
+					"node_id":  configuredNode,
+					"params": map[string]interface{}{
+						"Colour Light": map[string]interface{}{"Power": true, "H": 120},
+					},
+				}, "test-token")
+
+				var result mcptools.SetParamsResult
+				Expect(json.Unmarshal([]byte(text), &result)).To(Succeed())
+				Expect(result.Succeeded).To(Equal(1))
+
+				iotDataClient := awscommon.GetIoTDataPlaneClient().(*mock.IoTDataPlaneMock)
+				Expect(iotDataClient.PublishCalls).To(HaveLen(1))
+			})
+
+			It("costs a known number of DynamoDB reads and exactly one publish", func() {
+				restore := mockAuthSuccess(userID)
+				defer restore()
+				server = createServer()
+
+				rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, user.NewUser(userID))
+				grp, err := group.CreateGroupForUser(rmngCtx, "Access Count Group")
+				Expect(err).To(BeNil())
+				countedNode := "counted-node"
+				Expect(rmngCtx.SetAllow(utils.NodeAll, countedNode)).To(Succeed())
+				_, err = group.AddNode(rmngCtx, grp.GroupID, countedNode, nil)
+				Expect(err).To(BeNil())
+				seedNodeConfig(ctx, countedNode)
+
+				dbMock := awscommon.GetDynamoDBClient().(*mock.DynamoDBMock)
+				iotDataClient := awscommon.GetIoTDataPlaneClient().(*mock.IoTDataPlaneMock)
+				// Reset after the setup above, so only the tool call itself is measured.
+				dbMock.ProfileReset()
+				iotDataClient.PublishCalls = nil
+
+				text := callToolSuccess(server, ctx, "set_params", map[string]interface{}{
+					"group_id": grp.GroupID,
+					"node_id":  countedNode,
+					"params":   map[string]interface{}{"Colour Light": map[string]interface{}{"Power": true}},
+				}, "test-token")
+				var result mcptools.SetParamsResult
+				Expect(json.Unmarshal([]byte(text), &result)).To(Succeed())
+				Expect(result.Succeeded).To(Equal(1))
+
+				// One accepted write on one node, in one group with no subgroups. The shape is
+				// 2 + 2N reads for N nodes:
+				//
+				//   once per call, whatever the node count
+				//     1  Query   rmng-user-group-assoc   caller's access, and the permission grant
+				//     2  Query   rmng-groups             the group itself, read by ListGroupForUser
+				//   once per node
+				//     3  GetItem rmng-group-node-assoc   is this node in the group, and where it sits
+				//     4  GetItem rmng-nodes              the config the write is checked against
+				//
+				// Asserted rather than described because the per-call and per-node halves are easy
+				// to confuse: moving read 1 or 2 back inside the fan-out would still pass every
+				// other test in this file while costing 2N reads instead of 2.
+				profile := dbMock.ProfileGet()
+				readCnt, writeCnt := profile.TotalCounts()
+				Expect(readCnt).To(Equal(4))
+				Expect(writeCnt).To(BeZero(), "setting params must not write to DynamoDB")
+				Expect(iotDataClient.PublishCalls).To(HaveLen(1))
+			})
+
+			It("resolves the group once however many nodes the call names", func() {
+				restore := mockAuthSuccess(userID)
+				defer restore()
+				server = createServer()
+
+				rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, user.NewUser(userID))
+				grp, err := group.CreateGroupForUser(rmngCtx, "Fanout Count Group")
+				Expect(err).To(BeNil())
+				nodes := []string{"fanout-node-a", "fanout-node-b"}
+				for _, nodeID := range nodes {
+					Expect(rmngCtx.SetAllow(utils.NodeAll, nodeID)).To(Succeed())
+					_, err = group.AddNode(rmngCtx, grp.GroupID, nodeID, nil)
+					Expect(err).To(BeNil())
+					seedNodeConfig(ctx, nodeID)
+				}
+
+				dbMock := awscommon.GetDynamoDBClient().(*mock.DynamoDBMock)
+				iotDataClient := awscommon.GetIoTDataPlaneClient().(*mock.IoTDataPlaneMock)
+				dbMock.ProfileReset()
+				iotDataClient.PublishCalls = nil
+
+				text := callToolSuccess(server, ctx, "set_params", map[string]interface{}{
+					"group_id": grp.GroupID,
+					"node_id":  strings.Join(nodes, ","),
+					"params":   map[string]interface{}{"Colour Light": map[string]interface{}{"Power": true}},
+				}, "test-token")
+				var result mcptools.SetParamsResult
+				Expect(json.Unmarshal([]byte(text), &result)).To(Succeed())
+				Expect(result.Succeeded).To(Equal(2))
+
+				// 2 + 2N, so six for two nodes — not eight. This is the assertion that keeps the
+				// group resolution out of the fan-out: both nodes are in the same group, and
+				// re-reading it per node is invisible in every functional test.
+				profile := dbMock.ProfileGet()
+				readCnt, writeCnt := profile.TotalCounts()
+				Expect(readCnt).To(Equal(6))
+				Expect(writeCnt).To(BeZero())
+				Expect(iotDataClient.PublishCalls).To(HaveLen(2))
+			})
+
+			It("costs one read more than authorization and no publish when it rejects", func() {
+				restore := mockAuthSuccess(userID)
+				defer restore()
+				server = createServer()
+
+				rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, user.NewUser(userID))
+				grp, err := group.CreateGroupForUser(rmngCtx, "Rejected Count Group")
+				Expect(err).To(BeNil())
+				countedNode := "rejected-count-node"
+				Expect(rmngCtx.SetAllow(utils.NodeAll, countedNode)).To(Succeed())
+				_, err = group.AddNode(rmngCtx, grp.GroupID, countedNode, nil)
+				Expect(err).To(BeNil())
+				seedNodeConfig(ctx, countedNode)
+
+				dbMock := awscommon.GetDynamoDBClient().(*mock.DynamoDBMock)
+				iotDataClient := awscommon.GetIoTDataPlaneClient().(*mock.IoTDataPlaneMock)
+				dbMock.ProfileReset()
+				iotDataClient.PublishCalls = nil
+
+				message := callToolError(server, ctx, "set_params", map[string]interface{}{
+					"group_id": grp.GroupID,
+					"node_id":  countedNode,
+					"params":   map[string]interface{}{"Colour Light": map[string]interface{}{"Hue": 1}},
+				}, "test-token")
+				Expect(message).To(ContainSubstring("not a parameter"))
+
+				// The same four reads as an accepted write: the config read is what makes the
+				// refusal possible, and nothing after it reads anything. Rejecting therefore costs
+				// exactly what succeeding costs, minus the publish — so a model that gets the
+				// parameter name wrong is no more expensive to serve than one that gets it right.
+				profile := dbMock.ProfileGet()
+				readCnt, writeCnt := profile.TotalCounts()
+				Expect(readCnt).To(Equal(4))
+				Expect(writeCnt).To(BeZero())
+				Expect(iotDataClient.PublishCalls).To(BeEmpty())
+			})
+
 			It("fails the whole call when no node could be written", func() {
 				restore := mockAuthSuccess(userID)
 				defer restore()
@@ -1146,4 +1359,26 @@ var _ = Describe("MCP Main", func() {
 func TestMCP(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "MCP Suite")
+}
+
+// seedNodeConfig gives a node the config a real one would report. It mirrors
+// cli_data/node_config_va_multi.json: a colour light whose hue is named "H", which is what makes
+// it worth validating — the obvious guess for that parameter is wrong.
+func seedNodeConfig(ctx context.Context, nodeID string) {
+	nodeCtx := rmngctx.NewRmngContextWithCtx(ctx, node.NewNode(nodeID))
+	Expect(node_details_db.NewNodeDetailsDB(nodeCtx).UpdateServiceData("config", map[string]interface{}{
+		"devices": []interface{}{map[string]interface{}{
+			"id":      "Colour Light",
+			"type":    "esp.device.lightbulb",
+			"primary": "Power",
+			"params": []interface{}{
+				map[string]interface{}{"id": "Power", "type": "esp.param.power",
+					"data_type": "bool", "properties": []interface{}{"read", "write"}},
+				map[string]interface{}{"id": "H", "type": "esp.param.hue",
+					"data_type": "int", "properties": []interface{}{"read", "write"},
+					"bounds": map[string]interface{}{"min": 0, "max": 360}},
+			},
+		}},
+		"info": map[string]interface{}{"fw_version": "1.0.0"},
+	})).To(Succeed())
 }

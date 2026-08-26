@@ -28,6 +28,9 @@ type SetParamsResult struct {
 	Succeeded int          `json:"succeeded"`
 	Failed    int          `json:"failed"`
 	Results   []NodeResult `json:"results"`
+	// Summary is set only when some devices succeeded and others did not, because that case
+	// reaches the model as an ordinary success and is otherwise easy to read as "it worked".
+	Summary string `json:"summary,omitempty"`
 }
 
 // maxParamsFanout bounds the concurrent writes behind one "turn everything off" request.
@@ -41,9 +44,23 @@ func SetNodeParams(rmngCtx *rmngctx.RmngContext, groupID string, nodeIDs []strin
 		return SetParamsResult{}, fmt.Errorf("no node_id given")
 	}
 
+	// Resolved once for the whole call: every node named must be in this one group, so doing it
+	// per node re-read the same two rows for each of them.
+	if err := authorizeGroupForUser(rmngCtx, groupID); err != nil {
+		// Reported as a per-node failure rather than a returned error, because that is what each
+		// node would have produced on its own — the caller sees the same rows, and the same
+		// guidance, as before the check was hoisted.
+		rlog.Warn(rmngCtx).Err(err).Str("group_id", groupID).Msg("Failed to set params: group not accessible")
+		outcomes := make([]NodeResult, 0, len(nodeIDs))
+		for _, nodeID := range nodeIDs {
+			outcomes = append(outcomes, NodeResult{NodeID: nodeID, Error: setParamsFailure(nodeID, groupID)})
+		}
+		return SetParamsResult{Requested: len(nodeIDs), Failed: len(nodeIDs), Results: outcomes}, nil
+	}
+
 	// Concurrent because "turn the kitchen off" arrives as one call over several devices, and
-	// nobody wants the last lamp to wait on the first. Safe because the permission set the
-	// authorization below writes is mutex-guarded on the context.
+	// nobody wants the last lamp to wait on the first. Safe because the group permissions are
+	// now granted above, before the fan-out: what runs concurrently only reads them.
 	outcomes, _, err := parallel.ProcessParallel(rmngCtx.Context, nodeIDs,
 		func(nodeID string) NodeResult { return publishParams(rmngCtx, groupID, nodeID, params) },
 		parallel.ParallelOptions{MaxRoutines: maxParamsFanout, CollectResults: true})
@@ -68,17 +85,42 @@ func SetNodeParams(rmngCtx *rmngctx.RmngContext, groupID string, nodeIDs []strin
 }
 
 func publishParams(rmngCtx *rmngctx.RmngContext, groupID, nodeID string, params map[string]interface{}) NodeResult {
-	err := authorizeNodeForUser(rmngCtx, groupID, nodeID)
-	if err == nil {
-		err = node.NewNode(nodeID).PublishToDeviceDesired(rmngCtx, params)
-	}
+	// The caller's access to the group is established by SetNodeParams before the fan-out; what
+	// remains per node is that this node is in it.
+	placement, err := authorizeNodeInGroup(rmngCtx, groupID, nodeID)
 	if err != nil {
-		// Warned rather than returned: the failure becomes a row in the response, so this is
-		// the only place the underlying cause is recorded.
-		rlog.Warn(rmngCtx).Err(err).Str("node_id", nodeID).Msg("Failed to set params on node")
-		return NodeResult{NodeID: nodeID, Error: setParamsFailure(nodeID, groupID)}
+		return paramsFailed(rmngCtx, err, nodeID, groupID)
+	}
+
+	// Checked before publishing, never after: MQTT has no acknowledgement, so a device that
+	// cannot act on these params says nothing and the caller would be told it worked. Rejecting
+	// the node's whole write keeps it from being left half-set on a call the model got wrong.
+	// Authorization comes first so a stranger never learns whether a node has a config.
+	if message := validateParamsForNode(rmngCtx, nodeID, params); message != "" {
+		return NodeResult{NodeID: nodeID, Error: message}
+	}
+
+	// The shadow name is derived from the node's group and subgroups, which the authorization
+	// above already read off the node's own row. Handing them over spares a second read of that
+	// row through the by-node-id index: ensureGroups treats a populated GroupID as loaded. It is
+	// also the more precise answer — that index returns whichever row comes first, while this is
+	// the group the caller named and access was just checked against.
+	target := node.NewNode(nodeID)
+	target.GroupID = placement.Group
+	target.SubGroupIDs = placement.SubGroups
+
+	if err := target.PublishToDeviceDesired(rmngCtx, params); err != nil {
+		return paramsFailed(rmngCtx, err, nodeID, groupID)
 	}
 	return NodeResult{NodeID: nodeID, Success: true}
+}
+
+// paramsFailed records the real cause and returns the row the model sees. The two are
+// deliberately different: the response carries only guidance, so this is the one place the
+// underlying error is written down.
+func paramsFailed(rmngCtx *rmngctx.RmngContext, err error, nodeID, groupID string) NodeResult {
+	rlog.Warn(rmngCtx).Err(err).Str("node_id", nodeID).Msg("Failed to set params on node")
+	return NodeResult{NodeID: nodeID, Error: setParamsFailure(nodeID, groupID)}
 }
 
 func indexOf(values []string, wanted string) int {
