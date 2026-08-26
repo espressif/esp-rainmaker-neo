@@ -80,6 +80,22 @@ make deploy
 
 `make deploy` builds the Go Lambdas **and** the dashboard, then deploys both.
 
+Both the build and the deploy run in parallel by default: the lambda binaries build across
+all cores, and stack groups that do not depend on each other (alexa, smartthings, gva, ...)
+deploy at the same time, as do the three regions each of alexa and smartthings ships to.
+Groups that share a wave log to `build/cdk/logs/<group>.log` instead of the terminal, and a
+group that fails has its log dumped in full before the deploy stops.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `DEPLOY_JOBS` | number of cores | Stack groups deployed at once within a wave. **`DEPLOY_JOBS=1` restores a strictly serial deploy**, which is what you want when bisecting a failing one. |
+| `CDK_CONCURRENCY` | 4 | Stacks CDK deploys at once *within* one group. CDK still honours the stack dependency graph. |
+| `BUILD_JOBS` | number of cores | Parallel `go build` jobs for the lambda binaries. |
+
+```shell
+make deploy DEPLOY_JOBS=1     # serial, for debugging a bad deploy
+```
+
 To understand the backend, start from the [specs and API references](README.md#specs--documents) and the documentation under [docs/](docs/).
 
 **Tests**

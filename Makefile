@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # --- make behaviour ----------------------------------------------------------
-# Prefer bash for its `pipefail`, which stops a failing producer in `gocover-cobertura < coverage.out | sed ...` from being masked by a succeeding sed. Detected rather than hardcoded: the dashboard_check CI job runs make on node:22-alpine, which ships busybox sh and no bash. Every recipe below is POSIX sh, so plain sh loses only pipefail. Deliberately no -e/-u either: recipes rely on `|| true`, and every loop carries its own `set -e`.
+# Prefer bash for its `pipefail`, which stops a failing producer in `gocover-cobertura < coverage.out | sed ...` from being masked by a succeeding sed. CAVEAT: .SHELLFLAGS arrived in make 3.82, so on Apple's bundled make 3.81 this line is silently ignored and pipefail is OFF — never rely on it for correctness in a recipe (the deploy sweep records exit statuses explicitly for exactly this reason). Detected rather than hardcoded: the dashboard_check CI job runs make on node:22-alpine, which ships busybox sh and no bash. Every recipe below is POSIX sh, so plain sh loses only pipefail. Deliberately no -e/-u either: recipes rely on `|| true`, and every loop carries its own `set -e`.
 BASH := $(shell command -v bash 2>/dev/null)
 ifneq ($(BASH),)
 SHELL := $(BASH)
@@ -34,6 +34,27 @@ PUBLISH_REGION ?= us-east-1
 
 # Deployment group ordering derived from cdk/Stackfile.yaml. Cached on first use so targets that need no group list (test, lint, clean, ...) never shell out. stderr is intentionally not silenced: a parse error used to collapse this to an empty list, turning `make deploy-all` into a no-op that still exited 0.
 CDK_STACK_GROUPS = $(eval CDK_STACK_GROUPS := $(shell python3 scripts/cfn_stack_parser.py --stackfile cdk/Stackfile.yaml --format groups))$(CDK_STACK_GROUPS)
+
+# The same Stackfile graph bucketed into waves: every group in a wave is independent of the
+# others in it, and a wave only starts once the previous one has fully landed. The parser
+# prints one wave per line; packing each wave's groups into one comma-joined word is what
+# lets a make word-list carry a list of lists. Same lazy-eval caching as CDK_STACK_GROUPS.
+CDK_STACK_WAVES = $(eval CDK_STACK_WAVES := $(shell python3 scripts/cfn_stack_parser.py --stackfile cdk/Stackfile.yaml --format waves | tr ' ' ',' | tr '\n' ' '))$(CDK_STACK_WAVES)
+
+# Groups within a wave deploy concurrently. DEPLOY_JOBS caps how many at once; DEPLOY_JOBS=1
+# is the escape hatch that reproduces the old strictly-serial sweep for debugging a bad deploy.
+DEPLOY_JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
+
+# Lambda binaries are independent links; building them one at a time left 11 of 12 cores idle.
+# Capped by RAM as well as cores. Every job is a `go build` that forks its own compile/link
+# children, so a runner with many cores and little memory is precisely where the OOM killer
+# lands -- and CI runners are routinely 16+ cores on 8 GB. ~1 GB per job is the headroom a Go
+# link of an AWS-SDK-heavy binary wants. Memory is normalised to bytes from either source
+# first, because a `sysctl || awk /proc/meminfo` pipeline succeeds with empty output on the
+# platform that lacks the first command, which would silently mean "no cap at all".
+BUILD_CPUS := $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
+BUILD_MEM_BYTES := $(shell { sysctl -n hw.memsize 2>/dev/null || awk '/^MemTotal:/{print $$2*1024}' /proc/meminfo 2>/dev/null; } | head -n1)
+BUILD_JOBS ?= $(shell awk -v c="$(BUILD_CPUS)" -v b="$(BUILD_MEM_BYTES)" 'BEGIN{c=(c+0<1?4:c+0); m=int(b/1073741824); if(m<1)m=c; j=(c<m?c:m); print (j<1?1:j)}')
 
 # Submodules whose unit tests must run as part of `make test`.
 # Each submodule listed must expose a `test` target in its own Makefile.
@@ -77,19 +98,47 @@ endef
 # Define TARGETs based on MAIN_FILES
 BUILD_TARGETS:=$(foreach main_go,$(MAIN_FILES),$(call main_to_target,$(main_go)))
 
-go_build: $(BUILD_TARGETS) optional-build  ## Build all Lambda binaries into build/<fn>/bootstrap
+# Every lambda package, for the shared-dependency warm-up below. Trailing slash and leading
+# ./ both come straight from MAIN_FILES, so these are already valid relative package paths.
+LAMBDA_PKGS := $(sort $(dir $(MAIN_FILES)))
+
+# Warm the build cache in ONE pass before the parallel one.
+#
+# All ~47 lambdas share a single dependency graph (aws-sdk-go-v2, jwx, validator, ...). Go's
+# build cache dedupes that across *sequential* `go build` calls but not concurrent ones, so
+# the -j pass below had every job compiling the same packages simultaneously: measured cold on
+# a 12-core box, 107 concurrent toolchain processes peaking at 10.8 GB RSS and 185s wall. That
+# is what killed CI -- `signal: killed` (the OOM killer) on aws-sdk-go-v2/service/cognito-
+# identityprovider, then the job ran into its 1h timeout. This pass compiles that shared graph
+# exactly once, so the parallel pass afterwards is all cache hits: same work drops to 19s at a
+# 2.3 GB peak, with all 47 binaries byte-identical to a serial build.
+#
+# No -o flag: given several main packages `go build` discards the executables and only fills
+# the cache, which is the whole point. Costs ~1.6s when the cache is already warm.
+#
+# -p is passed for the same reason BUILD_JOBS is capped: go defaults it to GOMAXPROCS, i.e.
+# every core, which on a high-core/low-RAM runner would reintroduce the OOM inside this pass.
+#
+# Recursive rather than a plain prerequisite list so -j applies to the ~47 lambda links (and
+# their go_deps.sh dependency scans) however make itself was invoked — deploy/setup/synth all
+# depend on go_build, and none of their callers (CI, Jenkins, the /deploy skill) pass -j.
+go_build:  ## Build all Lambda binaries into build/<fn>/bootstrap
+	@$(GO_LAMBDA_ENV) go build -p $(BUILD_JOBS) $(GO_LAMBDA_FLAGS) $(LAMBDA_PKGS)
+	@$(MAKE) --no-print-directory -j$(BUILD_JOBS) $(BUILD_TARGETS) optional-build
 
 # Build optional-module Lambdas (no-op when the folder is absent). Uses the
 # superproject workspace so optional-module packages resolve their core imports.
 optional-build:
 ifneq ($(OPTIONAL_MODULES),)
 	@echo "--- building optional-module lambdas ---"
-	@set -e; for m in $(OPTIONAL_MAIN_FILES); do \
-		out="build/$$(basename $$(dirname $$m))/$(BINARY_NAME)"; \
-		mkdir -p "$$(dirname $$out)"; \
+	@GOWORK=$(SUPERPROJECT_GOWORK) $(GO_LAMBDA_ENV) go build -p $(BUILD_JOBS) $(GO_LAMBDA_FLAGS) $(addprefix ./,$(sort $(dir $(OPTIONAL_MAIN_FILES))))
+	@printf '%s\n' $(OPTIONAL_MAIN_FILES) | xargs -P $(BUILD_JOBS) -n 1 sh -c '\
+		set -e; \
+		m="$$1"; \
+		out="build/$$(basename $$(dirname "$$m"))/$(BINARY_NAME)"; \
+		mkdir -p "$$(dirname "$$out")"; \
 		echo "GOWORK=$(SUPERPROJECT_GOWORK) go build -> $$out"; \
-		GOWORK=$(SUPERPROJECT_GOWORK) $(GO_LAMBDA_ENV) go build $(GO_LAMBDA_FLAGS) -o "$$out" "./$$(dirname $$m)"; \
-	done
+		GOWORK=$(SUPERPROJECT_GOWORK) $(GO_LAMBDA_ENV) go build $(GO_LAMBDA_FLAGS) -o "$$out" "./$$(dirname "$$m")"' _
 endif
 
 ## Create the rule:
@@ -140,6 +189,18 @@ $(sort $(patsubst ./%,%,$(MAIN_FILES) $(DASHBOARD_SRCS) $(LINT_SRCS))): ;
 # $(call groups_for,<stem>[,<groups to skip when the stem is `all`>])
 groups_for = $(if $(filter all,$1),$(or $(strip $(filter-out $2,$(CDK_STACK_GROUPS))),$(error Stackfile yielded no deployment groups — see the cfn_stack_parser error above)),$1)
 
+# The same, in wave form: a list of comma-joined words, one per wave. A stem naming a single
+# group is trivially one wave of one group.
+# $(call waves_for,<stem>[,<groups to skip when the stem is `all`>])
+COMMA := ,
+EMPTY :=
+SPACE := $(EMPTY) $(EMPTY)
+unpack_wave = $(subst $(COMMA),$(SPACE),$1)
+pack_wave = $(subst $(SPACE),$(COMMA),$(strip $1))
+# Dropping a skipped group can empty a wave outright; foreach then contributes nothing for it,
+# so the wave disappears rather than becoming an empty iteration.
+waves_for = $(if $(filter all,$1),$(or $(strip $(foreach w,$(CDK_STACK_WAVES),$(call pack_wave,$(filter-out $2,$(call unpack_wave,$(w)))))),$(error Stackfile yielded no deployment groups — see the cfn_stack_parser error above)),$1)
+
 # make has no builtin reverse; destroy tears groups down in reverse dependency order.
 reverse = $(strip $(call reverse_,$1))
 reverse_ = $(if $1,$(call reverse_,$(wordlist 2,$(words $1),$1)) $(firstword $1))
@@ -154,14 +215,69 @@ DEPLOY_SKIP_GROUPS := claim
 needs_dashboard = $(if $(filter rmng all,$1),$(DASHBOARD_STAMP))
 
 # The single sweep body, parameterised through target-specific variables rather than $(call) so
-# `$$g` needs no extra escaping. SWEEP_POST runs after each group.
+# `$$g` needs no extra escaping. SWEEP_POST runs after each wave.
+#
+# SWEEP_WAVES is a list of comma-joined group words. Groups inside one word run concurrently;
+# one word per group (what destroy-% sets) degrades to exactly the old serial sweep, so there is
+# only one sweep implementation to keep correct.
+#
+# A wave of a single group streams live to the terminal (tee'd to its log) — there is nothing to
+# interleave with, and the long rmng deploy is the one you most want to watch. Concurrent groups
+# each get their own log and a status line, and a failed group's log is dumped in full so the
+# cause does not have to be hunted for under build/cdk/logs.
+#
+# The .rc file is not paranoia: `deploy.sh | tee` reports tee's status, and pipefail — which
+# would fix that — is NOT actually in effect under Apple's make 3.81, which silently ignores
+# .SHELLFLAGS (see the note at the top of this file). Writing the real status to a file is what
+# keeps a failed deploy from being reported as a success on a developer's Mac. The && / ||
+# around it matters too: with a plain `;`, set -e tears down the pipeline's subshell before the
+# status can be written, so nothing would be recorded at all.
 SWEEP_FLAGS =
 SWEEP_REGION = $(REGION)
 SWEEP_POST = :
+SWEEP_LOGS = build/cdk/logs
+# Set by verbs whose *output* is the deliverable rather than a side effect: a concurrent group's
+# log is replayed once it finishes, so `make diff` still shows you every group's diff instead of
+# a wall of "ok". Left empty for deploy/synth, where the log only matters when something breaks.
+SWEEP_SHOW_LOG =
 define sweep
-@set -e; for g in $(SWEEP_GROUPS); do \
-	./scripts/deploy.sh $(SWEEP_FLAGS) --region $(SWEEP_REGION) --profile $(PROFILE) --stack-group $$g; \
+@set -e; mkdir -p $(SWEEP_LOGS); \
+for wave in $(SWEEP_WAVES); do \
+	groups=$$(echo "$$wave" | tr ',' ' '); \
+	set -- $$groups; \
+	if [ "$(DEPLOY_JOBS)" = "1" ] || [ $$# -eq 1 ]; then \
+		for g in $$groups; do \
+			{ ./scripts/deploy.sh $(SWEEP_FLAGS) --region $(SWEEP_REGION) --profile $(PROFILE) --stack-group $$g && echo 0 > $(SWEEP_LOGS)/.$$g.rc || echo $$? > $(SWEEP_LOGS)/.$$g.rc; } 2>&1 | tee $(SWEEP_LOGS)/$$g.log; \
+			[ "$$(cat $(SWEEP_LOGS)/.$$g.rc)" = 0 ] || exit 1; \
+		done; \
+	else \
+		echo "=== wave: $$groups (up to $(DEPLOY_JOBS) at a time) ==="; \
+		rc=0; batch=""; n=0; \
+		for g in $$groups; do \
+			./scripts/deploy.sh $(SWEEP_FLAGS) --region $(SWEEP_REGION) --profile $(PROFILE) --stack-group $$g > $(SWEEP_LOGS)/$$g.log 2>&1 & \
+			batch="$$batch $$!:$$g"; n=$$((n + 1)); \
+			if [ $$n -ge $(DEPLOY_JOBS) ]; then \
+				$(call await_batch); batch=""; n=0; \
+			fi; \
+		done; \
+		$(call await_batch); \
+		[ $$rc -eq 0 ] || exit 1; \
+	fi; \
 	$(SWEEP_POST); \
+done
+endef
+
+# Reap one batch of backgrounded group deploys, reporting every outcome rather than stopping at
+# the first failure. Expands inside the sweep's shell, so it reads $$batch and updates $$rc.
+define await_batch
+for pg in $$batch; do \
+	p=$${pg%%:*}; g=$${pg##*:}; \
+	if wait $$p; then \
+		echo "  ok   $$g"; \
+		[ -z "$(SWEEP_SHOW_LOG)" ] || cat $(SWEEP_LOGS)/$$g.log; \
+	else \
+		rc=1; echo "  FAIL $$g — $(SWEEP_LOGS)/$$g.log follows:"; cat $(SWEEP_LOGS)/$$g.log; \
+	fi; \
 done
 endef
 
@@ -176,7 +292,10 @@ publish: publish-all    ## Synth and publish templates/assets for every stack gr
 # generated lambda rules above, which must keep single-expansion semantics.
 .SECONDEXPANSION:
 
-deploy-%: SWEEP_GROUPS = $(call groups_for,$*,$(DEPLOY_SKIP_GROUPS))
+deploy-%: SWEEP_WAVES = $(call waves_for,$*,$(DEPLOY_SKIP_GROUPS))
+# Once per wave, not once per group: alexa/smartthings read rmng-outputs.json at *synth*
+# time, so the file has to be refreshed after the rmng wave and before the wave that needs
+# it. Per-group it re-queried all 17 stacks 8 times for the same answer.
 deploy-%: SWEEP_POST = AWS_REGION=$(REGION) AWS_PROFILE=$(PROFILE) python3 ./scripts/generate_stack_outputs.py
 # The gather loop deliberately uses no skip list: prompts for every group are collected up front, claim included, so a long sweep never pauses to ask.
 deploy-%: go_build $$(call needs_dashboard,$$*)
@@ -186,22 +305,23 @@ deploy-%: go_build $$(call needs_dashboard,$$*)
 	$(sweep)
 	./scripts/deploy.sh --fetch-and-upload --region $(REGION) --profile $(PROFILE)
 
-setup-%: SWEEP_GROUPS = $(call groups_for,$*)
+setup-%: SWEEP_WAVES = $(call waves_for,$*)
 setup-%: SWEEP_FLAGS = --setup
 setup-%: go_build $$(call needs_dashboard,$$*)
 	$(sweep)
 
-diff-%: SWEEP_GROUPS = $(call groups_for,$*)
+diff-%: SWEEP_WAVES = $(call waves_for,$*)
 diff-%: SWEEP_FLAGS = --diff
+diff-%: SWEEP_SHOW_LOG = 1
 diff-%: go_build $$(call needs_dashboard,$$*)
 	$(sweep)
 
-synth-%: SWEEP_GROUPS = $(call groups_for,$*)
+synth-%: SWEEP_WAVES = $(call waves_for,$*)
 synth-%: SWEEP_FLAGS = --synth
 synth-%: go_build $$(call needs_dashboard,$$*)
 	$(sweep)
 
-publish-%: SWEEP_GROUPS = $(call groups_for,$*)
+publish-%: SWEEP_WAVES = $(call waves_for,$*)
 publish-%: SWEEP_FLAGS = --publish --version $(PUBLISH_VERSION)
 publish-%: SWEEP_REGION = $(PUBLISH_REGION)
 publish-%: go_build $$(call needs_dashboard,$$*)
@@ -209,7 +329,7 @@ publish-%: go_build $$(call needs_dashboard,$$*)
 	$(sweep)
 	AWS_REGION=$(PUBLISH_REGION) python3 scripts/upload_stackfile_to_s3.py --version $(PUBLISH_VERSION)
 
-destroy-%: SWEEP_GROUPS = $(call reverse,$(call groups_for,$*))
+destroy-%: SWEEP_WAVES = $(call reverse,$(call groups_for,$*))
 destroy-%: SWEEP_FLAGS = --destroy
 destroy-%:
 	morpheus admin test-data destroy || true
@@ -292,8 +412,11 @@ test-infra-destroy:  ## Destroy the itest webhook mock
 plantuml:  ## Render misc/aws_resources.puml to PNG
 	plantuml -tpng misc/aws_resources.puml
 
+# cdk/cdk.out is cdk.json's "output". Deploys now write per-group assemblies under
+# build/cdk/cdk.out.<group>, but a bare `cdk` invocation still lands there, and nothing
+# used to reap it — it had grown to 3.5 GB.
 clean:  ## Remove build artifacts (leaves cdk-outputs*.json deploy state alone)
-	rm -rf build/ cdk.out/ cdk.out.*/ $(DASHBOARD_DIST)
+	rm -rf build/ cdk.out/ cdk.out.*/ cdk/cdk.out/ $(DASHBOARD_DIST)
 
 	$(foreach s,$(TEST_SUBMODULES),rm -rf $(s)/build/;)
 
