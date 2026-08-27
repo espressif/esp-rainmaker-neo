@@ -83,8 +83,14 @@ type GroupEditResponse struct {
 // CreateSharingRequestRequest names the invitee by username — their email address
 // or E.164 phone number, the same identifier signup and signin take. Internal user
 // IDs are not accepted here: the owner knows the person by what they sign in with.
+//
+// Username may be left empty to create a QR-code sharing request instead: the
+// response's request_id is meant to be encoded into a QR code by the client
+// and claimed by whoever scans it, via
+// POST /v1/sharing-requests/{requestId}/accept. Whoever claims it first spends
+// it: the invite is single-use, and a decline by either side spends it too.
 type CreateSharingRequestRequest struct {
-	Username   string                `json:"username" validate:"required"`
+	Username   string                `json:"username"`
 	AccessType utils.GroupAccessType `json:"access_type,omitempty"`
 }
 
@@ -247,6 +253,9 @@ func handleAcceptSharingRequest(context context.Context, request events.APIGatew
 		if errors.Is(err, sharing_request_db.ErrSharingRequestExpired) {
 			return utils.APIGwRespJSON(http.StatusGone, utils.NewAPIStatus("Sharing request has expired")), nil
 		}
+		if errors.Is(err, group.ErrSelfSharingRequest) {
+			return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Cannot accept your own sharing request")), nil
+		}
 		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Failed to accept sharing request")), nil
 	}
 	return utils.APIGwRespJSON(http.StatusOK, utils.NewAPIStatus("Request accepted successfully")), nil
@@ -261,6 +270,12 @@ func handleRejectSharingRequest(context context.Context, request events.APIGatew
 	err := group.RejectSharingRequest(ctx, requestID)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Send()
+		if errors.Is(err, sharing_request_db.ErrSharingRequestNotFound) {
+			return utils.APIGwRespJSON(http.StatusNotFound, utils.NewAPIStatus("Sharing request not found")), nil
+		}
+		if errors.Is(err, sharing_request_db.ErrSharingRequestExpired) {
+			return utils.APIGwRespJSON(http.StatusGone, utils.NewAPIStatus("Sharing request has expired")), nil
+		}
 		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Failed to reject sharing request")), nil
 	}
 	return utils.APIGwRespJSON(http.StatusOK, utils.NewAPIStatus("Request rejected successfully")), nil
@@ -675,30 +690,31 @@ func handleSharingRequest(context context.Context, request events.APIGatewayProx
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Invalid request body")), nil
 	}
 
-	if req.Username == "" {
-		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Missing username")), nil
-	}
-
 	groupID := request.PathParameters["groupId"]
 	if groupID == "" {
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Missing group ID")), nil
 	}
 
-	// An unresolved username gets a byte-identical 201 with a decoy UUID; any
-	// future sharer-side lookup of request_id must fake decoys too, or it becomes
-	// an enumeration oracle.
-	targetUser, err := user.NewUserFromUserName(ctx, req.Username)
-	if err != nil {
-		rlog.Error(ctx).Err(err).Send()
-		if errors.Is(err, user.ErrInvalidUserName) {
-			return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("username must be an email address or an E.164 phone number")), nil
+	// An empty username requests the QR-code flow: create a real, claimable
+	// unclaimed request instead of resolving a specific invitee up front.
+	var targetUserID string
+	if req.Username != "" {
+		// An unresolved username gets a byte-identical 201 with a decoy UUID; any
+		// future sharer-side lookup of request_id must fake decoys too, or it becomes
+		// an enumeration oracle.
+		targetUser, err := user.NewUserFromUserName(ctx, req.Username)
+		if err != nil {
+			rlog.Error(ctx).Err(err).Send()
+			if errors.Is(err, user.ErrInvalidUserName) {
+				return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("username must be an email address or an E.164 phone number")), nil
+			}
+			return utils.APIGwRespJSON(http.StatusCreated, CreateSharingRequestResponse{
+				RequestID: uuid.New().String(),
+				Message:   sharingRequestAcceptedMessage,
+			}), nil
 		}
-		return utils.APIGwRespJSON(http.StatusCreated, CreateSharingRequestResponse{
-			RequestID: uuid.New().String(),
-			Message:   sharingRequestAcceptedMessage,
-		}), nil
+		targetUserID = targetUser.UserID
 	}
-	targetUserID := targetUser.UserID
 
 	subgroupID := request.PathParameters["subGroupId"]
 	var requestID string

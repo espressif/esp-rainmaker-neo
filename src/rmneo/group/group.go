@@ -38,6 +38,7 @@ var (
 	ErrSubGroupDeleteForbidden = errors.New("insufficient permissions to delete subgroup")
 	ErrNotMatterCapable        = errors.New("group does not have Matter capability")
 	ErrCapabilityAlreadyExists = errors.New("group already has capability")
+	ErrSelfSharingRequest      = errors.New("cannot accept your own sharing request")
 )
 
 // IsChildNode reports whether nodeID denotes a child (sub-)node under the
@@ -579,7 +580,10 @@ func DeleteSubGroup(ctx *rmngctx.RmngContext, groupID string, subGroupID string)
 	return nil
 }
 
-// ShareGroup shares a group with a user.
+// ShareGroup shares a group with a user. Pass an empty targetUserID for the
+// QR-code flow: this creates an unclaimed request that anyone holding the
+// returned request ID can claim via ApproveSharingRequest/RejectSharingRequest
+// (see sharing_request_db.SharingRequestDB.CreateSharingRequest).
 func ShareGroup(ctx *rmngctx.RmngContext, groupID string, targetUserID string, accessType utils.GroupAccessType, primaryUserInfo auth.UserInfo) (string, error) {
 	// check if we have permission to access the group
 	_, err := GetUserGroupAccess(ctx, groupID)
@@ -650,6 +654,7 @@ func UnshareGroup(ctx *rmngctx.RmngContext, groupID string, targetUserID string)
 // ShareSubGroup shares a subgroup with a user.
 // A subgroup is only shared with secondary access, so the user can only access the nodes in the sub-group
 // They can never share this sub-group further
+// Pass an empty targetUserID for the QR-code flow — see ShareGroup.
 func ShareSubGroup(ctx *rmngctx.RmngContext, parentGroupID string, subGroupID string, targetUserID string, primaryUserInfo auth.UserInfo) (string, error) {
 	// check if we have permission to access the group
 	_, err := GetUserGroupAccess(ctx, parentGroupID)
@@ -679,14 +684,60 @@ func UnshareSubGroup(ctx *rmngctx.RmngContext, parentGroupID string, subGroupID 
 	return userGroupDB.UnshareUserSubGroup(parentGroupID, subGroupID, targetUserID)
 }
 
+// claimSharingRequest resolves a sharing request for accept/reject, whether it
+// was addressed to the caller directly or is an unclaimed QR-code request (see
+// sharing_request_db.SharingRequestDB.GetUnclaimedSharingRequest). The returned
+// bool reports which of the two it was, since that decides how the row is keyed
+// and therefore how it must be deleted afterwards.
+func claimSharingRequest(sharingRequestDB *sharing_request_db.SharingRequestDB, sharingRequestID string) (*sharing_request_db.SharingRequestEntry, bool, error) {
+	sharingRequest, err := sharingRequestDB.GetSharingRequestbyID(sharingRequestID)
+	if err == nil {
+		return sharingRequest, false, nil
+	}
+	// Only "no request addressed to this caller" is worth a second look; a real
+	// DynamoDB failure or an expired request must surface as itself rather than
+	// be retried as an unclaimed lookup that would report it as a 404.
+	if !errors.Is(err, sharing_request_db.ErrSharingRequestNotFound) {
+		return nil, false, err
+	}
+
+	// Not addressed to the caller, so it may be an unclaimed (QR code) request,
+	// which anyone holding the request ID is entitled to claim.
+	sharingRequest, err = sharingRequestDB.GetUnclaimedSharingRequest(sharingRequestID)
+	if err != nil {
+		return nil, false, err
+	}
+	return sharingRequest, true, nil
+}
+
+// deleteClaimedSharingRequest removes the request row using whichever key it was
+// actually stored under.
+func deleteClaimedSharingRequest(sharingRequestDB *sharing_request_db.SharingRequestDB, sharingRequestID string, unclaimed bool) error {
+	if unclaimed {
+		return sharingRequestDB.DeleteUnclaimedSharingRequest(sharingRequestID)
+	}
+	return sharingRequestDB.DeleteSharingRequest(sharingRequestID)
+}
+
 // ApproveSharingRequest confirms a sharing request for a user with the group or sub-group
 func ApproveSharingRequest(ctx *rmngctx.RmngContext, sharingRequestID string) error {
 	sharingRequestDB := sharing_request_db.NewSharingRequestDB(ctx)
-	sharingRequest, err := sharingRequestDB.GetSharingRequestbyID(sharingRequestID)
+	sharingRequest, unclaimed, err := claimSharingRequest(sharingRequestDB, sharingRequestID)
 	if err != nil {
-		return rmerror.NewRMError(err, "failed to get sharing request")
+		return err
 	}
-	defer sharingRequestDB.DeleteSharingRequest(sharingRequestID)
+
+	if sharingRequest.PrimaryUserID == ctx.Accessor.GetID() {
+		return rmerror.NewRMError(ErrSelfSharingRequest, "cannot accept your own sharing request")
+	}
+
+	// The recipient is whoever is accepting right now. For a claimed request
+	// this already matches ctx.Accessor.GetID(); for an unclaimed (QR code)
+	// request the stored UserID is only the placeholder key, so it must be
+	// overwritten before the group/user_group mapping is created.
+	sharingRequest.UserID = ctx.Accessor.GetID()
+
+	defer deleteClaimedSharingRequest(sharingRequestDB, sharingRequestID, unclaimed)
 
 	userGroupDB := user_group_db.NewUserGroupDB(ctx)
 	err = userGroupDB.ConfirmSharingRequest(sharingRequest)
@@ -714,7 +765,16 @@ func ApproveSharingRequest(ctx *rmngctx.RmngContext, sharingRequestID string) er
 // RejectSharingRequest rejects a sharing request for a user with the group or sub-group
 func RejectSharingRequest(ctx *rmngctx.RmngContext, sharingRequestID string) error {
 	sharingRequestDB := sharing_request_db.NewSharingRequestDB(ctx)
-	return sharingRequestDB.DeleteSharingRequest(sharingRequestID)
+	_, unclaimed, err := claimSharingRequest(sharingRequestDB, sharingRequestID)
+	if err != nil {
+		return err
+	}
+
+	// Rejecting consumes the request whoever does it. A QR code invite is
+	// single-use, so a scanner declining spends it just as a named recipient
+	// declining does, and the sharer rejecting their own request is how they
+	// take it back.
+	return deleteClaimedSharingRequest(sharingRequestDB, sharingRequestID, unclaimed)
 }
 
 // GetMySharingRequests returns all the sharing requests for the current user

@@ -727,6 +727,22 @@ def handle_user_commands(user):
                 print(f"Syntax: {main_command} <sharing_request_id>")
             else:
                 handle_process_sharing_request(user, main_command.split('_')[0], args[0])
+        elif main_command == 'share_group':
+            # Username is optional: leave it out for a QR-code share, where the
+            # printed request id is what gets encoded into the code.
+            if len(args) in (2, 3):
+                group_id, access_type = args[0], args[1]
+                handle_share_group(user, group_id, access_type, args[2] if len(args) == 3 else None)
+            else:
+                print('Syntax: share_group <group_id> <access_type> [username]')
+                print('  Omit username for a QR code share; the request id printed is the QR payload')
+        elif main_command == 'share_subgroup':
+            if len(args) in (2, 3):
+                group_id, subgroup_id = args[0], args[1]
+                handle_share_subgroup(user, group_id, subgroup_id, args[2] if len(args) == 3 else None)
+            else:
+                print('Syntax: share_subgroup <group_id> <subgroup_id> [username]')
+                print('  Omit username for a QR code share')
         elif main_command == 'register_node':
             if len(args) == 2:
                 node_id, admin_group_names_str, tags_str = args
@@ -861,6 +877,8 @@ def handle_user_commands(user):
             print("  get_sharing_requests")
             print("  accept_sharing_request <sharing_request_id>")
             print("  reject_sharing_request <sharing_request_id>")
+            print("  share_group <group_id> <access_type> [username]   (omit username for a QR code share)")
+            print("  share_subgroup <group_id> <subgroup_id> [username]")
             print("  register_node <node_id> <tags>")
             print("  upload_file <file_type> <file_path>")
             print("  ios_instruction")
@@ -1192,6 +1210,41 @@ def handle_process_sharing_request(user, action, sharing_request_id):
         print(f"Successfully {action}ed sharing request: {sharing_request_id}")
     else:
         print(f"Failed to {action} sharing request: {sharing_request_id}")
+
+def handle_share_group(user, group_id, access_type, username=None):
+    """Share a group, either with a named invitee or as a QR code request.
+
+    Passing no username creates an unclaimed request: the printed request id is
+    what the client encodes into the QR code, and whoever scans it claims the
+    group with accept_sharing_request.
+    """
+    group_api = Group(user)
+    try:
+        if username:
+            response = group_api.share_group(group_id, username, access_type)
+            request_id = response.json().get("request_id")
+            print(f"Shared group {group_id} with {username} ({access_type}). Request ID: {request_id}")
+        else:
+            request_id = group_api.share_group_by_qr_code(group_id, access_type)
+            print(f"Created QR code sharing request for group {group_id} ({access_type}).")
+            print(f"Encode this into the QR code -> Request ID: {request_id}")
+    except AssertionError as e:
+        print(f"Failed to share group {group_id}: {e}")
+
+def handle_share_subgroup(user, group_id, subgroup_id, username=None):
+    """Share a subgroup — see handle_share_group. A subgroup share carries no
+    access type of its own: it is always scoped to that one subgroup."""
+    group_api = Group(user)
+    try:
+        if username:
+            request_id = group_api.share_subgroup(group_id, subgroup_id, username)
+            print(f"Shared subgroup {subgroup_id} with {username}. Request ID: {request_id}")
+        else:
+            request_id = group_api.share_subgroup_by_qr_code(group_id, subgroup_id)
+            print(f"Created QR code sharing request for subgroup {subgroup_id}.")
+            print(f"Encode this into the QR code -> Request ID: {request_id}")
+    except AssertionError as e:
+        print(f"Failed to share subgroup {subgroup_id}: {e}")
 
 def _oidc_endpoints():
     """The OIDC authorize/token endpoints for account-linking config, as placeholders when the

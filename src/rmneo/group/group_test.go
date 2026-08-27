@@ -799,6 +799,159 @@ var _ = Describe("Group Sharing", func() {
 		})
 	})
 
+	Describe("QR code sharing (unclaimed requests)", func() {
+		It("should let a different user claim an unclaimed sharing request by request ID alone", func() {
+			requestID, err := group.ShareGroup(rmngContext1, sharedGroupID.GroupID, "", utils.GroupSecondaryAccess, auth.UserInfo{})
+			Expect(err).To(BeNil())
+			Expect(requestID).ToNot(BeEmpty())
+
+			// The request isn't addressed to anyone yet, so nobody sees it in
+			// their "received" list until they claim it directly.
+			received, err := group.GetMySharingRequests(rmngContext2)
+			Expect(err).To(BeNil())
+			Expect(received).To(BeEmpty())
+
+			// testUser2 claims it by request ID alone, as if they'd scanned a QR code.
+			err = group.ApproveSharingRequest(rmngContext2, requestID)
+			Expect(err).To(BeNil())
+
+			test_utils.AssertRowInDB(user_group_db.UserGroupMappingTable, map[string]types.AttributeValue{
+				"user_id":        &types.AttributeValueMemberS{Value: testUser2.GetID()},
+				"group_id":       &types.AttributeValueMemberS{Value: sharedGroupID.GroupID},
+				"sub_entity_ids": &types.AttributeValueMemberL{Value: []types.AttributeValue{}},
+				"access_type":    &types.AttributeValueMemberS{Value: string(utils.GroupSecondaryAccess)},
+			})
+		})
+
+		It("should reject the sharer claiming their own unclaimed sharing request", func() {
+			requestID, err := group.ShareGroup(rmngContext1, sharedGroupID.GroupID, "", utils.GroupSecondaryAccess, auth.UserInfo{})
+			Expect(err).To(BeNil())
+
+			err = group.ApproveSharingRequest(rmngContext1, requestID)
+			Expect(err).To(HaveOccurred())
+			Expect(errors.Is(err, group.ErrSelfSharingRequest)).To(BeTrue())
+
+			// The group must not have been shared with anyone as a side effect.
+			Expect(test_utils.QuickGetItem(user_group_db.UserGroupMappingTable, map[string]types.AttributeValue{
+				"user_id":  &types.AttributeValueMemberS{Value: testUser1.GetID()},
+				"group_id": &types.AttributeValueMemberS{Value: sharedGroupID.GroupID},
+			})).ToNot(BeNil()) // owner's own row is untouched; no second row was created
+		})
+
+		It("should store an unclaimed request under a prefixed placeholder key, not in the user_id namespace", func() {
+			requestID, err := group.ShareGroup(rmngContext1, sharedGroupID.GroupID, "", utils.GroupSecondaryAccess, auth.UserInfo{})
+			Expect(err).To(BeNil())
+
+			// The placeholder partition key is "req-"+requestID, so it can never
+			// collide with a real user_id however the UUIDs fall.
+			Expect(test_utils.QuickGetItem(sharing_request_db.SharingRequestsTable, map[string]types.AttributeValue{
+				"user_id":            &types.AttributeValueMemberS{Value: "req-" + requestID},
+				"sharing_request_id": &types.AttributeValueMemberS{Value: requestID},
+			})).ToNot(BeNil(), "unclaimed request should be stored under the prefixed placeholder key")
+			Expect(test_utils.QuickGetItem(sharing_request_db.SharingRequestsTable, map[string]types.AttributeValue{
+				"user_id":            &types.AttributeValueMemberS{Value: requestID},
+				"sharing_request_id": &types.AttributeValueMemberS{Value: requestID},
+			})).To(BeNil(), "unprefixed request id must not be used as a partition key")
+		})
+
+		It("should give an unclaimed request a week to be claimed, against a day for a named one", func() {
+			namedID, err := group.ShareGroup(rmngContext1, sharedGroupID.GroupID, testUser2.GetID(), utils.GroupSecondaryAccess, auth.UserInfo{})
+			Expect(err).To(BeNil())
+			unclaimedID, err := group.ShareGroup(rmngContext1, sharedGroupID.GroupID, "", utils.GroupSecondaryAccess, auth.UserInfo{})
+			Expect(err).To(BeNil())
+
+			expiresIn := func(storedUserID, requestID string) time.Duration {
+				row := test_utils.QuickGetItem(sharing_request_db.SharingRequestsTable, map[string]types.AttributeValue{
+					"user_id":            &types.AttributeValueMemberS{Value: storedUserID},
+					"sharing_request_id": &types.AttributeValueMemberS{Value: requestID},
+				})
+				Expect(row).ToNot(BeNil())
+				stamp, ok := row["expiration_time"].(*types.AttributeValueMemberN)
+				Expect(ok).To(BeTrue(), "expiration_time should be stored as a number")
+				secs, err := strconv.ParseInt(stamp.Value, 10, 64)
+				Expect(err).To(BeNil())
+				return time.Until(time.Unix(secs, 0))
+			}
+
+			// Banded rather than exact: the clock moves between the write and here.
+			named := expiresIn(testUser2.GetID(), namedID)
+			Expect(named).To(BeNumerically(">", 23*time.Hour))
+			Expect(named).To(BeNumerically("<=", 24*time.Hour))
+
+			unclaimed := expiresIn("req-"+unclaimedID, unclaimedID)
+			Expect(unclaimed).To(BeNumerically(">", 6*24*time.Hour))
+			Expect(unclaimed).To(BeNumerically("<=", 7*24*time.Hour))
+		})
+
+		It("should spend the invite when a scanner rejects it, blocking every later scanner", func() {
+			requestID, err := group.ShareGroup(rmngContext1, sharedGroupID.GroupID, "", utils.GroupSecondaryAccess, auth.UserInfo{})
+			Expect(err).To(BeNil())
+
+			// testUser2 scans the code and declines. A QR invite is single-use,
+			// so declining spends it exactly as accepting would.
+			err = group.RejectSharingRequest(rmngContext2, requestID)
+			Expect(err).To(BeNil())
+
+			Expect(test_utils.QuickGetItem(sharing_request_db.SharingRequestsTable, map[string]types.AttributeValue{
+				"user_id":            &types.AttributeValueMemberS{Value: "req-" + requestID},
+				"sharing_request_id": &types.AttributeValueMemberS{Value: requestID},
+			})).To(BeNil(), "a rejected QR request should be gone")
+
+			err = group.ApproveSharingRequest(rmngContext3, requestID)
+			Expect(errors.Is(err, sharing_request_db.ErrSharingRequestNotFound)).To(BeTrue())
+
+			Expect(test_utils.QuickGetItem(user_group_db.UserGroupMappingTable, map[string]types.AttributeValue{
+				"user_id":  &types.AttributeValueMemberS{Value: testUser3.GetID()},
+				"group_id": &types.AttributeValueMemberS{Value: sharedGroupID.GroupID},
+			})).To(BeNil(), "a later scanner must not gain access to a spent invite")
+		})
+
+		It("should report an unknown request id as not found rather than a generic failure", func() {
+			err := group.ApproveSharingRequest(rmngContext2, "no-such-request-id")
+			Expect(errors.Is(err, sharing_request_db.ErrSharingRequestNotFound)).To(BeTrue())
+
+			err = group.RejectSharingRequest(rmngContext2, "no-such-request-id")
+			Expect(errors.Is(err, sharing_request_db.ErrSharingRequestNotFound)).To(BeTrue())
+		})
+
+		It("should let a different user claim an unclaimed subgroup sharing request", func() {
+			subGroup, err := group.CreateSubGroup(rmngContext1, sharedGroupID.GroupID, "QR Subgroup")
+			Expect(err).To(BeNil())
+
+			// A subgroup share carries no access_type of its own: it is always
+			// subentity access, scoped to that one subgroup.
+			requestID, err := group.ShareSubGroup(rmngContext1, sharedGroupID.GroupID, subGroup.SubGroupID, "", auth.UserInfo{})
+			Expect(err).To(BeNil())
+			Expect(requestID).ToNot(BeEmpty())
+
+			Expect(test_utils.QuickGetItem(sharing_request_db.SharingRequestsTable, map[string]types.AttributeValue{
+				"user_id":            &types.AttributeValueMemberS{Value: "req-" + requestID},
+				"sharing_request_id": &types.AttributeValueMemberS{Value: requestID},
+			})).ToNot(BeNil(), "unclaimed subgroup request should use the prefixed placeholder key too")
+
+			err = group.ApproveSharingRequest(rmngContext2, requestID)
+			Expect(err).To(BeNil())
+
+			test_utils.AssertRowInDB(user_group_db.UserGroupMappingTable, map[string]types.AttributeValue{
+				"user_id":        &types.AttributeValueMemberS{Value: testUser2.GetID()},
+				"group_id":       &types.AttributeValueMemberS{Value: sharedGroupID.GroupID},
+				"sub_entity_ids": &types.AttributeValueMemberL{Value: []types.AttributeValue{&types.AttributeValueMemberS{Value: subGroup.SubGroupID}}},
+				"access_type":    &types.AttributeValueMemberS{Value: string(utils.GroupSubEntityAccess)},
+			})
+		})
+
+		It("should still support the existing named-recipient flow unchanged", func() {
+			ShareAndApproveGroup(rmngContext1, rmngContext2, sharedGroupID.GroupID, utils.GroupPrimaryAccess)
+
+			test_utils.AssertRowInDB(user_group_db.UserGroupMappingTable, map[string]types.AttributeValue{
+				"user_id":        &types.AttributeValueMemberS{Value: testUser2.GetID()},
+				"group_id":       &types.AttributeValueMemberS{Value: sharedGroupID.GroupID},
+				"sub_entity_ids": &types.AttributeValueMemberL{Value: []types.AttributeValue{}},
+				"access_type":    &types.AttributeValueMemberS{Value: string(utils.GroupPrimaryAccess)},
+			})
+		})
+	})
+
 	Describe("UnshareGroup", func() {
 		BeforeEach(func() {
 			// Share the group with testUser2 and testUser3 before each test

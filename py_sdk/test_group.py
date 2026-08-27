@@ -200,6 +200,17 @@ class Group:
         assert "request_id" in response_data, "Response should contain requestId"
         return share_response
 
+    def share_group_by_qr_code(self, group_id: str, access_type: str):
+        """Create a QR-code sharing request: no invitee is named, so whoever
+        scans the returned request_id can claim it. Returns the request id."""
+        print("Creating QR code sharing request for group", group_id, "with access type", access_type)
+        share_data = json.dumps({"access_type": access_type})
+        share_response = self.user.make_api_request('POST', f'/v1/groups/{group_id}/sharing-requests', data=share_data)
+        assert share_response.status_code == 201, f"Expected 201, but got {share_response.status_code}: {share_response.text}"
+        request_id = share_response.json().get("request_id")
+        assert request_id, "Response should contain request_id"
+        return request_id
+
     def unshare_group(self, group_id: str, target_user_id: str):
         print("Unsharing group", group_id, "with user", target_user_id)
         unshare_response = self.user.make_api_request('DELETE', f'/v1/groups/{group_id}/users/{target_user_id}')
@@ -219,6 +230,16 @@ class Group:
         response_data = share_response.json()
         assert response_data.get("request_id"), "Failed to share subgroup"
         assert "request_id" in response_data, "Response should contain requestId"
+        return response_data["request_id"]
+
+    def share_subgroup_by_qr_code(self, group_id: str, subgroup_id: str):
+        """Create a QR-code sharing request for a subgroup — see share_group_by_qr_code."""
+        print("Creating QR code sharing request for subgroup", subgroup_id)
+        share_response = self.user.make_api_request('POST', f'/v1/groups/{group_id}/subgroups/{subgroup_id}/sharing-requests', data=json.dumps({}))
+        assert share_response.status_code == 201, f"Expected 201, but got {share_response.status_code}: {share_response.text}"
+        request_id = share_response.json().get("request_id")
+        assert request_id, "Response should contain request_id"
+        return request_id
 
     def unshare_subgroup(self, group_id: str, subgroup_id: str, target_user_id: str):
         print("Unsharing subgroup", subgroup_id, "with user", target_user_id)
