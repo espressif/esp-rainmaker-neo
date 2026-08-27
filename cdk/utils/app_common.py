@@ -5,7 +5,6 @@
 
 import json
 import os
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -13,10 +12,12 @@ from typing import Any, Optional
 # This module lives at <repo>/cdk/utils/, so every repo-relative path below is anchored here rather than counted out at each use.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# cloud-components is consumed via git submodule; expose its cdk_go/ on sys.path
-# so the re-exports below (and any rmng caller that imports from app_common)
-# resolve to the moved ManagedTable / GSI_MANAGED_BY_TAG_* symbols.
-sys.path.insert(0, str(REPO_ROOT / "esp-cloud-common" / "cdk_go"))
+# The submodule's cdk_go/ (ManagedTable, GSI_MANAGED_BY_TAG_*, gsi_infra) is put on sys.path by
+# cdk/apps/_bootstrap.py, which every CDK entry point imports before any repo-local module --
+# so it is already there by the time this file loads. There used to be a second insert here
+# pointing at <repo>/esp-cloud-common/cdk_go; the submodule is at src/esp-cloud-common, so that
+# path never existed and the line only ever added a no-op sys.path entry. _bootstrap is the one
+# place that sets this up; a second copy here would be a second place to get the path wrong.
 
 from aws_cdk import (
     ArnFormat,
