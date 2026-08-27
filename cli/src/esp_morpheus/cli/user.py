@@ -6,6 +6,7 @@
 
 import click
 
+from ..sdk.group import Group
 from . import output
 from .context import pass_user, pass_unverified_user
 
@@ -80,6 +81,38 @@ def read_shadow(user, thing_name, shadow_name):
     if not user.read_shadow(thing_name, shadow_name):
         output.fail(f"Failed to request shadow '{shadow_name}' on '{thing_name}'")
     output.ok(f"Requested shadow '{shadow_name}' on '{thing_name}'")
+
+
+def params_shadow_name_for(user, node_id):
+    """Name of the params shadow a node currently reports into, or None if the node is not in any
+    of this user's groups. The group is part of the shadow name, so it has to be resolved before
+    the shadow can be read."""
+    for grp in Group(user).list_groups().get('groups', []):
+        if node_id in (grp.get('node_ids') or []):
+            return f"params-{grp['group_id']}"
+    return None
+
+
+@click.command('get-shadow')
+@click.argument('node_id')
+@click.argument('shadow_name', required=False)
+@pass_user
+def get_shadow(user, node_id, shadow_name):
+    """Print NODE_ID's named shadow once.
+
+    SHADOW_NAME defaults to the params shadow of the group the node is in. `subscribe` streams
+    every later update and never terminates, which is awkward when the question is just what the
+    shadow says right now.
+    """
+    if not shadow_name:
+        shadow_name = params_shadow_name_for(user, node_id)
+        if not shadow_name:
+            output.fail(f"Node {node_id} is in none of this user's groups; pass SHADOW_NAME")
+
+    shadow = user.get_named_shadow(node_id, shadow_name)
+    if shadow is None:
+        output.fail(f"No shadow '{shadow_name}' on node {node_id}")
+    output.emit_json(shadow)
 
 
 # --- raw API ----------------------------------------------------------------
@@ -158,4 +191,4 @@ def upload_file(user, file_type, file_path):
     output.emit_kv('Uploaded', {'local file': file_path, 'S3 location': result})
 
 
-COMMANDS = [auth, connect, subscribe, publish, read_shadow, api, upload_file]
+COMMANDS = [auth, connect, subscribe, publish, read_shadow, get_shadow, api, upload_file]
