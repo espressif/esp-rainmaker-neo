@@ -15,14 +15,23 @@ Cognito federation leg (hosted-UI password login with the pooled user's credenti
 authorization code → confidential code exchange at /oauth2/token. Identity resolution is by
 verified email, so the resulting sub matches the pooled user's — groups they create via the SigV4
 APIs are visible through MCP.
+
+Two kinds of failure are asserted differently throughout. A *protocol* failure (unparseable body,
+unknown method, unknown tool, missing or wrong-audience token) is a JSON-RPC error. A *tool*
+failure (a node the caller cannot reach, a missing argument) is a successful JSON-RPC response
+carrying isError, so the model can read the message and correct itself. Mixing the two up is the
+bug these assertions exist to catch.
 """
-from py_sdk.test_group import Group
-from test.itest.conftest import MCP_API_URL, USER_API_GATEWAY_URL, pkce_pair, cognito_hosted_login
-from test.itest.mcp_oauth import get_mcp_access_token
-import json
+import time
+from urllib.parse import urlparse, parse_qs
+
 import pytest
 import requests
-from urllib.parse import urlparse, parse_qs
+
+from py_sdk.test_group import Group
+from py_sdk.test_mcp import Mcp, assert_matches_catalogue
+from test.itest.conftest import MCP_API_URL, USER_API_GATEWAY_URL, pkce_pair, cognito_hosted_login
+from test.itest.mcp_oauth import get_mcp_access_token
 
 MCP_CLIENT_ID = "mcp-oauth-client"
 
@@ -38,8 +47,6 @@ def _get_mcp_client_secret(super_admin):
     row = next(c for c in resp.json()["clients"] if c["client_id"] == MCP_CLIENT_ID)
     _mcp_client_secret = row["client_secret"]
     return _mcp_client_secret
-
-
 
 
 def _mint_mcp_token(user, super_admin):
@@ -80,37 +87,38 @@ def _mint_mcp_token(user, super_admin):
 
 
 @pytest.fixture
-def mcp_tokenize(super_admin_user):
-    """Callable that stamps (and caches) an MCP-audience access token on a pooled user."""
-    def _tokenize(user):
+def mcp_client(super_admin_user):
+    """Callable turning a pooled user into an authenticated MCP client, caching the token."""
+    def _client(user):
         if not getattr(user, "_mcp_access_token", None):
             user._mcp_access_token = _mint_mcp_token(user, super_admin_user)
-        return user
-    return _tokenize
+        return Mcp(MCP_API_URL, user._mcp_access_token)
+    return _client
 
 
-def _mcp_request(token, body):
-    """POST a JSON-RPC body to the MCP endpoint with the given Bearer token."""
-    return requests.post(
-        f"{MCP_API_URL}/v1/mcp",
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
-        data=json.dumps(body),
-    )
+@pytest.fixture
+def anon_mcp():
+    """An MCP client with no credential, for the protocol-level rejection tests."""
+    return Mcp(MCP_API_URL, None)
 
 
-def _mcp_post(user, method, params=None):
-    """Send a JSON-RPC request with the user's MCP-audience token.
+def _assert_protocol_error(response, code, status=200):
+    """A protocol failure is a JSON-RPC error, never an isError tool result."""
+    assert response.status_code == status, f"Expected {status}, got {response.status_code}: {response.text}"
+    payload = response.json()
+    assert payload.get("error") is not None, f"Expected a JSON-RPC error, got: {payload}"
+    assert payload["error"]["code"] == code
 
-    The MCP server accepts only tokens whose aud is mcp-oauth-client, so the user must have been
-    passed through mcp_tokenize first — a first-party app token is rejected by design.
-    """
-    token = getattr(user, "_mcp_access_token", None)
-    assert token, "user has no MCP token — pass the user through mcp_tokenize first"
-    body = {"jsonrpc": "2.0", "id": 1, "method": method}
-    if params is not None:
-        body["params"] = params
-    return _mcp_request(token, body)
 
+def _shadow_name(device, group_id):
+    """The named shadow the cloud uses for this device, which is group- and room-scoped."""
+    name = f"params-{group_id}"
+    for subgroup_id in sorted(getattr(device, "subgroup_ids", None) or []):
+        name += f"-{subgroup_id}"
+    return name
+
+
+# --- Protocol level -----------------------------------------------------------------------
 
 def test_mcp_get_returns_401():
     """GET /v1/mcp returns 401 indicating authentication is required."""
@@ -118,190 +126,68 @@ def test_mcp_get_returns_401():
     assert response.status_code == 401, f"Expected 401, got {response.status_code}. Response: {response.text}"
 
 
-def test_mcp_unauthenticated_tools_list_returns_401():
+def test_mcp_unauthenticated_tools_list_returns_401(anon_mcp):
     """Unauthenticated tools/list returns 401."""
-    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
-    response = requests.post(f"{MCP_API_URL}/v1/mcp",
-                             headers={"Content-Type": "application/json"},
-                             data=body)
-    assert response.status_code == 401
-
-    rpc_resp = response.json()
-    assert rpc_resp.get("error") is not None
-    assert rpc_resp["error"]["code"] == -32001
+    _assert_protocol_error(anon_mcp.post("tools/list"), -32001, status=401)
 
 
-def test_mcp_initialize_unauthenticated_returns_401():
+def test_mcp_initialize_unauthenticated_returns_401(anon_mcp):
     """POST initialize without Bearer token returns 401 to trigger OAuth discovery."""
-    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize"})
-    response = requests.post(f"{MCP_API_URL}/v1/mcp",
-                             headers={"Content-Type": "application/json"},
-                             data=body)
-    assert response.status_code == 401
-
-    rpc_resp = response.json()
-    assert rpc_resp.get("error") is not None
-    assert rpc_resp["error"]["code"] == -32001
+    _assert_protocol_error(anon_mcp.post("initialize"), -32001, status=401)
 
 
-def test_mcp_rejects_first_party_audience(test_user1):
+def test_mcp_tools_call_unauthenticated(anon_mcp):
+    """POST tools/call without auth returns 401."""
+    response = anon_mcp.post("tools/call", {"name": "list_groups", "arguments": {}})
+    _assert_protocol_error(response, -32001, status=401)
+
+
+def test_mcp_rejects_first_party_audience(test_user1, anon_mcp):
     """A first-party app token (aud=user-pool-client) must NOT authorize MCP calls — the MCP
     server is audience-confined to mcp-oauth-client (RFC 9700 audience restriction)."""
-    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
-    response = requests.post(f"{MCP_API_URL}/v1/mcp",
-                             headers={"Content-Type": "application/json",
-                                      "Authorization": f"Bearer {test_user1.access_token}"},
-                             data=body)
+    response = anon_mcp.post("tools/list", token=test_user1.access_token)
     assert response.status_code == 401, \
         f"first-party token must be rejected at MCP, got {response.status_code}"
 
 
-def test_mcp_initialize(test_user1, mcp_tokenize):
+def test_mcp_initialize(test_user1, mcp_client):
     """POST initialize returns server info and capabilities with auth."""
-    response = _mcp_post(mcp_tokenize(test_user1), "initialize")
-    assert response.status_code == 200
-
-    rpc_resp = response.json()
-    assert rpc_resp.get("jsonrpc") == "2.0"
-    assert rpc_resp.get("error") is None, f"Unexpected error: {rpc_resp.get('error')}"
-
-    result = rpc_resp["result"]
+    result = mcp_client(test_user1).rpc("initialize")
     assert result["protocolVersion"] == "2025-03-26"
     assert result["serverInfo"]["name"] == "rainmaker-mcp"
     assert result["serverInfo"]["version"] == "1.0.0"
     assert "tools" in result["capabilities"]
 
 
-def test_mcp_notifications_initialized(test_user1, mcp_tokenize):
+def test_mcp_notifications_initialized(test_user1, mcp_client):
     """POST notifications/initialized returns 200 with auth."""
-    response = _mcp_post(mcp_tokenize(test_user1), "notifications/initialized")
-    assert response.status_code == 200
+    assert mcp_client(test_user1).post("notifications/initialized").status_code == 200
 
 
-def test_mcp_tools_list(test_user1, mcp_tokenize):
-    """POST tools/list returns the get_groups tool when authenticated."""
-    response = _mcp_post(mcp_tokenize(test_user1), "tools/list")
-    assert response.status_code == 200
-
-    rpc_resp = response.json()
-    assert rpc_resp.get("error") is None, f"Unexpected error: {rpc_resp.get('error')}"
-
-    tools = rpc_resp["result"]["tools"]
-    assert len(tools) >= 1, "Should have at least one tool"
-    tool_names = [t["name"] for t in tools]
-    assert "get_groups" in tool_names, f"get_groups tool not found in: {tool_names}"
-
-    get_groups_tool = next(t for t in tools if t["name"] == "get_groups")
-    assert "description" in get_groups_tool
-    assert "inputSchema" in get_groups_tool
-
-
-def test_mcp_tools_call_get_groups(test_user1, mcp_tokenize):
-    """POST tools/call get_groups returns the user's groups."""
-    group_api = Group(test_user1)
-    group_id_1 = group_api.create_group("MCP Test Group 1")
-    group_id_2 = group_api.create_group("MCP Test Group 2")
-
-    try:
-        # Call get_groups via MCP
-        response = _mcp_post(mcp_tokenize(test_user1), "tools/call", {
-            "name": "get_groups",
-            "arguments": {}
-        })
-        assert response.status_code == 200
-
-        rpc_resp = response.json()
-        assert rpc_resp.get("error") is None, f"Unexpected error: {rpc_resp.get('error')}"
-
-        result = rpc_resp["result"]
-        assert "content" in result
-        assert len(result["content"]) == 1
-        assert result["content"][0]["type"] == "text"
-
-        groups = json.loads(result["content"][0]["text"])
-        returned_group_ids = [g["group_id"] for g in groups]
-        assert group_id_1 in returned_group_ids, f"Group {group_id_1} not found in MCP response"
-        assert group_id_2 in returned_group_ids, f"Group {group_id_2} not found in MCP response"
-
-        # Verify group structure
-        for g in groups:
-            assert "group_id" in g
-            assert "group_name" in g
-    finally:
-        group_api.delete_group(group_id_1)
-        group_api.delete_group(group_id_2)
-
-
-def test_mcp_tools_list_unauthenticated():
-    """POST tools/list without auth returns 401."""
-    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
-    response = requests.post(f"{MCP_API_URL}/v1/mcp",
-                             headers={"Content-Type": "application/json"},
-                             data=body)
-    assert response.status_code == 401
-
-    rpc_resp = response.json()
-    assert rpc_resp.get("error") is not None
-    assert rpc_resp["error"]["code"] == -32001
-
-
-def test_mcp_tools_call_unauthenticated():
-    """POST tools/call without auth returns 401."""
-    body = json.dumps({
-        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-        "params": {"name": "get_groups", "arguments": {}}
-    })
-    response = requests.post(f"{MCP_API_URL}/v1/mcp",
-                             headers={"Content-Type": "application/json"},
-                             data=body)
-    assert response.status_code == 401
-
-    rpc_resp = response.json()
-    assert rpc_resp.get("error") is not None
-    assert rpc_resp["error"]["code"] == -32001
-
-
-def test_mcp_invalid_json():
+def test_mcp_invalid_json(anon_mcp):
     """POST with invalid JSON returns parse error (-32700)."""
     response = requests.post(f"{MCP_API_URL}/v1/mcp",
                              headers={"Content-Type": "application/json"},
                              data="not-valid-json")
-    assert response.status_code == 200
-
-    rpc_resp = response.json()
-    assert rpc_resp["error"]["code"] == -32700
+    _assert_protocol_error(response, -32700)
 
 
-def test_mcp_unknown_method(test_user1, mcp_tokenize):
+def test_mcp_unknown_method(test_user1, mcp_client):
     """POST with unknown method returns method-not-found (-32601)."""
-    response = _mcp_post(mcp_tokenize(test_user1), "unknown/method")
-    assert response.status_code == 200
-
-    rpc_resp = response.json()
-    assert rpc_resp["error"]["code"] == -32601
+    _assert_protocol_error(mcp_client(test_user1).post("unknown/method"), -32601)
 
 
-def test_mcp_unknown_tool(test_user1, mcp_tokenize):
-    """POST tools/call with unknown tool returns invalid-params (-32602)."""
-    response = _mcp_post(mcp_tokenize(test_user1), "tools/call", {
-        "name": "nonexistent_tool",
-        "arguments": {}
-    })
-    assert response.status_code == 200
-
-    rpc_resp = response.json()
-    assert rpc_resp["error"]["code"] == -32602
+def test_mcp_unknown_tool(test_user1, mcp_client):
+    """An unknown tool is a protocol error, not a tool error — the model asked for something
+    that does not exist, which no argument change can fix."""
+    response = mcp_client(test_user1).post("tools/call", {"name": "nonexistent_tool", "arguments": {}})
+    _assert_protocol_error(response, -32602)
 
 
-def test_mcp_invalid_jsonrpc_version(test_user1, mcp_tokenize):
+def test_mcp_invalid_jsonrpc_version(test_user1, mcp_client):
     """POST with wrong jsonrpc version returns invalid-request (-32600)."""
-    user = mcp_tokenize(test_user1)
-    response = _mcp_request(user._mcp_access_token,
-                            {"jsonrpc": "1.0", "id": 1, "method": "initialize"})
-    assert response.status_code == 200
-
-    rpc_resp = response.json()
-    assert rpc_resp["error"]["code"] == -32600
+    response = mcp_client(test_user1).request({"jsonrpc": "1.0", "id": 1, "method": "initialize"})
+    _assert_protocol_error(response, -32600)
 
 
 def test_mcp_unsupported_http_method():
@@ -315,232 +201,561 @@ def test_mcp_unsupported_http_method():
         f"Expected 403, 404, or 405, got {response.status_code}. Response: {response.text}"
 
 
-def _mcp_post_with_access_token(user, method, params=None):
-    """Helper to send a JSON-RPC request using the mcp-oauth-client access_token (not id_token).
+# --- Tool catalogue -----------------------------------------------------------------------
 
-    This exercises the AdminGetUser fallback path since Cognito access tokens
-    don't contain the custom:user_id claim.
-    """
-    body = {"jsonrpc": "2.0", "id": 1, "method": method}
-    if params is not None:
-        body["params"] = params
-    return _mcp_request(get_mcp_access_token(user), body)
+def test_mcp_tools_list(test_user1, mcp_client):
+    """tools/list advertises the whole surface, each tool described and schema'd."""
+    tools = mcp_client(test_user1).list_tools()
+    assert_matches_catalogue(tools)
+
+    for name, tool in tools.items():
+        assert tool.get("description"), f"{name} has no description"
+        assert tool["inputSchema"]["type"] == "object", f"{name} has no object schema"
+
+
+def test_mcp_tools_list_schemas(test_user1, mcp_client):
+    """Every node-scoped tool demands both identifiers, and list_devices demands none."""
+    tools = mcp_client(test_user1).list_tools()
+
+    assert set(tools["list_schedules"]["inputSchema"]["required"]) == {"node_id", "group_id"}
+    assert set(tools["set_params"]["inputSchema"]["required"]) == {"node_id", "group_id", "params"}
+    assert set(tools["set_schedule"]["inputSchema"]["required"]) == {"node_id", "group_id", "operation"}
+    assert tools["set_schedule"]["inputSchema"]["properties"]["operation"]["enum"] == \
+        ["add", "edit", "remove", "enable", "disable"]
+
+    # Discovery must never require an identifier: it is what the model calls when it has none.
+    assert not tools["list_devices"]["inputSchema"].get("required")
+    assert not tools["list_groups"]["inputSchema"].get("required")
+
+
+def test_mcp_tool_descriptions_carry_their_guidance(test_user1, mcp_client):
+    """The clauses below exist because models got these cases wrong: inventing parameters for
+    unsupported actions, sending scheduled requests to set_params, and calling a tool for things
+    this server cannot do at all. They are behaviour, so they are asserted like behaviour."""
+    tools = mcp_client(test_user1).list_tools()
+
+    set_params = tools["set_params"]["description"]
+    assert "list_devices" in set_params
+    assert "set_schedule" in set_params, "a timed request must be pointed at set_schedule"
+    # Invented parameters are now refused rather than silently published, and the description has
+    # to say so: a model told the write "does nothing" has no reason to read the error, while one
+    # told it is rejected with the alternatives can fix the call in a single turn.
+    assert "rejected" in set_params, "set_params must say an undeclared parameter is refused"
+    assert "spec" in set_params, "set_params must point at spec, not params, for what it accepts"
+
+    list_devices = tools["list_devices"]["description"]
+    assert "spec" in list_devices, \
+        "list_devices must distinguish what a device reports from what it will accept"
+
+    for tool_name in ("list_devices", "list_groups"):
+        description = tools[tool_name]["description"]
+        assert "not available" in description, \
+            f"{tool_name} must say what this server cannot do, so the model refuses instead of guessing"
 
 
 @pytest.mark.xdist_group("env_mut")
 def test_mcp_tools_list_with_access_token(test_user1, enable_test_cimd):
-    """POST tools/list works with a Cognito access_token (AdminGetUser fallback)."""
-    response = _mcp_post_with_access_token(test_user1, "tools/list")
-    assert response.status_code == 200, \
-        f"Expected 200, got {response.status_code}. Response: {response.text}"
-
-    rpc_resp = response.json()
-    assert rpc_resp.get("error") is None, f"Unexpected error: {rpc_resp.get('error')}"
-
-    tools = rpc_resp["result"]["tools"]
-    tool_names = [t["name"] for t in tools]
-    assert "get_groups" in tool_names
+    """tools/list works with a Cognito access_token (AdminGetUser fallback)."""
+    client = Mcp(MCP_API_URL, get_mcp_access_token(test_user1))
+    assert_matches_catalogue(client.list_tools())
 
 
 @pytest.mark.xdist_group("env_mut")
-def test_mcp_tools_call_get_groups_with_access_token(test_user1, enable_test_cimd):
-    """POST tools/call get_groups works with a Cognito access_token (AdminGetUser fallback)."""
+def test_mcp_tools_call_with_access_token(test_user1, enable_test_cimd):
+    """A tool call resolves the same user through the AdminGetUser fallback, not just
+    tools/list — an access token carries no custom:user_id claim to read."""
     group_api = Group(test_user1)
     group_id = group_api.create_group("MCP Access Token Test Group")
 
     try:
-        response = _mcp_post_with_access_token(test_user1, "tools/call", {
-            "name": "get_groups",
-            "arguments": {}
-        })
-        assert response.status_code == 200
-
-        rpc_resp = response.json()
-        assert rpc_resp.get("error") is None, f"Unexpected error: {rpc_resp.get('error')}"
-
-        result = rpc_resp["result"]
-        groups = json.loads(result["content"][0]["text"])
-        returned_group_ids = [g["group_id"] for g in groups]
-        assert group_id in returned_group_ids, \
-            f"Group {group_id} not found in MCP access_token response"
+        client = Mcp(MCP_API_URL, get_mcp_access_token(test_user1))
+        groups = client.list_groups().json()["groups"]
+        assert group_id in {g["group_id"] for g in groups}
     finally:
         group_api.delete_group(group_id)
 
 
-def test_mcp_tools_list_includes_param_tools(test_user1, mcp_tokenize):
-    """POST tools/list returns get_params and set_params tools."""
-    response = _mcp_post(mcp_tokenize(test_user1), "tools/list")
-    assert response.status_code == 200
+# --- list_groups --------------------------------------------------------------------------
 
-    rpc_resp = response.json()
-    assert rpc_resp.get("error") is None, f"Unexpected error: {rpc_resp.get('error')}"
+def test_mcp_list_groups(test_user1, mcp_client):
+    """list_groups returns the caller's groups."""
+    group_api = Group(test_user1)
+    group_id_1 = group_api.create_group("MCP Test Group 1")
+    group_id_2 = group_api.create_group("MCP Test Group 2")
 
-    tools = rpc_resp["result"]["tools"]
-    tool_names = [t["name"] for t in tools]
-    assert "get_params" in tool_names, f"get_params not found in: {tool_names}"
-    assert "set_params" in tool_names, f"set_params not found in: {tool_names}"
+    try:
+        groups = mcp_client(test_user1).list_groups().json()["groups"]
+        returned = {g["group_id"] for g in groups}
+        assert {group_id_1, group_id_2} <= returned
 
-    # Verify get_params schema has required fields
-    get_params_tool = next(t for t in tools if t["name"] == "get_params")
-    assert "group_id" in get_params_tool["inputSchema"]["properties"]
-    assert "node_id" in get_params_tool["inputSchema"]["properties"]
-    assert "group_id" in get_params_tool["inputSchema"]["required"]
-    assert "node_id" in get_params_tool["inputSchema"]["required"]
-
-    # Verify set_params schema has required fields
-    set_params_tool = next(t for t in tools if t["name"] == "set_params")
-    assert "group_id" in set_params_tool["inputSchema"]["properties"]
-    assert "node_id" in set_params_tool["inputSchema"]["properties"]
-    assert "params" in set_params_tool["inputSchema"]["properties"]
-    assert "params" in set_params_tool["inputSchema"]["required"]
+        for group in groups:
+            assert "group_name" in group
+            assert "device_count" in group
+            # Structure only: device state belongs to list_devices.
+            assert "params" not in group
+            assert "connected" not in group
+    finally:
+        group_api.delete_group(group_id_1)
+        group_api.delete_group(group_id_2)
 
 
-def test_mcp_get_params(associated_device, mcp_tokenize):
-    """POST tools/call get_params returns the device's reported shadow params."""
-    device, group_id, test_user1, user1_group_api = associated_device
+def test_mcp_list_groups_always_reports_subgroups(test_user1, mcp_client):
+    """A home with no rooms still carries subgroups: [] — an absent key reads as "rooms
+    unknown" and sends the agent back for another look."""
+    group_api = Group(test_user1)
+    group_id = group_api.create_group("MCP Roomless Home")
+
+    try:
+        groups = mcp_client(test_user1).list_groups(group_id=group_id).json()["groups"]
+        assert len(groups) == 1
+        assert "subgroups" in groups[0], "a home with no rooms must still say so"
+        assert groups[0]["subgroups"] == []
+    finally:
+        group_api.delete_group(group_id)
+
+
+def test_mcp_list_groups_filters_by_name(test_user1, mcp_client):
+    """A group name resolves to exactly one group, ignoring case."""
+    group_api = Group(test_user1)
+    group_id = group_api.create_group("MCP Named Group")
+
+    try:
+        groups = mcp_client(test_user1).list_groups(group_name="mcp named group").json()["groups"]
+        assert [g["group_id"] for g in groups] == [group_id]
+    finally:
+        group_api.delete_group(group_id)
+
+
+def test_mcp_list_groups_include_devices(associated_device, mcp_client):
+    """include_devices adds node ids; without it the response carries counts only."""
+    device, group_id, test_user1, _ = associated_device
+    client = mcp_client(test_user1)
+
+    def group_row(**kwargs):
+        groups = client.list_groups(group_id=group_id, **kwargs).json()["groups"]
+        assert len(groups) == 1
+        return groups[0]
+
+    without = group_row()
+    assert without["device_count"] >= 1
+    assert "node_ids" not in without
+
+    with_devices = group_row(include_devices=True)
+    assert device.node_thing_name in with_devices["node_ids"]
+
+
+def test_mcp_list_groups_unknown_name_is_tool_error(test_user1, mcp_client):
+    """An unknown group name is something the model can retry differently, so it is a tool
+    error carrying the name it could not find — not a protocol error."""
+    result = mcp_client(test_user1).list_groups(group_name="No Such Home At All")
+    assert result.is_error
+    assert "No Such Home At All" in result.text
+
+
+# --- list_devices -------------------------------------------------------------------------
+
+def test_mcp_list_devices(associated_device, mcp_client):
+    """One list_devices row carries placement and live state together."""
+    device, group_id, test_user1, _ = associated_device
     node_id = device.node_thing_name
 
-    # Connect device and set up shadow with param data
     device.connect()
     device.get_group_info()
-
-    shadow_name = f"params-{group_id}"
-    if hasattr(device, 'subgroup_ids') and device.subgroup_ids:
-        for subgroup_id in sorted(device.subgroup_ids):
-            shadow_name += f"-{subgroup_id}"
-
+    shadow_name = _shadow_name(device, group_id)
     assert device.shadow_connect([shadow_name]), "Failed to connect to shadow"
+    # online is reported by the firmware on connect, not written by the cloud, so a simulated
+    # device has to publish it the way test_device_status and test_alexa do. update_named_shadow
+    # keeps online at the top level and moves the rest into params.
     device.update_named_shadow(shadow_name, {
-        "Light": {"Power": True, "Brightness": 75},
+        "online": True,
+        "Light": {"Name": "Reading Lamp", "Power": True, "Brightness": 75},
         "Switch": {"Power": False},
     })
-
-    import time
     time.sleep(2)
 
-    # Call get_params via MCP
-    response = _mcp_post(mcp_tokenize(test_user1), "tools/call", {
-        "name": "get_params",
-        "arguments": {"group_id": group_id, "node_id": node_id}
-    })
-    assert response.status_code == 200
+    devices = mcp_client(test_user1).list_devices(node_id=node_id, group_id=group_id).json()["devices"]
+    assert len(devices) == 1
+    row = devices[0]
 
-    rpc_resp = response.json()
-    assert rpc_resp.get("error") is None, f"Unexpected error: {rpc_resp.get('error')}"
-
-    result = rpc_resp["result"]
-    assert "content" in result
-    assert len(result["content"]) == 1
-    assert result["content"][0]["type"] == "text"
-
-    params = json.loads(result["content"][0]["text"])
-    expected = {
-        "Light": {"Power": True, "Brightness": 75},
-        "Switch": {"Power": False},
-    }
-    assert params == expected, f"Expected {expected}, got {params}"
+    # The whole point of the tool: one call yields the ids every other tool needs, plus state.
+    assert row["node_id"] == node_id
+    assert row["group_id"] == group_id
+    assert row["group_name"]
+    # Assert the state this test wrote round-trips, not that params holds nothing else: the
+    # device is pooled, so an earlier test may have left keys behind that this one never sets.
+    assert row["params"]["Light"] == {"Name": "Reading Lamp", "Power": True, "Brightness": 75}
+    assert row["params"]["Switch"] == {"Power": False}
+    assert row["connected"] is True
 
 
-def test_mcp_set_params(associated_device, mcp_tokenize):
-    """POST tools/call set_params publishes params to the device."""
-    device, group_id, test_user1, user1_group_api = associated_device
+def test_mcp_list_devices_by_name(associated_device, mcp_client):
+    """A device is findable by the name its user sees, which lives in the Name parameter."""
+    device, group_id, test_user1, _ = associated_device
     node_id = device.node_thing_name
 
     device.connect()
     device.get_group_info()
+    shadow_name = _shadow_name(device, group_id)
+    assert device.shadow_connect([shadow_name])
+    device.update_named_shadow(shadow_name, {"Light": {"Name": "Porch Lantern", "Power": True}})
+    time.sleep(2)
 
-    shadow_name = f"params-{group_id}"
-    if hasattr(device, 'subgroup_ids') and device.subgroup_ids:
-        for subgroup_id in sorted(device.subgroup_ids):
-            shadow_name += f"-{subgroup_id}"
+    client = mcp_client(test_user1)
+    found = client.list_devices(group_id=group_id, name="porch").json()["devices"]
+    assert [d["node_id"] for d in found] == [node_id]
 
+    missing = client.list_devices(group_id=group_id, name="no-such-device-anywhere").json()
+    assert missing["devices"] == [], "an unmatched filter is an empty list, not an error"
+    assert missing["count"] == 0
+
+
+def test_mcp_list_devices_by_node_id_passed_as_name(associated_device, mcp_client):
+    """A node id passed as name resolves to the device.
+
+    Node ids carry no distinguishing shape, so a model handed one cannot tell it from a name and
+    puts it in name — the argument the tool text points at for "whatever the user called it".
+    When that came back empty the model reported the device as non-existent, so the filter has to
+    match ids too."""
+    device, group_id, test_user1, _ = associated_device
+    node_id = device.node_thing_name
+
+    found = mcp_client(test_user1).list_devices(name=node_id).json()["devices"]
+    assert [d["node_id"] for d in found] == [node_id]
+
+
+def test_mcp_list_devices_fields(associated_device, mcp_client):
+    """fields narrows the response to exactly what was asked for, dot paths included."""
+    device, group_id, test_user1, _ = associated_device
+    node_id = device.node_thing_name
+
+    device.connect()
+    device.get_group_info()
+    shadow_name = _shadow_name(device, group_id)
+    assert device.shadow_connect([shadow_name])
+    device.update_named_shadow(shadow_name, {"Light": {"Power": True}})
+    time.sleep(2)
+
+    devices = mcp_client(test_user1).list_devices(
+        node_id=node_id, group_id=group_id, fields="node_id,params.Light.Power").json()["devices"]
+    assert devices == [{"node_id": node_id, "params.Light.Power": True}]
+
+
+def test_mcp_list_devices_hides_other_users_devices(associated_device, test_user2, mcp_client):
+    """user2 can neither list nor address user1's device."""
+    device, group_id, _, _ = associated_device
+    client = mcp_client(test_user2)
+
+    listed = client.list_devices().json()["devices"]
+    assert device.node_thing_name not in [d["node_id"] for d in listed]
+
+    result = client.list_devices(node_id=device.node_thing_name)
+    assert result.is_error
+    assert device.node_thing_name in result.text
+
+
+def test_mcp_list_devices_unauthorized_group(test_user1, test_user2, mcp_client):
+    """A group the caller cannot reach is a tool error naming the group."""
+    group_api = Group(test_user1)
+    group_id = group_api.create_group("MCP Unauthorized Devices Group")
+
+    try:
+        result = mcp_client(test_user2).list_devices(group_id=group_id)
+        assert result.is_error
+        assert group_id in result.text
+    finally:
+        group_api.delete_group(group_id)
+
+
+# --- set_params ---------------------------------------------------------------------------
+
+def test_mcp_set_params(associated_device, mcp_client):
+    """set_params reaches the device over MQTT."""
+    device, group_id, test_user1, _ = associated_device
+    node_id = device.node_thing_name
+
+    device.connect()
+    device.get_group_info()
+    shadow_name = _shadow_name(device, group_id)
     assert device.shadow_connect([shadow_name]), "Failed to connect to shadow"
 
-    # Subscribe to the params topic so we can verify delivery
     params_topic = f"rainmaker/nodes/{node_id}/user/{shadow_name}/params"
     assert device.subscribe(topic=params_topic), "Failed to subscribe to params topic"
 
-    # Call set_params via MCP
-    set_data = {
-        "Light": {"Power": True, "Brightness": 100},
-    }
-    response = _mcp_post(mcp_tokenize(test_user1), "tools/call", {
-        "name": "set_params",
-        "arguments": {
-            "group_id": group_id,
-            "node_id": node_id,
-            "params": set_data,
-        }
-    })
-    assert response.status_code == 200
+    set_data = {"Light": {"Power": True, "Brightness": 100}}
+    result = mcp_client(test_user1).set_params(group_id, node_id, set_data).json()
+    assert result["requested"] == 1
+    assert result["succeeded"] == 1
+    assert result["failed"] == 0
+    assert result["results"] == [{"node_id": node_id, "success": True}]
 
-    rpc_resp = response.json()
-    assert rpc_resp.get("error") is None, f"Unexpected error: {rpc_resp.get('error')}"
-
-    result = rpc_resp["result"]
-    content_text = result["content"][0]["text"]
-    assert "success" in content_text, f"Expected success in response: {content_text}"
-
-    # Verify the device received the params on the subscribed topic
     received = device.wait_for_params_message(timeout=10)
     assert received is not None, "Device did not receive params message"
-    assert received == set_data, f"Expected {set_data}, got {received}"
+    assert received == set_data
 
 
-def test_mcp_get_params_unauthorized_group(test_user1, test_user2, mcp_tokenize):
-    """get_params returns error when user doesn't have access to the group."""
-    # user1 creates a group
+def test_mcp_set_params_reports_each_node(associated_device, mcp_client):
+    """A foreign node in the list is reported as failed while the caller's own still lands."""
+    device, group_id, test_user1, _ = associated_device
+    node_id = device.node_thing_name
+
+    device.connect()
+    device.get_group_info()
+    shadow_name = _shadow_name(device, group_id)
+    assert device.shadow_connect([shadow_name])
+    params_topic = f"rainmaker/nodes/{node_id}/user/{shadow_name}/params"
+    assert device.subscribe(topic=params_topic)
+
+    set_data = {"Light": {"Power": False}}
+    result = mcp_client(test_user1).set_params(
+        group_id, f"{node_id},not-a-real-node", set_data).json()
+
+    assert result["requested"] == 2
+    assert result["succeeded"] == 1
+    assert result["failed"] == 1
+    outcomes = {r["node_id"]: r for r in result["results"]}
+    assert outcomes[node_id]["success"] is True
+    assert outcomes["not-a-real-node"]["success"] is False
+    assert "not-a-real-node" in outcomes["not-a-real-node"]["error"]
+
+    assert device.wait_for_params_message(timeout=10) == set_data
+
+
+def test_mcp_set_params_rejects_a_parameter_the_device_never_declared(associated_device, mcp_client):
+    """An invented parameter is refused, names the real ones, and reaches no device.
+
+    set_params is a generic write, so a model can name anything. Before the cloud checked the
+    node's config it published whatever it was handed: firmware ignored the unknown key, nothing
+    acknowledged it either way, and the tool still reported succeeded=1. The user was told a
+    change happened that never did — which is why this is asserted at the wire, not just in the
+    response.
+    """
+    device, group_id, test_user1, _ = associated_device
+    node_id = device.node_thing_name
+
+    device.connect()
+    device.get_group_info()
+    # A config that positively declares its devices: with no `devices` key there is nothing to
+    # contradict, and validation correctly stands aside (see test_mcp_set_params).
+    assert device.set_node_config({
+        "devices": [{
+            "id": "Light",
+            "type": "esp.device.lightbulb",
+            "primary": "Power",
+            "params": [
+                {"id": "Power", "type": "esp.param.power", "data_type": "bool",
+                 "properties": ["read", "write"]},
+                {"id": "Brightness", "type": "esp.param.brightness", "data_type": "int",
+                 "properties": ["read", "write"], "bounds": {"min": 0, "max": 100}},
+            ],
+        }],
+        "info": {"fw_version": "1.0"},
+    })
+
+    shadow_name = _shadow_name(device, group_id)
+    assert device.shadow_connect([shadow_name])
+    params_topic = f"rainmaker/nodes/{node_id}/user/{shadow_name}/params"
+    assert device.subscribe(topic=params_topic)
+
+    client = mcp_client(test_user1)
+
+    unknown_device = client.set_params(group_id, node_id, {"OTA": {"Trigger": True}})
+    assert unknown_device.is_error
+    assert "Light" in unknown_device.text, "the error must name the devices the node does have"
+
+    unknown_param = client.set_params(group_id, node_id, {"Light": {"Hue": 120}})
+    assert unknown_param.is_error
+    assert "Brightness" in unknown_param.text, "the error must name the writable parameters"
+
+    wrong_type = client.set_params(group_id, node_id, {"Light": {"Power": "on"}})
+    assert wrong_type.is_error
+    assert "boolean" in wrong_type.text
+
+    out_of_bounds = client.set_params(group_id, node_id, {"Light": {"Brightness": 150}})
+    assert out_of_bounds.is_error
+    assert "0-100" in out_of_bounds.text
+
+    # The point of rejecting before publishing: none of the four reached the device.
+    assert device.wait_for_params_message(timeout=5) is None, \
+        "a rejected write must not be published"
+
+    # And a declared parameter still lands, so validation is not simply refusing everything.
+    accepted = {"Light": {"Power": True, "Brightness": 80}}
+    result = client.set_params(group_id, node_id, accepted).json()
+    assert result["succeeded"] == 1
+    assert device.wait_for_params_message(timeout=10) == accepted
+
+
+def test_mcp_list_devices_reports_what_a_write_will_accept(associated_device, mcp_client):
+    """spec tells the model what set_params validates against, so it can get it right first time.
+
+    params is the reported shadow — current values — and a device may report a parameter its
+    config never declared. Only spec is built from the config the write is checked against, so
+    those two must not be confused: a light whose hue is named "H" will refuse "Hue".
+    """
+    device, group_id, test_user1, _ = associated_device
+    node_id = device.node_thing_name
+
+    device.connect()
+    device.get_group_info()
+    assert device.set_node_config({
+        "devices": [{
+            "id": "Colour Light",
+            "type": "esp.device.lightbulb",
+            "primary": "Power",
+            "params": [
+                {"id": "Power", "type": "esp.param.power", "data_type": "bool",
+                 "properties": ["read", "write"]},
+                {"id": "H", "type": "esp.param.hue", "data_type": "int",
+                 "properties": ["read", "write"], "bounds": {"min": 0, "max": 360}},
+                {"id": "Temperature", "type": "esp.param.temperature", "data_type": "float",
+                 "properties": ["read"]},
+            ],
+        }],
+        "info": {"fw_version": "1.0"},
+    })
+
+    client = mcp_client(test_user1)
+    devices = client.call_tool("list_devices", node_id=node_id).json()["devices"]
+    spec = next(d for d in devices if d["node_id"] == node_id)["spec"]
+
+    assert spec["Colour Light"]["H"] == "int 0-360, hue", \
+        "the model needs the range and the meaning, since the name alone is unguessable"
+    assert "Temperature" not in spec["Colour Light"], "a read-only parameter is not writable"
+
+    # The name the spec gives is accepted; the one a model would guess is not.
+    assert client.set_params(group_id, node_id, {"Colour Light": {"Hue": 120}}).is_error
+    assert client.set_params(group_id, node_id, {"Colour Light": {"H": 120}}).json()["succeeded"] == 1
+
+
+def test_mcp_set_params_unauthorized(test_user1, test_user2, mcp_client):
+    """A device the caller cannot reach fails the call and says how to recover."""
     group_api = Group(test_user1)
     group_id = group_api.create_group("MCP Unauthorized Params Group")
 
     try:
-        # user2 tries to read params from user1's group
-        response = _mcp_post(mcp_tokenize(test_user2), "tools/call", {
-            "name": "get_params",
-            "arguments": {"group_id": group_id, "node_id": "some-node"}
-        })
-        assert response.status_code == 200
-
-        rpc_resp = response.json()
-        assert rpc_resp.get("error") is not None, "Expected error for unauthorized group access"
-        assert rpc_resp["error"]["code"] == -32603
-        assert "Failed" in rpc_resp["error"]["message"]
+        result = mcp_client(test_user2).set_params(group_id, "some-node", {"Light": {"Power": True}})
+        assert result.is_error
+        assert "list_devices" in result.text
     finally:
         group_api.delete_group(group_id)
 
 
-def test_mcp_get_params_missing_args(test_user1, mcp_tokenize):
-    """get_params returns error when required arguments are missing."""
-    user = mcp_tokenize(test_user1)
-    # Missing both group_id and node_id
-    response = _mcp_post(user, "tools/call", {
-        "name": "get_params",
-        "arguments": {}
-    })
-    assert response.status_code == 200
-    rpc_resp = response.json()
-    assert rpc_resp.get("error") is not None
-    assert rpc_resp["error"]["code"] == -32602
+def test_mcp_set_params_missing_args(test_user1, mcp_client):
+    """A missing argument names itself, so the model can fix the call without guessing."""
+    client = mcp_client(test_user1)
 
-    # Missing node_id
-    response = _mcp_post(user, "tools/call", {
-        "name": "get_params",
-        "arguments": {"group_id": "some-group"}
-    })
-    assert response.status_code == 200
-    rpc_resp = response.json()
-    assert rpc_resp.get("error") is not None
-    assert rpc_resp["error"]["code"] == -32602
+    missing_both = client.call_tool("set_params", params={"Light": {"Power": True}})
+    assert missing_both.is_error
+    assert "node_id" in missing_both.text and "group_id" in missing_both.text
+
+    missing_params = client.call_tool("set_params", node_id="some-node", group_id="some-group")
+    assert missing_params.is_error
+    assert "params is required" in missing_params.text
 
 
-def test_mcp_set_params_missing_args(test_user1, mcp_tokenize):
-    """set_params returns error when required arguments are missing."""
-    # Missing params
-    response = _mcp_post(mcp_tokenize(test_user1), "tools/call", {
-        "name": "set_params",
-        "arguments": {"group_id": "some-group", "node_id": "some-node"}
-    })
-    assert response.status_code == 200
-    rpc_resp = response.json()
-    assert rpc_resp.get("error") is not None
-    assert rpc_resp["error"]["code"] == -32602
+# --- schedules ----------------------------------------------------------------------------
+
+def test_mcp_schedule_lifecycle(associated_device, mcp_client):
+    """add, list, edit, disable and remove, each reaching the device."""
+    device, group_id, test_user1, _ = associated_device
+    node_id = device.node_thing_name
+    client = mcp_client(test_user1)
+
+    assert device.connect(), "Failed to connect device"
+
+    try:
+        created = client.set_schedule(
+            group_id, node_id, "add",
+            name="MCP Morning",
+            triggers=[{"time": "07:00", "days": "weekdays"}],
+            action={"Light": {"Power": True}},
+        ).json()["schedule"]
+        schedule_id = created["id"]
+
+        # 07:00 is 420 minutes past midnight; weekdays is Mon-Fri = 1+2+4+8+16.
+        assert created["triggers"] == [{"m": 420, "d": 31}]
+        assert created["enabled"] is True
+
+        listed = client.list_schedules(group_id, node_id).json()["schedules"]
+        assert [s["id"] for s in listed] == [schedule_id]
+        assert listed[0]["name"] == "MCP Morning"
+
+        time.sleep(3)
+        version = device.get_schedule_version()
+        assert version is not None and version > 0
+        pushed = device.get_schedule_details()
+        assert pushed is not None
+        assert [s["id"] for s in pushed.get("Schedules", [])] == [schedule_id]
+
+        # An edit changes what it is given and leaves the rest of the schedule alone.
+        client.set_schedule(group_id, node_id, "edit", schedule_id=schedule_id,
+                            triggers=[{"time": "07:30", "days": "daily"}])
+        listed = client.list_schedules(group_id, node_id).json()["schedules"]
+        assert listed[0]["triggers"] == [{"m": 450, "d": 127}]
+        assert listed[0]["name"] == "MCP Morning"
+        assert listed[0]["action"] == {"Light": {"Power": True}}
+
+        time.sleep(3)
+        assert device.get_schedule_version() > version
+
+        client.set_schedule(group_id, node_id, "disable", schedule_id=schedule_id)
+        assert client.list_schedules(group_id, node_id).json()["schedules"][0]["enabled"] is False
+
+        client.set_schedule(group_id, node_id, "enable", schedule_id=schedule_id)
+        assert client.list_schedules(group_id, node_id).json()["schedules"][0]["enabled"] is True
+
+        client.set_schedule(group_id, node_id, "remove", schedule_id=schedule_id)
+        emptied = client.list_schedules(group_id, node_id).json()
+        assert emptied["schedules"] == []
+        assert emptied["count"] == 0
+    finally:
+        # Leave the pooled device without schedules whatever failed above.
+        for row in client.list_schedules(group_id, node_id).json()["schedules"]:
+            client.set_schedule(group_id, node_id, "remove", schedule_id=row["id"])
+
+
+def test_mcp_set_schedule_rejects_unknown_schedule(associated_device, mcp_client):
+    """Editing a schedule the node does not have points the model at list_schedules."""
+    device, group_id, test_user1, _ = associated_device
+
+    result = mcp_client(test_user1).set_schedule(
+        group_id, device.node_thing_name, "edit", schedule_id="no-such-schedule")
+    assert result.is_error
+    assert "no-such-schedule" in result.text
+    assert "list_schedules" in result.text
+
+
+def test_mcp_set_schedule_validates_add(associated_device, mcp_client):
+    """An incomplete or unreadable add says which field is at fault."""
+    device, group_id, test_user1, _ = associated_device
+    node_id = device.node_thing_name
+    client = mcp_client(test_user1)
+
+    without_name = client.set_schedule(
+        group_id, node_id, "add",
+        triggers=[{"time": "07:00", "days": "daily"}],
+        action={"Light": {"Power": True}})
+    assert without_name.is_error
+    assert "name is required" in without_name.text
+
+    bad_time = client.set_schedule(
+        group_id, node_id, "add", name="Impossible",
+        triggers=[{"time": "25:00", "days": "daily"}],
+        action={"Light": {"Power": True}})
+    assert bad_time.is_error
+    assert "hours" in bad_time.text
+
+
+def test_mcp_list_schedules_unauthorized(associated_device, test_user2, mcp_client):
+    """user2 cannot read the schedules on user1's device."""
+    device, group_id, _, _ = associated_device
+
+    result = mcp_client(test_user2).list_schedules(group_id, device.node_thing_name)
+    assert result.is_error
+
+
+def test_mcp_list_schedules_missing_args(test_user1, mcp_client):
+    """list_schedules names the identifier it is missing."""
+    result = mcp_client(test_user1).call_tool("list_schedules", node_id="some-node")
+    assert result.is_error
+    assert "group_id is required" in result.text

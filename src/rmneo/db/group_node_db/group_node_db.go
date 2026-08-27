@@ -123,7 +123,10 @@ type NodesGroups struct {
 	SubGroups []string
 }
 
-func (gn *GroupNode) toNodesGroups() NodesGroups {
+// ToNodesGroups is the node's group and subgroups as carried by its own row. Exported because a
+// caller that has already fetched the row can hand this to node.Node instead of letting it
+// re-read the same row through the by-node-id index.
+func (gn *GroupNode) ToNodesGroups() NodesGroups {
 	ng := NodesGroups{Group: gn.GroupID}
 	for _, sg := range []string{gn.SubGrp1, gn.SubGrp2, gn.SubGrp3} {
 		if sg != "" {
@@ -214,7 +217,7 @@ func (g *GroupNodeDB) GetNodesGroup(nodeID string) (NodesGroups, error) {
 	if groupNode == nil {
 		return NodesGroups{}, nil
 	}
-	return groupNode.toNodesGroups(), nil
+	return groupNode.ToNodesGroups(), nil
 }
 
 func (g *GroupNodeDB) GetGroupNodeByNodeID(nodeID string) (*GroupNode, error) {
@@ -307,7 +310,7 @@ func (g *GroupNodeDB) GetGroupNodes(groupID string, nodeID string) (NodesGroups,
 	if groupNode == nil {
 		return NodesGroups{}, nil
 	}
-	return groupNode.toNodesGroups(), nil
+	return groupNode.ToNodesGroups(), nil
 }
 
 // ListGroupNodesWithDBEntry returns nodes, subgroups, and the entire group_device_mapping Item for all nodes in the group.
@@ -430,7 +433,7 @@ func (g *GroupNodeDB) UpdateSubGroup(groupID, nodeID, subGroupID string, operati
 			if err := attributevalue.UnmarshalMap(groupNodeEntry, &current); err != nil {
 				return NodesGroups{}, rmerror.NewRMError(err, "failed to unmarshal group node")
 			}
-			return current.toNodesGroups(), nil
+			return current.ToNodesGroups(), nil
 		}
 		if updateExpression == "" {
 			return NodesGroups{}, rmerror.NewRMError(nil, "node is already in 3 subgroups")
@@ -457,7 +460,7 @@ func (g *GroupNodeDB) UpdateSubGroup(groupID, nodeID, subGroupID string, operati
 	if err := attributevalue.UnmarshalMap(updatedResult.Attributes, &groupNode); err != nil {
 		return NodesGroups{}, rmerror.NewRMError(err, "failed to unmarshal updated group node")
 	}
-	return groupNode.toNodesGroups(), nil
+	return groupNode.ToNodesGroups(), nil
 }
 
 func getRemoveSubGroupExpression(item map[string]types.AttributeValue, subGroupID string) (string, map[string]string) {
