@@ -1768,7 +1768,7 @@ var _ = Describe("Group Main", func() {
 			Expect(response.Body).To(ContainSubstring("username must be an email address or an E.164 phone number"))
 		})
 
-		It("should fail to share a group with a missing user name", func() {
+		It("should create a QR code sharing request when username is omitted, claimable by a different user", func() {
 			shareRequest := events.APIGatewayProxyRequest{
 				HTTPMethod: "POST",
 				Resource:   "/v1/groups/{groupId}/sharing-requests",
@@ -1783,12 +1783,157 @@ var _ = Describe("Group Main", func() {
 				PathParameters: map[string]string{"groupId": groupID},
 			}
 
-			// A missing username is caught by the struct's `validate:"required"` tag inside
-			// ExtractRequestStruct, so the body is the generic parse/validate failure.
 			response, err := handleSharingRequest(ctx, shareRequest)
 			Expect(err).To(BeNil())
-			Expect(response.StatusCode).To(Equal(http.StatusBadRequest))
+			Expect(response.StatusCode).To(Equal(http.StatusCreated))
+
+			var shareResponse CreateSharingRequestResponse
+			err = json.Unmarshal([]byte(response.Body), &shareResponse)
+			Expect(err).To(BeNil())
+			Expect(shareResponse.RequestID).ToNot(BeEmpty())
+
+			// otherUserID claims it by request ID alone, as if they'd scanned a
+			// QR code — note this does NOT go through the "received" list, since
+			// the request wasn't addressed to them ahead of time.
+			acceptRequest := events.APIGatewayProxyRequest{
+				HTTPMethod: "POST",
+				Path:       "/v1/sharing-requests/" + shareResponse.RequestID + "/accept",
+				Resource:   "/v1/sharing-requests/{requestId}/accept",
+				PathParameters: map[string]string{
+					"requestId": shareResponse.RequestID,
+				},
+				RequestContext: events.APIGatewayProxyRequestContext{
+					Identity: events.APIGatewayRequestIdentity{
+						CognitoIdentityID:             otherUserID,
+						CognitoAuthenticationProvider: "https://issuer.example:" + otherUserID,
+					},
+				},
+			}
+			acceptResponse, err := handleRequest(ctx, acceptRequest)
+			Expect(err).To(BeNil())
+			Expect(acceptResponse.StatusCode).To(Equal(http.StatusOK))
+
+			otherUserGroups := ListGroups(ctx, otherUserID)
+			Expect(otherUserGroups.Groups).To(HaveLen(1))
+			Expect(otherUserGroups.Groups[0].GroupID).To(Equal(groupID))
 		})
+
+		It("should reject the sharer accepting their own QR code sharing request with 400", func() {
+			shareRequest := events.APIGatewayProxyRequest{
+				HTTPMethod: "POST",
+				Resource:   "/v1/groups/{groupId}/sharing-requests",
+				Path:       "/v1/groups/" + groupID + "/sharing-requests",
+				Body:       `{"access_type": "` + string(utils.GroupSecondaryAccess) + `"}`,
+				RequestContext: events.APIGatewayProxyRequestContext{
+					Identity: events.APIGatewayRequestIdentity{
+						CognitoIdentityID:             userID,
+						CognitoAuthenticationProvider: "https://issuer.example:" + userID,
+					},
+				},
+				PathParameters: map[string]string{"groupId": groupID},
+			}
+			response, err := handleSharingRequest(ctx, shareRequest)
+			Expect(err).To(BeNil())
+			Expect(response.StatusCode).To(Equal(http.StatusCreated))
+
+			var shareResponse CreateSharingRequestResponse
+			err = json.Unmarshal([]byte(response.Body), &shareResponse)
+			Expect(err).To(BeNil())
+
+			acceptRequest := events.APIGatewayProxyRequest{
+				HTTPMethod: "POST",
+				Path:       "/v1/sharing-requests/" + shareResponse.RequestID + "/accept",
+				Resource:   "/v1/sharing-requests/{requestId}/accept",
+				PathParameters: map[string]string{
+					"requestId": shareResponse.RequestID,
+				},
+				RequestContext: events.APIGatewayProxyRequestContext{
+					Identity: events.APIGatewayRequestIdentity{
+						CognitoIdentityID:             userID,
+						CognitoAuthenticationProvider: "https://issuer.example:" + userID,
+					},
+				},
+			}
+			acceptResponse, err := handleRequest(ctx, acceptRequest)
+			Expect(err).To(BeNil())
+			Expect(acceptResponse.StatusCode).To(Equal(http.StatusBadRequest))
+		})
+
+		It("should answer 200 and spend the invite when a scanner rejects a QR code sharing request", func() {
+			shareRequest := events.APIGatewayProxyRequest{
+				HTTPMethod: "POST",
+				Resource:   "/v1/groups/{groupId}/sharing-requests",
+				Path:       "/v1/groups/" + groupID + "/sharing-requests",
+				Body:       `{"access_type": "` + string(utils.GroupSecondaryAccess) + `"}`,
+				RequestContext: events.APIGatewayProxyRequestContext{
+					Identity: events.APIGatewayRequestIdentity{
+						CognitoIdentityID:             userID,
+						CognitoAuthenticationProvider: "https://issuer.example:" + userID,
+					},
+				},
+				PathParameters: map[string]string{"groupId": groupID},
+			}
+			response, err := handleSharingRequest(ctx, shareRequest)
+			Expect(err).To(BeNil())
+			Expect(response.StatusCode).To(Equal(http.StatusCreated))
+
+			var shareResponse CreateSharingRequestResponse
+			err = json.Unmarshal([]byte(response.Body), &shareResponse)
+			Expect(err).To(BeNil())
+
+			sharingAction := func(action, actorID string) events.APIGatewayProxyRequest {
+				return events.APIGatewayProxyRequest{
+					HTTPMethod: "POST",
+					Path:       "/v1/sharing-requests/" + shareResponse.RequestID + "/" + action,
+					Resource:   "/v1/sharing-requests/{requestId}/" + action,
+					PathParameters: map[string]string{
+						"requestId": shareResponse.RequestID,
+					},
+					RequestContext: events.APIGatewayProxyRequestContext{
+						Identity: events.APIGatewayRequestIdentity{
+							CognitoIdentityID:             actorID,
+							CognitoAuthenticationProvider: "https://issuer.example:" + actorID,
+						},
+					},
+				}
+			}
+
+			// otherUserID scans the code and declines. The invite is single-use,
+			// so declining spends it and no later accept can succeed.
+			rejectResponse, err := handleRequest(ctx, sharingAction("reject", otherUserID))
+			Expect(err).To(BeNil())
+			Expect(rejectResponse.StatusCode).To(Equal(http.StatusOK))
+
+			acceptResponse, err := handleRequest(ctx, sharingAction("accept", otherUserID))
+			Expect(err).To(BeNil())
+			Expect(acceptResponse.StatusCode).To(Equal(http.StatusNotFound))
+		})
+
+		It("should answer 404 when accepting or rejecting an unknown sharing request", func() {
+			for _, action := range []string{"accept", "reject"} {
+				unknownRequest := events.APIGatewayProxyRequest{
+					HTTPMethod: "POST",
+					Path:       "/v1/sharing-requests/no-such-request-id/" + action,
+					Resource:   "/v1/sharing-requests/{requestId}/" + action,
+					PathParameters: map[string]string{
+						"requestId": "no-such-request-id",
+					},
+					RequestContext: events.APIGatewayProxyRequestContext{
+						Identity: events.APIGatewayRequestIdentity{
+							CognitoIdentityID:             otherUserID,
+							CognitoAuthenticationProvider: "https://issuer.example:" + otherUserID,
+						},
+					},
+				}
+				response, err := handleRequest(ctx, unknownRequest)
+				Expect(err).To(BeNil())
+				Expect(response.StatusCode).To(Equal(http.StatusNotFound), "unexpected status for "+action)
+			}
+		})
+
+		// A missing username used to be rejected here. It's no longer an error: an
+		// absent/empty username now means "create a QR-code sharing request" — see
+		// "should create a QR code sharing request when username is omitted" above.
 	})
 
 	Describe("Subgroup sharing (POST sharing-requests, DELETE users)", func() {

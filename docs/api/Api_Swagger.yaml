@@ -1647,6 +1647,17 @@ paths:
         Creates a new sharing request for a user to join the group. The invitee
         is named by `username` — the email address or E.164 phone number they
         sign in with. The user will see this in their 'sharing-requests' inbox.
+
+        `username` may be omitted to create a QR-code sharing request instead:
+        the response's `request_id` is meant to be encoded into a QR code and
+        claimed by whoever scans it, via `POST /v1/sharing-requests/{requestId}/accept`.
+        The invite is single-use: the first accept or reject spends it, and the
+        sharer takes it back by rejecting it themselves.
+
+        A request expires if nobody acts on it: 24 hours for a named invitee,
+        7 days for a QR-code request, which has to survive being printed or
+        passed around rather than sitting in an inbox. Acting on an expired
+        request answers `410`.
       tags:
         - Group Sharing
       security:
@@ -1689,6 +1700,10 @@ paths:
         Creates a new sharing request for a user to join the subgroup. The
         invitee is named by `username` — the email address or E.164 phone
         number they sign in with.
+
+        `username` may be omitted to create a QR-code sharing request instead —
+        see `POST /v1/groups/{groupId}/sharing-requests`, which also covers
+        single-use semantics and the 24 hour / 7 day expiry windows.
       tags:
         - Subgroup Sharing
       security:
@@ -1756,6 +1771,11 @@ paths:
       description: >
         Accepts the invitation. This triggers the 'join' workflow, adds the user
         to the group, and may send notifications.
+
+
+        A QR-code request (one created without a `username`) is accepted the same
+        way by whoever scanned it, since no recipient was named up front. The
+        sharer who created it cannot accept their own request.
       tags:
         - Sharing Requests
       security:
@@ -1773,6 +1793,16 @@ paths:
               example:
         "400":
           $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "410":
+          description: >
+            The sharing request has expired — 24 hours after creation for a
+            named invitee, 7 days for a QR-code request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIStatusMessage"
         "500":
           $ref: "#/components/responses/InternalServerError"
 
@@ -1780,7 +1810,14 @@ paths:
   /v1/sharing-requests/{requestId}/reject:
     post:
       summary: Reject sharing request
-      description: Declines the invitation and marks the request as rejected.
+      description: >
+        Declines the invitation and marks the request as rejected.
+
+
+        A QR-code request (one created without a `username`) is single-use, so
+        declining spends it: the code stops working for every later scanner,
+        exactly as accepting it would. The sharer who created the request may
+        reject it themselves, which is how they take the invite back.
       tags:
         - Sharing Requests
       security:
@@ -1797,6 +1834,16 @@ paths:
               example:
         "400":
           $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "410":
+          description: >
+            The sharing request has expired — 24 hours after creation for a
+            named invitee, 7 days for a QR-code request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIStatusMessage"
         "500":
           $ref: "#/components/responses/InternalServerError"
 
@@ -4547,8 +4594,6 @@ components:
 
     CreateSharingRequestRequest:
       type: object
-      required:
-        - username
       properties:
         username:
           type: string
@@ -4556,7 +4601,8 @@ components:
             User name of the invitee — the email address or E.164 phone number
             they sign in with. Internal user IDs are not accepted here.
             Matched exactly as the account was registered, so the case must
-            match for email.
+            match for email. Omit this field entirely to create a QR-code
+            sharing request instead — see the endpoint description.
           example: "invitee@example.com"
         access_type:
           type: string

@@ -595,6 +595,61 @@ def test_last_primary_cannot_leave_when_secondary_present(test_user1, test_user2
         user1_group_api.delete_group(group_id, warn_error=True)
 
 
+# QR code sharing: a request created without a username names no recipient, so
+# whoever scans the returned request_id claims it.
+
+def test_qr_code_sharing_request_claimed_by_scanner(test_user1, test_user2):
+    """A QR code request is invisible to everyone until claimed, then claimable by request id alone."""
+    user1_group_api = Group(test_user1)
+    user2_group_api = Group(test_user2)
+    group_id = user1_group_api.create_group(f"Test Group {uuid.uuid4()}")
+
+    try:
+        request_id = user1_group_api.share_group_by_qr_code(group_id, "secondary")
+
+        # Nobody is named as recipient, so it must not surface in any inbox.
+        reqs = test_user2.get_sharing_requests() or []
+        assert not any(r["sharing_request_id"] == request_id for r in reqs), \
+            "Unclaimed QR request must not appear in a user's received list"
+
+        # test_user2 scans the code and claims it by request id alone.
+        resp = test_user2.make_api_request("POST", f"/v1/sharing-requests/{request_id}/accept")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+
+        groups = user2_group_api.list_groups()
+        shared = next((g for g in groups["groups"] if g["group_id"] == group_id), None)
+        assert shared is not None, "Scanner did not receive access to the shared group"
+        assert shared["access_type"] == "secondary", f"Expected 'secondary', got '{shared.get('access_type')}'"
+    finally:
+        user1_group_api.delete_group(group_id, warn_error=True)
+
+
+def test_qr_code_invite_is_single_use(test_user1, test_user2, test_user3):
+    """A scanner declining a QR invite spends it: the code stops working for everyone.
+
+    Kept as an integration test because the QR accept/reject pair is what the
+    mobile client actually drives against a real deployment. The rest of the
+    rules (self-accept 400, unknown-id 404, subgroup QR shares, which key the
+    row lands under) are covered faster in the Ginkgo suites for
+    src/rmneo/group and the group handler.
+    """
+    user1_group_api = Group(test_user1)
+    group_id = user1_group_api.create_group(f"Test Group {uuid.uuid4()}")
+
+    try:
+        request_id = user1_group_api.share_group_by_qr_code(group_id, "secondary")
+
+        # test_user2 scans the code and declines, which spends the single-use invite.
+        resp = test_user2.make_api_request("POST", f"/v1/sharing-requests/{request_id}/reject")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+
+        resp = test_user3.make_api_request("POST", f"/v1/sharing-requests/{request_id}/accept")
+        assert resp.status_code == 404, \
+            f"Expected 404 after the request was rejected, got {resp.status_code}: {resp.text}"
+    finally:
+        user1_group_api.delete_group(group_id, warn_error=True)
+
+
 # Cross-tenant tests; see test_automations.py for the origin of this class.
 
 def test_cannot_accept_foreign_sharing_request(two_tenants, test_user3):
@@ -616,8 +671,10 @@ def test_cannot_accept_foreign_sharing_request(two_tenants, test_user3):
 
     resp = user_a.make_api_request("POST", f"/v1/sharing-requests/{req_id}/accept",
                                    data=json.dumps({}))
-    # Deployed handler answers 500 rather than a clean 403 — denied, but sloppy
-    # status, so this asserts >=400 and checks the real property below.
+    # The handler answers 404 rather than 403: a request not addressed to the
+    # caller is indistinguishable from one that doesn't exist, which is the
+    # right answer anyway since it leaks nothing. Assert >=400 and check the
+    # real property below.
     assert resp.status_code >= 400, (
         f"Accepting a foreign user's sharing request returned {resp.status_code}, "
         f"expected an error. Body: {resp.text}"
