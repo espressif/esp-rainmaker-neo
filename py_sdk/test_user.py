@@ -1015,13 +1015,14 @@ class User:
         return response.json()
 
     def admin_get_iot_event_mode(self):
-        """Get the current IoT-rule action mode for presence/publish_input
+        """Get the current IoT-rule action mode for presence/publish_input/timeseries
         (admin only). Returns the parsed body on 200, the raw response on
         non-200, or None on transport errors. Tests that need the status code
         should use admin_get_iot_event_mode_response() instead.
 
         Returns:
-            dict: {"presence": "direct"|"sqs", "publish_input": "direct"|"sqs"} on 200,
+            dict: {"presence": "direct"|"sqs", "publish_input": "direct"|"sqs",
+                   "timeseries": "direct"|"sqs"} on 200,
                   the raw response object on non-200, or None on transport error.
         """
         response = self.make_api_request('GET', '/v1/admin/iot-event-mode')
@@ -1032,14 +1033,14 @@ class User:
         return response.json()
 
     def admin_put_iot_event_mode(self, mode):
-        """Flip the IoT-rule action mode for both node_disconnected_rule and
-        node_to_cloud_rule (admin only).
+        """Flip the IoT-rule action mode for node_disconnected_rule,
+        node_to_cloud_rule, and node_ts_batch_rule (admin only).
 
         Args:
             mode (str): "direct" or "sqs"
 
         Returns:
-            dict: post-flip {"presence","publish_input"} state on 200,
+            dict: post-flip {"presence","publish_input","timeseries"} state on 200,
                   the raw response object on non-200.
         """
         body = {"mode": mode}

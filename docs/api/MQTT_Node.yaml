@@ -162,6 +162,12 @@ operations:
       $ref: "#/channels/timeseries"
     summary: Node publishes timestamped sensor/telemetry data
 
+  publishTimeseriesBatch:
+    action: send
+    channel:
+      $ref: "#/channels/timeseriesBatch"
+    summary: Node publishes multiple timestamped sensor/telemetry data points
+
   # ── Notifications ──────────────────────────────────────────────────────────
   publishNotification:
     action: send
@@ -459,6 +465,26 @@ channels:
     messages:
       tsData:
         $ref: "#/components/messages/timeseriesMessage"
+
+  timeseriesBatch:
+    address: "rainmaker/nodes/{nodeId}/ts/{groupInfoStr}/batch"
+    description: |
+      **[Node → Cloud]** Batched timeseries data. Devices should limit each
+      message to 1–100 independently queryable data points.
+      <div class="success" style="background-color: #d1e7dd; padding: 10px; border-left: 4px solid #198754; margin: 10px 0;">
+      <strong>Note:</strong> Use Basic Ingest topic <code>$aws/rules/node_ts_batch_rule/rainmaker/nodes/&lt;node_id&gt;/ts/&lt;group_info_str&gt;/batch</code> to save costs.
+      </div>
+
+      A bridge may publish a child's batch with `{nodeId}` set to the child
+      Thing. The existing `ChildrenPublish` `ts/*` permission covers this topic.
+    parameters:
+      nodeId:
+        $ref: "#/components/parameters/nodeId"
+      groupInfoStr:
+        $ref: "#/components/parameters/groupInfoStr"
+    messages:
+      tsBatchData:
+        $ref: "#/components/messages/timeseriesBatchMessage"
 
   # ── Notifications ──────────────────────────────────────────────────────────
   notification:
@@ -1221,49 +1247,9 @@ components:
     # ── Timeseries ───────────────────────────────────────────────────────────
     timeseriesMessage:
       name: TimeseriesData
-      summary: Timestamped sensor/telemetry data point
+      summary: One timestamped sensor/telemetry data point
       payload:
-        type: object
-        required:
-          - k
-          - dt
-          - t
-          - v
-        properties:
-          k:
-            type: string
-            description: |
-              Data point key — within-node identifier of the data point. Node is implicit (from MQTT topic).
-
-              Default data model: `<device id>.<param id>`, e.g. `"Light.Brightness"`. A bare
-              `<param id>` is also accepted when the node has a single device.
-
-              Matter data model: the full dotted key chain `"0x<endpoint>.c.s.0x<cluster>.a.0x<attribute>"`, e.g. `"0x1.c.s.0x402.a.0x0"`.
-            example: "Light.Brightness"
-          dt:
-            type: string
-            description: Data type of the value
-            enum: ["bool", "int", "float", "string"]
-            example: "float"
-          t:
-            type: integer
-            description: Unix timestamp in seconds (UTC)
-            example: 1743656583
-          v:
-            description: Parameter value (type matches `dt` field)
-            example: 25.5
-          cumulative:
-            type: boolean
-            description:
-              Whether the value is cumulative (e.g. energy meter total kWh)
-            default: false
-            example: false
-          tz:
-            type: string
-            description:
-              Timezone identifier (IANA name, e.g. "UTC", "Asia/Kolkata") for
-              timestamp context
-            example: "Asia/Kolkata"
+        $ref: "#/components/schemas/timeseriesDataPoint"
       examples:
         - name: Temperature reading (default — device.param)
           payload:
@@ -1287,6 +1273,38 @@ components:
             t: 1743656583
             v: 2500
             tz: "UTC"
+
+    timeseriesBatchMessage:
+      name: TimeseriesBatchData
+      summary: Multiple timestamped sensor/telemetry data points
+      description: |
+        The complete batch is validated before any point is stored. Each point
+        is written as an independent raw timeseries record.
+      payload:
+        type: object
+        required:
+          - data
+        properties:
+          data:
+            type: array
+            minItems: 1
+            maxItems: 100
+            items:
+              $ref: "#/components/schemas/timeseriesDataPoint"
+      examples:
+        - name: Multiple data points
+          payload:
+            data:
+              - k: "Sensor.Temperature"
+                dt: "float"
+                t: 1743656583
+                v: 25.5
+                tz: "UTC"
+              - k: "Sensor.Humidity"
+                dt: "float"
+                t: 1743656583
+                v: 60.2
+                tz: "UTC"
 
     # ── Notifications ────────────────────────────────────────────────────────
     notificationMessage:
@@ -1588,6 +1606,47 @@ components:
 
   # ── Schemas ────────────────────────────────────────────────────────────────
   schemas:
+    timeseriesDataPoint:
+      type: object
+      required:
+        - k
+        - dt
+        - t
+        - v
+      properties:
+        k:
+          type: string
+          description: |
+            Data point key — within-node identifier of the data point. Node is implicit (from MQTT topic).
+
+            Default data model: `<device id>.<param id>`, e.g. `"Light.Brightness"`. A bare
+            `<param id>` is also accepted when the node has a single device.
+
+            Matter data model: the full dotted key chain `"0x<endpoint>.c.s.0x<cluster>.a.0x<attribute>"`, e.g. `"0x1.c.s.0x402.a.0x0"`.
+          example: "Light.Brightness"
+        dt:
+          type: string
+          description: Data type of the value
+          enum: ["bool", "int", "float", "string"]
+          example: "float"
+        t:
+          type: integer
+          format: int64
+          description: Unix timestamp in seconds (UTC)
+          example: 1743656583
+        v:
+          description: Parameter value; its JSON type must match `dt`
+          example: 25.5
+        cumulative:
+          type: boolean
+          description: Whether the value is cumulative (e.g. energy meter total kWh)
+          default: false
+          example: false
+        tz:
+          type: string
+          description: Timezone identifier (IANA name, e.g. "UTC", "Asia/Kolkata") for timestamp context
+          example: "Asia/Kolkata"
+
     nodeConfig:
       type: object
       description: Node configuration payload (sent via setNodeConfig event)

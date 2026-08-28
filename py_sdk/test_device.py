@@ -1052,6 +1052,35 @@ class Device:
 
         return self._publish_to_topic(topic, payload, "timeseries data")
 
+    def publish_timeseries_batch(self, data_points, basic_ingest=True):
+        """Publish multiple independently queryable timeseries points in one MQTT message.
+
+        Each item must contain ``k``, ``dt``, ``t`` (Unix seconds), and
+        ``v``. Device-side publishing is limited to 100 items per message.
+        """
+        if not self.mqtt_connection:
+            device_log("Error: MQTT not connected. Call connect() first.")
+            return False
+        if not hasattr(self, 'group_id') or not self.group_id:
+            device_log("Error: Device group information not available. Call get_group_info() first.")
+            return False
+        if not isinstance(data_points, list) or not data_points:
+            device_log("Error: Timeseries batch must contain at least one data point.")
+            return False
+        if len(data_points) > 100:
+            device_log("Error: Timeseries batch cannot contain more than 100 data points.")
+            return False
+
+        topic_suffix = f"{self.group_id}"
+        if hasattr(self, 'subgroup_ids') and self.subgroup_ids:
+            topic_suffix += f"-{','.join(self.subgroup_ids)}"
+
+        topic = f"rainmaker/nodes/{self.node_thing_name}/ts/{topic_suffix}/batch"
+        if basic_ingest:
+            topic = f"$aws/rules/node_ts_batch_rule/{topic}"
+
+        return self._publish_to_topic(topic, {"data": data_points}, "timeseries batch data")
+
     def set_node_config(self, config_data):
         if not self.mqtt_connection:
             device_log("Error: MQTT not connected. Call connect() first.")

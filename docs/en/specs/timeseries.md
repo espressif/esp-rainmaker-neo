@@ -10,9 +10,11 @@ service API.
 
 The feature has two independent halves that never call each other directly:
 
-1. **Ingestion (write path).** A device publishes a data point to an MQTT
-   topic. An AWS IoT Core topic rule projects the message into a raw
-   DynamoDB table. That table's DynamoDB stream drives a Lambda that folds
+1. **Ingestion (write path).** A device publishes either one data point or a
+   batch of data points to MQTT. The single-point IoT Core rule projects the
+   message directly into the raw DynamoDB table. The batch rule invokes an
+   ingestion Lambda either directly or through SQS, according to the runtime
+   IoT event mode. The raw table's DynamoDB stream drives a Lambda that folds
    each new sample into per-window aggregates (hourly / daily / weekly /
    monthly) stored in a second DynamoDB table. There is no synchronous
    write API — data enters only through MQTT.
@@ -25,12 +27,12 @@ The feature has two independent halves that never call each other directly:
 
 ### Key design decisions
 
-1. **Ingestion is rule-driven, not Lambda-driven.** The IoT topic rule
-   (`node_ts_rule`) writes device samples straight into DynamoDB with a
-   `DynamoDBv2` action. No Lambda sits on the hot ingest path, so ingest
-   scales with IoT Core and DynamoDB rather than with Lambda concurrency.
-   The write path explicitly rejects synchronous writes: the topic is the
-   only ingress.
+1. **Single reports stay rule-driven; batch reports are buffered when needed.**
+   `node_ts_rule` writes legacy single-point reports straight into DynamoDB
+   with a `DynamoDBv2` action. `node_ts_batch_rule` sends multi-point reports
+   to `timeseries_ingest_handler`. Both direct and SQS delivery paths are
+   provisioned for the batch rule; operators can select SQS mode at runtime to queue bursts and
+   invoke the Lambda with batches. MQTT remains the only ingress.
 
 2. **Raw and aggregated data live in separate tables.** `raw_ts_data`
    is an append-only log of individual samples; `processed_ts_data`
@@ -46,11 +48,11 @@ The feature has two independent halves that never call each other directly:
    row.
 
 4. **A single partition key format threads the whole pipeline.**
-   `node_key_dt = "{node_id}.{key}.{data_type}"` is computed by the IoT rule
-   (`concat(topic(3), '.', k, '.', dt)`), used as the raw-table partition
-   key, carried through the stream, and reused as the processed-table
-   partition key. One parameter of one node maps to one partition on each
-   side.
+   `node_key_dt = "{node_id}.{key}.{data_type}"` is computed by the
+   single-point IoT rule (`concat(topic(3), '.', k, '.', dt)`) or by the batch
+   ingestion database layer, used as the raw-table partition key, carried
+   through the stream, and reused as the processed-table partition key. One
+   parameter of one node maps to one partition on each side.
 
 5. **Cumulative metrics are first-class.** The processor detects cumulative
    parameters (e.g. energy meters) and derives per-window *consumption* from
@@ -84,9 +86,10 @@ value that cannot be coerced fails aggregation for that sample.
 ### 2.2 The partition key: `node_key_dt`
 
 Every table in the pipeline is partitioned by
-`node_key_dt = "{node_id}.{key}.{data_type}"`. It is assembled once, by the
-IoT rule's SQL (`concat(topic(3), '.', k, '.', dt)`), and never recomputed on
-the write path. The query layer rebuilds the identical string from the
+`node_key_dt = "{node_id}.{key}.{data_type}"`. For single-point reports it is
+assembled by the IoT rule's SQL (`concat(topic(3), '.', k, '.', dt)`); for
+batch reports the ingestion path assembles the same value for each point.
+The query layer rebuilds the identical string from the
 node ID, `key`, and `data_type` before every read. This is why **both `key`
 and `data_type` are required on every query** — without both, the partition
 cannot be addressed.
@@ -209,7 +212,59 @@ Because the rule uses `DynamoDBv2` with a computed `node_key_dt` and the
 message's own `t` as the sort key, each published sample becomes exactly one
 raw-table item.
 
-### 3.2 Raw table — `raw_ts_data`
+### 3.2 Batch topic, queue, and ingestion Lambda
+
+A device should publish no more than 100 points in one message to:
+
+```
+rainmaker/nodes/{node_id}/ts/{topic_name}/batch
+```
+
+The `node_ts_batch_rule` subscribes to
+`rainmaker/nodes/+/ts/+/batch` and produces this event for
+`timeseries_ingest_handler`:
+
+```json
+{
+  "node_id": "node-1",
+  "topic_name": "group-1",
+  "payload": {
+    "data": [
+      {"k": "temperature", "dt": "float", "t": 1743656583, "v": 25.5, "tz": "UTC"},
+      {"k": "energy", "dt": "int", "t": 1743656583, "v": 42, "cumulative": true}
+    ]
+  }
+}
+```
+
+Each point uses the same `k`, `dt`, `t`, `v`, optional `tz`, and optional
+`cumulative` fields as a single-point report. `dt` must be `bool`, `int`,
+`float`, or `string`, and `v` must match it. The Lambda validates the whole
+MQTT batch before writing, so a validation error does not partially persist
+that report. Valid points are written to `raw_ts_data` with DynamoDB
+`BatchWriteItem`, in chunks of up to 25; they then follow the normal
+DynamoDB-stream aggregation path. The 100-point limit is enforced by device
+firmware rather than by the ingestion Lambda, avoiding retries for an
+otherwise valid oversized report.
+
+The rule and Lambda support two runtime delivery modes:
+
+- `direct` (the deploy-time default) invokes `timeseries_ingest_handler` once
+  per MQTT report.
+- `sqs` sends reports to `timeseries-ingest-queue`. Its Lambda event-source
+  mapping collects up to 10 reports for up to one second per invocation and
+  enables partial-batch failure reporting. Failed messages are retried up to
+  three receives and then moved to `timeseries-ingest-dlq`, which retains them
+  for 14 days.
+
+The superAdmin `/v1/admin/iot-event-mode` API switches
+`node_ts_batch_rule` together with the presence and publish-input rules. Both
+paths are always provisioned, so switching does not require a deployment.
+SQS mode provides queuing, invocation batching, retry isolation, and
+backpressure during bursts instead of mapping every MQTT publish directly to
+a concurrent Lambda invocation.
+
+### 3.3 Raw table — `raw_ts_data`
 
 - **Partition key:** `node_key_dt` (String).
 - **Sort key:** `ts` (Number).
@@ -220,9 +275,10 @@ raw-table item.
   creation-time suffix and cannot be hardcoded; the stream-processor stack
   reads it back from SSM.
 
-Items are append-only in normal operation; the only writer is the IoT rule.
+Items are append-only in normal operation; writers are the single-point IoT
+rule and the batch ingestion Lambda.
 
-### 3.3 Stream processor Lambda
+### 3.4 Stream processor Lambda
 
 The `ts_stream_processor` Lambda is the aggregation engine. Its event source
 is the raw table's DynamoDB stream:
@@ -248,7 +304,7 @@ For each record it:
 A per-record and per-batch metrics line (conversion / aggregation / total
 milliseconds) is logged for observability.
 
-### 3.4 Aggregation logic
+### 3.5 Aggregation logic
 
 The aggregation logic folds one raw sample into all four windows:
 
@@ -452,6 +508,14 @@ start through the processor and the range query) is listed under Future work.
     on the raw table only;
   - an error-action role scoped to `logs:CreateLogStream` /
     `logs:PutLogEvents` on the rule's log group.
+- **`node_ts_batch_rule`** and **`timeseries_ingest_handler`** (§3.2), with:
+  - a Lambda role scoped to `dynamodb:PutItem` / `dynamodb:BatchWriteItem` on the raw table and the SQS
+    receive/delete/get-attributes operations required by its event source;
+  - `timeseries-ingest-queue`, a 14-day DLQ, and an event-source mapping with
+    batch size 10, a one-second batching window, and partial-batch failures;
+  - `sqs:SendMessage` on the IoT rule role and a separate least-privilege
+    CloudWatch Logs error-action role;
+  - Lambda-direct invoke permission retained for runtime direct mode.
 
 ### 5.2 Stream-processor stack
 
@@ -464,12 +528,12 @@ start through the processor and the range query) is listed under Future work.
     `ListStreams` on the raw table's stream ARN.
 - An event-source mapping wires the stream to the Lambda with the `INSERT`
   filter, batch/window/retry settings, and `report_batch_item_failures`
-  from §3.3. (The event-source mapping has no physical name, so it can be
+  from §3.4. (The event-source mapping has no physical name, so it can be
   moved between stacks without a naming conflict.)
 
-Least privilege throughout: the ingest role can only write the raw table, and
-the processor role can only read the stream and read/write the processed
-table — neither can reach the other side's write surface.
+Least privilege throughout: the batch ingest role can only consume its queue
+and write the raw table, and the processor role can only read the stream and
+read/write the processed table.
 
 ### 5.3 Query path
 

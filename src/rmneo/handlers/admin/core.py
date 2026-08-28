@@ -24,10 +24,10 @@ from arn_utils import get_table_arn
 
 
 class IotEventModeCore(Construct):
-    """superAdmin REST API to flip the rule action on node_disconnected_rule and
-    node_to_cloud_rule between Lambda-direct and SQS at runtime, without
-    redeploying. Both action paths are pre-provisioned by the handler stacks
-    (see rmneo/handlers/node/{node_conn,node_to_cloud}/stack.py).
+    """superAdmin REST API to flip the rule action on node_disconnected_rule,
+    node_to_cloud_rule, and node_ts_batch_rule between Lambda-direct and SQS
+    at runtime, without redeploying. Both action paths are pre-provisioned by
+    the node and timeseries handler stacks.
 
     Drift across CloudFormation deploys is handled via a "reapply" custom
     resource (see docs/en/specs/iot_event_mode.md §4.4): the runtime-set mode
@@ -43,6 +43,7 @@ class IotEventModeCore(Construct):
         *,
         presence_handler,
         publish_input_handler,
+        timeseries_handler,
         **kwargs,
     ) -> None:
         super().__init__(scope, id, **kwargs)
@@ -53,11 +54,12 @@ class IotEventModeCore(Construct):
 
         presence_rule_arn = f"arn:aws:iot:{region}:{Aws.ACCOUNT_ID}:rule/node_disconnected_rule"
         publish_input_rule_arn = f"arn:aws:iot:{region}:{Aws.ACCOUNT_ID}:rule/node_to_cloud_rule"
+        timeseries_rule_arn = f"arn:aws:iot:{region}:{Aws.ACCOUNT_ID}:rule/node_ts_batch_rule"
         admin_config_table_arn = get_table_arn(TABLE_NAMES['ADMIN_CONFIG'], region)
 
         lambda_role.add_to_policy(iam.PolicyStatement(
             actions=["iot:GetTopicRule", "iot:ReplaceTopicRule"],
-            resources=[presence_rule_arn, publish_input_rule_arn],
+            resources=[presence_rule_arn, publish_input_rule_arn, timeseries_rule_arn],
         ))
 
         # ReplaceTopicRule with role-bearing actions (the SQS action's roleArn
@@ -71,6 +73,8 @@ class IotEventModeCore(Construct):
                 presence_handler.iot_rule_error_role.role_arn,
                 publish_input_handler.iot_rule_role.role_arn,
                 publish_input_handler.iot_rule_error_role.role_arn,
+                timeseries_handler.iot_rule_role.role_arn,
+                timeseries_handler.iot_rule_error_role.role_arn,
             ],
             conditions={
                 "StringEquals": {"iam:PassedToService": "iot.amazonaws.com"},
@@ -92,6 +96,9 @@ class IotEventModeCore(Construct):
             "PUBLISH_INPUT_LAMBDA_ARN": publish_input_handler.publish_input_function.function_arn,
             "NODE_TO_CLOUD_QUEUE_URL": publish_input_handler.node_to_cloud_queue.queue_url,
             "PUBLISH_INPUT_IOT_RULE_ROLE_ARN": publish_input_handler.iot_rule_role.role_arn,
+            "TIMESERIES_LAMBDA_ARN": timeseries_handler.timeseries_ingest_function.function_arn,
+            "TIMESERIES_QUEUE_URL": timeseries_handler.timeseries_ingest_queue.queue_url,
+            "TIMESERIES_IOT_RULE_ROLE_ARN": timeseries_handler.iot_rule_role.role_arn,
         }
 
         self.iot_event_mode_function = create_lambda_function(
@@ -158,9 +165,10 @@ class IotEventModeCore(Construct):
                 ),
             ]),
         )
-        # Run after both rules are written so the reapply pass sees the
+        # Run after all rules are written so the reapply pass sees the
         # post-CFN state and can heal it back to the runtime-set mode.
         reapply.node.add_dependency(presence_handler)
         reapply.node.add_dependency(publish_input_handler)
+        reapply.node.add_dependency(timeseries_handler)
         # And after the lambda itself exists.
         reapply.node.add_dependency(self.iot_event_mode_function)

@@ -31,6 +31,7 @@ var _ = Describe("iot_event_mode lambda", func() {
 		iotMock    *mock.IoTClientMock
 		presence   ruleConfig
 		publish    ruleConfig
+		timeseries ruleConfig
 		offlineSql = "SELECT * FROM '$aws/events/presence/disconnected/#'"
 		toCloudSql = "SELECT topic(3) as thing_name, * as data FROM 'rainmaker/things/+/to_cloud'"
 		errorAct   = &iottypes.Action{
@@ -52,6 +53,9 @@ var _ = Describe("iot_event_mode lambda", func() {
 		os.Setenv("PUBLISH_INPUT_LAMBDA_ARN", "arn:aws:lambda:us-east-1:123:function:publish_input_event_handler")
 		os.Setenv("NODE_TO_CLOUD_QUEUE_URL", "https://sqs.us-east-1.amazonaws.com/123/node-to-cloud-queue")
 		os.Setenv("PUBLISH_INPUT_IOT_RULE_ROLE_ARN", "arn:aws:iam::123:role/publish-input-iot-rule")
+		os.Setenv("TIMESERIES_LAMBDA_ARN", "arn:aws:lambda:us-east-1:123:function:timeseries-ingest-handler")
+		os.Setenv("TIMESERIES_QUEUE_URL", "https://sqs.us-east-1.amazonaws.com/123/timeseries-ingest-queue")
+		os.Setenv("TIMESERIES_IOT_RULE_ROLE_ARN", "arn:aws:iam::123:role/timeseries-iot-rule")
 
 		presence = ruleConfig{
 			name:       presenceRuleName,
@@ -65,8 +69,14 @@ var _ = Describe("iot_event_mode lambda", func() {
 			queueURL:   "https://sqs.us-east-1.amazonaws.com/123/node-to-cloud-queue",
 			iotRoleArn: "arn:aws:iam::123:role/publish-input-iot-rule",
 		}
+		timeseries = ruleConfig{
+			name:       timeseriesRuleName,
+			lambdaArn:  "arn:aws:lambda:us-east-1:123:function:timeseries-ingest-handler",
+			queueURL:   "https://sqs.us-east-1.amazonaws.com/123/timeseries-ingest-queue",
+			iotRoleArn: "arn:aws:iam::123:role/timeseries-iot-rule",
+		}
 
-		// Seed both rules in lambda-direct mode (matching the default deploy state).
+		// Seed all rules in lambda-direct mode (matching the default deploy state).
 		iotMock.SetTopicRuleDirect(presenceRuleName, &iottypes.TopicRulePayload{
 			Sql:         aws.String(offlineSql),
 			Actions:     []iottypes.Action{{Lambda: &iottypes.LambdaAction{FunctionArn: aws.String(presence.lambdaArn)}}},
@@ -77,6 +87,10 @@ var _ = Describe("iot_event_mode lambda", func() {
 			AwsIotSqlVersion: aws.String("2016-03-23"),
 			Actions:          []iottypes.Action{{Lambda: &iottypes.LambdaAction{FunctionArn: aws.String(publish.lambdaArn)}}},
 			ErrorAction:      errorAct,
+		})
+		iotMock.SetTopicRuleDirect(timeseriesRuleName, &iottypes.TopicRulePayload{
+			Sql:     aws.String("SELECT * FROM 'rainmaker/nodes/+/ts/+/batch'"),
+			Actions: []iottypes.Action{{Lambda: &iottypes.LambdaAction{FunctionArn: aws.String(timeseries.lambdaArn)}}},
 		})
 	})
 
@@ -226,7 +240,7 @@ var _ = Describe("iot_event_mode lambda", func() {
 	Describe("handleReapply", func() {
 		writeStoredRow := func(presence, publishInput string) {
 			adminDB := admin_config_db.NewAdminConfigDB(rmngctx.NewRmngContextWithCtx(ctx, utils.NewSystemActor()))
-			err := adminDB.SetIoTEventMode(presence, publishInput, "test-system")
+			err := adminDB.SetIoTEventMode(presence, publishInput, publishInput, "test-system")
 			Expect(err).To(BeNil())
 		}
 
@@ -234,20 +248,21 @@ var _ = Describe("iot_event_mode lambda", func() {
 			resp, err := handleReapply(ctx)
 			Expect(err).To(BeNil())
 			Expect(resp.Status).To(Equal("noop"))
-			// Both rules are still in lambda-direct mode (the seed state).
+			// All rules are still in lambda-direct mode (the seed state).
 			payload, _ := iotMock.GetTopicRuleDirect(presenceRuleName)
 			Expect(payload.Actions[0].Lambda).ToNot(BeNil())
 		})
 
-		It("flips both rules to sqs when the row says sqs", func() {
+		It("flips all rules to sqs when the row says sqs", func() {
 			writeStoredRow(modeSQS, modeSQS)
 			resp, err := handleReapply(ctx)
 			Expect(err).To(BeNil())
 			Expect(resp.Status).To(Equal("applied"))
 			Expect(resp.Presence).To(Equal(modeSQS))
 			Expect(resp.PublishInput).To(Equal(modeSQS))
+			Expect(resp.Timeseries).To(Equal(modeSQS))
 
-			// Verify both live rules now have an SQS action.
+			// Verify all live rules now have an SQS action.
 			pres, _ := iotMock.GetTopicRuleDirect(presenceRuleName)
 			Expect(pres.Actions[0].Sqs).ToNot(BeNil())
 			Expect(*pres.Sql).To(Equal(offlineSql))
@@ -255,10 +270,12 @@ var _ = Describe("iot_event_mode lambda", func() {
 			pub, _ := iotMock.GetTopicRuleDirect(publishInputRuleName)
 			Expect(pub.Actions[0].Sqs).ToNot(BeNil())
 			Expect(*pub.AwsIotSqlVersion).To(Equal("2016-03-23"))
+			ts, _ := iotMock.GetTopicRuleDirect(timeseriesRuleName)
+			Expect(ts.Actions[0].Sqs).ToNot(BeNil())
 		})
 
 		It("flips back to direct when the row says direct (e.g., after manual revert)", func() {
-			// Pre-state: both rules in sqs.
+			// Pre-state: all rules in sqs.
 			iotMock.SetTopicRuleDirect(presenceRuleName, &iottypes.TopicRulePayload{
 				Sql: aws.String(offlineSql),
 				Actions: []iottypes.Action{{Sqs: &iottypes.SqsAction{
@@ -276,6 +293,12 @@ var _ = Describe("iot_event_mode lambda", func() {
 				}}},
 				ErrorAction: errorAct,
 			})
+			iotMock.SetTopicRuleDirect(timeseriesRuleName, &iottypes.TopicRulePayload{
+				Actions: []iottypes.Action{{Sqs: &iottypes.SqsAction{
+					QueueUrl: aws.String(timeseries.queueURL),
+					RoleArn:  aws.String(timeseries.iotRoleArn),
+				}}},
+			})
 
 			writeStoredRow(modeDirect, modeDirect)
 			resp, err := handleReapply(ctx)
@@ -286,6 +309,8 @@ var _ = Describe("iot_event_mode lambda", func() {
 			Expect(pres.Actions[0].Lambda).ToNot(BeNil())
 			pub, _ := iotMock.GetTopicRuleDirect(publishInputRuleName)
 			Expect(pub.Actions[0].Lambda).ToNot(BeNil())
+			ts, _ := iotMock.GetTopicRuleDirect(timeseriesRuleName)
+			Expect(ts.Actions[0].Lambda).ToNot(BeNil())
 		})
 	})
 
@@ -294,9 +319,9 @@ var _ = Describe("iot_event_mode lambda", func() {
 			return rmngctx.NewRmngContextWithCtx(ctx, utils.NewSystemActor())
 		}
 
-		It("round-trips presence and publish_input through DynamoDB", func() {
+		It("round-trips all rule modes through DynamoDB", func() {
 			adminDB := admin_config_db.NewAdminConfigDB(systemCtx())
-			err := adminDB.SetIoTEventMode(modeSQS, modeDirect, "test-user-id")
+			err := adminDB.SetIoTEventMode(modeSQS, modeDirect, modeSQS, "test-user-id")
 			Expect(err).To(BeNil())
 
 			cfg, err := adminDB.GetIoTEventMode()
@@ -304,6 +329,7 @@ var _ = Describe("iot_event_mode lambda", func() {
 			Expect(cfg).ToNot(BeNil())
 			Expect(cfg.Presence).To(Equal(modeSQS))
 			Expect(cfg.PublishInput).To(Equal(modeDirect))
+			Expect(cfg.Timeseries).To(Equal(modeSQS))
 			Expect(cfg.UpdatedBy).To(Equal("test-user-id"))
 			Expect(cfg.UpdatedAt).To(BeNumerically(">", int64(0)))
 		})
@@ -319,7 +345,7 @@ var _ = Describe("iot_event_mode lambda", func() {
 			// Plain user context (only has GroupCreate granted by NewUser).
 			plain := rmngctx.NewRmngContextWithCtx(ctx, user.NewUser("regular-user"))
 			adminDB := admin_config_db.NewAdminConfigDB(plain)
-			err := adminDB.SetIoTEventMode(modeSQS, modeSQS, "regular-user")
+			err := adminDB.SetIoTEventMode(modeSQS, modeSQS, modeSQS, "regular-user")
 			Expect(err).ToNot(BeNil())
 		})
 
@@ -337,7 +363,7 @@ var _ = Describe("iot_event_mode lambda", func() {
 			Expect(grantCtx.SetAllow(utils.AdminConfigGet, admin_config_db.IoTEventModeConfigKey)).To(BeNil())
 
 			adminDB := admin_config_db.NewAdminConfigDB(grantCtx)
-			Expect(adminDB.SetIoTEventMode(modeDirect, modeDirect, "granted-user")).To(BeNil())
+			Expect(adminDB.SetIoTEventMode(modeDirect, modeDirect, modeDirect, "granted-user")).To(BeNil())
 			cfg, err := adminDB.GetIoTEventMode()
 			Expect(err).To(BeNil())
 			Expect(cfg).ToNot(BeNil())
