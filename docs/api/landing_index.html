@@ -19,7 +19,7 @@
     <link rel="apple-touch-icon" href="./logo-neo-mark.png" />
     <!--
       Root index for api.docs.neo.rainmaker.espressif.com. Every reference site
-      now lives under this one host: /http/, /mqtt/, /events/.
+      now lives under this one host: /http/, /mqtt/, /events/, /mcp/.
 
       Self-contained on purpose — no stylesheet or font binary is fetched. The
       font stack and palette are copied from the Admin Dashboard so the two read
@@ -224,6 +224,12 @@
             <small>Login and identity management endpoints</small>
           </a>
         </li>
+        <li>
+          <a class="doc-link" href="./http/?urls.primaryName=MCP%20API">
+            RainMaker MCP API
+            <small>MCP endpoint and its OAuth 2.0 proxy</small>
+          </a>
+        </li>
       </ul>
 
       <h2>MQTT</h2>
@@ -238,6 +244,19 @@
           <a class="doc-link" href="./mqtt/user/">
             RainMaker User MQTT
             <small>Topics and payloads for phone and web clients</small>
+          </a>
+        </li>
+      </ul>
+
+      <h2>MCP</h2>
+      <ul>
+        <li>
+          <a class="doc-link" href="./mcp/">
+            RainMaker MCP Tools
+            <small>
+              Tool names, descriptions and input schemas exposed by the MCP
+              server
+            </small>
           </a>
         </li>
       </ul>

@@ -2,21 +2,40 @@
 
 Static [Swagger UI](https://github.com/swagger-api/swagger-ui) build plus the OpenAPI/AsyncAPI specs it serves. No bundler, no build step — the files here are published as-is.
 
-Three pipelines in [`.gitlab-ci.yml`](../../.gitlab-ci.yml) read this folder, all on `main` only. All three publish to **one** bucket and **one** CloudFront distribution, each under its own path prefix:
+Four pipelines in [`.gitlab-ci.yml`](../../.gitlab-ci.yml) publish the reference site, all on `main` only. All four publish to **one** bucket and **one** CloudFront distribution, each under its own path prefix. Three read this folder; `sync_mcp` reads `docs/mcp/` instead (see below):
 
 | Job | What it publishes | Where |
 |---|---|---|
 | `sync_swagger` | this folder, minus `MQTT_*.yaml` / `mqtt_*` / `Push_*.yaml` / `landing_index.html`, plus `landing_index.html` as the root index | `s3://esp-rainmaker-neo-api/http/` → https://api.docs.neo.rainmaker.espressif.com/http/ |
 | `sync_mqtt` | `MQTT_*.yaml` rendered through `@asyncapi/html-template` | `s3://esp-rainmaker-neo-api/mqtt/node/` and `/mqtt/user/` |
 | `sync_events` | `Push_User.yaml` (notification/event payloads) rendered through `@asyncapi/html-template` | `s3://esp-rainmaker-neo-api/events/` → https://api.docs.neo.rainmaker.espressif.com/events/ |
+| `sync_mcp` | `docs/mcp/rainmaker-mcp.json` rendered by [`scripts/generate_mcp_reference.py`](../../scripts/generate_mcp_reference.py), plus the raw catalogue | `s3://esp-rainmaker-neo-api/mcp/` → https://api.docs.neo.rainmaker.espressif.com/mcp/ |
 
-[`landing_index.html`](./landing_index.html) is the root index at https://api.docs.neo.rainmaker.espressif.com — it links to all five reference sites. It is uploaded by `sync_swagger` with `aws s3 cp` rather than riding the folder sync, because it belongs at the bucket root and not under `http/`, and it has to survive that sync's `--delete`. Same for the two favicons, which it references with `./` from the root.
+[`landing_index.html`](./landing_index.html) is the root index at https://api.docs.neo.rainmaker.espressif.com — it links to all six reference sites. It is uploaded by `sync_swagger` with `aws s3 cp` rather than riding the folder sync, because it belongs at the bucket root and not under `http/`, and it has to survive that sync's `--delete`. Same for the two favicons, which it references with `./` from the root.
 
-Each job's `--delete` is scoped to its own prefix, so the three are safe to run in any order and none can remove another's output. **Keep it that way** — widening any of these syncs to the bucket root would make whichever job ran last wipe the other two sites and the landing page.
+Each job's `--delete` is scoped to its own prefix, so the four are safe to run in any order and none can remove another's output. **Keep it that way** — widening any of these syncs to the bucket root would make whichever job ran last wipe the other two sites and the landing page.
 
 `sync_swagger` uses `aws s3 sync --delete`, so `http/` is an exact mirror of this folder. Deleting a file here deletes it from the live site on the next run; `git revert` puts it back. There is no state outside this repo.
 
-Raw specs are now at `/mqtt/MQTT_Node.yaml`, `/mqtt/MQTT_User.yaml` and `/events/Push_User.yaml`.
+Raw specs are now at `/mqtt/MQTT_Node.yaml`, `/mqtt/MQTT_User.yaml`, `/events/Push_User.yaml` and `/mcp/rainmaker-mcp.json`.
+
+## MCP tool reference
+
+The MCP surface is documented in two places, because it has two halves.
+
+Its HTTP endpoint and OAuth 2.0 proxy are OpenAPI, so they live here as [`MCP_Api_Swagger.yaml`](./MCP_Api_Swagger.yaml) and render as the **MCP API** tab of `/http/` like any other spec.
+
+Its *tools* are not. `docs/mcp/rainmaker-mcp.json` is an MCP tool catalogue — generated from the Go tool registry and byte-compared by `TestToolCatalogMatchesSnapshot` — and MCP standardises the wire format of `tools/list` but no documentation rendering. Neither Swagger UI nor `@asyncapi/html-template` can display it, and there is no standard generator that can: `@modelcontextprotocol/inspector` needs a live authenticated server and emits no static HTML, and `openapi-mcp-generator` runs the opposite direction (OpenAPI → server code). Hence [`scripts/generate_mcp_reference.py`](../../scripts/generate_mcp_reference.py), which renders the catalogue as a static page at `/mcp/`.
+
+The catalogue deliberately stays the only copy in the tree — it is **not** duplicated into this folder. A second copy would drift, since `make update-mcp-schema` regenerates only the canonical path. `sync_mcp` uploads it from `docs/mcp/` at publish time instead, which is also why that job's `changes:` rules watch `docs/mcp/rainmaker-mcp.json` and the generator script rather than `docs/api/**`.
+
+Preview a description change locally with:
+
+```sh
+python3 scripts/generate_mcp_reference.py   # writes build/docs/mcp/index.html
+```
+
+The output is gitignored and never committed; CI regenerates it.
 
 The distribution serving this bucket needs a default root object of `index.html` and, for the `/http/`, and `/mqtt/node/`-style prefixes to resolve without a trailing filename, subdirectory index handling — a CloudFront Function or `index.html`-appending behaviour. S3 website endpoints do this natively; an OAC/REST origin does not.
 
@@ -33,7 +52,7 @@ Vendored from **`swagger-ui-dist@4.12.0`**, Apache-2.0 — see [`LICENSE`](./LIC
 Exactly two files differ from upstream. Re-apply both on any refresh.
 
 - [`index.html`](./index.html) — two changes: the added `<link rel="stylesheet" type="text/css" href="index.css" />`, and a `.rmng-home` banner (inline `<style>` plus a `<div>` above `#swagger-ui`) linking back to the root landing page. The banner is static markup rather than an addition to Swagger UI's own topbar, which the bundle renders itself.
-- [`swagger-initializer.js`](./swagger-initializer.js) — rewritten for the two-spec `urls` array and an allow-listed `?urls.primaryName=` deep link. This is deliberately **not** `queryConfigEnabled`: that flag also honours `?url=` and `?configUrl=`, which would let anyone point the live site at a spec they control. Keep that comment and the allow-list intact — the security posture below depends on it.
+- [`swagger-initializer.js`](./swagger-initializer.js) — rewritten for the three-spec `urls` array and an allow-listed `?urls.primaryName=` deep link. This is deliberately **not** `queryConfigEnabled`: that flag also honours `?url=` and `?configUrl=`, which would let anyone point the live site at a spec they control. Keep that comment and the allow-list intact — the security posture below depends on it.
 
 ## Not vendored
 

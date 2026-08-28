@@ -237,6 +237,12 @@ snapshot of the live tool registry: names, descriptions and input schemas. Offli
 the eval framework, docs generators — read it as the answer to "what does this server expose",
 so it must never drift from the code.
 
+It is also the source for the human-readable tool reference published at
+<https://api.docs.neo.rainmaker.espressif.com/mcp/>, with the raw catalogue served beside it at
+`/mcp/rainmaker-mcp.json` — the same page-plus-raw-spec convention the MQTT and event
+references follow. `scripts/generate_mcp_reference.py` renders it and the `sync_mcp` CI job
+publishes it, so `docs/mcp/rainmaker-mcp.json` stays the only copy in the tree.
+
 `TestToolCatalogMatchesSnapshot` regenerates the catalog from `createServer()` and
 byte-compares it, failing the build on any divergence. Regenerate with:
 
@@ -246,6 +252,11 @@ make update-mcp-schema
 
 The resulting diff is the review artifact for a tool change. Because the descriptions decide
 how models behave, rewording one is a behaviour change and should be evaluated as such.
+
+The HTTP surface in front of these tools — the `/v1/mcp` endpoint and the OAuth 2.0 proxy that
+authorizes it — is specified separately as OpenAPI in
+[docs/api/MCP_Api_Swagger.yaml](../../api/MCP_Api_Swagger.yaml), rendered as the **MCP API**
+tab of the API reference site.
 
 ## 7. Related
 

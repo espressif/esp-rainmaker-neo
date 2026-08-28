@@ -4,6 +4,7 @@ window.onload = function() {
   var urls = [
     { name: "RMNG API", url: "./Api_Swagger.yaml" },
     { name: "User API", url: "./User_Api_Swagger.yaml" },
+    { name: "MCP API", url: "./MCP_Api_Swagger.yaml" },
   ];
 
   // Allow deep-linking to a specific spec tab via ?urls.primaryName=<name>
