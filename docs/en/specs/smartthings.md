@@ -43,7 +43,10 @@ This must be done before calling the Store Configuration API.
 
 1. Go to [SmartThings Developer Center](https://developer.smartthings.com/)
 2. Click **Device Integrations** in the left sidebar
-3. Click **New Integration** → select **Cloud Connector** → **ST Schema**
+3. Create a **Product** and add a Cloud Connector to it → **ST Schema**. The Product is the
+   container the connector lives in, and adding the Schema App to it links the two automatically —
+   this is not a device profile, and nothing per-device-type is created here (see
+   [Step 5](#step-5-device-handler-types)).
 4. Fill in the App Name (e.g., "RMNG Smart Home")
 5. **App Icon**: use `assets/smartthings_logo.png` (the Neo logo, 512×512 PNG). SmartThings uses this as the icon shown during account linking (and for the 2x/3x icon URLs).
 
@@ -86,19 +89,23 @@ curl -X POST https://<ApiGatewayUrl>/v1/admin/integrations/smartthings/configura
 
 (The request must be authenticated as a super admin — SigV4-signed like the other admin configuration APIs.)
 
-#### Step 5: Register Products (Device Profiles)
+#### Step 5: Device Handler Types
 
-In the SmartThings Developer Center, create a **Product** for each device type your platform supports:
+A Schema App picks each device's presentation from the `deviceHandlerType` in the discovery
+response. Every type we emit is one of the pre-made `c2c-*` handlers, which SmartThings
+[provides](https://developer.smartthings.com/docs/devices/cloud-connected/device-handler-types) —
+nothing has to be authored for them, and a connector discovers and controls devices with no
+Device Profile of its own.
 
-1. Go to **Device Integrations** → select your Schema App
-2. Click **Create a Product**
-3. Choose a **Device Profile** that matches your device capabilities (e.g., `c2c-color-temperature-bulb` for a CCT light)
-4. Set the **Discovery callback manufacturerName** (e.g., "Espressif") and **modelName** (e.g., "CCT-2CH")
-5. Save the product
+A **custom Device Profile** is needed only when no pre-made handler covers the capabilities; its
+profile ID then goes in `deviceHandlerType` in place of a `c2c-*` name. The Product created in
+[Step 1](#step-1-create-a-schema-cloud-connector) is just the connector's container — it carries
+no per-device-type configuration of its own.
 
-The `deviceHandlerType` returned by the Lambda's discovery response must match the Device Profile's handler type exactly.
+`getDeviceHandlerType` in `src/smartthings/handle_discovery.go` derives the type from the node's
+parameter types, so this table is the mapping that code implements.
 
-| Device Type | Handler Type (Device Profile) | Capabilities |
+| Device Type | Handler Type | Capabilities |
 |---|---|---|
 | Light (on/off only) | `c2c-switch` | Switch, Health Check |
 | Dimmable Light | `c2c-dimmer` | Switch, Switch Level, Health Check |
@@ -344,12 +351,9 @@ When a new RMNG device type needs SmartThings support, changes are required in b
 
 ### SmartThings Console Changes
 
-1. Go to **Device Integrations** → your Schema App
-2. Click **Create a Product**
-3. Choose or create a **Device Profile** with the required capabilities
-4. Set the handler type to match what `getDeviceHandlerType` returns for this device
-5. Set manufacturer name and model name
-6. Save
+Usually none: pick a handler type from the [table above](#step-5-device-handler-types) that covers
+the new capability and the app renders it. Only if no pre-made `c2c-*` handler covers it do you
+create a custom Device Profile in the Workspace and return its profile ID as `deviceHandlerType`.
 
 ### Capability Reference
 
