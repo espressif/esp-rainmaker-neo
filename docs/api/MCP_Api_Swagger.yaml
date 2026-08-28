@@ -323,10 +323,12 @@ components:
           type: string
           enum: ["2.0"]
         id:
+          description:
+            Echoes the request id. Null when the request could not be parsed.
+          nullable: true
           oneOf:
             - type: integer
             - type: string
-            - type: "null"
         result:
           type: object
         error:
