@@ -55,6 +55,15 @@ if [ "$STACK_GROUP" != "rmng" ]; then
     OUTPUTS_FILE="build/cdk/cdk-outputs-$STACK_GROUP.json"
 fi
 
+# Regions hosting each assistant's skill/Schema-App Lambda. The backend region is
+# appended when absent: the apps emit rmng-{alexa,st}-cfg-core only on the pass where
+# AWS_REGION == RMNG_REGION, so without it that stack is never synthesised. Bootstrap
+# reads the same lists.
+ALEXA_REGIONS=("us-east-1" "eu-west-1" "us-west-2")
+ST_REGIONS=("us-east-1" "eu-west-1" "ap-northeast-1")
+[[ " ${ALEXA_REGIONS[*]} " == *" $AWS_REGION "* ]] || ALEXA_REGIONS+=("$AWS_REGION")
+[[ " ${ST_REGIONS[*]} " == *" $AWS_REGION "* ]] || ST_REGIONS+=("$AWS_REGION")
+
 # Parse command parameters
 if [ "$command" == "--setup" ]; then
     # Bootstrap deliberately does NOT pass --app. Passing it makes the CDK execute
@@ -76,13 +85,11 @@ if [ "$command" == "--setup" ]; then
     }
 
     if [ "$STACK_GROUP" == "alexa" ]; then
-        ALEXA_REGIONS=("us-east-1" "eu-west-1" "us-west-2")
         for ALEXA_REGION in "${ALEXA_REGIONS[@]}"; do
             bootstrap_env "$STACK_GROUP" "$ALEXA_REGION"
         done
     elif [ "$STACK_GROUP" == "smartthings" ]; then
         # Qualifier is "sthing" (CDK caps qualifiers at 10 chars), matching the app's synthesizer.
-        ST_REGIONS=("us-east-1" "eu-west-1" "ap-northeast-1")
         for ST_REGION in "${ST_REGIONS[@]}"; do
             bootstrap_env "sthing" "$ST_REGION"
         done
@@ -134,14 +141,12 @@ fi
 
 # Use context to point to the custom asset bucket for deployment
 if [ "$STACK_GROUP" == "alexa" ]; then
-    ALEXA_REGIONS=("us-east-1" "eu-west-1" "us-west-2")
     RMNG_REGION="$AWS_REGION"
     for ALEXA_REGION in "${ALEXA_REGIONS[@]}"; do
         echo "Deploying alexa stack to region: $ALEXA_REGION (rmng region: $RMNG_REGION)"
         RMNG_REGION="$RMNG_REGION" AWS_REGION="$ALEXA_REGION" cdk deploy --all --app "python3 $APP_FILE" --require-approval never --asset-parallelism true --outputs-file $OUTPUTS_FILE
     done
 elif [ "$STACK_GROUP" == "smartthings" ]; then
-    ST_REGIONS=("us-east-1" "eu-west-1" "ap-northeast-1")
     RMNG_REGION="$AWS_REGION"
     for ST_REGION in "${ST_REGIONS[@]}"; do
         echo "Deploying smartthings stack to region: $ST_REGION (rmng region: $RMNG_REGION)"
