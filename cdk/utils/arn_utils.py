@@ -94,6 +94,11 @@ def get_s3_object_arn(bucket_name: str, key_pattern: str = "*") -> str:
 
 
 
+def get_cloudfront_distribution_arn(distribution_id: str) -> str:
+    """Generate CloudFront distribution ARN. CloudFront is global, so the ARN carries no region."""
+    return f"arn:aws:cloudfront::{Aws.ACCOUNT_ID}:distribution/{distribution_id}"
+
+
 def get_iot_role_alias_arn(role_alias_name: str, region: str) -> str:
     """Generate IoT Role Alias ARN."""
     return f"arn:aws:iot:{region}:{Aws.ACCOUNT_ID}:rolealias/{role_alias_name}"

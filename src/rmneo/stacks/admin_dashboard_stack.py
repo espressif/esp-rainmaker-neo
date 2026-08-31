@@ -15,7 +15,7 @@ from aws_cdk import (
     custom_resources as cr,
 )
 
-from app_common import CommonResources, stable_logical_id, create_cloudfront_distribution, create_s3_bucket, discover_cloudfront_custom_domain
+from app_common import CommonResources, stable_logical_id, create_cloudfront_behavior, create_cloudfront_distribution, create_cloudfront_oac, create_s3_bucket, discover_cloudfront_custom_domain
 
 
 BUCKET_NAME_PREFIX = "rmng-admin-dashboard"
@@ -42,39 +42,18 @@ class AdminDashboardStack(Stack):
             "/rmng-client-outputs.json",
         ])
 
-        # Create the S3 Bucket. create_s3_bucket() handles DESTROY + auto_delete_objects
-        # (pinning the Custom::S3AutoDeleteObjects logical ID so the bucket empties itself
-        # on stack delete), the account-regional-namespace L1 escape hatch, and the
-        # S3Bucket logical ID. purpose="admin-dashboard" + prefix="rmng-" reproduces
-        # BUCKET_NAME_PREFIX, so the logical ID is unchanged (no bucket replacement).
+        # purpose + prefix reproduces BUCKET_NAME_PREFIX, so the logical ID is unchanged (no bucket replacement).
         frontend_bucket = create_s3_bucket(self, "AdminDashboardBucket", common_resources, "admin-dashboard")
 
-        # Origin Access Control : Permission to grant Cloudfront to access the S3 Bucket. Refer - https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html
-        # AWS Recommends migrating from OAI (Legacy) to OAC for new Cloudfront Distributions
-        # Origin Access Control: CloudFront is global; OAC *names* must be unique per account, not
-        # per CloudFormation region. CDK's auto-generated name is identical for the same construct
-        # tree, so a second rmng-admin-dashboard in another region hits AlreadyExists. Use an explicit
-        # name that includes the stack's AWS region.
-        # https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html
-        dashboard_oac = cloudfront.S3OriginAccessControl(
-            self,
-            "AdminDashboardS3OAC",
-            origin_access_control_name=Fn.join("", ["rmng-admin-dashboard-oac-", Aws.REGION]),
-        )
-        # OAC names are account-globally unique — stabilise logical ID so a
-        # construct-tree move doesn't trigger "already exists" on the Name.
-        dashboard_oac.node.default_child.override_logical_id(
-            stable_logical_id("CFOAC", "rmng-admin-dashboard-oac"))
+        dashboard_oac = create_cloudfront_oac(
+            self, "AdminDashboardS3OAC", name=f"{BUCKET_NAME_PREFIX}-oac")
         s3_origin = origins.S3BucketOrigin.with_origin_access_control(
             bucket=frontend_bucket,
             origin_access_control=dashboard_oac,
         )
 
-        cloudfront_behavior = cloudfront.BehaviorOptions(
-            origin=s3_origin,
-            # Redirect users to HTTPS if they accidentally use HTTP. Cloudfront will intercept the request and immediately send an HTTP 301 (Moved Permanently)
-            viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-        )
+        # TODO: per-path behaviors like app_assets.py — CACHING_OPTIMIZED applies to index.html too, so an edge can serve an entry point pointing at a deleted bundle.
+        cloudfront_behavior = create_cloudfront_behavior(self, origin=s3_origin)
 
         # Cloudfront Error responses for Single Page Applications (SPAs)
         error_responses=[
@@ -102,12 +81,6 @@ class AdminDashboardStack(Stack):
             default_root_object="index.html",
             error_responses=error_responses,
         )
-        # Pin BucketPolicy created lazily by the OAC wiring.
-        frontend_bucket_policy = frontend_bucket.node.try_find_child("Policy")
-        if frontend_bucket_policy is not None:
-            frontend_bucket_policy.node.default_child.override_logical_id(
-                stable_logical_id("S3BucketPolicy", BUCKET_NAME_PREFIX))
-
         # This will be injected in frontend.
         config_json = {"SERVER_URL": client_outputs_url}
 

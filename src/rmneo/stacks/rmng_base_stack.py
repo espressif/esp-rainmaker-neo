@@ -37,6 +37,7 @@ from src.rmneo.handlers.integration.base import IntegrationBase
 from src.rmneo.handlers.admin.admin_config.base import AdminConfigBase
 from src.rmneo.handlers.hello_world.base import HelloWorldBase
 from src.rmneo.stacks.base_res_constants import IOT_RESOURCES, SSM_PARAMETERS, S3_BUCKETS
+from src.rmneo.stacks.app_assets import AppAssets
 from src.espuser.stacks.base_res_constants import USER_SSM_PARAMETERS
 
 # Placeholder URL used during CDK deployment to satisfy validation requirements
@@ -897,6 +898,9 @@ class RMNGBaseStack(Stack):
             description="RMNG files S3 bucket name (firmware OTA prefix, uploads)",
         )
 
+        # Uploads are done by the web deploy script, not CDK, so the site republishes without a stack update.
+        self.app_assets = AppAssets(self, "AppAssets", self.common_resources)
+
         # Fire-and-forget GSI creation: each Custom::GsiIndex returns as soon as
         # the orchestrator execution is started, so no per-GSI CloudFormation ~1h
         # cap applies (a table with several GSIs is built serially by DynamoDB and
@@ -1055,5 +1059,29 @@ class RMNGBaseStack(Stack):
             description="S3 bucket name for device file storage",
             value=self.file_base.files_bucket.bucket_name
         )
+        CfnOutput(
+            self, "AppAssetsBucketName",
+            description="S3 bucket name for the web app build",
+            value=self.app_assets.bucket.bucket_name
+        )
+
+        CfnOutput(
+            self, "AppAssetsDistributionId",
+            description="CloudFront distribution ID for the web app",
+            value=self.app_assets.distribution.distribution_id
+        )
+
+        CfnOutput(
+            self, "AppOtaUrl",
+            description="expo-updates base URL (same distribution as the web app, /ota tree)",
+            value=self.app_assets.ota_url
+        )
+
+        CfnOutput(
+            self, "AppAssetsUrl",
+            description="The URL of the web app (custom domain when configured, else CloudFront)",
+            value=self.app_assets.url
+        )
+
         CfnOutput(self, "GsiStateMachineArn", value=self.common_resources.gsi_state_machine_arn)
         CfnOutput(self, "GsiTriggerLambdaArn", value=self.common_resources.gsi_trigger_lambda_arn)

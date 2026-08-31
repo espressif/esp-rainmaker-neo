@@ -658,16 +658,26 @@ def setup_sqs_lambda_infra(
 
 
 def create_s3_bucket(scope: Construct, id: str, common_resources: CommonResources, purpose: str,
-                     **bucket_kwargs) -> s3.Bucket:
+                     public: bool = False, **bucket_kwargs) -> s3.Bucket:
     """Create a general-purpose S3 bucket. Physical name prefix is composed as
     `{common_resources.prefix}{purpose}` and AWS appends `-<account>-<region>-an`
     via the Account-Regional Namespace opt-in, which is also what makes the name
     globally unique — callers must not hand-roll an account/region suffix.
 
+    `public=True` lifts only the two *policy* blocks so a resource-policy grant to AnyPrincipal takes effect; ACL-based public access stays blocked either way.
+
     `bucket_kwargs` passes through to `s3.Bucket`, overriding the defaults below,
     so a caller can supply e.g. its own `block_public_access`.
     """
     bucket_name_prefix = f"{common_resources.prefix}{purpose}"
+    bucket_kwargs.setdefault("block_public_access", s3.BlockPublicAccess(
+        block_public_acls=True,       # reject public-read ACLs on new objects
+        ignore_public_acls=True,      # ignore any public ACL already set
+        block_public_policy=False,    # allow the AnyPrincipal bucket policy
+        restrict_public_buckets=False,  # let that policy actually serve anonymous reads
+    ) if public else s3.BlockPublicAccess.BLOCK_ALL)
+    # Safe for public buckets: read via the REST endpoint, not the website endpoint.
+    bucket_kwargs.setdefault("enforce_ssl", True)
     bucket_kwargs.setdefault("removal_policy", RemovalPolicy.DESTROY)
     bucket_kwargs.setdefault("auto_delete_objects", True)
     bucket_kwargs.setdefault("encryption", s3.BucketEncryption.S3_MANAGED)
@@ -681,6 +691,7 @@ def create_s3_bucket(scope: Construct, id: str, common_resources: CommonResource
     cfn_bucket.add_property_override("BucketNamespace", "account-regional")
     cfn_bucket.add_property_deletion_override("BucketName")
     cfn_bucket.override_logical_id(stable_logical_id("S3Bucket", bucket_name_prefix))
+    bucket.rmng_bucket_name_prefix = bucket_name_prefix
     # Pin Custom::S3AutoDeleteObjects — its Delete handler empties the bucket.
     auto_delete = bucket.node.try_find_child("AutoDeleteObjectsCustomResource")
     if auto_delete is not None:
@@ -688,11 +699,16 @@ def create_s3_bucket(scope: Construct, id: str, common_resources: CommonResource
             stable_logical_id("CustomS3AutoDelete", bucket_name_prefix))
     # Pin BucketPolicy — PutBucketPolicy + DeleteBucketPolicy on rename strips
     # the bucket's policy silently.
+    pin_s3_bucket_policy(bucket)
+    return bucket
+
+
+def pin_s3_bucket_policy(bucket: s3.Bucket) -> None:
+    """Pin the bucket's S3::BucketPolicy logical ID; idempotent, since a grant or OAC creates the policy only after create_s3_bucket has run."""
     policy = bucket.node.try_find_child("Policy")
     if policy is not None:
         policy.node.default_child.override_logical_id(
-            stable_logical_id("S3BucketPolicy", bucket_name_prefix))
-    return bucket
+            stable_logical_id("S3BucketPolicy", bucket.rmng_bucket_name_prefix))
 
 
 def create_kms_signing_key(
@@ -1489,6 +1505,144 @@ def discover_cloudfront_custom_domain(
             resource.get_att_string("Host"))
 
 
+# CloudFront names are account-global, so the helpers below suffix the region and pin the logical ID — a changed ID would recreate the resource under a name that still exists.
+def _region_scoped_name(name: str) -> str:
+    return Fn.join("", [f"{name}-", Aws.REGION])
+
+
+def create_cloudfront_oac(scope: Construct, id: str, *, name: str) -> cloudfront.S3OriginAccessControl:
+    """S3 Origin Access Control (replaces the legacy OAI), letting a distribution read a bucket that blocks all public access."""
+    oac = cloudfront.S3OriginAccessControl(
+        scope, id,
+        origin_access_control_name=_region_scoped_name(name),
+    )
+    oac.node.default_child.override_logical_id(stable_logical_id("CFOAC", name))
+    return oac
+
+
+def create_cloudfront_function(
+    scope: Construct,
+    id: str,
+    *,
+    name: str,
+    code: str,
+    comment: str = None,
+    runtime: cloudfront.FunctionRuntime = cloudfront.FunctionRuntime.JS_2_0,
+) -> cloudfront.Function:
+    """CloudFront Function (viewer-request/response) from inline JavaScript.
+
+    Defaults to the JS 2.0 runtime; CDK's own default is JS 1.0, which is ES5.1 and
+    silently lacks `startsWith`/`endsWith`/`includes`.
+    """
+    fn = cloudfront.Function(
+        scope, id,
+        code=cloudfront.FunctionCode.from_inline(code),
+        function_name=_region_scoped_name(name),
+        comment=comment,
+        runtime=runtime,
+    )
+    fn.node.default_child.override_logical_id(stable_logical_id("CFFunction", name))
+    return fn
+
+
+def cloudfront_security_headers() -> cloudfront.ResponseSecurityHeadersBehavior:
+    """nosniff, SAMEORIGIN, strict-origin-when-cross-origin, and HSTS for a year."""
+    return cloudfront.ResponseSecurityHeadersBehavior(
+        # nosniff: honour the declared Content-Type instead of sniffing it.
+        content_type_options=cloudfront.ResponseHeadersContentTypeOptions(override=True),
+        # SAMEORIGIN: no third-party framing (clickjacking).
+        frame_options=cloudfront.ResponseHeadersFrameOptions(
+            frame_option=cloudfront.HeadersFrameOption.SAMEORIGIN,
+            override=True,
+        ),
+        # Cross-origin requests send the origin only, keeping IDs out of Referer.
+        referrer_policy=cloudfront.ResponseHeadersReferrerPolicy(
+            referrer_policy=cloudfront.HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN,
+            override=True,
+        ),
+        # HSTS: closes the first-request downgrade window a redirect alone leaves open.
+        strict_transport_security=cloudfront.ResponseHeadersStrictTransportSecurity(
+            access_control_max_age=Duration.days(365),
+            include_subdomains=True,
+            override=True,
+        ),
+    )
+
+
+def create_cloudfront_cache_policy(
+    scope: Construct,
+    id: str,
+    *,
+    name: str,
+    **kwargs,
+) -> cloudfront.CachePolicy:
+    """Custom cache policy, for when the cache key needs headers/cookies/query strings the managed policies drop."""
+    policy = cloudfront.CachePolicy(
+        scope, id,
+        cache_policy_name=_region_scoped_name(name),
+        **kwargs,
+    )
+    policy.node.default_child.override_logical_id(stable_logical_id("CFCachePolicy", name))
+    return policy
+
+
+def create_cloudfront_response_headers_policy(
+    scope: Construct,
+    id: str,
+    *,
+    name: str,
+    custom_headers: list = None,
+    **kwargs,
+) -> cloudfront.ResponseHeadersPolicy:
+    """Policy carrying `cloudfront_security_headers()` plus any `custom_headers` `(header, value)` pairs, all with `override=True`."""
+    kwargs.setdefault("security_headers_behavior", cloudfront_security_headers())
+    if custom_headers:
+        kwargs.setdefault("custom_headers_behavior", cloudfront.ResponseCustomHeadersBehavior(
+            custom_headers=[
+                cloudfront.ResponseCustomHeader(header=header, value=value, override=True)
+                for header, value in custom_headers
+            ],
+        ))
+    policy = cloudfront.ResponseHeadersPolicy(
+        scope, id,
+        response_headers_policy_name=_region_scoped_name(name),
+        **kwargs,
+    )
+    policy.node.default_child.override_logical_id(stable_logical_id("CFResponseHeaders", name))
+    return policy
+
+
+_DEFAULT_HEADERS_POLICY_ID = "DefaultCloudFrontResponseHeaders"
+
+
+def default_cloudfront_response_headers_policy(scope: Construct) -> cloudfront.ResponseHeadersPolicy:
+    """The stack's shared security-headers policy, created on first use and named from the stack so distributions share one and stacks never collide."""
+    stack = Stack.of(scope)
+    existing = stack.node.try_find_child(_DEFAULT_HEADERS_POLICY_ID)
+    if existing is not None:
+        return existing
+    return create_cloudfront_response_headers_policy(
+        stack, _DEFAULT_HEADERS_POLICY_ID,
+        name=f"{stack.stack_name}-headers",
+        comment=f"Baseline security headers for {stack.stack_name}",
+    )
+
+
+def create_cloudfront_behavior(scope: Construct, **kwargs) -> cloudfront.BehaviorOptions:
+    """BehaviorOptions defaulting to security headers, HTTPS-only viewers and compression. Pass any of them to override."""
+    # Not setdefault(): it would build the shared policy even when unused.
+    if kwargs.get("response_headers_policy") is None:
+        kwargs["response_headers_policy"] = default_cloudfront_response_headers_policy(scope)
+    # OPTIONS included so CORS preflights reach the origin and are cached.
+    kwargs.setdefault("allowed_methods", cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS)
+    kwargs.setdefault("cached_methods", cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS)
+    # 301 plain HTTP to HTTPS rather than serving cleartext.
+    kwargs.setdefault("viewer_protocol_policy", cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS)
+    # gzip/brotli at the edge.
+    kwargs.setdefault("compress", True)
+    return cloudfront.BehaviorOptions(**kwargs)
+
+
 def create_cloudfront_distribution(
     scope: Construct,
     id: str,
@@ -1499,8 +1653,7 @@ def create_cloudfront_distribution(
     error_responses: list = None,
     **kwargs,
 ) -> cloudfront.Distribution:
-    """CloudFront Distribution with a stable logical ID. Pinning the logical ID
-    keeps `DistributionId` (and `<id>.cloudfront.net`) constant across refactors.
+    """CloudFront Distribution with a stable logical ID, which keeps `DistributionId` (and `<id>.cloudfront.net`) constant across refactors.
     """
     dist = cloudfront.Distribution(
         scope, id,

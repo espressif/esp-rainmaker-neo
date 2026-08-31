@@ -313,14 +313,10 @@ class CreateDiscoveryStorage(Construct):
 
         region = Stack.of(self).region
 
+        # public=True for the AnyPrincipal grant on .well-known/ below.
         self.discovery_bucket = create_s3_bucket(
             self, "DiscoveryBucket", common_resources, "oauth",
-            block_public_access=s3.BlockPublicAccess(
-                block_public_acls=False,
-                ignore_public_acls=False,
-                block_public_policy=False,
-                restrict_public_buckets=False,
-            ),
+            public=True,
             removal_policy=RemovalPolicy.DESTROY,
             auto_delete_objects=True,
         )
