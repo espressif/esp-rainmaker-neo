@@ -540,7 +540,8 @@ var _ = Describe("Admin Nodes Registration", func() {
 			verifyGroupAssignment("test-node", []string{"Group1"}, offset)
 			verifyShadowTags("test-node", map[string]string{"environment": "prod"}, offset)
 
-			// Second registration with the same certificate
+			// Second registration with the same certificate, asking for a
+			// different admin group.
 			reqBody["admin_group_names"] = []string{"Group2"}
 			reqBodyBytes, err = json.Marshal(reqBody)
 			Expect(err).To(BeNil())
@@ -549,21 +550,19 @@ var _ = Describe("Admin Nodes Registration", func() {
 			response, err = handleRequest(ctx.Context, request)
 			Expect(err).To(BeNil())
 
-			// Since duplicate registrations are idempotent, we should get a success response
-			Expect(response.StatusCode).To(Equal(http.StatusCreated))
+			Expect(response.StatusCode).To(Equal(http.StatusConflict))
+			Expect(response.Body).To(ContainSubstring("test-node"))
+			Expect(response.Body).To(ContainSubstring("already registered"))
 
-			err = json.Unmarshal([]byte(response.Body), &responseBody)
-			Expect(err).To(BeNil())
-			Expect(responseBody.NodeID).To(Equal("test-node"))
-
-			// Verify node registration is still valid
+			// Group2 was never added: the node keeps the first registration's
+			// group and tags.
 			verifyNodeRegistration("test-node", userID, offset)
 			verifyCertificateRegistration(nodeCert, offset)
-			verifyGroupAssignment("test-node", []string{"Group2"}, offset)
+			verifyGroupAssignment("test-node", []string{"Group1"}, offset)
 			verifyShadowTags("test-node", map[string]string{"environment": "prod"}, offset)
 		})
 
-		It("should handle adding to same group multiple times gracefully", func() {
+		It("leaves the existing group assignment intact when the same node is re-registered", func() {
 			// Register node with group
 			reqBody := map[string]interface{}{
 				"cert":              nodeCert,
@@ -593,8 +592,7 @@ var _ = Describe("Admin Nodes Registration", func() {
 			response, err = handleRequest(ctx.Context, request)
 			Expect(err).To(BeNil())
 
-			// Since duplicate group assignments are idempotent, we should get a success response
-			Expect(response.StatusCode).To(Equal(http.StatusCreated))
+			Expect(response.StatusCode).To(Equal(http.StatusConflict))
 
 			// Verify group assignment is still valid
 			verifyGroupAssignment("test-node", []string{"Group1"}, offset)

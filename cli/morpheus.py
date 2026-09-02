@@ -757,7 +757,7 @@ def handle_user_commands(user):
                 print('Syntax: share_subgroup <group_id> <subgroup_id> [username]')
                 print('  Omit username for a QR code share')
         elif main_command == 'register_node':
-            if len(args) == 2:
+            if len(args) == 3:
                 node_id, admin_group_names_str, tags_str = args
                 handle_register_node(user, node_id, admin_group_names_str, tags_str=tags_str)
             else:

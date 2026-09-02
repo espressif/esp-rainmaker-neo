@@ -645,25 +645,41 @@ var _ = Describe("Node", func() {
 				Expect(len(thing.CertificateIds)).To(BeNumerically(">", 0))
 			})
 
-			It("should handle duplicate registration gracefully", func() {
+			It("should reject a duplicate registration", func() {
 				// First registration
 				nodeIDRegistered, err := node.RegisterNodeInRmng(testUserContext, nodeCert, "", []string{}, []string{}, "test-user-id", nil)
 				Expect(err).To(BeNil())
 				Expect(nodeIDRegistered).To(Equal(testNode.GetID()))
 
-				// Second registration with same certificate
+				// Second registration with same certificate. The node id still
+				// comes back alongside the error so callers can report it.
 				nodeIDRegistered, err = node.RegisterNodeInRmng(testUserContext, nodeCert, "", []string{}, []string{}, "test-user-id", nil)
-				Expect(err).To(BeNil())
+				Expect(err).To(MatchError(node.ErrNodeAlreadyRegistered))
 				Expect(nodeIDRegistered).To(Equal(testNode.GetID()))
 
-				// Verify everything is still properly registered AND the
-				// cert-to-Thing attachment survives the second call.
+				// The rejected call must leave the live node untouched.
 				Expect(iotClient.VerifyThingExists(testNode.GetID())).To(BeTrue())
 				Expect(iotClient.VerifyCertificateExists(nodeCert)).To(BeTrue())
 				Expect(iotClient.VerifyCertificateActive(nodeCert)).To(BeTrue())
 				thing, exists := iotClient.GetThingDirect(testNode.GetID())
 				Expect(exists).To(BeTrue())
 				Expect(len(thing.CertificateIds)).To(BeNumerically(">", 0))
+			})
+
+			It("should reject a duplicate before touching IoT Core", func() {
+				_, err := node.RegisterNodeInRmng(testUserContext, nodeCert, "", []string{}, []string{}, "test-user-id", nil)
+				Expect(err).To(BeNil())
+
+				// Drop the Thing so any IoT work in the second attempt is visible:
+				// the duplicate is caught from the node_details row alone, so the
+				// Thing must still be missing afterwards.
+				delete(iotClient.GetThingsDirect(), testNode.GetID())
+				Expect(iotClient.VerifyThingExists(testNode.GetID())).To(BeFalse())
+
+				_, err = node.RegisterNodeInRmng(testUserContext, nodeCert, "", []string{}, []string{}, "test-user-id", nil)
+				Expect(err).To(MatchError(node.ErrNodeAlreadyRegistered))
+				Expect(iotClient.VerifyThingExists(testNode.GetID())).To(BeFalse(),
+					"a duplicate must not re-provision the node in IoT Core")
 			})
 
 			It("should handle invalid certificate format", func() {

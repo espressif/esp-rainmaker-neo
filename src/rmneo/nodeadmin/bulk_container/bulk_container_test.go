@@ -187,6 +187,39 @@ var _ = Describe("Bulk Container", func() {
 			Expect(entry.UserID).To(Equal("test-user"))
 		})
 
+		It("reports every row as DUPLICATE_NODEID when the same CSV is submitted twice", func() {
+			var buf bytes.Buffer
+			w := csv.NewWriter(&buf)
+			w.Write([]string{"node_id", "certs", "admin_groups"})
+			w.Write([]string{"bulknode1", testCert1, "group1"})
+			w.Write([]string{"bulknode2", testCert2, "group2"})
+			w.Flush()
+			mockS3Client.Buckets[fileBucket]["system/test-key.csv"] = buf.String()
+
+			Expect(bulk_container.HandleContainer(testConfig)).To(Succeed())
+			entry, err := dbClient.GetNodeRegRequest(testTaskID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(*entry.SuccessCount).To(Equal(2))
+			Expect(*entry.FailedCount).To(Equal(0))
+
+			// Re-submitting the identical file must not look like a success.
+			Expect(bulk_container.HandleContainer(testConfig)).To(Succeed())
+			entry, err = dbClient.GetNodeRegRequest(testTaskID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(*entry.SuccessCount).To(Equal(0))
+			Expect(*entry.FailedCount).To(Equal(2))
+
+			readerCtx := rmngctx.NewRmngContext(user.NewUser("reader"))
+			readerCtx.SetAllow(utils.NodeAdminRegisterStatus, "*")
+			out, err := node_reg_failed_nodes_db.NewNodeRegFailedNodesDB(readerCtx).ListFailures(testTaskID, 100, "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(out.Entries).To(HaveLen(2))
+			for _, e := range out.Entries {
+				Expect(e.Code).To(Equal(string(node_reg_failed_nodes_db.FailureCodeDuplicateNodeID)))
+				Expect(e.Reason).To(ContainSubstring("already registered"))
+			}
+		})
+
 		It("should fail when S3 file read fails", func() {
 			// Don't store the file in the mock bucket
 			err := bulk_container.HandleContainer(testConfig)

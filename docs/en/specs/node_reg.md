@@ -537,11 +537,25 @@ absorb duplicate-resource errors and continue:
 | `CreateThing` | Fails on `ResourceAlreadyExistsException` | Catch, treat as "Thing already exists with this name", continue |
 | `AttachThingPrincipal` | Already idempotent in IoT | Unchanged |
 | `AddThingToThingGroup` (per group) | Already idempotent in IoT | Unchanged |
-| Node-details add | Error already ignored at call site | Unchanged |
+| Node-details add | Error already ignored at call site | **Not idempotent** — this step is what rejects a re-registration |
 | Tag-shadow update | Already overwrites; idempotent | Unchanged |
 
-The operator semantic becomes: **re-running the same row is a no-op for
-steps already done, and completes any steps that hadn't run.**
+The operator semantic becomes: **re-running a row resumes any step that had
+not completed, and a node that is already registered is reported rather than
+silently re-registered.**
+
+The `node_details` row is the authority for "is this node registered", and
+rejecting there is deliberate. It keeps the IoT-step idempotency above
+meaningful: a run interrupted partway through still completes on retry,
+because registration is not keyed on the IoT resources.
+
+One consequence. The rejection happens after the IoT-core steps, which have
+therefore already re-run. For the case this protects — the same certificate
+submitted twice — each of those is a no-op. A *different* certificate
+carrying the same CN is the exception: it is registered and attached before
+the rejection, leaving the node with a second active credential. Use update
+jobs (§3.7) to replace a certificate; that path deactivates the previous
+ones.
 
 Concretely, the IoT-core registration step calls `RegisterCertificate`,
 `CreateThing`, and `AttachThingPrincipal` in sequence; a duplicate-resource
@@ -576,7 +590,10 @@ the shared error utilities — it recognises the AWS
    key is already a valid `cert_file_s3_path`, so no re-upload is even
    strictly necessary).
 4. Each retry row either resumes from where it left off (partial state
-   absorbed) or restarts cleanly (no prior state).
+   absorbed) or restarts cleanly (no prior state). A row whose node was
+   already registered is reported as `DUPLICATE_NODEID` rather than silently
+   succeeding — including rows that failed at the tag-shadow or admin-group
+   step. Finish those with an update job (§3.7).
 
 No retry endpoint, no flags, no operator-visible idempotency knob, no
 client-side join. For just the reasons, the operator reads the paginated
@@ -826,9 +843,12 @@ Container tests verify:
 
 Extend the existing registration-routine specs:
 
-- Re-running a previously successful registration is a no-op.
-- A row that fails at the tag-shadow step, then is retried, succeeds (cert
-  and Thing already exist; tags are written this time).
+- Re-running a previously successful registration is rejected (HTTP 409 on
+  the single-node endpoint, `DUPLICATE_NODEID` on a bulk row) and leaves the
+  existing admin groups and tags untouched.
+- A run interrupted partway through still completes when retried.
+- A row that fails at the tag-shadow step is *not* completable by re-running
+  registration; it is reported as a duplicate and finished via an update job.
 - Cert fingerprint mismatch (if implemented): an existing cert with the
   same CN but a different fingerprint produces a distinct error code.
 - Update-routine specs: happy path, missing node, cert rotation, partial
@@ -872,7 +892,7 @@ cross-flow isolation: a register job's `request_id` read under `/update-jobs/`
 | `node_details` schema | Registration writes the same row shape as before |
 | Existing aggregate status endpoint `GET .../{requestId}` | Still returns counts only; per-node detail is on the new `failed-nodes` endpoint |
 | Existing list endpoint `GET .../registration-jobs` | Continues to return all jobs of both types |
-| Existing callers of the per-node registration routine outside the bulk container | Idempotency change is behavior-compatible — duplicate errors become success |
+| Existing callers of the per-node registration routine outside the bulk container | Assisted claiming only registers nodes it has not registered before, so it never hits the duplicate rejection |
 | `tags` shadow shape | Unchanged |
 | AWS IoT policies attached at registration time | Unchanged |
 | Container image, Fargate task definition | Same image, same task def — `JOB_TYPE` env switches the per-row code path |

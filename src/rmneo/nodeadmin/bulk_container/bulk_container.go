@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"errors"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/convert"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/parallel"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
@@ -153,9 +154,15 @@ func recordRowOutcome(reportedID string, err error) {
 		return
 	}
 	failureCount++
+	// Mapped here, not in ClassifyFailure, to keep the db package free of a
+	// node-package import.
+	code := node_reg_failed_nodes_db.ClassifyFailure(err)
+	if errors.Is(err, node.ErrNodeAlreadyRegistered) {
+		code = node_reg_failed_nodes_db.FailureCodeDuplicateNodeID
+	}
 	failedNodes = append(failedNodes, node_reg_failed_nodes_db.NodeRegFailedNodeEntry{
 		NodeID: reportedID,
-		Code:   string(node_reg_failed_nodes_db.ClassifyFailure(err)),
+		Code:   string(code),
 		Reason: rmerror.FormatErrorChain(err),
 	})
 }
