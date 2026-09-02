@@ -11,7 +11,7 @@ export default defineConfig({
   description: "Manage devices, users, and deployments for ESP RainMaker Neo.",
   themeColor: { light: "#FAFCFF", dark: "#030303" },
   projectName: "rainmaker-neo",
-  storagePrefix: "espdashboard",
+  storagePrefix: "rm-neo-dashboard",
   defaults: {
     sidebarCollapsed: false,
     darkMode:

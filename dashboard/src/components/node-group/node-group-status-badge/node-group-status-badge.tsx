@@ -5,7 +5,7 @@
  */
 
 import { useTranslation } from "react-i18next";
-import { StatusBadge } from "@/components/status-badge";
+import { StatusBadge } from "@espressif/dashboard-ui-components/components";
 import { getNodeGroupStatusPresentation } from "@/config/node-group-status.config";
 import type { NodeGroupStatusBadgeProps } from "./node-group-status-badge.props";
 
@@ -25,6 +25,7 @@ export function NodeGroupStatusBadge({ status }: NodeGroupStatusBadgeProps) {
       label={label}
       Icon={Icon}
       color={color}
+      variant="gradient"
       isLoading={spinning}
     />
   );

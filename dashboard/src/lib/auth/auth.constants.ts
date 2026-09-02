@@ -9,16 +9,36 @@
  * Centralizes all storage keys and configuration
  */
 
+// Relative import (not `@/…`) because this module is reached from the alias-free
+// `vitest.config.ts` via `auth.storage.ts` and the sign-in flow store.
+import { appStorageKey } from '../app-config'
+
 /**
- * localStorage keys for auth tokens
+ * localStorage keys for auth tokens and sign-in preferences, all namespaced by the
+ * app-wide `storagePrefix` like the persisted Zustand stores.
  */
 export const AUTH_STORAGE_KEYS = {
-  ACCESS_TOKEN: 'access_token',
-  ID_TOKEN: 'id_token',
-  REFRESH_TOKEN: 'refresh_token',
-  PROFILE: 'adminProfile',
-  KEEP_SIGNED_IN: 'keep_signed_in',
+  ACCESS_TOKEN: appStorageKey('access_token'),
+  ID_TOKEN: appStorageKey('id_token'),
+  REFRESH_TOKEN: appStorageKey('refresh_token'),
+  KEEP_SIGNED_IN: appStorageKey('keep_signed_in'),
+  LAST_LOGIN_EMAIL: appStorageKey('last_login_email'),
 } as const
+
+/**
+ * Where each value lived before the keys were prefixed (2026-09). The startup
+ * migration (`migrateLegacyAuthStorage`) moves these so deployed browsers keep
+ * their sessions across the rename. Delete the table (and the migration) once
+ * every active browser has passed through a build that contains it.
+ */
+export const LEGACY_AUTH_STORAGE_MIGRATIONS: ReadonlyArray<
+  readonly [legacyKey: string, currentKey: string]
+> = [
+  ['access_token', AUTH_STORAGE_KEYS.ACCESS_TOKEN],
+  ['id_token', AUTH_STORAGE_KEYS.ID_TOKEN],
+  ['refresh_token', AUTH_STORAGE_KEYS.REFRESH_TOKEN],
+  ['keep_signed_in', AUTH_STORAGE_KEYS.KEEP_SIGNED_IN],
+]
 
 /**
  * sessionStorage keys for OAuth PKCE flow

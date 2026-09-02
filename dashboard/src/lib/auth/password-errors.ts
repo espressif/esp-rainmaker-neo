@@ -196,7 +196,16 @@ const OTP_ERRORS: Record<string, LocalizedMessage> = {
   NotAuthorizedException: OTP_SESSION_EXPIRED,
   TooManyFailedAttemptsException: OTP_RATE_LIMITED,
   TooManyRequestsException: OTP_RATE_LIMITED,
+  // Cognito's cap on emailed codes per user per window surfaces as this name too.
+  LimitExceededException: OTP_RATE_LIMITED,
 };
+
+/**
+ * Message shown when the sign-in flow's short-lived Cognito session lapses and the
+ * admin is bounced back to the entry screen. Exported for the flow store, which has
+ * to carry the notice across that redirect — mutation errors die with their page.
+ */
+export const OTP_SESSION_EXPIRED_MESSAGE = OTP_SESSION_EXPIRED;
 
 /** Message for a failure during choice-based sign-in. */
 export function otpErrorMessage(error: unknown): LocalizedMessage | null {

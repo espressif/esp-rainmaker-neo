@@ -70,8 +70,12 @@ export const routesConfig: RouteConfig[] = [
   { path: "/", redirectTo: "/login" },
   { path: "/error" },
 
-  // Auth routes
+  // Auth routes. The login steps are flat routes, not `subroutes`: `/login` is
+  // itself the remembered-account screen, not a layout with an <Outlet/>.
   { path: "/login" },
+  { path: "/login/email" },
+  { path: "/login/otp" },
+  { path: "/login/password" },
   { path: "/forgot-password" },
   { path: "/set-password" },
   { path: "/logout" },

@@ -5,7 +5,7 @@
  */
 
 import { useTranslation } from "react-i18next";
-import { StatusBadge } from "@/components/status-badge";
+import { StatusBadge } from "@espressif/dashboard-ui-components/components";
 import { getOtaJobStatusPresentation } from "@/config/ota-job-status.config";
 import type { OtaJobStatusBadgeProps } from "./ota-job-status-badge.props";
 
@@ -20,6 +20,12 @@ export function OtaJobStatusBadge({ status }: OtaJobStatusBadgeProps) {
   }
 
   return (
-    <StatusBadge label={label} Icon={Icon} color={color} isLoading={spinning} />
+    <StatusBadge
+      label={label}
+      Icon={Icon}
+      color={color}
+      variant="gradient"
+      isLoading={spinning}
+    />
   );
 }

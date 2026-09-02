@@ -38,7 +38,7 @@ export default function OnboardingCard({
       actions={actions}
     >
       {description ? (
-        <Alert hideIcon color="mist" variant="soft" className="border-none mb-6">
+        <Alert hideIcon color="gray" variant="soft" className="mb-6">
           {description}
         </Alert>
       ) : null}

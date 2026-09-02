@@ -64,14 +64,12 @@ function createHttpClient(): AxiosInstance {
         config.baseURL = getEspUserApiUrl()
       }
 
-      // Add ID token in Authorization header (Cognito authorizer validates ID tokens)
-      try {
-        const token = getIdToken()
-        if (token && config.headers) {
-          config.headers['Authorization'] = `Bearer ${token}`
-        }
-      } catch (_) {
-        // Ignore localStorage errors
+      // Add ID token in Authorization header (Cognito authorizer validates ID
+      // tokens). No try/catch: `getIdToken` goes through safe-storage and
+      // returns null instead of throwing when storage is unusable.
+      const token = getIdToken()
+      if (token && config.headers) {
+        config.headers['Authorization'] = `Bearer ${token}`
       }
 
       return config

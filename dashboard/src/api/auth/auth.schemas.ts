@@ -167,14 +167,15 @@ export type ForgotPasswordRequestSchema = z.infer<
  * Zod schema for confirming a password reset (step 2 of forgot password).
  * Cognito always mails a six-digit confirmation code.
  */
+// Single password field by design (wireframe decision, 2026-09-02): right after a
+// reset the admin types the address's emailed code too, so a typo'd password is
+// recoverable on the spot — unlike the signed-in change-password form, which keeps
+// its confirm field.
 export const getConfirmForgotPasswordRequestSchema = (messages: AuthSchemaMessages) =>
-  z
-    .object({
-      code: z.string().min(1, messages.codeRequired).regex(/^\d{6}$/, messages.codeInvalid),
-      new_password: newPasswordSchema(messages),
-      confirm_password: confirmPasswordSchema(messages),
-    })
-    .refine(passwordsMatch.check, passwordsMatch.options(messages))
+  z.object({
+    code: z.string().min(1, messages.codeRequired).regex(/^\d{6}$/, messages.codeInvalid),
+    new_password: newPasswordSchema(messages),
+  })
 
 export type ConfirmForgotPasswordRequestSchema = z.infer<
   ReturnType<typeof getConfirmForgotPasswordRequestSchema>

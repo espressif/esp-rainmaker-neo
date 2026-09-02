@@ -17,69 +17,60 @@ import {
   FormField,
   FormItem,
   FormMessage,
-  Input,
   InputPassword,
   Label,
-  Link,
 } from "@espressif/dashboard-ui-components/components";
-import {
-  getAuthSchemaMessages,
-  getSigninRequestSchema,
-  type SigninRequestSchema,
-} from "@/api";
-import { TanstackRouterLink } from "@/lib/navigation/router-link-adapters";
+import { getAuthSchemaMessages, getSigninRequestSchema } from "@/api";
 import { voidFormSubmit } from "@/lib/void-form-submit";
+import type { PasswordFormProps } from "./password-form.props";
 
-interface PasswordFormProps {
-  defaultUsername: string;
-  allowKeepMeSignedIn: boolean;
-  keepSignedIn: boolean;
-  onKeepSignedInChange: (checked: boolean) => void;
-  isSubmitting: boolean;
-  onSubmit: (data: SigninRequestSchema) => void;
+// The shared signin schema also carries `username`; here the address is fixed
+// (shown as the account chip), so the form validates only the password field.
+interface PasswordFormValues {
+  password: string;
 }
 
-/** Password fallback: the one path that works whether or not the admin has an email factor. */
+/** Screen 4's form: the password path, for admins that have one. */
 export default function PasswordForm({
-  defaultUsername,
   allowKeepMeSignedIn,
   keepSignedIn,
   onKeepSignedInChange,
   isSubmitting,
+  isRequestingReset,
   onSubmit,
+  onForgotPassword,
 }: PasswordFormProps) {
   const { t } = useTranslation(["login", "common"]);
-  const schema = useMemo(() => getSigninRequestSchema(getAuthSchemaMessages(t)), [t]);
+  const schema = useMemo(
+    () => getSigninRequestSchema(getAuthSchemaMessages(t)).pick({ password: true }),
+    [t],
+  );
 
-  const form = useForm<SigninRequestSchema>({
+  const form = useForm<PasswordFormValues>({
     resolver: zodResolver(schema),
-    defaultValues: {
-      username: defaultUsername,
-      password: "",
-    },
+    defaultValues: { password: "" },
   });
+
+  const forgotPasswordControl = (
+    <Button
+      type="button"
+      variant="link"
+      className="px-0 h-auto"
+      loading={isRequestingReset}
+      onClick={onForgotPassword}
+    >
+      {t("forgotPasswordLink", "Forgot password?")}
+    </Button>
+  );
 
   return (
     <Form {...form}>
-      <form onSubmit={voidFormSubmit(form.handleSubmit(onSubmit))} className="space-y-6">
-        <FormField
-          control={form.control}
-          name="username"
-          render={({ field }) => (
-            <FormItem>
-              <FormControl>
-                <Input
-                  type="text"
-                  placeholder={t("emailPlaceholder", "Enter your email")}
-                  label={t("emailLabel", "Email")}
-                  {...field}
-                />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-
+      <form
+        onSubmit={voidFormSubmit(
+          form.handleSubmit((data) => onSubmit(data.password)),
+        )}
+        className="space-y-6"
+      >
         <FormField
           control={form.control}
           name="password"
@@ -87,22 +78,11 @@ export default function PasswordForm({
             <FormItem>
               <FormControl>
                 <InputPassword
-                  placeholder={t(
-                    "passwordPlaceholder",
-                    "Enter your password",
-                  )}
+                  placeholder={t("passwordPlaceholder", "Enter your password")}
                   autoComplete="current-password"
+                  autoFocus
                   label={t("passwordLabel", "Password")}
-                  hintContent={
-                    <Link
-                      to="/forgot-password"
-                      linkComponent={TanstackRouterLink}
-                      color="primary"
-                      underline={false}
-                    >
-                      {t("forgotPasswordLink", "Forgot password?")}
-                    </Link>
-                  }
+                  hintContent={forgotPasswordControl}
                   {...field}
                 />
               </FormControl>

@@ -5,3 +5,4 @@
  */
 
 export { default as BackToSignInLink } from "./back-to-signin-link";
+export type { BackToSignInLinkProps } from "./back-to-signin-link.props";
