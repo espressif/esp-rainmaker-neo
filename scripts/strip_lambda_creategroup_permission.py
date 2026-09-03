@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Remove logs:CreateLogGroup from the execution roles of our own Lambdas.
 
 Log groups are now declared as `AWS::Logs::LogGroup` in the stacks, so a function's role no

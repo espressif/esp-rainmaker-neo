@@ -17,11 +17,13 @@ applicable to these third-party components.
 
 
 Swagger UI
-    Path:      misc/swagger/swagger-ui*.js, swagger-ui*.css,
-               swagger-ui*.map, misc/swagger/index.html,
-               mqtt_index.html, oauth2-redirect.html,
-               swagger-initializer.js, index.css,
-               favicon-*.png
+    Path:      docs/api/swagger-ui-bundle.js,
+               docs/api/swagger-ui-standalone-preset.js,
+               docs/api/swagger-ui.css, docs/api/index.html,
+               docs/api/oauth2-redirect.html,
+               docs/api/swagger-initializer.js,
+               docs/api/index.css, docs/api/favicon-16x16.png,
+               docs/api/favicon-32x32.png
 
     Copyright: Copyright 2020 SmartBear Software Inc.
     License:   Apache License 2.0
@@ -34,7 +36,7 @@ Swagger UI
 
 
 Matter (CHIP) test attestation credentials
-    Path:      src/admin/dashboard/src/utils/matter-gen/
+    Path:      dashboard/src/utils/matter-gen/
                chip-test-credentials.ts
 
     Copyright: Copyright Project CHIP Authors

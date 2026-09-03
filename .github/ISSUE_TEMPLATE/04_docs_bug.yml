@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+#
+# SPDX-License-Identifier: Apache-2.0
+
 name: Documentation bug
 description: A spec, API reference, or guide is wrong, outdated, unclear, or missing
 labels: ["Type: Bug", "Area: Documentation"]

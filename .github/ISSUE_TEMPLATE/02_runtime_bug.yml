@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+#
+# SPDX-License-Identifier: Apache-2.0
+
 name: Runtime bug
 description: A deployed stack misbehaves — API errors, wrong or buggy behavior, device connectivity
 labels: ["Type: Bug"]

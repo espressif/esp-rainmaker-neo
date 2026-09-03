@@ -1,3 +1,9 @@
+/*
+ * SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import fs from 'node:fs'
 import path from 'node:path'
 import type { HtmlTagDescriptor, Plugin } from 'vite'

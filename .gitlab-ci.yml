@@ -118,6 +118,26 @@ pip_audit:
     - pip-audit -r requirements.txt
 
 # -------------------------
+# SPDX licence header gate. Blocking, and scoped to the files the MR adds.
+# CI_MERGE_REQUEST_DIFF_BASE_SHA is the merge-base the MR diff is computed against, so
+# the job sees exactly the files the MR widget shows as added.
+# -------------------------
+license_headers:
+  stage: lint
+  # Full python image, not -slim: the script shells out to git for the added-file list
+  # and -slim ships no git.
+  image: python:3.12
+  variables:
+    GIT_SUBMODULE_STRATEGY: none
+    GIT_DEPTH: 0
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  script:
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+    - python3 scripts/check_license_headers.py --added-since
+      "$CI_MERGE_REQUEST_DIFF_BASE_SHA"
+
+# -------------------------
 # CDK synth check — the only gate on Python and dependency changes.
 # Every other job filters on **/*.go or docs/api/**, so a requirements.txt, cdk.json
 # or stack.py change previously produced a pipeline with nothing in it. Synth needs no AWS

@@ -198,6 +198,35 @@ jobs:
       # eslint --max-warnings 0 plus the en/zh i18n key-parity check.
       - run: npm run lint
 
+  # SPDX licence header gate on the files the change adds.
+  #
+  # fetch-depth: 0 so the merge-base with the base branch exists locally. On a push to
+  # main there is no base branch, so the previous commit is the comparison point.
+  license_headers:
+    name: Licence headers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Check added files
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="origin/${{ github.base_ref }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+          # A branch's first push (or a force-push) reports an all-zero or unreachable
+          # "before" SHA; fall back to the parent commit rather than failing the gate.
+          if ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
+            base="HEAD~1"
+          fi
+          echo "Comparing against $base"
+          python3 scripts/check_license_headers.py --added-since "$base"
+
   # Schema validation for the published API definitions.
   api_docs:
     name: API definitions
