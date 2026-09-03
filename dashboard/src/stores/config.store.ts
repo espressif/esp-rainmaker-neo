@@ -6,7 +6,7 @@
 
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { appConfig } from '@/lib/app-config'
+import { appStorageKey } from '@/lib/app-config'
 import type { RuntimeConfig } from '@/lib/config'
 
 /**
@@ -34,7 +34,7 @@ export const useConfigStore = create<ConfigState>()(
       clearConfig: () => set({ config: null }),
     }),
     {
-      name: `${appConfig.storagePrefix}-config-storage`,
+      name: appStorageKey('config-storage'),
     }
   )
 )

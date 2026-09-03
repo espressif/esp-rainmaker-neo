@@ -6,7 +6,7 @@
 
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { appConfig } from '@/lib/app-config'
+import { appStorageKey } from '@/lib/app-config'
 
 interface UserState {
   loggedInUserName: string | null
@@ -22,7 +22,7 @@ export const useUserStore = create<UserState>()(
       clearUser: () => set({ loggedInUserName: null }),
     }),
     {
-      name: `${appConfig.storagePrefix}-user-storage`,
+      name: appStorageKey('user-storage'),
     }
   )
 )

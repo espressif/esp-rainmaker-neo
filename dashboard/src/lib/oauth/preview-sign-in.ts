@@ -20,6 +20,7 @@
 import { oauthClientsApi, type OAuthClient } from '@/api/oauth-clients'
 import { generatePkceParams } from '@/lib/auth'
 import { getAuthorizeUrl, getVaClientId } from '@/lib/config'
+import { safeLocalStorage } from '@/lib/safe-storage'
 
 /** Dashboard route that receives the authorization response. */
 const PREVIEW_CALLBACK_PATH = '/oauth-preview'
@@ -54,7 +55,7 @@ function getPreviewRedirectUri(): string {
 }
 
 function storePreviewRequest(request: StoredPreviewRequest): void {
-  localStorage.setItem(PREVIEW_REQUEST_STORAGE_KEY, JSON.stringify(request))
+  safeLocalStorage.set(PREVIEW_REQUEST_STORAGE_KEY, JSON.stringify(request))
 }
 
 /**
@@ -63,7 +64,7 @@ function storePreviewRequest(request: StoredPreviewRequest): void {
  */
 export function readPreviewRequest(): StoredPreviewRequest | null {
   try {
-    const raw = localStorage.getItem(PREVIEW_REQUEST_STORAGE_KEY)
+    const raw = safeLocalStorage.get(PREVIEW_REQUEST_STORAGE_KEY)
     if (!raw) {
       return null
     }
@@ -85,11 +86,9 @@ export function readPreviewRequest(): StoredPreviewRequest | null {
 }
 
 export function clearPreviewRequest(): void {
-  try {
-    localStorage.removeItem(PREVIEW_REQUEST_STORAGE_KEY)
-  } catch {
-    // A storage failure must not mask the outcome the callback page is showing.
-  }
+  // Already swallowed by safe-storage: a storage failure must not mask the
+  // outcome the callback page is showing.
+  safeLocalStorage.remove(PREVIEW_REQUEST_STORAGE_KEY)
 }
 
 /**

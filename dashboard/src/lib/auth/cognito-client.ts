@@ -25,7 +25,13 @@ let clientRegion: string | null = null
 export function getCognitoClient(): CognitoIdentityProviderClient {
   const region = getAwsRegion()
   if (!client || clientRegion !== region) {
-    client = new CognitoIdentityProviderClient({ region })
+    // No automatic retries. Cognito auth sessions are single-use, so an SDK retry of a
+    // challenge call can never succeed — it reports "session can only be used once"
+    // (NotAuthorizedException) and masks the real failure; the SDK even classifies
+    // Cognito's LimitExceededException as retryable throttling, turning a rate limit
+    // into that misleading error. Every caller has its own retry story anyway: the
+    // interactive flows retry via the user, the session keeper via its own backoff.
+    client = new CognitoIdentityProviderClient({ region, maxAttempts: 1 })
     clientRegion = region
   }
   return client

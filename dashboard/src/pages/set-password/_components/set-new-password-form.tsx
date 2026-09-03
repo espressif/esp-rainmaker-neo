@@ -17,10 +17,14 @@ import {
   FormField,
   FormItem,
   FormMessage,
-  Input,
+  InputOTP,
   InputPassword,
-  Link,
+  RequirementList,
+  SectionCard,
+  type RequirementListItem,
 } from "@espressif/dashboard-ui-components/components";
+import { ResendCodeHint } from "@/components/resend-code-hint";
+import { evaluatePasswordPolicy } from "@/config/password-policy.config";
 import {
   getConfirmForgotPasswordRequestSchema,
   getAuthSchemaMessages,
@@ -29,9 +33,11 @@ import {
   type ConfirmForgotPasswordRequestSchema,
 } from "@/api";
 import { confirmResetErrorMessage, requestCodeErrorMessage } from "@/lib/auth";
+import { useResendCooldown } from "@/hooks/use-resend-cooldown";
 import type { SetNewPasswordFormProps } from "./set-new-password-form.props";
-import { TanstackRouterLink } from "@/lib/navigation/router-link-adapters";
 import { voidFormSubmit } from "@/lib/void-form-submit";
+
+const CODE_LENGTH = 6;
 
 /**
  * Step 2 of the reset flow: exchange the emailed code for a new password.
@@ -40,6 +46,7 @@ import { voidFormSubmit } from "@/lib/void-form-submit";
  */
 export default function SetNewPasswordForm({
   email,
+  codeJustSent,
   onSuccess,
   onCodeResent,
 }: SetNewPasswordFormProps) {
@@ -47,10 +54,11 @@ export default function SetNewPasswordForm({
   const schema = useMemo(() => getConfirmForgotPasswordRequestSchema(getAuthSchemaMessages(t)), [t]);
   const confirmMutation = useConfirmForgotPassword();
   const resendMutation = useForgotPassword();
+  const cooldown = useResendCooldown(codeJustSent);
 
   const form = useForm<ConfirmForgotPasswordRequestSchema>({
     resolver: zodResolver(schema),
-    defaultValues: { code: "", new_password: "", confirm_password: "" },
+    defaultValues: { code: "", new_password: "" },
   });
 
   const resetPassword = (data: ConfirmForgotPasswordRequestSchema) => {
@@ -63,7 +71,15 @@ export default function SetNewPasswordForm({
 
   const resendCode = () => {
     confirmMutation.reset();
-    resendMutation.mutate({ username: email }, { onSuccess: onCodeResent });
+    resendMutation.mutate(
+      { username: email },
+      {
+        onSuccess: () => {
+          cooldown.restart();
+          onCodeResent();
+        },
+      },
+    );
   };
 
   // A failed reset is what the admin is looking at right now, so it wins over
@@ -71,6 +87,32 @@ export default function SetNewPasswordForm({
   const errorMessage =
     confirmResetErrorMessage(confirmMutation.error) ??
     requestCodeErrorMessage(resendMutation.error);
+
+  // Live policy checklist, same as the change-password form: it renders in place
+  // of the password field's `FormMessage`, which would repeat the failing rule.
+  const newPassword = form.watch("new_password");
+  const requirementItems = useMemo<RequirementListItem[]>(
+    () =>
+      evaluatePasswordPolicy(newPassword).map(({ rule, met }) => ({
+        id: rule.id,
+        label: t(rule.i18nKey, rule.fallback),
+        met,
+      })),
+    [newPassword, t],
+  );
+
+  const resendControl = (
+    <ResendCodeHint
+      isCoolingDown={cooldown.isCoolingDown}
+      countdownLabel={t("resendCodeIn", {
+        defaultValue: "Resend code in {{seconds}}s",
+        seconds: cooldown.secondsLeft,
+      })}
+      resendLabel={t("resendCode", "Resend code")}
+      isResending={resendMutation.isPending}
+      onResend={resendCode}
+    />
+  );
 
   return (
     <Form {...form}>
@@ -91,14 +133,14 @@ export default function SetNewPasswordForm({
           render={({ field }) => (
             <FormItem>
               <FormControl>
-                <Input
-                  type="text"
-                  inputMode="numeric"
+                <InputOTP
+                  length={CODE_LENGTH}
                   autoComplete="one-time-code"
-                  maxLength={6}
-                  placeholder={t("codePlaceholder", "6-digit code")}
-                  label={t("codeLabel", "Confirmation code")}
-                  {...field}
+                  label={t("codeLabel", "Verification code")}
+                  value={field.value}
+                  onChange={field.onChange}
+                  expand
+                  hintContent={resendControl}
                 />
               </FormControl>
               <FormMessage />
@@ -109,38 +151,31 @@ export default function SetNewPasswordForm({
         <FormField
           control={form.control}
           name="new_password"
-          render={({ field }) => (
+          render={({ field, fieldState }) => (
             <FormItem>
               <FormControl>
                 <InputPassword
                   autoComplete="new-password"
                   placeholder={t("newPasswordPlaceholder", "New password")}
-                  label={t("newPasswordLabel", "New Password")}
+                  label={t("newPasswordLabel", "New password")}
+                  error={!!fieldState.error}
                   {...field}
                 />
               </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-
-        <FormField
-          control={form.control}
-          name="confirm_password"
-          render={({ field }) => (
-            <FormItem>
-              <FormControl>
-                <InputPassword
-                  autoComplete="new-password"
-                  placeholder={t(
-                    "confirmPasswordPlaceholder",
-                    "Confirm new password",
-                  )}
-                  label={t("confirmPasswordLabel", "Confirm Password")}
-                  {...field}
+              <SectionCard
+                className="mt-4"
+                primaryText={t("requirementsLabel", "Password requirements")}
+                allowCollapse={false}
+                color="silver"
+                variant="soft"
+                size="sm"
+              >
+                <RequirementList
+                  items={requirementItems}
+                  metLabel={t("requirementMet", "Requirement met")}
+                  unmetLabel={t("requirementUnmet", "Requirement not met")}
                 />
-              </FormControl>
-              <FormMessage />
+              </SectionCard>
             </FormItem>
           )}
         />
@@ -156,23 +191,6 @@ export default function SetNewPasswordForm({
           >
             {t("submit", "Reset password")}
           </Button>
-          <Button
-            type="button"
-            variant="outline"
-            loading={resendMutation.isPending}
-            onClick={resendCode}
-          >
-            {t("resendCode", "Resend code")}
-          </Button>
-          <Link
-            to="/forgot-password"
-            linkComponent={TanstackRouterLink}
-            color="primary"
-            underline={false}
-            className="w-full flex items-center justify-center"
-          >
-            {t("useDifferentEmail", "Use a different email")}
-          </Link>
         </div>
       </form>
     </Form>

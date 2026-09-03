@@ -5,110 +5,37 @@
  */
 
 /**
- * Safe storage utilities for auth tokens
- * Handles storage errors gracefully (private browsing, quota exceeded, etc.)
+ * Auth-domain storage helpers: tokens, sign-in preferences, and the OAuth
+ * redirect hand-off. Raw storage access goes through `safe-storage`, so blocked
+ * or absent storage degrades gracefully instead of throwing.
  */
 
-import { AUTH_STORAGE_KEYS, PKCE_STORAGE_KEYS } from './auth.constants'
-
-type AuthStorageKey = typeof AUTH_STORAGE_KEYS[keyof typeof AUTH_STORAGE_KEYS]
-type PkceStorageKey = typeof PKCE_STORAGE_KEYS[keyof typeof PKCE_STORAGE_KEYS]
-
-/**
- * Safely get item from localStorage
- */
-export function getLocalStorageItem(key: AuthStorageKey): string | null {
-  try {
-    return localStorage.getItem(key)
-  } catch (error) {
-    console.warn(`[Auth] Failed to read from localStorage: ${key}`, error)
-    return null
-  }
-}
-
-/**
- * Safely set item in localStorage
- */
-export function setLocalStorageItem(key: AuthStorageKey, value: string): boolean {
-  try {
-    localStorage.setItem(key, value)
-    return true
-  } catch (error) {
-    console.warn(`[Auth] Failed to write to localStorage: ${key}`, error)
-    return false
-  }
-}
-
-/**
- * Safely remove item from localStorage
- */
-export function removeLocalStorageItem(key: AuthStorageKey): boolean {
-  try {
-    localStorage.removeItem(key)
-    return true
-  } catch (error) {
-    console.warn(`[Auth] Failed to remove from localStorage: ${key}`, error)
-    return false
-  }
-}
-
-/**
- * Safely get item from sessionStorage
- */
-export function getSessionStorageItem(key: PkceStorageKey): string | null {
-  try {
-    return sessionStorage.getItem(key)
-  } catch (error) {
-    console.warn(`[Auth] Failed to read from sessionStorage: ${key}`, error)
-    return null
-  }
-}
-
-/**
- * Safely set item in sessionStorage
- */
-export function setSessionStorageItem(key: PkceStorageKey, value: string): boolean {
-  try {
-    sessionStorage.setItem(key, value)
-    return true
-  } catch (error) {
-    console.warn(`[Auth] Failed to write to sessionStorage: ${key}`, error)
-    return false
-  }
-}
-
-/**
- * Safely remove item from sessionStorage
- */
-export function removeSessionStorageItem(key: PkceStorageKey): boolean {
-  try {
-    sessionStorage.removeItem(key)
-    return true
-  } catch (error) {
-    console.warn(`[Auth] Failed to remove from sessionStorage: ${key}`, error)
-    return false
-  }
-}
+import { safeLocalStorage, safeSessionStorage } from '../safe-storage'
+import {
+  AUTH_STORAGE_KEYS,
+  LEGACY_AUTH_STORAGE_MIGRATIONS,
+  PKCE_STORAGE_KEYS,
+} from './auth.constants'
 
 /**
  * Get the current access token
  */
 export function getAccessToken(): string | null {
-  return getLocalStorageItem(AUTH_STORAGE_KEYS.ACCESS_TOKEN)
+  return safeLocalStorage.get(AUTH_STORAGE_KEYS.ACCESS_TOKEN)
 }
 
 /**
  * Get the current ID token
  */
 export function getIdToken(): string | null {
-  return getLocalStorageItem(AUTH_STORAGE_KEYS.ID_TOKEN)
+  return safeLocalStorage.get(AUTH_STORAGE_KEYS.ID_TOKEN)
 }
 
 /**
  * Get the current refresh token
  */
 export function getRefreshToken(): string | null {
-  return getLocalStorageItem(AUTH_STORAGE_KEYS.REFRESH_TOKEN)
+  return safeLocalStorage.get(AUTH_STORAGE_KEYS.REFRESH_TOKEN)
 }
 
 /**
@@ -120,13 +47,13 @@ export function storeAuthTokens(tokens: {
   refreshToken?: string
 }): void {
   if (tokens.accessToken) {
-    setLocalStorageItem(AUTH_STORAGE_KEYS.ACCESS_TOKEN, tokens.accessToken)
+    safeLocalStorage.set(AUTH_STORAGE_KEYS.ACCESS_TOKEN, tokens.accessToken)
   }
   if (tokens.idToken) {
-    setLocalStorageItem(AUTH_STORAGE_KEYS.ID_TOKEN, tokens.idToken)
+    safeLocalStorage.set(AUTH_STORAGE_KEYS.ID_TOKEN, tokens.idToken)
   }
   if (tokens.refreshToken) {
-    setLocalStorageItem(AUTH_STORAGE_KEYS.REFRESH_TOKEN, tokens.refreshToken)
+    safeLocalStorage.set(AUTH_STORAGE_KEYS.REFRESH_TOKEN, tokens.refreshToken)
   }
 }
 
@@ -134,14 +61,30 @@ export function storeAuthTokens(tokens: {
  * Store "keep me signed in" preference
  */
 export function storeKeepSignedIn(value: boolean): void {
-  setLocalStorageItem(AUTH_STORAGE_KEYS.KEEP_SIGNED_IN, value.toString())
+  safeLocalStorage.set(AUTH_STORAGE_KEYS.KEEP_SIGNED_IN, value.toString())
 }
 
 /**
  * Get "keep me signed in" preference
  */
 export function getKeepSignedIn(): boolean {
-  return getLocalStorageItem(AUTH_STORAGE_KEYS.KEEP_SIGNED_IN) === 'true'
+  return safeLocalStorage.get(AUTH_STORAGE_KEYS.KEEP_SIGNED_IN) === 'true'
+}
+
+/**
+ * Store the address that last signed in successfully, so the login entry screen can
+ * greet the returning admin instead of asking for the email again.
+ */
+export function storeLastLoginEmail(email: string): void {
+  safeLocalStorage.set(AUTH_STORAGE_KEYS.LAST_LOGIN_EMAIL, email)
+}
+
+/**
+ * Get the address that last signed in successfully, or null when none is stored
+ * (first visit, cleared storage, or unusable localStorage).
+ */
+export function getLastLoginEmail(): string | null {
+  return safeLocalStorage.get(AUTH_STORAGE_KEYS.LAST_LOGIN_EMAIL)
 }
 
 /**
@@ -150,23 +93,42 @@ export function getKeepSignedIn(): boolean {
  * "Keep me signed in" deliberately survives: it is a per-browser preference, not a
  * credential, and it prefills the login checkbox on the next visit. It cannot extend
  * anything on its own — the session keeper also requires the refresh token, which is
- * removed here.
+ * removed here. The last-login email survives too: the remembered-account screen
+ * exists precisely for the admin who just logged out.
  */
 export function clearAuthTokens(): void {
-  removeLocalStorageItem(AUTH_STORAGE_KEYS.ACCESS_TOKEN)
-  removeLocalStorageItem(AUTH_STORAGE_KEYS.ID_TOKEN)
-  removeLocalStorageItem(AUTH_STORAGE_KEYS.REFRESH_TOKEN)
-  removeLocalStorageItem(AUTH_STORAGE_KEYS.PROFILE)
+  safeLocalStorage.remove(AUTH_STORAGE_KEYS.ACCESS_TOKEN)
+  safeLocalStorage.remove(AUTH_STORAGE_KEYS.ID_TOKEN)
+  safeLocalStorage.remove(AUTH_STORAGE_KEYS.REFRESH_TOKEN)
+}
+
+/**
+ * One-time move of auth storage from the pre-prefix key names to the
+ * `storagePrefix`-namespaced ones, so the rename does not log every deployed
+ * browser out. Runs at startup, before anything reads a token. A value already
+ * present under the new key wins — the legacy copy is stale by definition —
+ * and the legacy entry is removed either way.
+ */
+export function migrateLegacyAuthStorage(): void {
+  for (const [legacyKey, currentKey] of LEGACY_AUTH_STORAGE_MIGRATIONS) {
+    const value = safeLocalStorage.get(legacyKey)
+    if (value === null) {
+      continue
+    }
+    if (safeLocalStorage.get(currentKey) === null) {
+      safeLocalStorage.set(currentKey, value)
+    }
+    safeLocalStorage.remove(legacyKey)
+  }
 }
 
 /**
  * Get and clear stored redirect path
  */
 export function consumeRedirectPath(): string | null {
-  const path = getSessionStorageItem(PKCE_STORAGE_KEYS.REDIRECT_PATH)
+  const path = safeSessionStorage.get(PKCE_STORAGE_KEYS.REDIRECT_PATH)
   if (path) {
-    removeSessionStorageItem(PKCE_STORAGE_KEYS.REDIRECT_PATH)
+    safeSessionStorage.remove(PKCE_STORAGE_KEYS.REDIRECT_PATH)
   }
   return path
 }
-

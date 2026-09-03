@@ -6,7 +6,7 @@
 
 import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
-import { appConfig } from '@/lib/app-config'
+import { appStorageKey } from '@/lib/app-config'
 
 export interface AwsCredentials {
   accessKeyId: string
@@ -36,7 +36,7 @@ export const useAuthStore = create<AuthState>()(
       },
     }),
     {
-      name: `${appConfig.storagePrefix}-auth-credentials`,
+      name: appStorageKey('auth-credentials'),
       storage: createJSONStorage(() => sessionStorage),
     }
   )

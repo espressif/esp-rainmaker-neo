@@ -5,7 +5,7 @@
  */
 
 import { useTranslation } from "react-i18next";
-import { StatusBadge } from "@/components/status-badge";
+import { StatusBadge } from "@espressif/dashboard-ui-components/components";
 import { getSmsSandboxStatusPresentation } from "@/config/sms-sandbox-status.config";
 import type { SmsSandboxStatusBadgeProps } from "./sms-sandbox-status-badge.props";
 
@@ -20,5 +20,5 @@ export function SmsSandboxStatusBadge({ status }: SmsSandboxStatusBadgeProps) {
     getSmsSandboxStatusPresentation(status);
   const label = i18nKey ? t(i18nKey, labelFallback) : status;
 
-  return <StatusBadge label={label} Icon={Icon} color={color} />;
+  return <StatusBadge label={label} Icon={Icon} color={color} variant="gradient" />;
 }

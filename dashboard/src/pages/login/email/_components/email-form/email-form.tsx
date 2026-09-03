@@ -24,19 +24,14 @@ import {
   type IdentifyRequestSchema,
 } from "@/api";
 import { voidFormSubmit } from "@/lib/void-form-submit";
+import type { EmailFormProps } from "./email-form.props";
 
-interface IdentifyFormProps {
-  defaultUsername: string;
-  isSubmitting: boolean;
-  onSubmit: (username: string) => void;
-}
-
-/** Step 1: collect the address, so Cognito can say which factors it has. */
-export default function IdentifyForm({
+/** Screen 3's form: collect the address, so Cognito can say which factors it has. */
+export default function EmailForm({
   defaultUsername,
   isSubmitting,
   onSubmit,
-}: IdentifyFormProps) {
+}: EmailFormProps) {
   const { t } = useTranslation(["login", "common"]);
   const schema = useMemo(
     () => getIdentifyRequestSchema(getAuthSchemaMessages(t)),

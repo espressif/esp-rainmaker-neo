@@ -1,25 +1,35 @@
 {
   "title": "登录",
   "description": "输入您的凭据以访问您的账户",
+  "welcomeBack": "欢迎回来",
+  "welcomeBackDescription": "使用上次登录的账户继续。",
+  "continue": "继续",
+  "chooseAnotherEmail": "选择其他邮箱",
+  "emailLabel": "邮箱",
+  "emailPlaceholder": "请输入邮箱",
   "errorTitle": "无法登录",
   "invalidCredentials": "用户名或密码无效",
+  "otp": {
+    "title": "请查看您的邮箱",
+    "sentTo": "请输入发送至 {{email}} 的 8 位验证码",
+    "resendIn": "{{seconds}} 秒后可重新发送验证码"
+  },
+  "otpLabel": "验证码",
+  "otpSubmit": "验证",
+  "resendCode": "重新发送验证码",
+  "usePasswordInstead": "使用密码登录",
+  "password": {
+    "title": "输入密码",
+    "description": "使用下方账户的密码登录。",
+    "emailCode": "改为向我发送验证码"
+  },
   "passwordLabel": "密码",
   "passwordPlaceholder": "请输入密码",
+  "forgotPasswordLink": "忘记密码？",
   "keepSignedInLabel": "保持登录",
   "submit": "登录",
-  "forgotPasswordLink": "忘记密码？",
   "resetSuccessTitle": "密码已更新",
   "resetSuccessMessage": "您的密码已更新，请使用新密码登录。",
   "setSuccessTitle": "密码已设置",
-  "setSuccessMessage": "您已设置密码，之后可使用密码或验证码登录。",
-  "emailLabel": "邮箱",
-  "emailPlaceholder": "请输入邮箱",
-  "continue": "继续",
-  "otpSentTo": "验证码已发送至 {{destination}}。",
-  "otpLabel": "一次性验证码",
-  "otpPlaceholder": "请输入 6 位验证码",
-  "otpSubmit": "验证",
-  "resendCode": "重新发送验证码",
-  "usePasswordInstead": "改用密码登录",
-  "useAnotherAddress": "使用其他邮箱"
+  "setSuccessMessage": "您已设置密码，之后可使用密码或验证码登录。"
 }

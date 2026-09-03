@@ -7,7 +7,10 @@
 import { createRoot } from 'react-dom/client'
 import { RouterProvider } from '@tanstack/react-router'
 import { createRouter } from '../app/router'
+import { migrateLegacyAuthStorage } from './lib/auth'
 import './styles/globals.css'
+
+migrateLegacyAuthStorage()
 
 const router = createRouter()
 

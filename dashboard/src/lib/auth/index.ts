@@ -28,7 +28,10 @@ export {
   clearAuthTokens,
   storeKeepSignedIn,
   getKeepSignedIn,
+  storeLastLoginEmail,
+  getLastLoginEmail,
   consumeRedirectPath,
+  migrateLegacyAuthStorage,
 } from './auth.storage'
 
 // Core auth functions
@@ -71,6 +74,7 @@ export {
   otpErrorMessage,
   isIncorrectCurrentPasswordError,
   SESSION_EXPIRED_MESSAGE,
+  OTP_SESSION_EXPIRED_MESSAGE,
 } from './password-errors'
 export type { LocalizedMessage } from './password-errors'
 

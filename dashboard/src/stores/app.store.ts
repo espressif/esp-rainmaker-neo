@@ -6,7 +6,7 @@
 
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { appConfig } from '@/lib/app-config'
+import { appConfig, appStorageKey } from '@/lib/app-config'
 import urlParamsConfig from '@/config/url-params.config.json'
 import { getURLParamValue } from '@/utils/utils'
 import type { SupportedLanguage } from '@/lib/app-config'
@@ -53,7 +53,7 @@ export const useAppStore = create<AppState>()(
       setLanguage: (lang) => set({ language: lang }),
     }),
     {
-      name: `${appConfig.storagePrefix}-app-storage`,
+      name: appStorageKey('app-storage'),
     }
   )
 )

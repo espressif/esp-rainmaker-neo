@@ -5,7 +5,7 @@
  */
 
 import { useTranslation } from "react-i18next";
-import { StatusBadge } from "@/components/status-badge";
+import { StatusBadge } from "@espressif/dashboard-ui-components/components";
 import { getRegistrationJobStatusPresentation } from "@/config/registration-job-status.config";
 import type { RegistrationJobStatusBadgeProps } from "./registration-job-status-badge.props";
 

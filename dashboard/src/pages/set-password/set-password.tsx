@@ -8,7 +8,6 @@ import { useCallback, useEffect, useMemo } from "react";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { KeyRound } from "lucide-react";
-import { Alert } from "@espressif/dashboard-ui-components/components";
 import OnboardingLayout from "@/containers/onboarding/onboarding-layout";
 import { OnboardingCard } from "@/components/onboarding-card";
 import { BackToSignInLink } from "@/components/back-to-signin-link";
@@ -69,28 +68,15 @@ export default function SetPassword() {
       <OnboardingCard
         icon={<KeyRound className="w-6 h-6" />}
         title={t("title", "Set new password")}
-        description={t(
-          "description",
-          "Enter the code you received and choose a new password.",
-        )}
+        description={t("description", {
+          defaultValue: "Enter the 6 digit code sent to {{email}}",
+          email,
+        })}
         actions={<BackToSignInLink />}
       >
-        {sent && (
-          <Alert
-            title={t("codeSentTitle", "Check your inbox")}
-            type="info"
-            description={t("codeSent", {
-              defaultValue:
-                "If {{email}} is registered, a confirmation code has been sent to it.",
-              email,
-            })}
-            hideIcon
-            className="mb-4 border-none shadow-none"
-          />
-        )}
-
         <SetNewPasswordForm
           email={email}
+          codeJustSent={sent}
           onSuccess={handleSuccess}
           onCodeResent={handleCodeResent}
         />

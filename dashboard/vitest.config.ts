@@ -21,6 +21,7 @@ export default defineConfig({
       'src/utils/**/*.test.ts',
       'src/lib/**/*.test.ts',
       'src/pages/**/*.test.ts',
+      'src/stores/**/*.test.ts',
     ],
   },
 })
