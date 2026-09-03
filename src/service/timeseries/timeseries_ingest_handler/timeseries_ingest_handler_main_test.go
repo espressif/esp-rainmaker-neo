@@ -32,8 +32,7 @@ var _ = ginkgo.Describe("Timeseries ingestion", func() {
 
 	ginkgo.It("fans out a batch payload into independently queryable points", func() {
 		event := TimeseriesIngestEvent{
-			NodeID:    "node-1",
-			TopicName: "group-1",
+			NodeID: "node-1",
 			Payload: json.RawMessage(`{"data":[
 				{"k":"temperature","dt":"float","t":1743656583,"v":25.5,"tz":"UTC"},
 				{"k":"humidity","dt":"int","t":1743656583,"v":60},
@@ -45,7 +44,6 @@ var _ = ginkgo.Describe("Timeseries ingestion", func() {
 		gomega.Expect(handleTimeseriesIngest(context.Background(), event)).To(gomega.Succeed())
 		temperature := getStoredPoint("node-1", "temperature", "float")
 		gomega.Expect(temperature.Value).To(gomega.Equal(25.5))
-		gomega.Expect(temperature.TopicName).To(gomega.Equal("group-1"))
 		gomega.Expect(temperature.Timestamp).To(gomega.Equal(int64(1743656583)))
 		gomega.Expect(getStoredPoint("node-1", "humidity", "int").Value).To(gomega.Equal(float64(60)))
 		gomega.Expect(getStoredPoint("node-1", "online", "bool").Value).To(gomega.Equal(true))
@@ -98,9 +96,8 @@ var _ = ginkgo.Describe("Timeseries ingestion", func() {
 
 	ginkgo.It("processes SQS records and reports only failed messages", func() {
 		validEvent := TimeseriesIngestEvent{
-			NodeID:    "node-sqs",
-			TopicName: "group-1",
-			Payload:   json.RawMessage(`{"data":[{"k":"temperature","dt":"float","t":1743656583,"v":25.5}]}`),
+			NodeID:  "node-sqs",
+			Payload: json.RawMessage(`{"data":[{"k":"temperature","dt":"float","t":1743656583,"v":25.5}]}`),
 		}
 		validBody, err := json.Marshal(validEvent)
 		gomega.Expect(err).ToNot(gomega.HaveOccurred())

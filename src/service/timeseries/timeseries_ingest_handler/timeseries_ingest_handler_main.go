@@ -23,9 +23,8 @@ import (
 // TimeseriesIngestEvent is produced by node_ts_batch_rule for messages on the
 // dedicated rainmaker/nodes/{nodeID}/ts/{groupInfo}/batch topic.
 type TimeseriesIngestEvent struct {
-	NodeID    string          `json:"node_id"`
-	TopicName string          `json:"topic_name"`
-	Payload   json.RawMessage `json:"payload"`
+	NodeID  string          `json:"node_id"`
+	Payload json.RawMessage `json:"payload"`
 }
 
 func decodeTimeseriesPayload(payload json.RawMessage) (*timeseries.TimeseriesBatchPayload, error) {
@@ -45,7 +44,6 @@ func handleTimeseriesIngest(ctx context.Context, event TimeseriesIngestEvent) er
 	if err != nil {
 		return err
 	}
-	payload.TopicName = event.TopicName
 
 	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, utils.NewSystemActor())
 	return timeseries.NewTimeseriesService().Put(rmngCtx, event.NodeID, payload)

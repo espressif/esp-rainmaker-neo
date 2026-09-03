@@ -14,7 +14,6 @@ Schema:
 - node_key_dt (String): Partition key, format: "nodeID.key.dt"
 - ts (Number): Sort key, epoch timestamp
 - node_id (String): Device identifier
-- topic_name (String): Topic name suffix (e.g., "ts-group456-sub1,sub2")
 - key (String): Parameter name
 - dt (String): Data type (int/float/bool/string)
 - tz (String): Timezone identifier (IANA name, e.g. "UTC", "Asia/Kolkata") (optional)
@@ -27,7 +26,6 @@ Example Records:
      "node_key_dt": "device123.temperature.float",
      "ts": 1640995200,
      "node_id": "device123",
-     "topic_name": "ts-group456",
      "key": "temperature",
      "dt": "float",
      "tz": "UTC",
@@ -40,7 +38,6 @@ Example Records:
      "node_key_dt": "device456.energy.float",
      "ts": 1640995260,
      "node_id": "device456",
-     "topic_name": "ts-group456-sub1",
      "key": "energy",
      "dt": "float",
      "value": 1500.25,
@@ -109,7 +106,6 @@ type TimeseriesEntry struct {
 	NodeKeyDt  string      `dynamodbav:"node_key_dt"`
 	Timestamp  int64       `dynamodbav:"ts"` // In milliseconds
 	NodeID     string      `dynamodbav:"node_id"`
-	TopicName  string      `dynamodbav:"topic_name"`
 	DataKey    string      `dynamodbav:"key"`
 	DataType   string      `dynamodbav:"dt"`
 	Timezone   string      `dynamodbav:"tz,omitempty"`
@@ -130,7 +126,7 @@ type NodeTimeseriesPayload struct {
 
 // UnMarshalNodePayloadToTimeseriesEntry validates a node payload and converts
 // it into the raw-table representation.
-func (db *TimeseriesDB) UnMarshalNodePayloadToTimeseriesEntry(nodeID, topicName string, point NodeTimeseriesPayload) (*TimeseriesEntry, error) {
+func (db *TimeseriesDB) UnMarshalNodePayloadToTimeseriesEntry(nodeID string, point NodeTimeseriesPayload) (*TimeseriesEntry, error) {
 	if nodeID == "" {
 		return nil, rmerror.NewRMError(nil, "missing required field: node_id")
 	}
@@ -177,7 +173,6 @@ func (db *TimeseriesDB) UnMarshalNodePayloadToTimeseriesEntry(nodeID, topicName 
 	return &TimeseriesEntry{
 		Timestamp:  point.Timestamp,
 		NodeID:     nodeID,
-		TopicName:  topicName,
 		DataKey:    point.Key,
 		DataType:   point.DataType,
 		Timezone:   point.Timezone,

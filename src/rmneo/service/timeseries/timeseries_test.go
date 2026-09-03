@@ -204,7 +204,6 @@ var _ = Describe("TimeseriesService", func() {
 		It("should validate and batch-store node timeseries data", func() {
 			testUser.Permissions.SetAllow(utils.NodePutConfig.String(), testNodeID)
 			err := timeseriesService.Put(rmngCtx, testNodeID, timeseries.TimeseriesBatchPayload{
-				TopicName: "group-1",
 				Data: []timeseries_db.NodeTimeseriesPayload{
 					{Key: "temperature", DataType: "float", Timestamp: 1743656583, Value: json.RawMessage(`25.5`)},
 					{Key: "online", DataType: "bool", Timestamp: 1743656583, Value: json.RawMessage(`true`)},
@@ -214,7 +213,6 @@ var _ = Describe("TimeseriesService", func() {
 
 			entry, err := timeseries_db.NewTimeseriesDB(rmngCtx).GetLatestTimeseriesData(testNodeID, "temperature", "float")
 			Expect(err).ToNot(HaveOccurred())
-			Expect(entry.TopicName).To(Equal("group-1"))
 			Expect(entry.Value).To(Equal(25.5))
 		})
 
@@ -480,7 +478,6 @@ var _ = Describe("TimeseriesDB", func() {
 						DataKey:    "temperature",
 						DataType:   "float",
 						Timestamp:  1640995200, // 2022-01-01 00:00:00 UTC
-						TopicName:  "ts-group456",
 						Timezone:   "UTC",
 						Value:      25.5,
 						Cumulative: false,
@@ -490,7 +487,6 @@ var _ = Describe("TimeseriesDB", func() {
 						DataKey:    "temperature",
 						DataType:   "float",
 						Timestamp:  1640995260, // 2022-01-01 00:01:00 UTC
-						TopicName:  "ts-group456",
 						Timezone:   "UTC",
 						Value:      26.0,
 						Cumulative: false,
@@ -500,7 +496,6 @@ var _ = Describe("TimeseriesDB", func() {
 						DataKey:    "temperature",
 						DataType:   "float",
 						Timestamp:  1640995320, // 2022-01-01 00:02:00 UTC
-						TopicName:  "ts-group456",
 						Timezone:   "UTC",
 						Value:      24.8,
 						Cumulative: false,
@@ -578,7 +573,6 @@ var _ = Describe("TimeseriesDB", func() {
 				Expect(entry.NodeID).To(Equal(testNodeID))
 				Expect(entry.DataKey).To(Equal("temperature"))
 				Expect(entry.DataType).To(Equal("float"))
-				Expect(entry.TopicName).To(Equal("ts-group456"))
 				Expect(entry.Timezone).To(Equal("UTC"))
 				Expect(entry.Cumulative).To(BeFalse())
 			})
@@ -604,7 +598,6 @@ var _ = Describe("TimeseriesDB", func() {
 				DataKey:   "temperature",
 				DataType:  "float",
 				Timestamp: 1640995200,
-				TopicName: "ts-group456",
 				Value:     25.5,
 			}
 
@@ -644,7 +637,6 @@ var _ = Describe("TimeseriesDB", func() {
 				DataKey:    "temperature",
 				DataType:   "float",
 				Timestamp:  1640995200,
-				TopicName:  "ts-group456",
 				Timezone:   "UTC",
 				Value:      25.5,
 				Cumulative: false,
@@ -749,7 +741,6 @@ var _ = Describe("TimeseriesDB", func() {
 						DataKey:    "temperature",
 						DataType:   "float",
 						Timestamp:  baseTimestamp + int64(i),
-						TopicName:  "ts-group456",
 						Timezone:   "UTC",
 						Value:      float64(20 + i), // Values 20.0 to 29.0
 						Cumulative: false,
@@ -918,7 +909,6 @@ var _ = Describe("Timeseries Service Integration", func() {
 					DataKey:    "temperature",
 					DataType:   "float",
 					Timestamp:  1640995200,
-					TopicName:  "ts-test",
 					Timezone:   "UTC",
 					Value:      22.0,
 					Cumulative: false,
@@ -928,7 +918,6 @@ var _ = Describe("Timeseries Service Integration", func() {
 					DataKey:    "temperature",
 					DataType:   "float",
 					Timestamp:  1640995202,
-					TopicName:  "ts-test",
 					Timezone:   "UTC",
 					Value:      23.0,
 					Cumulative: false,
@@ -938,7 +927,6 @@ var _ = Describe("Timeseries Service Integration", func() {
 					DataKey:    "temperature",
 					DataType:   "float",
 					Timestamp:  1640995204,
-					TopicName:  "ts-test",
 					Timezone:   "UTC",
 					Value:      24.0,
 					Cumulative: false,
@@ -1454,7 +1442,7 @@ var _ = Describe("Purging all timeseries data for a node", func() {
 			for _, ts := range []int64{1000, 2000} {
 				Expect(db.PutTimeseriesData(&timeseries_db.TimeseriesEntry{
 					NodeID: nodeID, DataKey: p.Name, DataType: p.DataType,
-					Timestamp: ts, TopicName: "ts-test", Value: 1.0,
+					Timestamp: ts, Value: 1.0,
 				})).To(Succeed())
 			}
 			// Processed rows, keyed on interval_key — both the open "current" row and an
