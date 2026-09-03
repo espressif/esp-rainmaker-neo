@@ -211,7 +211,6 @@ class TimeseriesCore(Construct):
                 sql="""
                 SELECT
                     topic(3) as node_id,
-                    topic(5) as topic_name,
                     * as payload
                 FROM 'rainmaker/nodes/+/ts/+/batch'
                 """,

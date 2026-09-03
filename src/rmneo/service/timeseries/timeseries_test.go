@@ -204,7 +204,6 @@ var _ = Describe("TimeseriesService", func() {
 		It("should validate and batch-store node timeseries data", func() {
 			testUser.Permissions.SetAllow(utils.NodePutConfig.String(), testNodeID)
 			err := timeseriesService.Put(rmngCtx, testNodeID, timeseries.TimeseriesBatchPayload{
-				TopicName: "group-1",
 				Data: []timeseries_db.NodeTimeseriesPayload{
 					{Key: "temperature", DataType: "float", Timestamp: 1743656583, Value: json.RawMessage(`25.5`)},
 					{Key: "online", DataType: "bool", Timestamp: 1743656583, Value: json.RawMessage(`true`)},
@@ -214,7 +213,6 @@ var _ = Describe("TimeseriesService", func() {
 
 			entry, err := timeseries_db.NewTimeseriesDB(rmngCtx).GetLatestTimeseriesData(testNodeID, "temperature", "float")
 			Expect(err).ToNot(HaveOccurred())
-			Expect(entry.TopicName).To(Equal("group-1"))
 			Expect(entry.Value).To(Equal(25.5))
 		})
 

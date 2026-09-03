@@ -126,7 +126,7 @@ type NodeTimeseriesPayload struct {
 
 // UnMarshalNodePayloadToTimeseriesEntry validates a node payload and converts
 // it into the raw-table representation.
-func (db *TimeseriesDB) UnMarshalNodePayloadToTimeseriesEntry(nodeID, topicName string, point NodeTimeseriesPayload) (*TimeseriesEntry, error) {
+func (db *TimeseriesDB) UnMarshalNodePayloadToTimeseriesEntry(nodeID string, point NodeTimeseriesPayload) (*TimeseriesEntry, error) {
 	if nodeID == "" {
 		return nil, rmerror.NewRMError(nil, "missing required field: node_id")
 	}
@@ -173,7 +173,6 @@ func (db *TimeseriesDB) UnMarshalNodePayloadToTimeseriesEntry(nodeID, topicName 
 	return &TimeseriesEntry{
 		Timestamp:  point.Timestamp,
 		NodeID:     nodeID,
-		TopicName:  topicName,
 		DataKey:    point.Key,
 		DataType:   point.DataType,
 		Timezone:   point.Timezone,

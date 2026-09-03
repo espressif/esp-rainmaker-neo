@@ -69,8 +69,7 @@ type TimeseriesDataPoint struct {
 // TimeseriesBatchPayload is the payload passed from the MQTT ingestion
 // handler to the timeseries service.
 type TimeseriesBatchPayload struct {
-	TopicName string                                `json:"topic_name,omitempty"`
-	Data      []timeseries_db.NodeTimeseriesPayload `json:"data"`
+	Data []timeseries_db.NodeTimeseriesPayload `json:"data"`
 }
 
 // Get retrieves timeseries data for a node
@@ -556,7 +555,7 @@ func (s *TimeseriesService) Put(rmngCtx *rmngctx.RmngContext, nodeID string, dat
 	timeseriesDB := timeseries_db.NewTimeseriesDB(rmngCtx)
 	entries := make([]*timeseries_db.TimeseriesEntry, len(payload.Data))
 	for i, point := range payload.Data {
-		entry, err := timeseriesDB.UnMarshalNodePayloadToTimeseriesEntry(nodeID, payload.TopicName, point)
+		entry, err := timeseriesDB.UnMarshalNodePayloadToTimeseriesEntry(nodeID, point)
 		if err != nil {
 			return rmerror.NewRMError(err, fmt.Sprintf("invalid data point at index %d", i))
 		}
