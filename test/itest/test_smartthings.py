@@ -17,9 +17,13 @@ Mirrors test_alexa.py / test_gva.py for parity. Two layers are covered:
 
 Run all: pytest test/itest/test_smartthings.py -v -s
 """
+import os
+import subprocess
+import sys
 import time
 
 import pytest
+import requests
 
 from py_sdk.test_group import Group
 from py_sdk.test_smartthings import cookie_for, st_external_device_id
@@ -703,3 +707,167 @@ def test_smartthings_command_multiple_commands_one_device(user_with_1_dev_each_i
     assert received == {"Power": True, "Brightness": 50}, (
         f"region {region}: device did not receive both commands: {received}"
     )
+
+
+# ---------------------------------------------------------------------------
+# 6. Proactive state callback (device -> SmartThings)
+#
+# The other tests here all drive SmartThings -> connector. This one covers the
+# reverse direction: a device param change reaching SmartThings as a
+# stateCallback, dispatched by the notifications Lambda.
+#
+# Unlike Alexa/GVA, the SmartThings adapter does not implement
+# NotifyOnConnectivityChange, so it is only dispatched when notify.version moves
+# — a param change, not a bare online/offline flip. The test therefore bumps
+# notify.version rather than disconnecting the device.
+# ---------------------------------------------------------------------------
+def _read_st_notification(base_url, api_key, callback_token):
+    """Return the last SmartThings stateCallback the in-cloud mock captured.
+
+    Keyed by the callback access token, since a stateCallback envelope names no
+    user: the callback URL plus bearer token are what identify the recipient.
+    """
+    response = requests.get(
+        f"{base_url}/v1/smartthings/validate",
+        params={"uuid": callback_token},
+        headers={"x-api-key": api_key})
+    assert response.status_code == 200, \
+        f"Failed to read SmartThings notification for token {callback_token}: {response.text}"
+    payload = response.json()
+    assert payload is not None, f"No SmartThings notification for token {callback_token}"
+    assert payload.get("smartthings") is True, f"Not a SmartThings notification: {payload}"
+    return payload
+
+
+def _assert_st_reported(base_url, api_key, callback_token, device_id, expected_states):
+    """Assert the mock captured a stateCallback carrying expected_states for device_id.
+
+    Retries, since the callback travels device -> shadow -> shadow_notify_rule ->
+    notifications lambda -> mock and the last hop is not synchronous.
+    """
+    def check():
+        payload = _read_st_notification(base_url, api_key, callback_token)
+        assert payload["headers"]["interactionType"] == "stateCallback", \
+            f"Not a stateCallback: {payload}"
+
+        device_states = payload.get("deviceState") or []
+        match = [ds for ds in device_states if ds.get("externalDeviceId") == device_id]
+        assert match, f"Device {device_id} not in stateCallback: {payload}"
+
+        states = {(s["capability"], s["attribute"]): s["value"] for s in match[0]["states"]}
+        for key, value in expected_states.items():
+            assert states.get(key) == value, \
+                f"Expected {key}={value}, got {states.get(key)} in {states}"
+
+    last_error = None
+    for _ in range(3):
+        try:
+            check()
+            return
+        except AssertionError as e:
+            last_error = e
+            print(f"SmartThings stateCallback validation retrying: {e}")
+            time.sleep(5)
+    raise last_error
+
+
+
+@pytest.fixture
+def st_action_test_mode(webhook_mock):
+    """Point the regional Schema App Lambda at the in-cloud mock for one test.
+
+    grantCallbackAccess runs in rmng-st-action, not in rmng-notifications, so the
+    webhook_mock fixture's env patch does not reach it. Without this the handler
+    reads /rmng/smartthings/{client_id,client_secret} from SSM and fails outright on
+    an account where SmartThings was never configured. drx.py takes its region from
+    AWS_REGION, hence the per-region env for the subprocess.
+    """
+    base_url, api_key = webhook_mock
+    if not ST_REGION_ARNS:
+        pytest.skip("No rmng-st-core regions in rmng-outputs.json")
+    region, arn = ST_REGION_ARNS[0]
+    fn = arn.rsplit(":", 1)[-1]
+
+    def _set(url_value, key_value):
+        # Both vars matter: the base URL is what makes the handler skip the SSM
+        # credential read, and the key is what MakeHTTPPostRequest attaches as
+        # x-api-key -- every /v1 method on the test-infra API is api_key_required,
+        # so the token POST is answered with 403 without it.
+        env = {**os.environ, "AWS_REGION": region}
+        subprocess.run(
+            [sys.executable, "tools/drx.py", "update-env", fn,
+             f"webhook_mock_base_url={url_value}",
+             f"webhook_mock_api_key={key_value}"],
+            check=True, env=env)
+
+    _set(base_url, api_key)
+    try:
+        yield base_url
+    finally:
+        _set("", "")
+
+
+@pytest.mark.xdist_group("env_mut")
+def test_smartthings_state_callback(user_with_1_dev_each_in_2_groups, webhook_mock, st_action_test_mode):
+    """A device param change is reported to SmartThings as a proactive stateCallback.
+
+    The webhook_mock fixture points rmng-notifications at the in-cloud mock, which
+    is where the adapter's test mode routes state callbacks. The env_mut group
+    serialises this against the other tests that toggle the same Lambda config.
+
+    Only the first ST region is exercised: the dispatch path under test lives in
+    the notifications Lambda, which is regional-independent, and the fixture
+    mutates shared Lambda env.
+    """
+    webhook_mock_base_url, webhook_mock_api_key = webhook_mock
+    if not ST_REGION_ARNS:
+        pytest.skip("No rmng-st-core regions in rmng-outputs.json")
+    region, arn = ST_REGION_ARNS[0]
+
+    device1, _device2, group1_id, _group2_id, test_user1 = user_with_1_dev_each_in_2_groups
+    test_user1.get_aws_credentials()
+
+    assert device1.connect(), "Failed to connect to MQTT"
+    shadow_name = f"params-{group1_id}"
+    assert device1.shadow_connect([shadow_name]), "Failed to connect to shadow"
+    device1.update_named_shadow(shadow_name, {
+        "online": True,
+        "Light1": {"Power": False, "Brightness": 0},
+    })
+
+    # Discovery registers the node as ST-enabled, the same precondition the
+    # command and state-refresh tests rely on.
+    test_user1.st_discover_devices(lambda_arn=arn, region=region)
+
+    # Link callback tokens: without a stored row SendTo skips the user entirely.
+    # The mock echoes the code back as the access token, so the token the state
+    # callback will carry — and thus the capture key — is predictable.
+    callback_token = f"st-cb-{test_user1.sub}"
+    test_user1.st_grant_callback(
+        callback_token,
+        f"{webhook_mock_base_url}/v1/smartthings/token",
+        f"{webhook_mock_base_url}/v1/smartthings/data",
+        lambda_arn=arn, region=region)
+
+    # notify names the services to dispatch; a bumped version marks the event as
+    # a param change rather than connectivity-only, which is the only kind the ST
+    # adapter is dispatched for.
+    light1_id = st_external_device_id(device1.node_thing_name, "Light1")
+
+    device1.update_named_shadow(shadow_name, {
+        "Light1": {"Power": True, "Brightness": 75},
+        "notify": {"version": 1, "smartthings": True},
+    })
+    _assert_st_reported(
+        webhook_mock_base_url, webhook_mock_api_key, callback_token, light1_id,
+        {("st.switch", "switch"): "on", ("st.switchLevel", "level"): 75})
+
+    # A second change must be reported too, not just the first: the version has
+    # to move again for the event to count as a param change.
+    device1.update_named_shadow(shadow_name, {
+        "Light1": {"Power": False},
+        "notify": {"version": 2, "smartthings": True},
+    })
+    _assert_st_reported(
+        webhook_mock_base_url, webhook_mock_api_key, callback_token, light1_id,
+        {("st.switch", "switch"): "off"})

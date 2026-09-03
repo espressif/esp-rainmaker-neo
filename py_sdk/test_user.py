@@ -1936,6 +1936,18 @@ class User:
         device = smartthings.command_device(external_device_id, commands, device_cookie)
         return self.st_control_devices([device], lambda_arn=lambda_arn, region=region)
 
+    def st_grant_callback(self, code, oauth_token_url, state_callback_url,
+                          lambda_arn=None, region=None):
+        """Send a grantCallbackAccess request, linking this user's callback tokens.
+
+        Stores a (user, smartthings, state_callback_url) row holding the tokens the
+        notifications Lambda later presents on state callbacks. Required before any
+        state callback is dispatched to this user.
+        """
+        request_body = smartthings.grant_callback_request(
+            self.access_token, code, oauth_token_url, state_callback_url)
+        return self._st_invoke(request_body, lambda_arn=lambda_arn, region=region)
+
     def st_state_refresh(self, external_device_ids, lambda_arn=None, region=None):
         """Send a stateRefreshRequest for the given device ids."""
         request_body = smartthings.state_refresh_request(self.access_token, external_device_ids)
