@@ -98,10 +98,10 @@ func (adb *AutomationDB) CreateAutomation(groupID, automationID string, payload 
 				// Extract trigger IDs from conditions
 				triggerIDs := extractTriggerIDs(conditionsMap)
 
-				// Create state object with conditions and trigger value mappings
+				// Create state object with conditions and trigger value mappings.
 				stateData := map[string]interface{}{
-					"conditions":    conditions,
-					"triggerValues": createTriggerValueMap(triggerIDs),
+					"conditions":     conditions,
+					"trigger_values": createTriggerValueMap(triggerIDs),
 				}
 
 				// Marshal state to JSON string for storage
