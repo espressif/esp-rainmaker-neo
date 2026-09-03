@@ -1307,7 +1307,8 @@ def print_smartthings_instructions():
     authorize_url, token_url = _oidc_endpoints()
     va_client_id = 'va-client'
     print(f"\nSmartThings configuration (https://developer.smartthings.com/):")
-    print(f'1. Device Integrations > New Integration > Cloud Connector > ST Schema')
+    print(f'1. Device Integrations > create a Product > add a Cloud Connector > ST Schema')
+    print(f'   - The Product is the container; adding the Schema App links the two automatically')
     print(f'   - App icon: use the logo at assets/smartthings_logo.png')
     print(f'2. Set the Target ARN for each geography:')
     if not st_regions:
@@ -1326,8 +1327,9 @@ def print_smartthings_instructions():
     print(f'   these are different from the credentials in step 3.')
     print(f'5. Store them: st_setup <config_file>, where the file holds')
     print(f'   {{"client_id": "<SmartThings client id>", "client_secret": "<SmartThings client secret>"}}')
-    print(f'6. Create a Product referencing the Schema App, with a Device Profile whose handler')
-    print(f'   type matches discovery (e.g. c2c-dimmer), then test via the SmartThings app.')
+    print(f'6. Link your account in the SmartThings app and the devices appear. Discovery names a')
+    print(f'   pre-made c2c-* handler type, so nothing per-device-type is created in the Workspace:')
+    print(f'   the Product from step 1 is only the container the Schema App lives in.')
 
 
 def handle_st_setup(user, config_file):
