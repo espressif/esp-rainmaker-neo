@@ -123,6 +123,90 @@ Two further properties are worth knowing:
   distinguish from a transient fault. Clients must treat a repeated
   `assumed-roles` 500 alongside a non-empty group list as this condition.
 
+## NOCs and CAT IDs
+
+A group with the `matter` capability is a Matter fabric, and access to it is
+carried by certificates rather than by cloud lookups. Two things do that work.
+
+### The NOC
+
+A **NOC** (Node Operational Certificate) is the identity a phone presents to a
+device. It is an end-entity certificate signed by the fabric's Root CA, issued by
+[Get NOC for user](#get-noc-for-user) against a CSR the phone generates, and it
+proves two things to a device: that the holder belongs to this fabric, and what
+role they hold in it.
+
+A NOC is issued once per fabric per phone and kept in the platform keystore. It
+is long-lived (10 years) and bound to a key that never leaves the device, so it
+is not re-fetched per session. Its subject carries the fabric ID, a controller
+node ID derived from the phone's key, and a CAT ID.
+
+Controller identity is derived, not stored: the same user on two phones has two
+keys and therefore two node IDs, and the cloud keeps no per-controller record.
+
+### The CAT ID
+
+A **CAT** (CASE Authenticated Tag) is a role tag baked into a NOC. Rather than
+listing every member on every device, a device grants privilege to a *tag*, and
+any NOC carrying that tag is granted it. This is what makes sharing device-free:
+a new member needs a NOC, not a visit to each device.
+
+A fabric has two, generated at [Group Create](#group-create):
+
+| CAT | Range | Carried by | Grants |
+| --- | --- | --- | --- |
+| `group_cat_id_admin` | `0x0100`–`0x03FF` | primary members | `Administer` |
+| `group_cat_id_operate` | `0x0600`–`0x08FF` | secondary members | `Operate` |
+
+Each is 32 bits written as 8 hex digits, `XXXXVVVV` — a tag identity fixed for
+the life of the group, and a version starting at `0001`. The ranges are disjoint,
+so an operate tag can never be read as an admin one.
+
+### How a CAT is written
+
+The two halves are positional, never separate fields. The cloud stores one 8-hex
+string and both destinations embed that 32-bit value whole; splitting it is a
+reading convention, applied only to compare or increment a version.
+
+**In a NOC**, it is a single UTF8String in the certificate subject under the
+Matter `matter-noc-cat` OID `1.3.6.1.4.1.37244.1.6`, beside the fabric ID
+(`…1.5`) and controller node ID (`…1.1`). The value is verbatim: `06D90001`.
+
+**On a device**, an ACL subject is always a 64-bit Node ID, and a CAT subject is
+one from the reserved range `0xFFFFFFFD_00000000`–`0xFFFFFFFD_FFFFFFFF`. The
+controller prefixes the constant `FFFFFFFD`:
+
+```
+in a NOC              06D90001
+                      ├──┤├──┤
+                      tag  version
+
+on a device      FFFFFFFD06D90001
+                 ├──────┤├──┤├──┤
+                 CAT      tag  version
+                 marker
+```
+
+The prefix marks the subject as a CAT rather than a plain node ID, and applies
+both to the admin subject passed to `AddNOC` and to an ACL entry's `subjects`.
+Omitting it fails loudly: the device matches nothing and rejects commissioning
+with `0x7E UnsupportedAccess`.
+
+### How they reach a device, and how they are matched
+
+The cloud never writes a device's ACL — it has no Matter path to a node, keeps no
+record of any ACL, and cannot read back what a device enforces. A CAT reaches a
+device only over a commissioner's Matter session: at commissioning, the phone
+reads the CAT IDs from [List Groups](#list-groups) and writes the device's Access
+Control cluster, setting `caseAdminSubject` to the admin CAT and adding an entry
+granting `Operate` to the operate CAT.
+
+A device then grants an entry's privilege when the tag halves are equal and the
+NOC's version is `>=` the entry's. **Only the version is ordered.** A newer NOC
+still satisfies an older entry, which is what lets a version be rotated without
+locking out members who re-issue — and what makes the device-side rewrite, not
+the rotation, the act that revokes. See [Unshare Fabric](#unshare-fabric).
+
 ## APIs
 
 ### Group Create
@@ -159,6 +243,9 @@ Two further properties are worth knowing:
      1. `fabric_id` — 64-bit (8 bytes, 16 hex chars). Derived from the `group_id` by hex-encoding its ASCII bytes and right-padding with zeros to 16 hex chars. Example: `group_id` `"abc123"` → hex `616263313233` → padded `6162633132330000`.
      2. `group_cat_id_admin` — 32-bit. Random hex value in range 0x0100-0x03FF (256–1023 decimal) + version `"0001"`, e.g. `03A30001`.
      3. `group_cat_id_operate` — 32-bit. Random hex value in range 0x0600-0x08FF (1536–2303 decimal) + version `"0001"`, e.g. `06D90001`.
+
+     For what these are and how the tag and version halves are written into a
+     NOC and into a device's ACL, see [NOCs and CAT IDs](#nocs-and-cat-ids).
      4. `root_ca` — ECDSA SHA256 Root CA certificate (PEM format)
         - Certificate type: CA certificate (self-signed)
         - Algorithm: ECDSA P-256 with SHA256 signature
@@ -910,6 +997,12 @@ sequenceDiagram
 
 ### Share Group
 
+An invitee is named one of two ways. Either the sharer knows who they are
+inviting and names them by `username`, and the request lands in that person's
+inbox; or the sharer does not, omits `username`, and turns the returned
+`request_id` into a QR code that whoever scans it claims — see [QR-code sharing
+requests](#qr-code-sharing-requests) below.
+
 Sharing works the same way whether or not the group is a Matter fabric. A
 subgroup-shared (`subentity`) user gets subgroup-only access and cannot obtain
 Matter NOCs; see the [FAQ](#faqs).
@@ -933,6 +1026,10 @@ Matter NOCs; see the [FAQ](#faqs).
 - Sharing request is created
 - Target user receives notification and can approve/decline
 
+To share by QR code instead, the user skips entering a user name; the client
+calls the same API without `username`, renders the returned `request_id` as a QR
+code, and whoever scans it accepts it.
+
 #### Internal Flow
 
 **API**: `POST /v1/groups/{groupId}/sharing-requests`
@@ -947,11 +1044,14 @@ Matter NOCs; see the [FAQ](#faqs).
 
 `access_type` is optional and defaults to `secondary`. `username` is the
 invitee's email address or E.164 phone number (`+919876543210`); internal user
-IDs are rejected with HTTP 400.
+IDs are rejected with HTTP 400. `username` is itself optional — omitting it
+creates a QR-code request instead of naming a recipient.
 
 **Process**:
 1. Verify user has permission (requires primary access)
-2. Resolve the target `username` to a `user_id`
+2. Resolve the target `username` to a `user_id`. Skipped entirely when
+   `username` is absent — there is nobody to resolve, and the request is stored
+   unclaimed (step 4).
    - TableName: `espuser-user-details`
    - A value starting with `+` is queried on IndexName
      `espuser-user-details-by-phone` (PK `phone`); a value containing `@` on
@@ -972,12 +1072,15 @@ IDs are rejected with HTTP 400.
 4. Create sharing request in database
    - TableName: `rmng-sharing-reqs`
    - Attributes: `user_id` (PK), `sharing_request_id` (SK)
-   - `user_id`: Target user ID
+   - `user_id`: Target user ID, or `"req-" + sharing_request_id` when the
+     request is unclaimed (see [QR-code sharing
+     requests](#qr-code-sharing-requests))
    - `sharing_request_id`: Generated UUID
    - `group_id`: Group ID
    - `sub_entity_id`: `"NONE"` (for full group)
    - `access_type`: Provided access type (`primary` or `secondary`)
-   - `expiration_time`: Current time + 24 hours (Unix timestamp)
+   - `expiration_time`: Unix timestamp — current time + 24 hours for a named
+     invitee, + 7 days for an unclaimed request
 
 **Response** (HTTP 201):
 ```json
@@ -1024,6 +1127,34 @@ sequenceDiagram
     deactivate ShareAPI
 ```
 
+#### QR-code sharing requests
+
+Omitting `username` creates a request with no recipient named up front. The
+sharer shows the returned `request_id` as a QR code and whoever scans it claims
+it. This is for the case the named flow cannot serve: inviting someone whose
+sign-in address the sharer does not know, or does not want to type.
+
+**Storage**. `rmng-sharing-reqs` is keyed by the recipient's `user_id`, and an
+unclaimed request has no recipient, so it is stored under the placeholder
+partition key `"req-" + sharing_request_id`. The `req-` prefix keeps placeholder
+keys disjoint from the real `user_id` namespace by construction — real ids are
+bare Cognito subs — rather than relying on UUIDs never colliding with one, so
+nothing that scans or backfills this table by `user_id` can mistake a placeholder
+row for a real user's.
+
+**Lifetime**. 7 days, against 24 hours for a named invitee. A named invite lands
+in an inbox and pushes a notification, so a day is ample. A QR code has an
+offline life — printed, held up on a screen, photographed, forwarded — and
+prompts nobody, so it needs longer. Being generous costs little here: the invite
+is single-use, and the sharer can spend it themselves at any time (see below).
+
+**Single use**. The first person to act on the request consumes it, and a
+decline consumes it exactly as an accept does. So a scanner who declines burns
+the code, and the sharer rejecting their own request is how they cancel it — the
+same operation viewed from the other end. Anyone holding the `request_id` is
+entitled to claim it; the code itself is the credential, which is why it is
+short-lived and single-use.
+
 ### List Sharing Requests
 
 #### External Flow
@@ -1041,6 +1172,9 @@ sequenceDiagram
 1. Query sharing requests for current user
    - TableName: `rmng-sharing-reqs`
    - Query by `user_id` (PK) to get all requests for the current user
+   - Unclaimed QR-code requests never appear here. They are keyed by a
+     placeholder `user_id`, not the scanner's, and the scanner reaches one by
+     the `request_id` they scanned rather than by listing an inbox.
 2. Filter out expired requests (compare `expiration_time` with current time)
 3. Enrich each request with the inviting user's details (email and phone number)
 4. Return all pending requests
@@ -1164,8 +1298,12 @@ sequenceDiagram
 Removes a member from the group. A primary user can remove any member (kick); a
 member can remove themselves (leave) by using the `me` alias as `userId`. The last
 remaining primary user cannot be removed — the group must always have at least one
-primary; that user should remove the node from the group instead. Unshare works the
-same way on Matter fabrics.
+primary; that user should remove the node from the group instead.
+
+The same API removes a member from a Matter fabric, but removing cloud access is
+only half of revocation there: the member's NOC keeps working against the
+devices until the fabric side is repaired too. See [Unshare
+Fabric](#unshare-fabric).
 
 #### External Flow
 - User navigates to group settings
@@ -1196,6 +1334,16 @@ Use `me` as `userId` to leave the group yourself.
    - TableName: `rmng-user-group-assoc`
    - IndexName: `rmng-user-group-assoc-by-group-id`
    - Query by `group_id` using the secondary index, filter by `user_id`, and delete the matching entries
+4. For each capability on the group, run its user-exit hook. For `matter`, this
+   rotates the CAT ID selected by the access type read in step 1, and writes the
+   incremented value back to `cap_matter` on the group row.
+   - The hook runs **after** the removal has committed, never before. Its side
+     effect outlives the request — every NOC already issued under the old CAT is
+     superseded — so it must not fire for a call that the permission check or the
+     last-primary guard ultimately rejects.
+   - A hook failure is logged and the unshare still succeeds: the member is
+     already out, and failing the API would wrongly suggest they still have
+     access.
 
 **Response**:
 ```json
@@ -1203,6 +1351,83 @@ Use `me` as `userId` to leave the group yourself.
   "message": "success"
 }
 ```
+
+### Unshare Fabric
+
+Revoking a fabric member is two jobs. [Unshare Group](#unshare-group) does the
+cloud half — the assoc row goes, so no more fabric material, NOCs, or cloud
+access to the nodes. It does not touch the devices. The member's NOC is already
+in their phone's keystore and the devices accept it because of an ACL entry
+written at commissioning; nothing in the cloud can invalidate either. Until a
+controller rewrites those ACLs, the removed user keeps local Matter control.
+
+#### What rotation does
+
+Removing a member increments the version half of one CAT — see [NOCs and CAT
+IDs](#nocs-and-cat-ids) for what those are and how they are written. Rotation is
+a two-sided edit of one value: `cap_matter` goes `06D90001` → `06D90002`, NOCs
+issued afterwards carry `06D90002`, and a controller rewrites each device's ACL
+entry from `FFFFFFFD06D90001` to `FFFFFFFD06D90002`.
+
+#### What the backend does
+
+The `matter` user-exit hook increments one CAT's version — `group_cat_id_admin`
+if the departing member was primary, `group_cat_id_operate` otherwise — and
+writes it back to `cap_matter`. The tag half is untouched. See [Unshare
+Group](#unshare-group) for why it runs only after the removal commits.
+
+That rotated value, published in the `matter` object of [List
+Groups](#list-groups), is the backend's entire contribution to revocation. No
+notification, no ACL registry, no way to tell whether a device was repaired.
+
+#### What each client is responsible for
+
+Detection needs no new API: [List Groups](#list-groups) already returns the
+current CAT IDs and every client already calls it on sync. The version half is a
+rotation counter, so comparing it against the value the client last acted on is
+the whole signal.
+
+Both sides of that comparison are already on the client. A NOC is stored once per
+fabric — it is long-lived and bound to a device-held key, so re-issuing per
+session would be pointless — and the CAT IDs it was issued under are stored with
+it. A NOC's subject also carries its own CAT.
+
+The check must therefore be **version-keyed, not existence-keyed**. "Do I hold a
+NOC?" is the wrong question after a rotation — the answer is yes and the NOC is
+stale. A client that only checks presence never re-issues and never repairs.
+
+**The primary's app** owns the repair, since only an admin-privileged controller
+can write a device ACL. On a rotation it must:
+
+- Re-issue its own NOC via [Get NOC for user](#get-noc-for-user) if the stored
+  one predates the rotation.
+- On every commissioned node, **replace** the entry for the rotated CAT: drop
+  subjects carrying the same tag at a lower version, then add the new one.
+  Appending without removing repairs nothing.
+- Persist the version it finished sweeping, so an interrupted sweep resumes.
+
+Until the sweep completes the removed user keeps local control of every unreached
+node. 
+
+**A remaining member's app** re-issues its NOC when the version check fails. It
+cannot repair devices, so that is where its duty ends; a member still stale when
+the sweep lands loses control until it re-issues.
+
+**The removed user's app** has nothing to do and no way to know. Cloud access
+ends at the next credential refresh, Matter access when the sweep reaches each
+device.
+
+#### Limits
+
+- **No rotation notification.** Clients learn by polling, so the window is the
+  gap until the primary's next sync.
+- **No cloud record of ACL state.** Nothing lists which nodes are still on the old
+  CAT, so a sweep covers every node rather than a delta, and an unreached device
+  is indistinguishable from a repaired one. The commissioning-time ACL write is
+  likewise non-fatal: if it fails, shared users silently cannot control that node.
+- **Subgroup removal rotates nothing.** [Unshare
+  Subgroup](#unshare-subgroup) runs no hook, and a `subentity` member never holds
+  a NOC (see the [FAQ](#faqs)).
 
 ### Share Subgroup
 
@@ -1459,6 +1684,9 @@ Use `me` as `userId` to leave the subgroup yourself.
      - Key Usage: Digital Signature
      - Extended Key Usage: Server Auth and Client Auth
      - Subject ExtraNames: Matter Fabric ID (OID 1.3.6.1.4.1.37244.1.5), derived controller Node ID (OID 1.3.6.1.4.1.37244.1.1), Matter Group CAT ID (OID 1.3.6.1.4.1.37244.1.6) - all UTF-8 encoded. CAT ID uses `cat_id_admin` for primary access or `cat_id_operate` for secondary/sub-entity access
+     - The CAT ID is written as the 8-character hex string verbatim; the device
+       derives its own ACL subject form from it. See [NOCs and CAT
+       IDs](#nocs-and-cat-ids)
      - Serial Number: Cryptographically secure random number 0-255
 5. Associate the CAT ID with the user and group
    - TableName: `rmng-user-group-assoc`
