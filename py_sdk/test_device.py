@@ -1133,6 +1133,31 @@ class Device:
             device_log(f"Error setting node config: {str(e)}")
             return False
 
+    # A reconnect with a clean session cancels every request that was in flight, so a
+    # subscribe issued in that window fails even though the connection is healthy a
+    # moment later. Retry that one error; everything
+    # else — a denied topic above all — still propagates.
+    _SUBSCRIBE_RETRY_ERRORS = ("AWS_ERROR_MQTT_CANCELLED_FOR_CLEAN_SESSION",)
+
+    def _subscribe_topic(self, topic, attempts=4, delay=1.0):
+        """Subscribe to one topic, retrying while the session is being re-established."""
+        for attempt in range(1, attempts + 1):
+            try:
+                future, _ = self.mqtt_connection.subscribe(
+                    topic=topic,
+                    qos=mqtt.QoS.AT_LEAST_ONCE,
+                    callback=self.on_message_received
+                )
+                future.result()
+                return
+            except Exception as e:
+                if (attempt == attempts
+                        or not any(c in str(e) for c in self._SUBSCRIBE_RETRY_ERRORS)):
+                    raise
+                device_log(f"Subscribe to {topic} was cancelled by a session reset "
+                           f"(attempt {attempt}/{attempts}); retrying")
+                time.sleep(delay)
+
     def subscribe(self, topic=None, callback=None, shadow_name=None):
         """Subscribe to a topic or shadow events.
 
@@ -1161,12 +1186,7 @@ class Device:
 
                 for shadow_topic in shadow_topics:
                     device_log(f"Subscribing to shadow topic: {shadow_topic}")
-                    future, _ = self.mqtt_connection.subscribe(
-                        topic=shadow_topic,
-                        qos=mqtt.QoS.AT_LEAST_ONCE,
-                        callback=self.on_message_received
-                    )
-                    future.result()
+                    self._subscribe_topic(shadow_topic)
 
                 if callback:
                     self.register_callback('shadow', callback)
@@ -1176,12 +1196,7 @@ class Device:
                 # Handle regular topic subscriptions
                 # The topic should already be a full path
                 device_log(f"Subscribing to topic: {topic}")
-                future, _ = self.mqtt_connection.subscribe(
-                    topic=topic,
-                    qos=mqtt.QoS.AT_LEAST_ONCE,
-                    callback=self.on_message_received
-                )
-                future.result()
+                self._subscribe_topic(topic)
 
                 # Determine message type based on topic parts.
                 # Group control topics (.../groups/<g>/[subgroups/<sg>/]control) route to
