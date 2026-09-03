@@ -44,8 +44,9 @@ There are three ways to use it, in increasing order of involvement:
 
 ## Specs & Documents
 
-The cloud specification lives as Markdown under [docs/en/specs/](docs/en/specs/), with [docs/en/index.md](docs/en/index.md) as the table of contents. The pages are readable directly in the repo; to build and view the HTML docs locally, see the [docs build guide](docs/README.md).
+The cloud specification is published at [docs.espressif.com/projects/esp-rainmaker-neo](https://docs.espressif.com/projects/esp-rainmaker-neo/en/latest/index.html). It lives as Markdown under [docs/en/specs/](docs/en/specs/), with [docs/en/index.md](docs/en/index.md) as the table of contents.
 
+- [Cloud Specification](https://docs.espressif.com/projects/esp-rainmaker-neo/en/latest/index.html)
 - [HTTP, MQTT, Events and MCP Reference](https://api.docs.neo.rainmaker.espressif.com)
 - [Glossary](docs/GLOSSARY.md)
 
