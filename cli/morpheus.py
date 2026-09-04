@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import getpass
+import hashlib
 import json
 import os
 import sys
@@ -178,6 +179,7 @@ ADMIN_USER_POOL_ID = settings.admin_user_pool_id
 ADMIN_USER_POOL_CLIENT_ID = settings.admin_client_id
 END_USER_POOL_ID = settings.end_user_pool_id
 USER_API_GATEWAY_URL = settings.user_api_gateway_url
+DEFAULT_THING_POLICY = settings.default_thing_policy
 
 
 def handle_get(user, path):
@@ -1928,6 +1930,72 @@ def sweep_test_certs(dry_run=False):
               f"incomplete. Re-run --destroy-test-data to retry them.")
 
 
+def _cert_id_from_pem(cert_pem):
+    """AWS IoT's certificate ID: the lowercase hex SHA-256 of the certificate's DER bytes.
+
+    Computed locally so a cert can be looked up without first knowing its ARN, mirroring
+    iotutil.GetCertIDFromPEM on the backend.
+    """
+    from cryptography import x509
+    der = x509.load_pem_x509_certificate(cert_pem.encode()).public_bytes(serialization.Encoding.DER)
+    return hashlib.sha256(der).hexdigest()
+
+
+def ensure_cert_registered(device):
+    """Attach this checkout's certificate to the device's thing in the target deployment.
+
+    Thing names in test_config.json are fixed, but its certificates are generated per checkout.
+    A deployment somebody else already seeded therefore holds `node_switch` and friends registered
+    against *their* certificate: /v1/admin/nodes then refuses ours as already registered, the local
+    cert is never added to the registry, and the device fails its TLS handshake at connect time
+    (AWS_ERROR_MQTT_UNEXPECTED_HANGUP). The same happens when the config is repointed at a second
+    deployment, since a certificate is only known to the account it was registered in.
+
+    Registering the certificate directly is safe and idempotent: a thing may carry several
+    principals, so this adds ours alongside whatever is already attached rather than replacing it.
+    Returns True when the certificate is active, policied and attached to the thing.
+    """
+    iot_client = boto3.client('iot', region_name=REGION)
+    thing_name = device.node_thing_name
+
+    try:
+        cert_id = _cert_id_from_pem(device.node_cert)
+    except Exception as e:
+        print(f"Could not read the certificate for {thing_name} from test_config.json: {e}")
+        return False
+
+    try:
+        try:
+            cert_arn = iot_client.describe_certificate(
+                certificateId=cert_id)['certificateDescription']['certificateArn']
+        except iot_client.exceptions.ResourceNotFoundException:
+            cert_arn = iot_client.register_certificate_without_ca(
+                certificatePem=device.node_cert, status='ACTIVE')['certificateArn']
+            print(f"Registered this checkout's certificate for {thing_name} ({cert_id[:12]})")
+
+        # A cert left INACTIVE by an earlier --destroy-test-data run still exists, and the broker
+        # closes the connection without a usable error, so normalise the status every time.
+        iot_client.update_certificate(certificateId=cert_id, newStatus='ACTIVE')
+
+        if DEFAULT_THING_POLICY not in [p['policyName'] for p in
+                                        iot_client.list_attached_policies(target=cert_arn)['policies']]:
+            iot_client.attach_policy(policyName=DEFAULT_THING_POLICY, target=cert_arn)
+
+        try:
+            iot_client.describe_thing(thingName=thing_name)
+        except iot_client.exceptions.ResourceNotFoundException:
+            iot_client.create_thing(thingName=thing_name)
+
+        if cert_arn not in iot_client.list_thing_principals(thingName=thing_name)['principals']:
+            iot_client.attach_thing_principal(thingName=thing_name, principal=cert_arn)
+            print(f"Attached the local certificate to thing {thing_name}")
+    except ClientError as e:
+        print(f"Failed to attach the local certificate to {thing_name}: {e}")
+        return False
+
+    return True
+
+
 def setup_nodes(user_map: dict[str, User]):
     devices = [get_node(i) for i in range(len(config.get('nodes', [])))]
     nodes = config.get('nodes', [])
@@ -1945,32 +2013,46 @@ def setup_nodes(user_map: dict[str, User]):
     print("Setting up devices...")
     for i, node_config in enumerate(nodes):
         device = devices[i] if i < len(devices) else None
-        if device:
-            if superadmin.register_node(device, tags=["created_by:test"],
-                                        admin_group_names=[admin_group_name]):
-                print(f"Node {device.node_thing_name} registered successfully")
-
-                # Check if this node should be associated with a user
-                associate_to = node_config.get('associate_to')
-                if associate_to:
-                    user = user_map.get(associate_to)
-                    if user:
-                        print(f"Associating node {device.node_thing_name} with user {user.get_group_ids()}")
-                        group_id = user.get_group_ids()[0]
-                        if device.node_thing_name in user.get_devices():
-                            print(f"User {associate_to} already has device {device.node_thing_name}, skipping association")
-                            continue
-                        error = user.do_user_node_assoc(device, group_id)
-                        if error:
-                            print(f"Failed to associate node {device.node_thing_name} with user {associate_to}: {error}")
-                        else:
-                            print(f"Successfully associated node {device.node_thing_name} with user {associate_to} in group {group_id}")
-                    else:
-                        print(f"User {associate_to} not found, skipping association")
-            else:
-                print(f"Failed to register node {device.node_thing_name}")
-        else:
+        if not device:
             print("Failed to create a device")
+            continue
+
+        if superadmin.register_node(device, tags=["created_by:test"],
+                                    admin_group_names=[admin_group_name]):
+            print(f"Node {device.node_thing_name} registered successfully")
+        else:
+            # Most often the node is already registered here -- from an earlier run, or by another
+            # checkout that seeded this deployment under the same fixed thing name. Registration is
+            # then a no-op, but the rest of the setup still applies, so carry on rather than
+            # leaving the node half-seeded.
+            print(f"Node {device.node_thing_name} was not registered (already registered, or the "
+                  "call failed); continuing with the certificate and association")
+
+        # Registration only adds the certificate it was handed, and it is refused outright for a
+        # node that already exists. Either way the certificate this checkout will connect with has
+        # to be in the registry, or `connect` dies on the TLS handshake.
+        if not ensure_cert_registered(device):
+            print(f"Skipping association for {device.node_thing_name}: its certificate is not usable "
+                  "against this deployment")
+            continue
+
+        # Check if this node should be associated with a user
+        associate_to = node_config.get('associate_to')
+        if associate_to:
+            user = user_map.get(associate_to)
+            if user:
+                print(f"Associating node {device.node_thing_name} with user {user.get_group_ids()}")
+                group_id = user.get_group_ids()[0]
+                if device.node_thing_name in user.get_devices():
+                    print(f"User {associate_to} already has device {device.node_thing_name}, skipping association")
+                    continue
+                error = user.do_user_node_assoc(device, group_id)
+                if error:
+                    print(f"Failed to associate node {device.node_thing_name} with user {associate_to}: {error}")
+                else:
+                    print(f"Successfully associated node {device.node_thing_name} with user {associate_to} in group {group_id}")
+            else:
+                print(f"User {associate_to} not found, skipping association")
 
     return devices
 
