@@ -95,7 +95,12 @@ secrets:
 
 npm_audit:
   stage: lint
-  image: node:22-alpine
+  # node 24 for npm 11: npm 10 (node 22) audits through
+  # /-/npm/v1/security/audits/quick, which the registry is retiring and now answers
+  # with a 400 whose body reads "Invalid package tree, run npm install" — nothing to
+  # do with the lockfile, which audits clean on npm 11. npm 11 uses the bulk
+  # advisory endpoint instead.
+  image: node:24-alpine
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
   script:
