@@ -20,8 +20,6 @@ export interface AuthSchemaMessages {
   emailInvalid: string
   passwordRequired: string
   currentPasswordRequired: string
-  confirmPasswordRequired: string
-  passwordsDoNotMatch: string
   codeRequired: string
   codeInvalid: string
   /** One message per password-policy rule, keyed by rule id. */
@@ -37,11 +35,6 @@ export function getAuthSchemaMessages(t: TFunction): AuthSchemaMessages {
       'common:authErrors.currentPasswordRequired',
       'Current password is required',
     ),
-    confirmPasswordRequired: t(
-      'common:authErrors.confirmPasswordRequired',
-      'Please confirm your new password',
-    ),
-    passwordsDoNotMatch: t('common:authErrors.passwordsDoNotMatch', 'Passwords do not match'),
     codeRequired: t('common:authErrors.codeRequired', 'Confirmation code is required'),
     codeInvalid: t('common:authErrors.codeInvalid', 'Enter the 6-digit code you received'),
     passwordPolicy: Object.fromEntries(
@@ -70,18 +63,6 @@ const newPasswordSchema = (messages: AuthSchemaMessages) =>
       }
     }
   })
-
-const confirmPasswordSchema = (messages: AuthSchemaMessages) =>
-  z.string().min(1, messages.confirmPasswordRequired)
-
-const passwordsMatch = {
-  check: (data: { new_password: string; confirm_password: string }) =>
-    data.new_password === data.confirm_password,
-  options: (messages: AuthSchemaMessages) => ({
-    message: messages.passwordsDoNotMatch,
-    path: ['confirm_password'],
-  }),
-}
 
 /**
  * Zod schema for signin request validation
@@ -134,7 +115,6 @@ export const getChangePasswordRequestSchema = (
     .object({
       old_password: z.string(),
       new_password: newPasswordSchema(messages),
-      confirm_password: confirmPasswordSchema(messages),
     })
     .superRefine((data, ctx) => {
       if (requireCurrentPassword && data.old_password.length === 0) {
@@ -145,7 +125,6 @@ export const getChangePasswordRequestSchema = (
         })
       }
     })
-    .refine(passwordsMatch.check, passwordsMatch.options(messages))
 
 export type ChangePasswordRequestSchema = z.infer<
   ReturnType<typeof getChangePasswordRequestSchema>
@@ -167,10 +146,9 @@ export type ForgotPasswordRequestSchema = z.infer<
  * Zod schema for confirming a password reset (step 2 of forgot password).
  * Cognito always mails a six-digit confirmation code.
  */
-// Single password field by design (wireframe decision, 2026-09-02): right after a
-// reset the admin types the address's emailed code too, so a typo'd password is
-// recoverable on the spot — unlike the signed-in change-password form, which keeps
-// its confirm field.
+// Single password field by design: the InputPassword show/hide toggle lets the admin
+// verify what they typed, so a second field would only add friction. The signed-in
+// change-password form follows the same rule.
 export const getConfirmForgotPasswordRequestSchema = (messages: AuthSchemaMessages) =>
   z.object({
     code: z.string().min(1, messages.codeRequired).regex(/^\d{6}$/, messages.codeInvalid),

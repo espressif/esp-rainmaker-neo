@@ -33,7 +33,7 @@ import { searchThings } from "@/aws/services/thing.service";
 import {
   extractIparamsFields,
   type IparamsFields,
-} from "@/pages/home/node-management/nodes/iparams-fields";
+} from "@/aws/utils/iparams-fields";
 
 export type NodeGroupsSearchField = "groupName" | "description";
 

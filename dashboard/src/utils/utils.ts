@@ -22,3 +22,16 @@ export function getURLParamValue(paramName: string): string | undefined {
   return params.get(paramName) || undefined;
 }
 
+export function trimOrUndefined(value: string | null | undefined): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed === "" ? undefined : trimmed;
+}
+
+/** Like {@link trimOrUndefined}, but returns `null` for the missing case. */
+export function trimOrNull(value: string | null | undefined): string | null {
+  return trimOrUndefined(value) ?? null;
+}
+

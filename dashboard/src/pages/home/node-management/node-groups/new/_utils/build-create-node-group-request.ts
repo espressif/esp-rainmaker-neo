@@ -6,12 +6,13 @@
 
 import { buildQueryFromRules } from "@/aws/components/query-rule-builder/query-rule-builder.utils";
 import type { CreateNodeGroupRequest } from "@/aws/services/thing-group.service";
+import { trimOrUndefined } from "@/utils/utils";
 import type { CreateNodeGroupFormValues } from "../_schema/create-node-group-form.schema";
 
 export function buildCreateNodeGroupRequest(
   values: CreateNodeGroupFormValues,
 ): CreateNodeGroupRequest {
-  const description = values.description?.trim() || undefined;
+  const description = trimOrUndefined(values.description);
 
   if (values.createAsDynamic) {
     return {

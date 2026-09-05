@@ -10,6 +10,7 @@ import {
   AsyncMultiSelect,
   type AsyncMultiSelectOption,
 } from "@espressif/dashboard-ui-components/components";
+import { getNodeDisplay } from "@/aws/utils/get-node-display";
 import type { ThingSelectorProps } from "./thing-selector.props";
 import { useThingSearch } from "./use-thing-search";
 import { ThingOptionRow } from "./thing-option-row";
@@ -43,11 +44,14 @@ export function ThingSelector({
 
   const options = useMemo<AsyncMultiSelectOption[]>(
     () =>
-      things.map((thing) => ({
-        value: thing.thingName as string,
-        label: thing.thingName as string,
-        description: thing.thingId,
-      })),
+      things.map((thing) => {
+        const { nodeId, displayName } = getNodeDisplay(thing);
+        return {
+          value: nodeId,
+          label: displayName ?? nodeId,
+          description: displayName ? nodeId : undefined,
+        };
+      }),
     [things],
   );
 

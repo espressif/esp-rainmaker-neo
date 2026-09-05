@@ -12,19 +12,20 @@ import {
   FormItem,
   FormMessage,
   InputPassword,
-  RequirementList,
-  SectionCard,
 } from "@espressif/dashboard-ui-components/components";
 import type { ChangePasswordRequestSchema } from "@/api";
+import { PasswordRequirementsCard } from "@/components/password-requirements-card";
 import type { ChangePasswordFieldsProps } from "./change-password-fields.props";
 
 /**
- * The three password inputs. Reads the form from context so the field markup stays
+ * The password inputs. Reads the form from context so the field markup stays
  * independent of how the parent wires up `useForm`.
  *
  * The new-password field shows the requirements checklist in place of `FormMessage`:
  * the checklist already lists every rule and marks the failing ones, so rendering both
- * would repeat the same sentence twice. The other two fields keep `FormMessage`.
+ * would repeat the same sentence twice. The current-password field keeps `FormMessage`.
+ * A second "confirm password" field is intentionally omitted — `InputPassword`'s
+ * show/hide toggle already lets the admin verify what they typed.
  */
 export default function ChangePasswordFields({
   mode,
@@ -78,49 +79,7 @@ export default function ChangePasswordFields({
                 error={!!fieldState.error}
               />
             </FormControl>
-            <SectionCard
-              className="mt-4"
-              primaryText={t(
-                "password.requirementsLabel",
-                "Password requirements",
-              )}
-              allowCollapse={false}
-              color="silver"
-              variant="soft"
-              size="sm"
-            >
-              <RequirementList
-                items={requirementItems}
-                metLabel={t("password.requirementMet", "Requirement met")}
-                unmetLabel={t(
-                  "password.requirementUnmet",
-                  "Requirement not met",
-                )}
-              />
-            </SectionCard>
-          </FormItem>
-        )}
-      />
-
-      <FormField
-        control={control}
-        name="confirm_password"
-        render={({ field, fieldState }) => (
-          <FormItem>
-            <FormControl>
-              <InputPassword
-                {...field}
-                autoComplete="new-password"
-                required
-                label={t("password.confirmPasswordLabel", "Confirm new password")}
-                placeholder={t(
-                  "password.confirmPasswordPlaceholder",
-                  "Re-enter the new password",
-                )}
-                error={!!fieldState.error}
-              />
-            </FormControl>
-            <FormMessage />
+            <PasswordRequirementsCard items={requirementItems} />
           </FormItem>
         )}
       />

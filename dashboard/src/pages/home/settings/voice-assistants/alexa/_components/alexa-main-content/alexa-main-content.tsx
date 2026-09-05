@@ -10,6 +10,7 @@ import {
   Button,
   FullSizeError,
   Skeleton,
+  SectionCard,
 } from "@espressif/dashboard-ui-components/components";
 import type { AlexaConfigGetResponse } from "@/api/integrations";
 import { CustomIcon } from "@/components/custom-icon";
@@ -54,34 +55,45 @@ export default function AlexaMainContent({
 
   if (error && !isNotFoundError(error)) {
     return (
-      <FullSizeError
-        title={t("alexa.fetchError", "Failed to load Alexa configuration")}
-        illustration={<CustomIcon type="amazon-alexa" size={48} />}
-      >
-        {normalizeApiError(error, t("alexa.fetchError", "Failed to load Alexa configuration"))}
-      </FullSizeError>
+      <SectionCard
+        variant="outline"
+        color="error"
+        primaryText={normalizeApiError(
+          error,
+          t("alexa.fetchError", "Failed to load Alexa configuration"),
+        )}
+        icon={<CustomIcon type="amazon-alexa" size={20} aria-hidden />}
+        allowCollapse={false}
+      />
     );
   }
 
   if (!hasConfiguration(data)) {
     return (
-      <FullSizeError
-        title={t("alexa.notConfiguredTitle", "Alexa not configured")}
-        illustration={<CustomIcon type="amazon-alexa" size={48} />}
-      >
-        <div className="flex flex-col items-center gap-4">
-          <span>{t("alexa.notConfiguredDescription", "No Alexa configuration found yet.")}</span>
-          <Button
-            type="button"
-            variant="default"
-            fullWidth={false}
-            onClick={onConfigure}
-            startIcon={<Plus className="h-4 w-4" aria-hidden />}
-          >
-            {t("alexa.configureButton", "Configure")}
-          </Button>
-        </div>
-      </FullSizeError>
+      <SectionCard allowCollapse={false} variant="soft" color="silver">
+        <FullSizeError
+          title={t("alexa.notConfiguredTitle", "Alexa not configured")}
+          illustration={<CustomIcon type="amazon-alexa" size={48} />}
+        >
+          <div className="flex flex-col items-center gap-4">
+            <span>
+              {t(
+                "alexa.notConfiguredDescription",
+                "No Alexa configuration found yet.",
+              )}
+            </span>
+            <Button
+              type="button"
+              variant="default"
+              fullWidth={false}
+              onClick={onConfigure}
+              startIcon={<Plus className="h-4 w-4" aria-hidden />}
+            >
+              {t("alexa.configureButton", "Configure")}
+            </Button>
+          </div>
+        </FullSizeError>
+      </SectionCard>
     );
   }
 

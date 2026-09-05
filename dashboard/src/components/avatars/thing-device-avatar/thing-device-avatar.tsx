@@ -30,7 +30,7 @@ export function ThingDeviceAvatar({
       size={size}
       color={color}
       ring={{
-        show: status != null,
+        show: true,
         pulsate: status === "online",
         color,
       }}

@@ -12,11 +12,10 @@ import { useTokenPagination } from "@/hooks/use-token-pagination";
 import {
   extractIparamsFields,
   type IparamsFields,
-} from "@/pages/home/node-management/nodes/iparams-fields";
+} from "@/aws/utils/iparams-fields";
 
 export interface AwsThingRow {
   thingName: string;
-  thingId: string | null;
   displayName: string | null;
   online: boolean | null;
   deviceType: string | null;
@@ -25,7 +24,6 @@ export interface AwsThingRow {
 
 interface PrimaryThing {
   thingName: string;
-  thingId: string | null;
   fields: IparamsFields | null;
   connectivityTs: number | null;
 }
@@ -53,13 +51,11 @@ function normalizeLastSeen(
 
 function buildRow(
   thingName: string,
-  thingId: string | null,
   fields: IparamsFields | null | undefined,
   connectivityTs: number | null,
 ): AwsThingRow {
   return {
     thingName,
-    thingId,
     displayName: fields?.displayName ?? null,
     online: fields?.online ?? null,
     deviceType: fields?.deviceType ?? null,
@@ -73,10 +69,10 @@ function toRow(
   enrichment: Record<string, EnrichmentEntry>,
 ): AwsThingRow {
   if (isSearch) {
-    return buildRow(thing.thingName, thing.thingId, thing.fields, thing.connectivityTs);
+    return buildRow(thing.thingName, thing.fields, thing.connectivityTs);
   }
   const enriched = enrichment[thing.thingName];
-  return buildRow(thing.thingName, null, enriched, enriched?.connectivityTs ?? null);
+  return buildRow(thing.thingName, enriched, enriched?.connectivityTs ?? null);
 }
 
 export function useAwsThingsList({ maxResults }: UseAwsThingsListParams) {
@@ -116,7 +112,6 @@ export function useAwsThingsList({ maxResults }: UseAwsThingsListParams) {
           things: response.things.map(
             (thing): PrimaryThing => ({
               thingName: thing.thingName ?? "",
-              thingId: thing.thingId ?? null,
               fields: extractIparamsFields(thing.shadow),
               connectivityTs: thing.connectivity?.timestamp ?? null,
             }),
@@ -133,7 +128,6 @@ export function useAwsThingsList({ maxResults }: UseAwsThingsListParams) {
         things: response.things.map(
           (thing): PrimaryThing => ({
             thingName: thing.thingName ?? "",
-            thingId: null,
             fields: null,
             connectivityTs: null,
           }),

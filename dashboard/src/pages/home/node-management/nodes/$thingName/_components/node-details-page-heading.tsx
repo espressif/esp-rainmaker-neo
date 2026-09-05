@@ -55,7 +55,7 @@ export default function NodeDetailsPageHeading({
           size={56}
         />
       }
-      heading={data.displayName}
+      heading={data.displayName ?? data.thingName}
       actions={<ResourceArnPopover arn={data.thingArn} />}
       description={
         status ? (

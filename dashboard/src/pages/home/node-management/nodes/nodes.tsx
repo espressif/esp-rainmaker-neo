@@ -106,7 +106,7 @@ function IoTThings() {
           onRowClick={(row) =>
             void navigate({
               to: "/home/node-management/nodes/$thingName",
-              params: { thingName: row.awsThingName },
+              params: { thingName: row.nodeId },
             })
           }
           tableActionsContent={<NodesTableActions />}

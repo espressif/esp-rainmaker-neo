@@ -19,10 +19,9 @@ import {
   FormMessage,
   InputOTP,
   InputPassword,
-  RequirementList,
-  SectionCard,
   type RequirementListItem,
 } from "@espressif/dashboard-ui-components/components";
+import { PasswordRequirementsCard } from "@/components/password-requirements-card";
 import { ResendCodeHint } from "@/components/resend-code-hint";
 import { evaluatePasswordPolicy } from "@/config/password-policy.config";
 import {
@@ -162,20 +161,7 @@ export default function SetNewPasswordForm({
                   {...field}
                 />
               </FormControl>
-              <SectionCard
-                className="mt-4"
-                primaryText={t("requirementsLabel", "Password requirements")}
-                allowCollapse={false}
-                color="silver"
-                variant="soft"
-                size="sm"
-              >
-                <RequirementList
-                  items={requirementItems}
-                  metLabel={t("requirementMet", "Requirement met")}
-                  unmetLabel={t("requirementUnmet", "Requirement not met")}
-                />
-              </SectionCard>
+              <PasswordRequirementsCard items={requirementItems} />
             </FormItem>
           )}
         />
