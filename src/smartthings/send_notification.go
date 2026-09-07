@@ -66,9 +66,9 @@ func (s *STNotification) SendTo(notif interface{}, userIDs []string) error {
 		return nil
 	}
 
-	callbackPayload, ok := notif.(*STStateCallbackPayload)
+	callbackPayload, ok := notif.(stCallbackPayload)
 	if !ok {
-		return rmerror.NewRMError(nil, "failed to cast notification to *STStateCallbackPayload")
+		return rmerror.NewRMError(nil, "failed to cast notification to a SmartThings callback payload")
 	}
 
 	ctx := context.Background()
@@ -97,12 +97,12 @@ func (s *STNotification) SendTo(notif interface{}, userIDs []string) error {
 				callbackURL = s.mockURL
 			}
 
-			if err := sendStateCallback(callbackPayload, tokenData.AccessToken, callbackURL); err != nil {
-				rlog.Error(ctx).Err(err).Str("userID", userID).Msg("failed to send state callback, continuing with remaining users")
+			if err := sendCallback(callbackPayload, tokenData.AccessToken, callbackURL); err != nil {
+				rlog.Error(ctx).Err(err).Str("userID", userID).Msg("failed to send callback, continuing with remaining users")
 				continue
 			}
 
-			rlog.Debug(ctx).Str("userID", userID).Msg("successfully sent SmartThings state callback")
+			rlog.Debug(ctx).Str("userID", userID).Msg("successfully sent SmartThings callback")
 		}
 	}
 
@@ -111,6 +111,10 @@ func (s *STNotification) SendTo(notif interface{}, userIDs []string) error {
 
 // Marshal converts a shadow update notification to a SmartThings state callback payload.
 func (s *STNotification) Marshal(notif *notification.Notification) (interface{}, error) {
+	if notif.NotificationType == notification.NotificationTypeGroupMembership {
+		return marshalGroupMembership(notif)
+	}
+
 	if notif.NotificationType != notification.NotificationTypeShadowUpdate {
 		return nil, rmerror.NewRMError(nil, "unsupported notification type for SmartThings")
 	}
@@ -181,12 +185,7 @@ func (s *STNotification) Marshal(notif *notification.Notification) (interface{},
 	}
 
 	payload := &STStateCallbackPayload{
-		Headers: STHeaders{
-			Schema:          "st-schema",
-			Version:         "1.0",
-			InteractionType: InteractionStateCallback,
-			RequestID:       uuid.New().String(),
-		},
+		Headers:     newCallbackHeaders(InteractionStateCallback),
 		DeviceState: deviceStates,
 	}
 
@@ -221,6 +220,88 @@ type STStateCallbackPayload struct {
 	Headers        STHeaders        `json:"headers"`
 	Authentication STAuthentication `json:"authentication"`
 	DeviceState    []STDeviceState  `json:"deviceState"`
+}
+
+// STDiscoveryCallbackPayload is the payload sent when devices become available to a user
+// outside a discoveryRequest. SmartThings only rebuilds its device list from a discovery
+// it initiates, so a node added to a group stays invisible until we push this.
+type STDiscoveryCallbackPayload struct {
+	Headers        STHeaders           `json:"headers"`
+	Authentication STAuthentication    `json:"authentication"`
+	Devices        []STDiscoveryDevice `json:"devices"`
+}
+
+// stCallbackPayload is the shape SendTo needs from any callback envelope: the per-user
+// access token is only known once the recipient is resolved, so it is set just before the post.
+type stCallbackPayload interface {
+	setAuthentication(auth STAuthentication)
+}
+
+func (p *STStateCallbackPayload) setAuthentication(auth STAuthentication) { p.Authentication = auth }
+
+func (p *STDiscoveryCallbackPayload) setAuthentication(auth STAuthentication) {
+	p.Authentication = auth
+}
+
+// marshalGroupMembership builds the callback for a node's group-membership change:
+// a discoveryCallback when the node was added, and a stateCallback carrying
+// DEVICE-DELETED for each of its devices when it was removed. SmartThings has no
+// deletion interaction — the error enum is what makes it drop the device.
+func marshalGroupMembership(notif *notification.Notification) (interface{}, error) {
+	if notif.GroupMembershipData == nil {
+		return nil, rmerror.NewRMError(nil, "group membership data is nil")
+	}
+
+	nodeID := notif.GroupMembershipData.NodeID
+	rmngCtx := rmngctx.NewRmngContextWithCtx(context.Background(), utils.NewSystemActor())
+
+	switch action := notif.GroupMembershipData.Action; action {
+	case notification.GroupMembershipActionAdded:
+		devices := buildSTDevices(rmngCtx, nodeID, notif.GroupID)
+		if len(devices) == 0 {
+			rlog.Info(rmngCtx).Str("nodeID", nodeID).Msg("no SmartThings devices for node, skipping discoveryCallback")
+			return nil, nil
+		}
+		return &STDiscoveryCallbackPayload{
+			Headers: newCallbackHeaders(InteractionDiscoveryCallback),
+			Devices: devices,
+		}, nil
+
+	case notification.GroupMembershipActionRemoved:
+		// The node config outlives group removal, so it still names the devices to drop.
+		nodeCfg, err := getNodeConfig(rmngCtx, nodeID)
+		if err != nil {
+			return nil, rmerror.NewRMError(err, "failed to get node configuration")
+		}
+		deviceStates := make([]STDeviceState, 0, len(nodeCfg.Devices))
+		for _, device := range nodeCfg.Devices {
+			deviceStates = append(deviceStates, STDeviceState{
+				ExternalDeviceID: GetDeviceID(nodeID, device.ID),
+				States:           []STState{},
+				DeviceError:      []STDeviceError{{ErrorEnum: ErrorDeviceDeleted, Detail: "device removed from group"}},
+			})
+		}
+		if len(deviceStates) == 0 {
+			rlog.Info(rmngCtx).Str("nodeID", nodeID).Msg("no devices in node config, skipping delete callback")
+			return nil, nil
+		}
+		return &STStateCallbackPayload{
+			Headers:     newCallbackHeaders(InteractionStateCallback),
+			DeviceState: deviceStates,
+		}, nil
+
+	default:
+		return nil, rmerror.NewRMError(nil, "unsupported group membership action for SmartThings: "+action)
+	}
+}
+
+func newCallbackHeaders(interactionType string) STHeaders {
+	return STHeaders{
+		Schema:          "st-schema",
+		Version:         "1.0",
+		InteractionType: interactionType,
+		RequestID:       uuid.New().String(),
+	}
 }
 
 // refreshCallbackToken returns an oauth refresh callback bound to one endpoint's token URL.
@@ -269,20 +350,20 @@ func refreshCallbackToken(ctx context.Context, oauthTokenURL string) func(string
 	}
 }
 
-// sendStateCallback sends the state callback payload to the SmartThings callback URL.
-func sendStateCallback(payload *STStateCallbackPayload, accessToken string, callbackURL string) error {
+// sendCallback sends a callback payload to the SmartThings callback URL.
+func sendCallback(payload stCallbackPayload, accessToken string, callbackURL string) error {
 	// Set the per-user callback access token in the envelope's authentication block.
-	payload.Authentication = STAuthentication{
+	payload.setAuthentication(STAuthentication{
 		TokenType: "Bearer",
 		Token:     accessToken,
-	}
+	})
 
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
-		return rmerror.NewRMError(err, "failed to marshal state callback payload")
+		return rmerror.NewRMError(err, "failed to marshal callback payload")
 	}
 
-	rlog.Trace(context.TODO()).RawJSON("payload", jsonData).Str("url", callbackURL).Msg("sending SmartThings state callback")
+	rlog.Trace(context.TODO()).RawJSON("payload", jsonData).Str("url", callbackURL).Msg("sending SmartThings callback")
 
 	_, err = notification.MakeHTTPPostRequest(jsonData, callbackURL, func(req *http.Request) error {
 		req.Header.Set("Content-Type", "application/json")

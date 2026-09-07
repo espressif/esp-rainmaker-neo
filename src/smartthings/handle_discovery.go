@@ -11,6 +11,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/alexa"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification/integrationauth"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/config"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
@@ -83,8 +84,22 @@ func HandleDiscovery(ctx context.Context, request STRequest) (STResponse, error)
 			InteractionType: InteractionDiscoveryResponse,
 			RequestID:       request.Headers.RequestID,
 		},
-		Devices: devices,
+		Devices:                    devices,
+		RequestGrantCallbackAccess: needsCallbackGrant(ctx, userID),
 	}, nil
+}
+
+// needsCallbackGrant reports whether this user has no callback tokens to send proactive
+// callbacks with. SmartThings grants them once at link time, so a user whose grant failed
+// (wrong client credentials, say) would otherwise stay stuck until they unlink and link
+// again; asking on the discovery response is the documented way back.
+func needsCallbackGrant(ctx context.Context, userID string) bool {
+	endpoints, err := integrationauth.GetAllOAuthEndpoints(userID, stPlatform)
+	if err != nil {
+		rlog.Debug(ctx).Err(err).Str("userID", userID).Msg("could not read callback endpoints, requesting a grant")
+		return true
+	}
+	return len(endpoints) == 0
 }
 
 // discoverDevicesFromNode fetches config for a node and returns SmartThings discovery
@@ -93,6 +108,27 @@ func HandleDiscovery(ctx context.Context, request STRequest) (STResponse, error)
 // HandleDiscover and GVA's HandleSync) — this makes the device start emitting
 // "smartthings" in its shadow notify map, which is what triggers proactive state callbacks.
 func discoverDevicesFromNode(ctx *rmngctx.RmngContext, nodeID string, groupID string) []STDiscoveryDevice {
+	devices := buildSTDevices(ctx, nodeID, groupID)
+
+	// Mark node as SmartThings-enabled since it has discoverable devices
+	if len(devices) > 0 {
+		n := node.NewNode(nodeID)
+		if err := n.UpdateSTEnabled(ctx.Context, true); err != nil {
+			rlog.Debug(ctx).Err(err).Str("nodeID", nodeID).Msg("failed to update SmartThings enabled status")
+		}
+		n = node.NewNode(nodeID)
+		if err := n.SendSTEnabled(ctx.Context); err != nil {
+			rlog.Debug(ctx).Err(err).Str("nodeID", nodeID).Msg("failed to send SmartThings enabled notification")
+		}
+	}
+
+	return devices
+}
+
+// buildSTDevices maps a node's config to SmartThings discovery devices without the
+// st_en side effects. A proactive discoveryCallback (group-membership change) must not
+// push getSTEn to the device — only a user-initiated discovery does that.
+func buildSTDevices(ctx *rmngctx.RmngContext, nodeID string, groupID string) []STDiscoveryDevice {
 	// Fetch node config
 	nodeCfg, err := getNodeConfig(ctx, nodeID)
 	if err != nil {
@@ -156,20 +192,6 @@ func discoverDevicesFromNode(ctx *rmngctx.RmngContext, nodeID string, groupID st
 		}
 
 		devices = append(devices, stDevice)
-	}
-
-	// Mark node as SmartThings-enabled since it has discoverable devices
-	if len(devices) > 0 {
-		n := node.NewNode(nodeID)
-		err = n.UpdateSTEnabled(ctx.Context, true)
-		if err != nil {
-			rlog.Debug(ctx).Err(err).Str("nodeID", nodeID).Msg("failed to update SmartThings enabled status")
-		}
-		n = node.NewNode(nodeID)
-		err = n.SendSTEnabled(ctx.Context)
-		if err != nil {
-			rlog.Debug(ctx).Err(err).Str("nodeID", nodeID).Msg("failed to send SmartThings enabled notification")
-		}
 	}
 
 	return devices
