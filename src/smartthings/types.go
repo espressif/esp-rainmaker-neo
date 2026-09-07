@@ -20,6 +20,7 @@ const (
 	InteractionStateRefreshResponse = "stateRefreshResponse"
 	InteractionCommandResponse      = "commandResponse"
 	InteractionStateCallback        = "stateCallback"
+	InteractionDiscoveryCallback    = "discoveryCallback"
 )
 
 // SmartThings capability constants

@@ -245,6 +245,24 @@ var _ = Describe("SmartThings handlers", func() {
 	// HandleDiscovery
 	// ------------------------------------------------------------------
 	Describe("HandleDiscovery", func() {
+		It("asks for a callback grant when the user has no callback tokens", func() {
+			resp, err := HandleDiscovery(ctx, stRequest(userID, InteractionDiscoveryRequest))
+			Expect(err).To(BeNil())
+			Expect(resp.RequestGrantCallbackAccess).To(BeTrue())
+		})
+
+		It("does not ask for a callback grant when the user already has tokens", func() {
+			seedCallbackTokens(userID, "https://st/cb", "https://st/token", user_integration_db.IntegrationToken{
+				AccessToken:  "acc",
+				RefreshToken: "ref",
+				ExpiresAt:    9999999999,
+			})
+
+			resp, err := HandleDiscovery(ctx, stRequest(userID, InteractionDiscoveryRequest))
+			Expect(err).To(BeNil())
+			Expect(resp.RequestGrantCallbackAccess).To(BeFalse())
+		})
+
 		It("returns qualifying devices with mapped capabilities and external device IDs", func() {
 			resp, err := HandleDiscovery(ctx, stRequest(userID, InteractionDiscoveryRequest))
 			Expect(err).To(BeNil())
@@ -893,6 +911,68 @@ var _ = Describe("SmartThings handlers", func() {
 
 			It("returns an error when shadow update data is nil", func() {
 				notif := &notification.Notification{NotificationType: notification.NotificationTypeShadowUpdate}
+				_, err := stNotif.Marshal(notif)
+				Expect(err).To(HaveOccurred())
+			})
+
+			It("produces a discoveryCallback when a node is added to a group", func() {
+				notif := &notification.Notification{
+					NotificationType: notification.NotificationTypeGroupMembership,
+					GroupID:          testGroup.GroupID,
+					GroupMembershipData: &notification.GroupMembershipNotification{
+						NodeID: switchNodeID,
+						Action: notification.GroupMembershipActionAdded,
+					},
+				}
+
+				out, err := stNotif.Marshal(notif)
+				Expect(err).To(BeNil())
+
+				payload, ok := out.(*STDiscoveryCallbackPayload)
+				Expect(ok).To(BeTrue())
+				Expect(payload.Headers.InteractionType).To(Equal(InteractionDiscoveryCallback))
+				Expect(payload.Devices).To(HaveLen(1))
+				Expect(payload.Devices[0].ExternalDeviceID).To(Equal(GetDeviceID(switchNodeID, "Switch")))
+			})
+
+			It("produces a stateCallback with DEVICE-DELETED when a node is removed from a group", func() {
+				notif := &notification.Notification{
+					NotificationType: notification.NotificationTypeGroupMembership,
+					GroupID:          testGroup.GroupID,
+					GroupMembershipData: &notification.GroupMembershipNotification{
+						NodeID: switchNodeID,
+						Action: notification.GroupMembershipActionRemoved,
+					},
+				}
+
+				out, err := stNotif.Marshal(notif)
+				Expect(err).To(BeNil())
+
+				payload, ok := out.(*STStateCallbackPayload)
+				Expect(ok).To(BeTrue())
+				Expect(payload.Headers.InteractionType).To(Equal(InteractionStateCallback))
+
+				ds := findDeviceState(payload.DeviceState, GetDeviceID(switchNodeID, "Switch"))
+				Expect(ds).NotTo(BeNil())
+				Expect(ds.DeviceError).To(HaveLen(1))
+				Expect(ds.DeviceError[0].ErrorEnum).To(Equal(ErrorDeviceDeleted))
+			})
+
+			It("returns an error when group membership data is nil", func() {
+				notif := &notification.Notification{NotificationType: notification.NotificationTypeGroupMembership}
+				_, err := stNotif.Marshal(notif)
+				Expect(err).To(HaveOccurred())
+			})
+
+			It("returns an error for an unsupported group membership action", func() {
+				notif := &notification.Notification{
+					NotificationType: notification.NotificationTypeGroupMembership,
+					GroupID:          testGroup.GroupID,
+					GroupMembershipData: &notification.GroupMembershipNotification{
+						NodeID: switchNodeID,
+						Action: "moved",
+					},
+				}
 				_, err := stNotif.Marshal(notif)
 				Expect(err).To(HaveOccurred())
 			})

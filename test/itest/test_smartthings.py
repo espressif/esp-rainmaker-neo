@@ -21,7 +21,9 @@ import os
 import subprocess
 import sys
 import time
+import uuid
 
+import boto3
 import pytest
 import requests
 
@@ -799,6 +801,13 @@ def st_action_test_mode(webhook_mock):
              f"webhook_mock_base_url={url_value}",
              f"webhook_mock_api_key={key_value}"],
             check=True, env=env)
+        # drx returns as soon as UpdateFunctionConfiguration is accepted, but the new
+        # env is not live until the update finishes. Invoking in that window runs the
+        # old configuration: the handler then posts the token exchange without
+        # x-api-key and grantCallbackAccess fails, leaving the previous callback token
+        # in place with nothing to say it happened.
+        boto3.client("lambda", region_name=region).get_waiter(
+            "function_updated_v2").wait(FunctionName=fn)
 
     _set(base_url, api_key)
     try:
@@ -871,3 +880,124 @@ def test_smartthings_state_callback(user_with_1_dev_each_in_2_groups, webhook_mo
     _assert_st_reported(
         webhook_mock_base_url, webhook_mock_api_key, callback_token, light1_id,
         {("st.switch", "switch"): "off"})
+
+
+# ---------------------------------------------------------------------------
+# 7. Membership callbacks (connector -> SmartThings)
+#
+# Section 6 covers a param change; these cover the two membership transitions.
+# SmartThings rebuilds its device list only from a discovery it initiates, so a
+# node added to a group after linking stays invisible and one removed stays
+# visible until we push: adding sends a discoveryCallback, removing sends a
+# stateCallback carrying DEVICE-DELETED, which is the only deletion signal the
+# Schema API defines. Both are dispatched off group_membership_change, the same
+# event Alexa and GVA consume.
+# ---------------------------------------------------------------------------
+def _wait_for_st_callback(base_url, api_key, callback_token, check, what):
+    """Poll the mock until check(payload) passes.
+
+    Same retry shape as _assert_st_reported: the callback travels API ->
+    group_membership_change -> notifications lambda -> mock, and only the first
+    hop is synchronous with the caller.
+    """
+    last_error = None
+    for _ in range(4):
+        try:
+            check(_read_st_notification(base_url, api_key, callback_token))
+            return
+        except AssertionError as e:
+            last_error = e
+            print(f"waiting for {what}: {e}")
+            time.sleep(5)
+    raise last_error
+
+
+def _link_st_callbacks(test_user1, webhook_mock_base_url, arn, region):
+    """Grant callback tokens and return the token captures arrive under.
+
+    The code is unique per call, and so is the capture key. The user and the node
+    are pooled across the session, so a fixed key would let one test read the
+    callback an earlier test left behind — and both tests below assert on the same
+    device id, so a stale capture would pass for a callback never sent.
+    """
+    callback_token = f"st-cb-{test_user1.sub}-{uuid.uuid4().hex[:8]}"
+    response = test_user1.st_grant_callback(
+        callback_token,
+        f"{webhook_mock_base_url}/v1/smartthings/token",
+        f"{webhook_mock_base_url}/v1/smartthings/data",
+        lambda_arn=arn, region=region)
+    # A failed grant leaves the previous token in the endpoint row, so the callback is
+    # still sent — just under a token this test never sees. Asserting here names the
+    # cause instead of surfacing it as a callback that never arrived.
+    assert not response.get("errorMessage"), f"grantCallbackAccess failed: {response}"
+    assert response.get("headers", {}).get("interactionType") == "grantCallbackAccess", \
+        f"Unexpected grantCallbackAccess response: {response}"
+    return callback_token
+
+
+@pytest.mark.xdist_group("env_mut")
+def test_smartthings_device_added_callback(user_with_1_dev_each_in_2_groups, webhook_mock, st_action_test_mode):
+    """A node added to a group is pushed to SmartThings as a discoveryCallback.
+
+    Removing the node first makes the add a real membership transition: adding a
+    node already in the group is a no-op and fires nothing.
+    """
+    webhook_mock_base_url, webhook_mock_api_key = webhook_mock
+    region, arn = ST_REGION_ARNS[0]
+
+    device1, _device2, group1_id, _group2_id, test_user1 = user_with_1_dev_each_in_2_groups
+    test_user1.get_aws_credentials()
+
+    # Discovery registers the node as ST-enabled, the precondition the other tests share.
+    test_user1.st_discover_devices(lambda_arn=arn, region=region)
+    callback_token = _link_st_callbacks(test_user1, webhook_mock_base_url, arn, region)
+
+    Group(test_user1).remove_node_from_group(group1_id, device1.node_thing_name)
+    test_user1.do_user_node_assoc(device1, group1_id)
+
+    light1_id = st_external_device_id(device1.node_thing_name, "Light1")
+
+    def added(payload):
+        assert payload["headers"]["interactionType"] == "discoveryCallback", \
+            f"Not a discoveryCallback: {payload}"
+        ids = [d["externalDeviceId"] for d in payload.get("devices") or []]
+        assert light1_id in ids, f"{light1_id} not in discoveryCallback: {ids}"
+
+    _wait_for_st_callback(webhook_mock_base_url, webhook_mock_api_key,
+                          callback_token, added, "discoveryCallback")
+
+
+@pytest.mark.xdist_group("env_mut")
+def test_smartthings_device_removed_callback(user_with_1_dev_each_in_2_groups, webhook_mock, st_action_test_mode):
+    """A node removed from a group is pushed as DEVICE-DELETED on every device.
+
+    Answering DEVICE-DELETED to a later stateRefresh is not enough — SmartThings
+    reconciles its device list from callbacks, not from responses — which is what
+    the certification offboarding case failed on.
+    """
+    webhook_mock_base_url, webhook_mock_api_key = webhook_mock
+    region, arn = ST_REGION_ARNS[0]
+
+    device1, _device2, group1_id, _group2_id, test_user1 = user_with_1_dev_each_in_2_groups
+    test_user1.get_aws_credentials()
+
+    test_user1.st_discover_devices(lambda_arn=arn, region=region)
+    callback_token = _link_st_callbacks(test_user1, webhook_mock_base_url, arn, region)
+
+    light1_id = st_external_device_id(device1.node_thing_name, "Light1")
+    Group(test_user1).remove_node_from_group(group1_id, device1.node_thing_name)
+
+    def deleted(payload):
+        assert payload["headers"]["interactionType"] == "stateCallback", \
+            f"Not a stateCallback: {payload}"
+        states = payload.get("deviceState") or []
+        match = [ds for ds in states if ds.get("externalDeviceId") == light1_id]
+        assert match, f"{light1_id} not in delete callback: {payload}"
+        errors = [e["errorEnum"] for e in match[0].get("deviceError") or []]
+        assert "DEVICE-DELETED" in errors, f"Expected DEVICE-DELETED, got {errors}"
+
+    _wait_for_st_callback(webhook_mock_base_url, webhook_mock_api_key,
+                          callback_token, deleted, "DEVICE-DELETED callback")
+
+    # Leave the pooled device where the other tests expect it.
+    test_user1.do_user_node_assoc(device1, group1_id)
