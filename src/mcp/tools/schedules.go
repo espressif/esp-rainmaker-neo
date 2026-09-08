@@ -74,9 +74,12 @@ func SetSchedule(rmngCtx *rmngctx.RmngContext, groupID, nodeID string, operation
 	// checked the same way. Without this, a model refused by set_params would simply route the
 	// invented parameter through a schedule instead, and the failure would surface at 7am.
 	if len(input.Action) > 0 {
-		if message := validateParamsForNode(rmngCtx, nodeID, input.Action); message != "" {
+		// The stored action is what the device is handed at trigger time, so the repaired one is what must be stored.
+		action, message := paramsService.Check(rmngCtx, nodeID, input.Action)
+		if message != "" {
 			return nil, guidancef("%s", message)
 		}
+		input.Action = action
 	}
 
 	existing, err := readSchedules(rmngCtx, nodeID)

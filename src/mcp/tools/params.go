@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/params"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/parallel"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
@@ -32,6 +33,8 @@ type SetParamsResult struct {
 	// reaches the model as an ordinary success and is otherwise easy to read as "it worked".
 	Summary string `json:"summary,omitempty"`
 }
+
+var paramsService = params.NewParamsService()
 
 // maxParamsFanout bounds the concurrent writes behind one "turn everything off" request.
 const maxParamsFanout = 10
@@ -92,14 +95,6 @@ func publishParams(rmngCtx *rmngctx.RmngContext, groupID, nodeID string, params 
 		return paramsFailed(rmngCtx, err, nodeID, groupID)
 	}
 
-	// Checked before publishing, never after: MQTT has no acknowledgement, so a device that
-	// cannot act on these params says nothing and the caller would be told it worked. Rejecting
-	// the node's whole write keeps it from being left half-set on a call the model got wrong.
-	// Authorization comes first so a stranger never learns whether a node has a config.
-	if message := validateParamsForNode(rmngCtx, nodeID, params); message != "" {
-		return NodeResult{NodeID: nodeID, Error: message}
-	}
-
 	// The shadow name is derived from the node's group and subgroups, which the authorization
 	// above already read off the node's own row. Handing them over spares a second read of that
 	// row through the by-node-id index: ensureGroups treats a populated GroupID as loaded. It is
@@ -109,8 +104,14 @@ func publishParams(rmngCtx *rmngctx.RmngContext, groupID, nodeID string, params 
 	target.GroupID = placement.Group
 	target.SubGroupIDs = placement.SubGroups
 
-	if err := target.PublishToDeviceDesired(rmngCtx, params); err != nil {
+	// Authorization comes first so a stranger never learns whether a node has a config.
+	guidance, err := paramsService.Publish(rmngCtx, target, params)
+	if err != nil {
 		return paramsFailed(rmngCtx, err, nodeID, groupID)
+	}
+	// Guidance already names what the device does have and says nothing changed, so it goes back verbatim.
+	if guidance != "" {
+		return NodeResult{NodeID: nodeID, Error: guidance}
 	}
 	return NodeResult{NodeID: nodeID, Success: true}
 }
