@@ -68,11 +68,11 @@ var _ = Describe("SmartThings Config", func() {
 		os.Setenv("OIDC_VA_CLIENT_ID", vaClientID)
 		userID := "51bbf520-70a1-70ac-627f-07d1af2a930c"
 
-		// Set up super admin user
+		// Set up admin user
 		_, _ = test_utils.SetupTestAdminUser(ctx, userID, "test-user-email")
 
 		// Set up non-admin user for authorization tests
-		_, _ = test_utils.SetupTestNonAdminUserInAdminPool(ctx, "test-dummy-user-id", "test-dummy-user-email")
+		_, _ = test_utils.SetupTestNonAdminUser(ctx, "test-dummy-user-id", "test-dummy-user-email")
 
 		request = events.APIGatewayProxyRequest{
 			HTTPMethod: "POST",
@@ -222,7 +222,7 @@ var _ = Describe("SmartThings Config", func() {
 				Body:       string(body),
 				RequestContext: events.APIGatewayProxyRequestContext{
 					Identity: events.APIGatewayRequestIdentity{
-						CognitoAuthenticationProvider: ":CognitoSignIn:test-dummy-user-id",
+						CognitoAuthenticationProvider: test_utils.OIDCAuthProvider("test-dummy-user-id"),
 					},
 				},
 			}
@@ -316,7 +316,7 @@ var _ = Describe("SmartThings Config", func() {
 				HTTPMethod: "GET",
 				RequestContext: events.APIGatewayProxyRequestContext{
 					Identity: events.APIGatewayRequestIdentity{
-						CognitoAuthenticationProvider: ":CognitoSignIn:test-dummy-user-id",
+						CognitoAuthenticationProvider: test_utils.OIDCAuthProvider("test-dummy-user-id"),
 					},
 				},
 			}
@@ -367,7 +367,7 @@ var _ = Describe("SmartThings Config", func() {
 				HTTPMethod: "DELETE",
 				RequestContext: events.APIGatewayProxyRequestContext{
 					Identity: events.APIGatewayRequestIdentity{
-						CognitoAuthenticationProvider: ":CognitoSignIn:test-dummy-user-id",
+						CognitoAuthenticationProvider: test_utils.OIDCAuthProvider("test-dummy-user-id"),
 					},
 				},
 			}

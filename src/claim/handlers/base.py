@@ -22,7 +22,7 @@ class ClaimBase(Construct):
     The reservation is the record that makes certificate identity
     server-determined: claim-verify reads the node ID from here rather than
     from anything the caller submits. The CA certificate itself is not minted
-    here — it is minted at runtime through the superadmin bootstrap API
+    here — it is minted at runtime through the admin bootstrap API
     (assisted-claiming §3.9), since it must be signed by the key below, which
     only exists once this stack is deployed.
     """

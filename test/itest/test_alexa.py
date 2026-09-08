@@ -10,9 +10,9 @@ import pytest
 # The Alexa integration configuration is a single global record, so tests that write it must
 # not run concurrently on different xdist workers or they clobber each other's round-trip.
 @pytest.mark.xdist_group("alexa_config")
-def test_alexa_post_then_get_configuration(super_admin_user):
+def test_alexa_post_then_get_configuration(admin_user):
     """Test POST then GET /v1/admin/integrations/alexa/configuration to verify round-trip."""
-    admin = super_admin_user
+    admin = admin_user
     admin.get_aws_credentials()
 
     # POST configuration
@@ -46,9 +46,9 @@ def test_alexa_post_then_get_configuration(super_admin_user):
     assert alexa_statement['Condition']['StringEquals']['lambda:EventSourceToken'] == 'amzn1.ask.skill.test-integration-skill'
 
 @pytest.mark.xdist_group("alexa_config")
-def test_alexa_update_configuration(super_admin_user):
+def test_alexa_update_configuration(admin_user):
     """Test that POST with different values updates the configuration."""
-    admin = super_admin_user
+    admin = admin_user
     admin.get_aws_credentials()
 
     # POST initial configuration
@@ -91,9 +91,9 @@ def test_alexa_update_configuration(super_admin_user):
 
 
 @pytest.mark.xdist_group("alexa_config")
-def test_alexa_manufacturer_name_configuration(super_admin_user):
+def test_alexa_manufacturer_name_configuration(admin_user):
     """Test that manufacturer_name round-trips, survives a credentials-only update, and resets."""
-    admin = super_admin_user
+    admin = admin_user
     admin.get_aws_credentials()
 
     creds = {

@@ -461,7 +461,7 @@ def test_register_client_put_is_idempotent(test_user1):
 
 
 @pytest.mark.xdist_group("env_mut")
-def test_mobile_push_notification(test_user2, associated_device, super_admin_user):
+def test_mobile_push_notification(test_user2, associated_device, admin_user):
     """Test mobile push notifications using SQS queue for validation."""
     import subprocess
     import uuid
@@ -720,7 +720,7 @@ def test_mobile_push_notification(test_user2, associated_device, super_admin_use
 
             try:
                 # Upload the file using the file API
-                success, s3_path = super_admin_user.upload_file(temp_file_path, 'push_text_config')
+                success, s3_path = admin_user.upload_file(temp_file_path, 'push_text_config')
 
                 if not success:
                     raise Exception(f"File upload failed: {s3_path}")
@@ -903,7 +903,7 @@ def test_mobile_push_notification(test_user2, associated_device, super_admin_use
 
 
 def test_update_and_list_mobile_platforms(
-    super_admin_user, test_user1, apns_credentials, firebase_service_account
+    admin_user, test_user1, apns_credentials, firebase_service_account
 ):
     """
     Test updating mobile platform credentials for iOS and Android, and that the
@@ -921,7 +921,7 @@ def test_update_and_list_mobile_platforms(
 
     try:
         # Test iOS platform update
-        ios_result = super_admin_user.register_ios_platform(
+        ios_result = admin_user.register_ios_platform(
             authentication_key=ios_config["key"],
             key_id=ios_config["key_id"],
             team_id=ios_config["team_id"],
@@ -931,7 +931,7 @@ def test_update_and_list_mobile_platforms(
         assert ios_result is not None, "Failed to create iOS platform"
         created_platform_arns.append(("apns", ios_config["bundle_id"]))
 
-        update_result = super_admin_user.update_mobile_platform(
+        update_result = admin_user.update_mobile_platform(
             platform="APNS",
             authentication_key=ios_config["key"],
             key_id=ios_config["key_id"],
@@ -943,13 +943,13 @@ def test_update_and_list_mobile_platforms(
         print("iOS platform updated successfully")
 
         # Test Android platform update
-        android_result = super_admin_user.register_android_platform(
+        android_result = admin_user.register_android_platform(
             json_content=json.dumps(android_config)
         )
         assert android_result is not None, "Failed to create Android platform"
         created_platform_arns.append(("GCM", android_config["project_id"]))
 
-        update_result = super_admin_user.update_mobile_platform(
+        update_result = admin_user.update_mobile_platform(
             platform="GCM",
             api_key=json.dumps(android_config)
         )
@@ -961,13 +961,13 @@ def test_update_and_list_mobile_platforms(
 
         # --- Admin GET /v1/admin/integrations/{id} on the same setup ----------
         # The admin GET-one returns per-type detail the public list omits.
-        status, apns_detail = super_admin_user.get_mobile_platform(expected_apns)
+        status, apns_detail = admin_user.get_mobile_platform(expected_apns)
         assert status == 200, f"admin GET-one apns failed: {status} {apns_detail}"
         assert apns_detail["integration_id"] == expected_apns
         assert apns_detail["integration_type"] == "apns"
         assert apns_detail["bundle_id"] == ios_config["bundle_id"]
 
-        status, gcm_detail = super_admin_user.get_mobile_platform(expected_gcm)
+        status, gcm_detail = admin_user.get_mobile_platform(expected_gcm)
         assert status == 200, f"admin GET-one gcm failed: {status} {gcm_detail}"
         assert gcm_detail["integration_id"] == expected_gcm
         assert gcm_detail["integration_type"] == "gcm"
@@ -999,7 +999,7 @@ def test_update_and_list_mobile_platforms(
 
         # Public ids agree with the admin list (admin returns the same set plus
         # per-type detail the public view strips out).
-        admin = super_admin_user.list_mobile_platforms()
+        admin = admin_user.list_mobile_platforms()
         admin_ids = {p["integration_id"] for p in admin["integrations"]}
         assert set(ids) == admin_ids, \
             f"public ids {set(ids)} disagree with admin ids {admin_ids}"
@@ -1015,13 +1015,13 @@ def test_update_and_list_mobile_platforms(
     finally:
         for platform, app_name in created_platform_arns:
             try:
-                super_admin_user.delete_mobile_platform(platform, app_name)
+                admin_user.delete_mobile_platform(platform, app_name)
             except Exception as e:
                 print(f"Warning: Failed to cleanup integration {platform}_{app_name}: {e}")
 
 
 @pytest.mark.xdist_group("env_mut")
-def test_delete_mobile_platform(super_admin_user, apns_credentials, firebase_service_account):
+def test_delete_mobile_platform(admin_user, apns_credentials, firebase_service_account):
     """
     Test deleting mobile platform for iOS and Android.
     """
@@ -1033,7 +1033,7 @@ def test_delete_mobile_platform(super_admin_user, apns_credentials, firebase_ser
     sns_client = boto3.client('sns', region_name=REGION)
 
     # Test iOS platform deletion
-    ios_result = super_admin_user.register_ios_platform(
+    ios_result = admin_user.register_ios_platform(
         authentication_key=ios_config["key"],
         key_id=ios_config["key_id"],
         team_id=ios_config["team_id"],
@@ -1042,7 +1042,7 @@ def test_delete_mobile_platform(super_admin_user, apns_credentials, firebase_ser
     )
     assert ios_result is not None, "Failed to create iOS platform"
 
-    delete_result = super_admin_user.delete_mobile_platform(
+    delete_result = admin_user.delete_mobile_platform(
         platform="APNS",
         platform_app_name=ios_config["bundle_id"],
     )
@@ -1050,12 +1050,12 @@ def test_delete_mobile_platform(super_admin_user, apns_credentials, firebase_ser
     print("iOS platform deleted successfully")
 
     # Test Android platform deletion
-    android_result = super_admin_user.register_android_platform(
+    android_result = admin_user.register_android_platform(
         json_content=json.dumps(android_config)
     )
     assert android_result is not None, "Failed to create Android platform"
 
-    delete_result = super_admin_user.delete_mobile_platform(
+    delete_result = admin_user.delete_mobile_platform(
         platform="GCM",
         platform_app_name=android_config["project_id"],
     )

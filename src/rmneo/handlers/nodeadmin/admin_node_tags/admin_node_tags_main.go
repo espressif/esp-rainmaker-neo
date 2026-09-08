@@ -44,7 +44,7 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		rlog.Error(rctx).Msg("Accessor is not a user; rejecting admin tags request")
 		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Unauthorized")), nil
 	}
-	if !userAccessor.IsSuperAdmin(rctx) {
+	if !userAccessor.IsAdmin(rctx) {
 		rlog.Error(rctx).Msg("User is not authorized for admin tags endpoints")
 		return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("Forbidden")), nil
 	}

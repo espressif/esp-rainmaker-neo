@@ -25,7 +25,7 @@ class AdminCredsCore(Construct):
     ServiceQuotas increases.
 
     Mirrors rmneo/handlers/admin/iot_event_mode: reached via AWS_IAM (SigV4) using the
-    dashboard's identity-pool creds, super-admin resolved from the request
+    dashboard's identity-pool creds, the admin resolved from the request
     identity. The lambda assumes the admin-creds role and returns temp credentials
     narrowed by the inline session policy in rmng_admin_creds_main.go — the role's
     attached policy is the outer ceiling, the session policy the intersection."""
@@ -49,7 +49,7 @@ class AdminCredsCore(Construct):
 
         # create_lambda_function -> common_api_policy already grants the Cognito
         # GetUser/AdminGetUser + JWKS reads that NewContextWithAPIRequest and
-        # IsSuperAdmin need, so no extra grant is required here.
+        # IsAdmin need, so no extra grant is required here.
         # function_name is "rmng_admin_creds" to give the build target a distinct
         # basename (the Makefile keys on the _main.go basename), but the deployed
         # name is overridden to "{prefix}admin-creds" so it isn't "rmng-rmng-...".
@@ -62,7 +62,7 @@ class AdminCredsCore(Construct):
         )
 
         # POST /v1/admin/credentials — AWS_IAM (SigV4) like iot-event-mode; the
-        # handler enforces super-admin. /v1 and /v1/admin are shared via the
+        # handler enforces the admin gate. /v1 and /v1/admin are shared via the
         # common_resources cache with the other admin constructs.
         v1_parent_id = get_or_create_api_resource(
             self, "V1Resource", common_resources,

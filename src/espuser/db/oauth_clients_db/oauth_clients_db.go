@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Table espuser-oauth-clients (PK client_id, no SK): the registered OAuth/OIDC client
-// registry. Admin-managed (superadmin); secrets stored plaintext so the admin API can return them (get_secret). Spec: espuser/docs/en/specs/admin-clients.md.
+// registry. Admin-managed; secrets stored plaintext so the admin API can return them (get_secret). Spec: espuser/docs/en/specs/admin-clients.md.
 package oauth_clients_db
 
 import (

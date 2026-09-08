@@ -57,7 +57,7 @@
   "previewSignInTooltip": "在新标签页中打开用户看到的登录页面",
   "previewSignInFailed": "无法打开登录页面预览",
   "previewSignInFailedMessage": "无法准备登录页面，请重试。",
-  "previewSignInForbidden": "注册预览回调地址需要超级管理员权限。",
+  "previewSignInForbidden": "注册预览回调地址需要管理员权限。",
   "noRedirectUris": "尚未配置重定向 URI",
   "gva": {
     "heading": "GVA 配置",

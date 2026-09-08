@@ -38,7 +38,7 @@ var _ = Describe("File Handler", func() {
 			test_utils.TestSetup()
 			userID = "test-user-id"
 
-			// Set up super admin user using helper function
+			// Set up admin user using helper function
 			test_utils.SetupTestAdminUser(ctx, userID, "test-user-email")
 
 			requestBody := map[string]interface{}{
@@ -274,7 +274,7 @@ var _ = Describe("File Handler", func() {
 			test_utils.TestSetup()
 			userID = "test-user-id"
 
-			// Set up super admin user using helper function
+			// Set up admin user using helper function
 			test_utils.SetupTestAdminUser(ctx, userID, "test-user-email")
 
 			request = events.APIGatewayProxyRequest{

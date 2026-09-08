@@ -75,12 +75,12 @@ def test_same_email_as_admin_and_end_user_are_separate_identities():
 
     admin = User(email, password, REGION, IDENTITY_POOL_ID, API_GATEWAY_URL, USER_API_GATEWAY_URL,
                  IOT_ENDPOINT, admin_user_pool_id=ADMIN_USER_POOL_ID, admin_client_id=ADMIN_CLIENT_ID,
-                 is_super_admin=True)
+                 is_admin=True)
     end_user = User(email, password, REGION, IDENTITY_POOL_ID, API_GATEWAY_URL, USER_API_GATEWAY_URL,
                     IOT_ENDPOINT)
     end_user.end_user_pool_id = END_USER_POOL_ID
     try:
-        assert admin.create_super_admin_via_cognito(email=email, password=password), \
+        assert admin.create_admin_via_cognito(email=email, password=password), \
             "the same email must be usable in the admin pool"
         assert end_user.create_user_via_cognito(email=email, password=password), \
             "and independently in the end-user pool"
@@ -261,21 +261,21 @@ def _require_fed_env():
 
 
 @pytest.fixture
-def fed_client(super_admin_user):
+def fed_client(admin_user):
     """A throwaway OAuth client with our redirect_uri registered.
 
     The seeded first-party clients carry no redirect_uris, so /oauth2/authorize refuses them — a
     federated login needs a client that names where the code may be sent.
     """
     client_id = "itest_fed_" + uuid.uuid4().hex[:8]
-    created = super_admin_user.create_oauth_client({
+    created = admin_user.create_oauth_client({
         "client_id": client_id, "client_name": "itest federation", "client_type": "public",
         "redirect_uris": [_FED_REDIRECT_URI], "grant_types": ["authorization_code", "refresh_token"],
         "scopes": ["openid", "email", "phone", "profile"], "require_pkce": True,
     })
     assert created.status_code == 201, created.text
     yield client_id
-    super_admin_user.delete_oauth_client(client_id)
+    admin_user.delete_oauth_client(client_id)
 
 
 def _login(client_id, username, password, scope=_FED_SCOPE, **kwargs):
@@ -336,18 +336,18 @@ def test_federated_login_carries_contacts_and_claims(federated_identity, fed_cli
 
 
 @pytest.fixture
-def fed_confidential_client(super_admin_user):
+def fed_confidential_client(admin_user):
     """A throwaway confidential OAuth client, as the voice assistants use: Alexa authenticates at
     /oauth2/token with HTTP Basic, Google account linking with form-body credentials."""
     client_id = "itest_conf_" + uuid.uuid4().hex[:8]
-    created = super_admin_user.create_oauth_client({
+    created = admin_user.create_oauth_client({
         "client_id": client_id, "client_name": "itest confidential", "client_type": "confidential",
         "redirect_uris": [_FED_REDIRECT_URI], "grant_types": ["authorization_code", "refresh_token"],
         "scopes": ["openid", "email", "phone", "profile"],
     })
     assert created.status_code == 201, created.text
     yield client_id, created.json()["client_secret"]
-    super_admin_user.delete_oauth_client(client_id)
+    admin_user.delete_oauth_client(client_id)
 
 
 @pytest.mark.xdist_group("env_mut")

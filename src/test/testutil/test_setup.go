@@ -102,7 +102,7 @@ func TestSetup() {
 
 	// Cognito pool JWKS — the same shared key under each pool's own param, so a token minted for
 	// either pool verifies. Both pools are needed: the end-user pool is the upstream provider the
-	// password APIs authenticate against, the admin pool backs superadmin tokens.
+	// password APIs authenticate against, the admin pool backs admin tokens.
 	for envVar, paramName := range map[string]string{
 		"UPSTREAM_USER_POOL_JWKS_PARA_NAME": "/esp_user/base/user_pool_jwks_json",
 		"ADMIN_USER_POOL_JWKS_PARA_NAME":    "/esp_user/base/admin_user_pool_jwks_json",

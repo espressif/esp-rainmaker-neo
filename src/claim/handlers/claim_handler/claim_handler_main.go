@@ -428,7 +428,7 @@ var (
 )
 
 // leafProfileDefaults resolves the operator-configured leaf subject and
-// validity from the certificate configuration (§3.9), set through the superadmin
+// validity from the certificate configuration (§3.9), set through the admin
 // config API and read from SSM at issuance. Both are optional: an unset subject
 // leaves the leaf with just its CN (the node ID), and a zero validity falls back
 // to certissuer.DeviceCertValidity. The read is cached, so a configuration

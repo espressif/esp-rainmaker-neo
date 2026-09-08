@@ -119,16 +119,16 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 	rctx := user.NewContextWithAPIRequest(ctx, request)
 	// Fail closed: never fall back to a SystemActor. A nil/empty context means
 	// the caller's identity did not resolve to a real user; a SystemActor holds
-	// *:* permissions and would bypass the super-admin gate below.
+	// *:* permissions and would bypass the admin gate below.
 	if rctx == nil || rctx.GetAccessor() == nil || rctx.GetAccessor().GetID() == "" {
 		rlog.Error(ctx).Msg("Failed to resolve user context for admin update request")
 		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Unauthorized")), nil
 	}
 
-	// Super-admin gate rejects by default: a non-*user.User accessor (e.g. a
+	// Admin gate rejects by default: a non-*user.User accessor (e.g. a
 	// system actor) must not be allowed through.
 	userAccessor, ok := rctx.GetAccessor().(*user.User)
-	if !ok || !userAccessor.IsSuperAdmin(rctx) {
+	if !ok || !userAccessor.IsAdmin(rctx) {
 		rlog.Error(rctx).Msg("User is not authorized")
 		return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("Forbidden")), nil
 	}

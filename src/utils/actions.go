@@ -128,7 +128,7 @@ func (na NodeAdminActions) String() string {
 // CloudFormation redeploys (see docs/en/specs/iot_event_mode.md §4.4 and
 // rmneo/handlers/admin/admin_config_base.py). Resource is the row's config_key
 // (e.g. "iot_event_mode"); writers must hold AdminConfigSet, readers
-// AdminConfigGet. Granted exclusively to SystemActor and superAdmin
+// AdminConfigGet. Granted exclusively to SystemActor and admin
 // callers — this table is never user-facing.
 type AdminConfigActions string
 

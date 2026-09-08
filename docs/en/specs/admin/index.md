@@ -1,6 +1,6 @@
 # Overview
 
-Everything an admin or super admin can access in ESP RainMaker Neo: what the dashboard
+Everything an admin or admin can access in ESP RainMaker Neo: what the dashboard
 currently exposes, the plane behind it, and what can be added.
 
 Read the pages below in order for a full picture of the admin plane, or jump

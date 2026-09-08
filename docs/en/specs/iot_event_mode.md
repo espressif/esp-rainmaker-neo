@@ -31,7 +31,7 @@ concurrency limit, and the resulting throttles turn into IoT rule retries and
 back-pressure on the broker. The SQS path trades a little latency for a queue
 that absorbs the burst.
 
-Both paths are provisioned on every deploy, and a superAdmin REST API
+Both paths are provisioned on every deploy, and an admin REST API
 (`/v1/admin/iot-event-mode`) flips each rule's action between them at runtime via
 `iot:ReplaceTopicRule`. The flip takes effect in seconds and needs no redeploy.
 
@@ -120,7 +120,7 @@ every deploy. The deployment has no toggle for this. Operators who want
 SQS mode call the runtime API after deploy. This is intentional — see
 §4.4 *CloudFormation drift across deploys* for the reasoning.
 
-### 3.3 Runtime mode flip via superAdmin API
+### 3.3 Runtime mode flip via admin API
 
 A dedicated lambda exposes:
 
@@ -129,7 +129,7 @@ GET  /v1/admin/iot-event-mode
 PUT  /v1/admin/iot-event-mode    body: {"mode": "direct"|"sqs"}
 ```
 
-Both endpoints are super-admin only.
+Both endpoints are admin only.
 
 **GET** — calls `iot:GetTopicRule` for `node_disconnected_rule`,
 `node_to_cloud_rule`, and `node_ts_batch_rule` and reports `"sqs"` if the first action is an Sqs
@@ -157,13 +157,13 @@ working pipeline).
 
 ```mermaid
 sequenceDiagram
-    participant Admin as superAdmin
+    participant Admin as Admin
     participant API as API Gateway
     participant L as iot_event_mode lambda
     participant IoT as AWS IoT control plane
     Admin->>API: PUT /v1/admin/iot-event-mode {"mode":"sqs"}
     API->>L: invoke
-    L->>L: IsSuperAdmin check
+    L->>L: IsAdmin check
     L->>IoT: GetTopicRule(node_disconnected_rule)
     IoT-->>L: {sql, errorAction, ...}
     L->>IoT: ReplaceTopicRule(node_disconnected_rule, new payload)
@@ -344,7 +344,7 @@ mechanism is working as designed.
 | Presence handler | Consumes presence events; sniffs the payload shape and dispatches one event or a batch |
 | Publish-input handler | Same, for device-to-cloud events |
 | Timeseries batch handler | Expands batch reports into raw timeseries rows; dispatches direct or SQS payloads |
-| Mode-flip API | Super-admin `GET`/`PUT /v1/admin/iot-event-mode`, plus the reapply path the drift custom resource calls |
+| Mode-flip API | Admin `GET`/`PUT /v1/admin/iot-event-mode`, plus the reapply path the drift custom resource calls |
 | Admin-configs table | `rmng-admin-configs`, one row per `config_key`, holding runtime-flippable admin state |
 | Handler infrastructure | Provisions both paths on every deploy: queue, DLQ, event-source mapping and both sets of IAM |
 | OpenAPI | `/v1/admin/iot-event-mode` `GET`/`PUT` |
@@ -365,7 +365,7 @@ the flip preserving the rule's SQL, SQL version and error action.
 ### 6.2 Integration tests
 
 Against a deployed environment, two suites cover the feature. The mode API is
-exercised as super-admin and as a non-admin (403 on both `GET` and `PUT`), with
+exercised as admin and as a non-admin (403 on both `GET` and `PUT`), with
 an invalid mode rejected as 400 and no rule mutated; each successful flip is
 cross-checked against the live `iot:GetTopicRule` and a follow-up `GET`, and is
 verified to preserve the rule's SQL, SQL version, description, disabled flag and

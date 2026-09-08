@@ -31,12 +31,12 @@ export function usePreviewSignIn() {
       await openPreviewSignIn();
     } catch (caught) {
       setHasFailed(true);
-      // The registry is superadmin-only, which is the one failure a plain admin will hit.
+      // The registry is admin-only, so this is the failure an expired or non-admin session hits.
       if (ApiError.isApiError(caught) && caught.isAuthError()) {
         setError(
           t(
             "previewSignInForbidden",
-            "Registering the preview callback needs superadmin access.",
+            "Registering the preview callback needs admin access.",
           ),
         );
       } else {

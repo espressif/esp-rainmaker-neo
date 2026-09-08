@@ -9,9 +9,9 @@
       "password": ""
     },
     {
-      "name": "test-superadmin@example.com",
+      "name": "test-admin@example.com",
       "password": "",
-      "super_admin": true
+      "admin": true
     }
   ],
   "nodes": [

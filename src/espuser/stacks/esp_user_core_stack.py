@@ -158,7 +158,7 @@ class EspUserCoreStack(Stack):
             self, "AdminEmails",
             type="String",
             description=(
-                "Comma-separated list of admin email addresses to register as super-admins in "
+                "Comma-separated list of admin email addresses to register as admins in "
                 "this account. At least one valid email address is required."
             ),
             allowed_pattern=ADMIN_EMAILS_ALLOWED_PATTERN,

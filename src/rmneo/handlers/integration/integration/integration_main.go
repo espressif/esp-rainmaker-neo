@@ -560,7 +560,7 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		return utils.APIGwRespJSON(http.StatusMethodNotAllowed, utils.NewAPIStatus("Method not allowed")), nil
 	}
 
-	isAuthorized := rctx.GetAccessor().(*user.User).IsSuperAdmin(rctx)
+	isAuthorized := rctx.GetAccessor().(*user.User).IsAdmin(rctx)
 	if !isAuthorized {
 		rlog.Error(rctx).Bool("isAuthorized", isAuthorized).Msg("User is not authorized")
 		return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("Forbidden")), nil

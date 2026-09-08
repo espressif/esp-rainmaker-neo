@@ -6,7 +6,7 @@
 
 Mirrors test_alexa.py / test_gva.py for parity. Two layers are covered:
 
-1. Config API CRUD at /v1/admin/integrations/smartthings/configuration, a super-admin
+1. Config API CRUD at /v1/admin/integrations/smartthings/configuration, a admin
    REST API driven through User.st_post_configuration and friends.
 
 2. Schema App interactions. SmartThings invokes the st_action Lambda directly, not
@@ -71,13 +71,13 @@ def st_region_arn(request):
 
 
 # ---------------------------------------------------------------------------
-# 1. Config API CRUD (super-admin REST API)
+# 1. Config API CRUD (admin REST API)
 # ---------------------------------------------------------------------------
 @pytest.mark.xdist_group("smartthings_config")
-def test_smartthings_configuration_round_trip(super_admin_user):
+def test_smartthings_configuration_round_trip(admin_user):
     """POST stores the credentials, GET returns client_id only, a second POST updates them,
     DELETE removes them."""
-    admin = super_admin_user
+    admin = admin_user
     admin.get_aws_credentials()
 
     post_response = admin.st_post_configuration("test-st-client-id", "test-st-client-secret")

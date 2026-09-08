@@ -10,6 +10,7 @@ import (
 
 // Custom attributes
 const (
+	// SuperAdminFlag is retained so the attribute round-trips; no authorisation reads it.
 	SuperAdminFlag = "custom:super_admin"
 	UserId         = "custom:user_id"
 	Email          = "email"

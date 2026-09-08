@@ -105,7 +105,7 @@ func (cu *CognitoUtils) SigningKey() *rsa.PrivateKey {
 // and access tokens issued by one authentication event, so by default this derives it
 // from `sub` — which makes any two tokens for the same user a matched pair, the common
 // case in tests. Pass an override to model tokens from two different sign-ins.
-func (cu *CognitoUtils) GetIdentityToken(sub string, issuer, tokenUse string, expired bool, isSuperAdmin bool, email string, userID string, originJTIOverride ...string) string {
+func (cu *CognitoUtils) GetIdentityToken(sub string, issuer, tokenUse string, expired bool, isAdmin bool, email string, userID string, originJTIOverride ...string) string {
 	exp := time.Now().Add(time.Hour * 24 * 365).Unix()
 	if expired {
 		exp = time.Now().Add(time.Hour * -1).Unix()
@@ -127,15 +127,11 @@ func (cu *CognitoUtils) GetIdentityToken(sub string, issuer, tokenUse string, ex
 	// `client_id`, ID tokens in `aud`. Validators that pin the client (see
 	// validateCognitoToken in mcp/proxy/auth.go) reject a token that carries
 	// neither, so mint it the same way here or such tokens fail before any other check.
-	clientID := tokenClientID(isSuperAdmin)
+	clientID := tokenClientID(isAdmin)
 	if tokenUse == "id" {
 		claims["aud"] = clientID
 	} else {
 		claims["client_id"] = clientID
-	}
-
-	if isSuperAdmin {
-		claims["custom:super_admin"] = "true"
 	}
 
 	if email != "" {
@@ -180,8 +176,8 @@ func (cu *CognitoUtils) GetIdentityToken(sub string, issuer, tokenUse string, ex
 
 // tokenClientID resolves the app client a minted test token belongs to. The session
 // registry and the token claims must agree on it, so both read it from here.
-func tokenClientID(isSuperAdmin bool) string {
-	if isSuperAdmin {
+func tokenClientID(isAdmin bool) string {
+	if isAdmin {
 		if clientID := os.Getenv("ADMIN_USER_POOL_CLIENT_ID"); clientID != "" {
 			return clientID
 		}
@@ -269,7 +265,9 @@ func (cu *CognitoUtils) GetAccessTokenWithWrongTokenUse(sub string, isAdmin bool
 	return cu.GetIdentityToken(sub, fmt.Sprintf("https://cognito-idp.%s.amazonaws.com/%s", cu.testRegion, userPoolID), "wrong-token-use", false, false, "", sub)
 }
 
-func (cu *CognitoUtils) GetAccessTokenWithSuperAdmin(sub, email string) string {
+// GetAccessTokenWithAdmin mints an admin-pool access token. Admin-pool membership is
+// the whole admin privilege, so there is no second, more-privileged variant.
+func (cu *CognitoUtils) GetAccessTokenWithAdmin(sub, email string) string {
 	return cu.GetIdentityToken(sub, fmt.Sprintf("https://cognito-idp.%s.amazonaws.com/%s", cu.testRegion, os.Getenv("ADMIN_USER_POOL_ID")), "access", false, true, email, sub)
 }
 

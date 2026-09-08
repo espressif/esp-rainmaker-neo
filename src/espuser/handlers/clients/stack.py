@@ -23,9 +23,9 @@ from src.espuser.stacks.base_res_constants import (
 
 
 class ClientsAPI(Construct):
-    """Superadmin OAuth client registry API (/v1/admin/clients).
+    """Admin OAuth client registry API (/v1/admin/clients).
 
-    Wires the clients Go Lambda behind the admin Cognito authorizer (superadmin claim
+    Wires the clients Go Lambda behind the admin Cognito authorizer (admin-pool token
     checked in-handler). Create / list / update / delete over espuser-oauth-clients.
     The registry is seeded in the base stack, next to the Cognito clients.
     See espuser/docs/en/specs/admin-clients.md.
@@ -52,7 +52,7 @@ class ClientsAPI(Construct):
             ],
         ))
 
-        # Verify the admin token in-handler (super_admin claim) against the admin pool JWKS.
+        # Verify the admin token in-handler against the admin pool JWKS.
         clients_lambda_role.add_to_policy(iam.PolicyStatement(
             actions=["ssm:GetParameter"],
             resources=[

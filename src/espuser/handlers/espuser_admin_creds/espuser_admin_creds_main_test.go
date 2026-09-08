@@ -29,25 +29,12 @@ func TestEspUserAdminCredsMain(t *testing.T) {
 
 const testAdminCredsRoleArn = "arn:aws:iam::123456789012:role/espuser-admin-creds-role-us-east-1"
 
-// superAdminRequest builds a request carrying the authorizer claims the admin
-// Cognito authorizer would inject. superAdmin toggles the custom:super_admin
-// claim.
-func superAdminRequest(superAdmin bool, body Request) events.APIGatewayProxyRequest {
+// adminRequest builds a request as it reaches the handler once the admin Cognito
+// authorizer has admitted it. The authorizer is the only gate — admin-pool
+// membership is the whole privilege, so the handler itself reads no claims.
+func adminRequest(body Request) events.APIGatewayProxyRequest {
 	requestJSON, _ := json.Marshal(body)
-	claim := "false"
-	if superAdmin {
-		claim = "true"
-	}
-	return events.APIGatewayProxyRequest{
-		Body: string(requestJSON),
-		RequestContext: events.APIGatewayProxyRequestContext{
-			Authorizer: map[string]interface{}{
-				"claims": map[string]interface{}{
-					"custom:super_admin": claim,
-				},
-			},
-		},
-	}
+	return events.APIGatewayProxyRequest{Body: string(requestJSON)}
 }
 
 var _ = Describe("EspUser Admin Creds Main", func() {
@@ -65,9 +52,9 @@ var _ = Describe("EspUser Admin Creds Main", func() {
 		GinkgoT().Setenv("AWS_REGION", "us-east-1")
 	})
 
-	Describe("super admin (happy path)", func() {
+	Describe("admin (happy path)", func() {
 		It("returns scoped credentials and assumes the admin-creds role", func() {
-			resp, err := handleRequest(ctx, superAdminRequest(true, Request{}))
+			resp, err := handleRequest(ctx, adminRequest(Request{}))
 			Expect(err).To(BeNil())
 			Expect(resp.StatusCode).To(Equal(http.StatusOK))
 
@@ -85,7 +72,7 @@ var _ = Describe("EspUser Admin Creds Main", func() {
 		})
 
 		It("vends the sandbox reads and number management, but no account-level write", func() {
-			_, err := handleRequest(ctx, superAdminRequest(true, Request{}))
+			_, err := handleRequest(ctx, adminRequest(Request{}))
 			Expect(err).To(BeNil())
 
 			policy := *stsMock.GetLastAssumeRoleInput().Policy
@@ -116,7 +103,7 @@ var _ = Describe("EspUser Admin Creds Main", func() {
 		})
 
 		It("appends the session suffix to the role session name", func() {
-			_, err := handleRequest(ctx, superAdminRequest(true, Request{SessionSuffix: "abc123"}))
+			_, err := handleRequest(ctx, adminRequest(Request{SessionSuffix: "abc123"}))
 			Expect(err).To(BeNil())
 			Expect(*stsMock.GetLastAssumeRoleInput().RoleSessionName).To(Equal("EspUserAdminSession-abc123"))
 		})
@@ -124,35 +111,22 @@ var _ = Describe("EspUser Admin Creds Main", func() {
 	})
 
 	Describe("negative cases", func() {
-		It("rejects a non-super-admin with 403", func() {
-			resp, err := handleRequest(ctx, superAdminRequest(false, Request{}))
-			Expect(err).To(BeNil())
-			Expect(resp.StatusCode).To(Equal(http.StatusForbidden))
-			Expect(stsMock.GetLastAssumeRoleInput()).To(BeNil())
-		})
-
-		It("rejects a request with no authorizer context with 403", func() {
-			resp, err := handleRequest(ctx, events.APIGatewayProxyRequest{Body: "{}"})
-			Expect(err).To(BeNil())
-			Expect(resp.StatusCode).To(Equal(http.StatusForbidden))
-		})
-
 		It("returns 500 when the admin-creds role ARN is not configured", func() {
 			os.Unsetenv("ADMIN_CREDS_ROLE_ARN")
-			resp, err := handleRequest(ctx, superAdminRequest(true, Request{}))
+			resp, err := handleRequest(ctx, adminRequest(Request{}))
 			Expect(err).To(BeNil())
 			Expect(resp.StatusCode).To(Equal(http.StatusInternalServerError))
 		})
 
 		It("returns 500 when AssumeRole fails", func() {
 			stsMock.AssumeRoleError = errors.New("access denied")
-			resp, err := handleRequest(ctx, superAdminRequest(true, Request{}))
+			resp, err := handleRequest(ctx, adminRequest(Request{}))
 			Expect(err).To(BeNil())
 			Expect(resp.StatusCode).To(Equal(http.StatusInternalServerError))
 		})
 
 		It("returns 400 for a session suffix that is not alphanumeric", func() {
-			resp, err := handleRequest(ctx, superAdminRequest(true, Request{SessionSuffix: "bad suffix!"}))
+			resp, err := handleRequest(ctx, adminRequest(Request{SessionSuffix: "bad suffix!"}))
 			Expect(err).To(BeNil())
 			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
 		})

@@ -18,8 +18,10 @@ to ESP RainMaker Neo: it sits behind the ESP User issuer, which is what the Iden
 trusts. An admin token and an end-user tofperefore differ in issuer, which is
 how `POST /v1/user/credentials` tells them apart.
 
-The admin pool declares two custom attributes: `custom:super_admin` (max 4
-characters, so the value is the string `"true"`) and `custom:user_id`.
+The admin pool declares two custom attributes: `custom:user_id`, which carries the
+admin's internal identity, and `custom:super_admin` (max 4 characters, so the value
+is the string `"true"`), which is retained on the schema but is inert — no
+authorisation decision reads it.
 
 ### Admin sign-in factors
 
@@ -73,35 +75,35 @@ consume any email quota to use.
 
 The Identity Pool has exactly **one** role mapping, on the admin pool's client:
 
-- A token from the admin pool carrying `custom:super_admin == "true"` maps to
-  **`AdminDeviceUsersRole`**.
+- A token from the admin pool — matched on its `aud`, the admin pool's own app
+  client id — maps to **`AdminDeviceUsersRole`**. Every admin maps there; the rule
+  reads no per-user claim.
 - Everything else — including **every** federated end user — falls through to the
   pool's default `authenticated` role, **`DeviceUsersRole`**. There is no
-  role mapping on the OIDC provider and no per-`aud` branching.
+  role mapping on the OIDC provider.
 
 So admin privilege is an infrastructure fact: which role the identity pool will
 hand you, decided before any ESP RainMaker Neo Lambda runs.
 
-### Super-admin resolution in the handlers
+### Admin resolution in the handlers
 
 Being on `AdminDeviceUsersRole` gets a caller to the endpoint; the handler still
-re-checks super-admin status, and **where it reads that from depends on the
-path**:
+re-establishes that the caller is an admin, and **where it reads that from depends
+on the path**:
 
 - **SigV4 admin endpoints** (the normal case). There is no token in the request,
-  only the API Gateway identity. The handler resolves the caller and calls
-  Cognito **`AdminGetUser`**, reading the `custom:super_admin` **user attribute**.
-  Its value is authoritative.
+  only the API Gateway identity. The caller is resolved through the admin Cognito
+  service, and resolving there is what marks them an admin.
 - **Token-verifying endpoints** (`/v1/user/credentials` and the ESP-User
-  surface). The `custom:super_admin` claim is read from the verified Cognito
-  token. Cognito emits custom attributes in the **ID token**, not the access
-  token.
+  surface). The token is verified against the admin pool's JWKS; a token that pool
+  issued is an admin token.
 
-Either way the handler answers `403` when the caller is not a super admin.
+Either way the handler answers `403` when the caller did not come through the
+admin pool. There is no second tier above admin: every admin reaches every admin
+endpoint.
 
 The `user_details` table declares an `is_super_admin` attribute, but no ESP RainMaker Neo code
-path reads or writes it — only the test harness sets it. Do not treat it as a
-source of truth.
+path reads or writes it. Do not treat it as a source of truth.
 
 ## AdminDeviceUsersRole
 

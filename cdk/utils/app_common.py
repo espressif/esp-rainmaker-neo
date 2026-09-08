@@ -177,7 +177,7 @@ def common_api_policy(lambda_role: iam.Role, common_resources: CommonResources, 
     Add IAM policy for Cognito User Pool operations needed for authentication and authorization.
     This grants permissions to read user attributes from Cognito User Pool, which is required for:
     - user.NewContextWithAPIRequest() - to authenticate users and create request context
-    - user.User.IsSuperAdmin() - to check if a user is a super admin
+    - user.User.IsAdmin() - to check if a caller came through the admin pool
     
     Also grants permissions to read JWKS from SSM Parameter Store, which is required for:
     - cognito.NewCognitoService() - to fetch and parse JWKS for token validation

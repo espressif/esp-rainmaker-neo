@@ -232,7 +232,7 @@ func handleGetAlexaCfg(ctx context.Context) (events.APIGatewayProxyResponse, err
 func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	rctx := user.NewContextWithAPIRequest(ctx, request)
 
-	isAuthorized := rctx.GetAccessor().(*user.User).IsSuperAdmin(rctx)
+	isAuthorized := rctx.GetAccessor().(*user.User).IsAdmin(rctx)
 	if !isAuthorized {
 		rlog.Error(rctx).Bool("isAuthorized", isAuthorized).Msg("User is not authorized")
 		return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("Forbidden")), nil

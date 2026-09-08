@@ -21,16 +21,16 @@ import pytest
 import requests
 
 
-def test_register_node_basic(super_admin_user, test_device_new):
+def test_register_node_basic(admin_user, test_device_new):
     """Test basic node registration without tags or admin group."""
     # Register the node
-    result = super_admin_user.register_node(test_device_new)
+    result = admin_user.register_node(test_device_new)
     assert result is not False, "Node registration failed"
 
     # Verify the node can connect
     assert test_device_new.connect(), "Registered device failed to connect"
 
-def test_register_node_with_admin_group(super_admin_user, test_device_new):
+def test_register_node_with_admin_group(admin_user, test_device_new):
     """Test node registration with an admin group."""
 
     admin_group_name = "test_admin_group"
@@ -38,7 +38,7 @@ def test_register_node_with_admin_group(super_admin_user, test_device_new):
 
     try:
         # Register the node with an admin group
-        result = super_admin_user.register_node(test_device_new, admin_group_names=[admin_group_name])
+        result = admin_user.register_node(test_device_new, admin_group_names=[admin_group_name])
         assert result is not False, "Node registration with admin group failed"
 
         # Verify the node is in the admin group using IoT Core APIs
@@ -73,7 +73,7 @@ def test_register_node_with_admin_group(super_admin_user, test_device_new):
         except Exception as e:
                 print(f"Error removing thing from group during cleanup: {str(e)}")
 
-def test_register_node_with_parent_group(super_admin_user, test_device_new):
+def test_register_node_with_parent_group(admin_user, test_device_new):
     """Test node registration with admin group under a parent group.
     Verifies that both parent and child groups are created and the node is placed in the child group.
     """
@@ -82,7 +82,7 @@ def test_register_node_with_parent_group(super_admin_user, test_device_new):
     iot_client = boto3.client('iot', region_name=REGION)
 
     try:
-        result = super_admin_user.register_node(
+        result = admin_user.register_node(
             test_device_new,
             admin_group_names=[child_group],
             admin_parent_group_name=parent_group,
@@ -119,7 +119,7 @@ def test_register_node_with_parent_group(super_admin_user, test_device_new):
                 pass
 
 
-def test_register_node_parent_group_mismatch(super_admin_user, test_device_new):
+def test_register_node_parent_group_mismatch(admin_user, test_device_new):
     """Test that registration fails when a group already exists under a different parent.
     Creates child under parentA, then attempts to register under parentB — should fail.
     """
@@ -134,7 +134,7 @@ def test_register_node_parent_group_mismatch(super_admin_user, test_device_new):
         iot_client.create_thing_group(thingGroupName=child_group, parentGroupName=parent_a)
 
         # Attempt to register node with child under parentB — should fail
-        result = super_admin_user.register_node(
+        result = admin_user.register_node(
             test_device_new,
             admin_group_names=[child_group],
             admin_parent_group_name=parent_b,
@@ -149,7 +149,7 @@ def test_register_node_parent_group_mismatch(super_admin_user, test_device_new):
                 pass
 
 
-def test_register_node_parent_exists_child_created(super_admin_user, test_device_new):
+def test_register_node_parent_exists_child_created(admin_user, test_device_new):
     """Test that when a parent group already exists, the child is created under it."""
     parent_group = f"itest_pexist_{os.urandom(4).hex()}"
     child_group = f"itest_cnew_{os.urandom(4).hex()}"
@@ -159,7 +159,7 @@ def test_register_node_parent_exists_child_created(super_admin_user, test_device
         # Pre-create the parent group
         iot_client.create_thing_group(thingGroupName=parent_group)
 
-        result = super_admin_user.register_node(
+        result = admin_user.register_node(
             test_device_new,
             admin_group_names=[child_group],
             admin_parent_group_name=parent_group,
@@ -193,7 +193,7 @@ def test_register_node_parent_exists_child_created(super_admin_user, test_device
                 pass
 
 
-def test_register_node_parent_child_both_exist(super_admin_user, test_device_new):
+def test_register_node_parent_child_both_exist(admin_user, test_device_new):
     """Test that when both parent and child already exist in the correct hierarchy, registration succeeds."""
     parent_group = f"itest_pboth_{os.urandom(4).hex()}"
     child_group = f"itest_cboth_{os.urandom(4).hex()}"
@@ -204,7 +204,7 @@ def test_register_node_parent_child_both_exist(super_admin_user, test_device_new
         iot_client.create_thing_group(thingGroupName=parent_group)
         iot_client.create_thing_group(thingGroupName=child_group, parentGroupName=parent_group)
 
-        result = super_admin_user.register_node(
+        result = admin_user.register_node(
             test_device_new,
             admin_group_names=[child_group],
             admin_parent_group_name=parent_group,
@@ -234,7 +234,7 @@ def test_register_node_parent_child_both_exist(super_admin_user, test_device_new
                 pass
 
 
-def test_register_node_standalone_child_fails_with_parent(super_admin_user, test_device_new):
+def test_register_node_standalone_child_fails_with_parent(admin_user, test_device_new):
     """Test that when a child exists as a standalone (no parent) group,
     requesting it under a parent fails with a mismatch error."""
     parent_group = f"itest_pnew_{os.urandom(4).hex()}"
@@ -246,7 +246,7 @@ def test_register_node_standalone_child_fails_with_parent(super_admin_user, test
         iot_client.create_thing_group(thingGroupName=child_group)
 
         # Attempt to register with child under a parent — should fail (parent mismatch)
-        result = super_admin_user.register_node(
+        result = admin_user.register_node(
             test_device_new,
             admin_group_names=[child_group],
             admin_parent_group_name=parent_group,
@@ -261,7 +261,7 @@ def test_register_node_standalone_child_fails_with_parent(super_admin_user, test
                 pass
 
 
-def test_bulk_register_common_admin_group_only(super_admin_user, node_csv_uploader):
+def test_bulk_register_common_admin_group_only(admin_user, node_csv_uploader):
     """
     Test that bulk registration applies common admin_group_names from the API body
     when the CSV has no per-node admin_groups column.
@@ -285,11 +285,11 @@ def test_bulk_register_common_admin_group_only(super_admin_user, node_csv_upload
         ]
 
         # Upload CSV without admin_groups column (default CSV has no admin_groups)
-        s3_path, generated_certs = node_csv_uploader(super_admin_user, nodes, return_certs=True)
+        s3_path, generated_certs = node_csv_uploader(admin_user, nodes, return_certs=True)
         assert s3_path.startswith("s3://"), f"S3 path not returned: {s3_path}"
 
         # Bulk register with only common admin_group_names (no per-node groups in CSV)
-        response = super_admin_user.bulk_register_nodes(s3_path, admin_group_names=[admin_group_name])
+        response = admin_user.bulk_register_nodes(s3_path, admin_group_names=[admin_group_name])
         assert response is not None, "Bulk register API did not return a response"
         request_id = response.get("request_id")
         assert request_id, "No request_id returned from bulk register"
@@ -299,7 +299,7 @@ def test_bulk_register_common_admin_group_only(super_admin_user, node_csv_upload
         status = None
         for attempt in range(max_retries):
             time.sleep(10)
-            status = super_admin_user.get_bulk_register_status(request_id)
+            status = admin_user.get_bulk_register_status(request_id)
             if status is None:
                 pytest.fail(f"Got None response on attempt {attempt + 1}")
             if status.get("request_id") and status.get("status") in ("completed", "failed"):
@@ -355,7 +355,7 @@ def test_bulk_register_common_admin_group_only(super_admin_user, node_csv_upload
                 print(f"Warning: Failed to clean up {device.node_thing_name}: {e}")
 
 
-def test_generate_and_upload_node_csv(super_admin_user, node_csv_uploader):
+def test_generate_and_upload_node_csv(admin_user, node_csv_uploader):
     """
     Generate node registration CSV with real certificates and upload it to the API.
     Combines CSV generation with file upload functionality.
@@ -378,14 +378,14 @@ def test_generate_and_upload_node_csv(super_admin_user, node_csv_uploader):
             "key_type": "rsa"
         }
     ]
-    s3_path = node_csv_uploader(super_admin_user, nodes)
+    s3_path = node_csv_uploader(admin_user, nodes)
     assert s3_path.startswith("s3://"), f"S3 path not returned: {s3_path}"
     print(f"Test completed successfully! S3 location: {s3_path}")
 
-def test_list_registration_jobs(super_admin_user, node_csv_uploader):
+def test_list_registration_jobs(admin_user, node_csv_uploader):
     """Test the list registration jobs endpoint."""
     # First verify listing works (may already have jobs from previous runs)
-    initial_response = super_admin_user.list_registration_jobs()
+    initial_response = admin_user.list_registration_jobs()
     assert initial_response is not None, "List registration jobs returned None"
     assert "jobs" in initial_response, "Response missing 'jobs' key"
     initial_count = len(initial_response["jobs"])
@@ -401,8 +401,8 @@ def test_list_registration_jobs(super_admin_user, node_csv_uploader):
             "subtype": "",
         },
     ]
-    s3_path, generated_certs = node_csv_uploader(super_admin_user, nodes, return_certs=True)
-    response = super_admin_user.bulk_register_nodes(s3_path, admin_group_names=["ListTestGroup"], tags=["test:list"])
+    s3_path, generated_certs = node_csv_uploader(admin_user, nodes, return_certs=True)
+    response = admin_user.bulk_register_nodes(s3_path, admin_group_names=["ListTestGroup"], tags=["test:list"])
     assert response is not None, "Bulk register failed"
     request_id = response.get("request_id")
     assert request_id, "No request_id returned"
@@ -415,7 +415,7 @@ def test_list_registration_jobs(super_admin_user, node_csv_uploader):
     next_key = None
     total_seen = 0
     while True:
-        list_response = super_admin_user.list_registration_jobs(page_size=20, start_key=next_key)
+        list_response = admin_user.list_registration_jobs(page_size=20, start_key=next_key)
         assert list_response is not None, "List registration jobs returned None"
         jobs = list_response["jobs"]
         total_seen += len(jobs)
@@ -429,7 +429,7 @@ def test_list_registration_jobs(super_admin_user, node_csv_uploader):
     assert our_job.get("tags") == ["test:list"], f"tags mismatch: {our_job}"
 
     # Test page_size parameter — verify next_key is returned when more results exist
-    limit_response = super_admin_user.list_registration_jobs(page_size=1)
+    limit_response = admin_user.list_registration_jobs(page_size=1)
     assert limit_response is not None
     assert len(limit_response["jobs"]) == 1, f"Expected 1 job with page_size=1, got {len(limit_response['jobs'])}"
     if total_seen > 1:
@@ -449,7 +449,7 @@ def test_list_registration_jobs(super_admin_user, node_csv_uploader):
             print(f"Warning: Failed to cleanup node {node['node_id']}: {e}")
 
 
-def test_bulk_register_nodes_and_status(super_admin_user, node_csv_uploader):
+def test_bulk_register_nodes_and_status(admin_user, node_csv_uploader):
     """
     Test the bulk_register_nodes and get_bulk_register_status methods.
     """
@@ -477,11 +477,11 @@ def test_bulk_register_nodes_and_status(super_admin_user, node_csv_uploader):
         ]
 
         # Generate and upload CSV, get S3 path and certificates
-        s3_path, generated_certs = node_csv_uploader(super_admin_user, nodes, return_certs=True)
+        s3_path, generated_certs = node_csv_uploader(admin_user, nodes, return_certs=True)
         assert s3_path.startswith("s3://"), f"S3 path not returned: {s3_path}"
 
         # Call bulk_register_nodes
-        response = super_admin_user.bulk_register_nodes(s3_path, admin_group_names=["BulkTestGroup"], tags=["env:test"])
+        response = admin_user.bulk_register_nodes(s3_path, admin_group_names=["BulkTestGroup"], tags=["env:test"])
         assert response is not None, "Bulk register API did not return a response"
         request_id = response.get("request_id")
         assert request_id, "No request_id returned from bulk register"
@@ -493,7 +493,7 @@ def test_bulk_register_nodes_and_status(super_admin_user, node_csv_uploader):
 
         for attempt in range(max_initial_retries):
             time.sleep(10)
-            status = super_admin_user.get_bulk_register_status(request_id)
+            status = admin_user.get_bulk_register_status(request_id)
 
             # If status is None, fail immediately
             if status is None:
@@ -523,7 +523,7 @@ def test_bulk_register_nodes_and_status(super_admin_user, node_csv_uploader):
                 break
 
             time.sleep(2)
-            status = super_admin_user.get_bulk_register_status(request_id)
+            status = admin_user.get_bulk_register_status(request_id)
         else:
             print(f"Warning: Bulk register did not reach terminal state after {max_terminal_retries} attempts. Last status: {status}")
 
@@ -593,7 +593,7 @@ def test_bulk_register_nodes_and_status(super_admin_user, node_csv_uploader):
                 print(f"Warning: Failed to delete node {device.node_thing_name}: {e}")
 
 
-def test_failed_nodes_presigned_csv_retry(super_admin_user):
+def test_failed_nodes_presigned_csv_retry(admin_user):
     """Submit a bulk registration with one valid cert and one malformed PEM,
     then verify the failure-visibility surface and the eager failed-rows CSV.
 
@@ -636,11 +636,11 @@ def test_failed_nodes_presigned_csv_retry(super_admin_user):
     try:
         with open(csv_path, "wb") as f:
             f.write(csv_body)
-        success, s3_path = super_admin_user.upload_file(csv_path, "node_cert")
+        success, s3_path = admin_user.upload_file(csv_path, "node_cert")
         assert success, f"Failed to upload CSV: {s3_path}"
 
         # Trigger the bulk registration. Expect one success and one failure.
-        resp = super_admin_user.bulk_register_nodes(s3_path)
+        resp = admin_user.bulk_register_nodes(s3_path)
         assert resp is not None, "Bulk register API returned None"
         request_id = resp["request_id"]
 
@@ -649,7 +649,7 @@ def test_failed_nodes_presigned_csv_retry(super_admin_user):
         status = None
         for attempt in range(max_attempts):
             time.sleep(5)
-            status = super_admin_user.get_bulk_register_status(request_id)
+            status = admin_user.get_bulk_register_status(request_id)
             if status and status.get("status") == "completed":
                 break
         else:
@@ -660,7 +660,7 @@ def test_failed_nodes_presigned_csv_retry(super_admin_user):
         assert status.get("failed_count") == 1
 
         # Failed-nodes JSON list returns the bad row with a real reason.
-        failed_resp = super_admin_user.list_failed_nodes(request_id, job_type="register")
+        failed_resp = admin_user.list_failed_nodes(request_id, job_type="register")
         assert failed_resp is not None, "list_failed_nodes returned None"
         failed_entries = failed_resp.get("failed_nodes", [])
         assert len(failed_entries) == 1, f"Expected 1 failure, got: {failed_entries}"
@@ -716,17 +716,17 @@ def test_failed_nodes_presigned_csv_retry(super_admin_user):
         fixed_csv_path = os.path.join(test_data_dir, f"failed_nodes_itest_retry_{timestamp}.csv")
         with open(fixed_csv_path, "wb") as f:
             f.write(fixed_body)
-        fixed_success, fixed_s3_path = super_admin_user.upload_file(fixed_csv_path, "node_cert")
+        fixed_success, fixed_s3_path = admin_user.upload_file(fixed_csv_path, "node_cert")
         assert fixed_success, f"Failed to upload corrected retry CSV: {fixed_s3_path}"
 
-        retry_resp = super_admin_user.bulk_register_nodes(fixed_s3_path)
+        retry_resp = admin_user.bulk_register_nodes(fixed_s3_path)
         assert retry_resp is not None, "Retry bulk_register API returned None"
         retry_request_id = retry_resp["request_id"]
 
         retry_status = None
         for attempt in range(max_attempts):
             time.sleep(5)
-            retry_status = super_admin_user.get_bulk_register_status(retry_request_id)
+            retry_status = admin_user.get_bulk_register_status(retry_request_id)
             if retry_status and retry_status.get("status") == "completed":
                 break
         else:
@@ -767,7 +767,7 @@ def test_failed_nodes_presigned_csv_retry(super_admin_user):
                     print(f"Warning: failed to delete S3 object {path}: {e}")
 
 
-def test_groupless_node_bootsequence(bare_device, super_admin_user):
+def test_groupless_node_bootsequence(bare_device, admin_user):
     """A registered but unassociated node must complete its boot sequence.
 
     Before its first association a node belongs to no group, and no step here
@@ -803,7 +803,7 @@ def test_groupless_node_bootsequence(bare_device, super_admin_user):
         "Cloud did not accept setNodeConfig for a group-less node"
 
     # Admin tags live in the iparams shadow, whose name carries no group.
-    result = super_admin_user.admin_put_node_tags(node_id, admin_tags={"env": "staging"})
+    result = admin_user.admin_put_node_tags(node_id, admin_tags={"env": "staging"})
     assert result is not False, "Admin tag write failed for a group-less node"
-    tags = super_admin_user.admin_get_node_tags(node_id)
+    tags = admin_user.admin_get_node_tags(node_id)
     assert tags["admin"]["env"] == "staging", f"Admin tags not readable back: {tags}"

@@ -46,14 +46,14 @@ def cognito_end_user(provision_end_user):
     return user, email, password
 
 
-def test_federation_login_ui_browser_end_to_end(cognito_end_user, super_admin_user, chromium_browser):
+def test_federation_login_ui_browser_end_to_end(cognito_end_user, admin_user, chromium_browser):
     """Real browser: /oauth2/authorize -> Cognito hosted UI -> our callback -> redirect_uri?code=..."""
     if not USER_API_GATEWAY_URL or not END_USER_POOL_ID:
         pytest.skip("espuser outputs not configured")
     user, email, password = cognito_end_user
 
     client_id = "itest_fedui_" + uuid.uuid4().hex[:8]
-    created = super_admin_user.create_oauth_client({
+    created = admin_user.create_oauth_client({
         "client_id": client_id, "client_name": "itest federation ui", "client_type": "public",
         "redirect_uris": [REDIRECT_URI], "grant_types": ["authorization_code", "refresh_token"],
         "scopes": ["openid", "email", "profile"], "require_pkce": True,
@@ -131,4 +131,4 @@ def test_federation_login_ui_browser_end_to_end(cognito_end_user, super_admin_us
         assert rotated_claims["sub"] == claims["sub"], "refresh must keep the same subject"
         assert rotated_claims["email"] == email
     finally:
-        super_admin_user.delete_oauth_client(client_id)
+        admin_user.delete_oauth_client(client_id)

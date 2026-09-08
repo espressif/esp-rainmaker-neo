@@ -92,16 +92,17 @@ class AppSim:
 
         username = user_config.get('name')
         password = user_config.get('password')
-        is_super_admin = user_config.get('super_admin', False)
+        # 'super_admin' is the pre-rename key; still honoured for an existing test_config.json.
+        is_admin = user_config.get('admin', user_config.get('super_admin', False))
 
         if not username or not password:
             print(f"Error: Missing required configuration for user {user_id}")
             return None
 
-        if is_super_admin:
+        if is_admin:
             return User(username, password, self.region,
                        self.identity_pool_id, self.api_gateway_url, self.user_api_gateway_url, self.iot_endpoint,
-                       admin_user_pool_id=self.admin_user_pool_id, admin_client_id=self.admin_client_id, is_super_admin=True)
+                       admin_user_pool_id=self.admin_user_pool_id, admin_client_id=self.admin_client_id, is_admin=True)
         # end_user_pool_id is what lets provisioning reach the pool this user signs in against.
         return User(username, password, self.region,
                     self.identity_pool_id, self.api_gateway_url, self.user_api_gateway_url, self.iot_endpoint,

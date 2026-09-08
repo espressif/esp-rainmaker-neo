@@ -4,8 +4,9 @@
 
 """Tenant-identity takeover via a user-writable custom:user_id.
 
-custom:user_id is the tenant key on both Cognito pools (and custom:super_admin is the privilege
-key on the admin pool). Both attributes are declared mutable, so the ONLY thing stopping a
+custom:user_id is the tenant key on both Cognito pools. custom:super_admin still exists on the
+admin pool as a flag but grants nothing — admin-pool membership is the whole privilege — so it is
+covered here only as an attribute no principal may write. Both are declared mutable, so the ONLY thing stopping a
 signed-in principal from rewriting their own via Cognito's UpdateUserAttributes is a
 write_attributes restriction on the app client that pins writable fields to standard profile
 attributes. These tests assert that restriction is in place on every app client, at the
@@ -70,23 +71,24 @@ def test_client_cannot_write_identity_attributes(pool_id, client_name, extra_for
 
 
 @pytest.mark.xdist_group("env_mut")
-def test_admin_cannot_escalate_via_update_user_attributes(super_admin_user):
+def test_admin_cannot_escalate_via_update_user_attributes(admin_user):
     """An admin holds a real Cognito access token, so it can call UpdateUserAttributes on itself.
 
-    Writing custom:super_admin would be self-granted privilege, and custom:user_id would move the
-    admin onto another tenant. The app client's write_attributes must refuse both. This is the one
+    Writing custom:user_id would move the admin onto another tenant; custom:super_admin grants
+    nothing any more but must stay unwritable all the same, so a stale reader of the flag cannot be
+    fed a self-set value. The app client's write_attributes must refuse both. This is the one
     pool where the attack is reachable, so it is driven rather than inferred from configuration.
     """
     if not ADMIN_USER_POOL_ID:
         pytest.skip("admin pool id not configured")
-    if not super_admin_user.access_token:
+    if not admin_user.access_token:
         pytest.skip("admin access token unavailable")
 
     cognito = boto3.client("cognito-idp", region_name=REGION)
     for attribute, value in (("custom:super_admin", "true"), ("custom:user_id", "some-other-tenant")):
         with pytest.raises(Exception) as excinfo:  # noqa: PT011 — Cognito's error type varies
             cognito.update_user_attributes(
-                AccessToken=super_admin_user.access_token,
+                AccessToken=admin_user.access_token,
                 UserAttributes=[{"Name": attribute, "Value": value}],
             )
         assert "NotAuthorized" in str(excinfo.value) or "not authorized" in str(excinfo.value).lower() \
@@ -94,7 +96,7 @@ def test_admin_cannot_escalate_via_update_user_attributes(super_admin_user):
             f"writing {attribute} must be refused, got: {excinfo.value}"
 
     # The stored attribute is unchanged, so nothing partially applied.
-    fresh = cognito.get_user(AccessToken=super_admin_user.access_token)
+    fresh = cognito.get_user(AccessToken=admin_user.access_token)
     stored = {a["Name"]: a["Value"] for a in fresh["UserAttributes"]}
-    assert stored.get("custom:user_id") == super_admin_user.sub, \
+    assert stored.get("custom:user_id") == admin_user.sub, \
         f"custom:user_id must still be the admin's own: {stored.get('custom:user_id')}"

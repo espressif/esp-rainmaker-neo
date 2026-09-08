@@ -163,9 +163,9 @@ class ClaimCore(Construct):
         self._build_admin_api(common_resources, region, ca_key_arn)
 
     def _build_admin_api(self, common_resources, region, ca_key_arn):
-        """Superadmin CA configuration and bootstrap API (assisted-claiming §3.9).
+        """Admin CA configuration and bootstrap API (assisted-claiming §3.9).
 
-        A Lambda separate from the claim handler: it is superadmin-gated and
+        A Lambda separate from the claim handler: it is admin-gated and
         holds the CA-minting grants — signing and writes to the config and CA
         certificate parameters — that the user-facing claim handler must never
         have. Certificate identity/validity is set here at runtime, so it never
@@ -191,7 +191,7 @@ class ClaimCore(Construct):
                 get_ssm_parameter_arn(SSM_PARAMETERS['CLAIMING_CONFIG'], region),
             ]
         ))
-        # Resolving the caller's superadmin status reads the user-details row.
+        # Resolving the caller's admin status reads the user-details row.
         admin_role.add_to_policy(iam.PolicyStatement(
             actions=["dynamodb:GetItem"],
             resources=[get_table_arn(USER_TABLE_NAMES['USER_DETAILS'], region)]
@@ -205,7 +205,7 @@ class ClaimCore(Construct):
 
         # No custom env: the CA-material parameter paths are ca_bootstrap Go
         # constants, and create_lambda_function supplies the user-pool/JWKS env
-        # the superadmin check needs.
+        # the admin check needs.
         self.claim_admin_function = create_lambda_function(
             self, function_name,
             common_resources,
