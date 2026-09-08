@@ -114,8 +114,8 @@ func HandleGrantCallbackAccess(ctx context.Context, request STRequest) (STRespon
 	callingUser := user.NewUser(userID)
 	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, callingUser)
 	err = callingUser.RegisterClient(rmngCtx, user_integration_db.UserIntegrationEntry{
-		IntegrationID: stPlatform,
-		EndpointID:    user_integration_db.EncodeEndpointID(request.CallbackURLs.StateCallback),
+		IntegrationID:    stPlatform,
+		EndpointID:       user_integration_db.EncodeEndpointID(request.CallbackURLs.StateCallback),
 		TokenCallbackURL: request.CallbackURLs.OAuthToken,
 		IntegrationToken: &user_integration_db.IntegrationToken{
 			AccessToken:  tokenResp.CallbackAuthentication.AccessToken,
@@ -175,7 +175,7 @@ func exchangeCodeForTokens(ctx context.Context, code, oauthTokenURL string) (*ac
 		Headers: accessTokenRequestHeaders{
 			Schema:          "st-schema",
 			Version:         "1.0",
-			InteractionType: "accessTokenRequest",
+			InteractionType: InteractionAccessTokenRequest,
 			RequestID:       uuid.New().String(),
 		},
 		CallbackAuthentication: accessTokenRequestAuth{

@@ -248,14 +248,23 @@ func executeColorControlCommand(rmngCtx *rmngctx.RmngContext, n *node.Node, devi
 		return nil, fmt.Errorf("device has no color control parameters")
 	}
 
-	// SmartThings sends setColor with a map argument: {"hue": 0-360, "saturation": 0-100}
 	if len(cmd.Arguments) == 0 {
 		return nil, fmt.Errorf("missing color arguments")
 	}
 
-	colorMap, ok := cmd.Arguments[0].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid color argument format")
+	// setColor carries a map; setHue and setSaturation carry the bare value.
+	var colorMap map[string]interface{}
+	switch cmd.Command {
+	case CommandSetHue:
+		colorMap = map[string]interface{}{"hue": cmd.Arguments[0]}
+	case CommandSetSaturation:
+		colorMap = map[string]interface{}{"saturation": cmd.Arguments[0]}
+	default:
+		var ok bool
+		colorMap, ok = cmd.Arguments[0].(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("invalid color argument format")
+		}
 	}
 
 	deviceParams := map[string]interface{}{}
@@ -263,7 +272,7 @@ func executeColorControlCommand(rmngCtx *rmngctx.RmngContext, n *node.Node, devi
 
 	if hueParam != "" {
 		if hue, ok := toNumericValue(colorMap["hue"]); ok {
-			deviceParams[hueParam] = int(hue)
+			deviceParams[hueParam] = HueToDevice(hue)
 			states = append(states, STState{
 				Component:  ComponentMain,
 				Capability: CapabilityColorControl,
@@ -281,7 +290,6 @@ func executeColorControlCommand(rmngCtx *rmngctx.RmngContext, n *node.Node, devi
 				Capability: CapabilityColorControl,
 				Attribute:  AttributeSaturation,
 				Value:      sat,
-				Unit:       "%",
 			})
 		}
 	}

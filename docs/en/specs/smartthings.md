@@ -120,10 +120,14 @@ parameter types, so this table is the mapping that code implements.
 
 Before publishing to the SmartThings catalog:
 
-1. In the Schema Cloud Connector settings, generate an **invitation link**
-2. Share the link with test users
-3. Test users open the link on their phone and install the integration
+1. Generate an **invitation** with the SmartThings CLI — `smartthings invites:schema:create`, which prompts for a description and an accept limit. Invitations are created through the CLI, not the connector settings page.
+2. Share the resulting **Accept URL** (`https://invitations.smartthings.com/schemaApp/<INVITATION_ID>`) with test users
+3. Test users open the link on their phone, choose a Location, authorize, and sign in with their RainMaker credentials
 4. Monitor `interactionResult` CloudWatch logs for errors reported by SmartThings
+
+An invitation is how testers other than the connector's owner install it — **My Testing Devices** in the app only lists connectors owned by that Samsung account. Two consequences for what an invitation can verify: app-to-app linking cannot be exercised this way, and device onboarding runs automatically, so the onboarding flow is not testable either.
+
+Re-installing after unlinking uses the **same Accept URL** — the invitation stays valid and reusable until one of three things happens: it passes its automatic **30-day expiry**, its **accept limit** is exhausted (default 500 installs), or the developer deletes it. In any of those cases nobody can reinstall until a new invitation is generated, which can be done at any time.
 
 #### Step 7: WWST Certification (Production)
 
@@ -250,6 +254,16 @@ The cookie is only ever a param-name lookup. Authorization is unaffected: the ca
 | `esp.param.temperature` / `esp.param.setpoint-temperature` | `st.thermostatHeatingSetpoint` | `heatingSetpoint` | 0-100 °C |
 | _(always included)_ | `st.healthCheck` | `healthStatus` | online/offline |
 
+**Units are per-attribute, not per-value.** Every state is validated against its capability schema, and an attribute that declares no unit is rejected if one is sent — the whole response fails with `BAD-RESPONSE` `"should NOT have additional properties 'unit' for attribute '<attr>' in capability '<cap>'"`, so one stray unit takes out every device in the payload. Send `unit` only where the capability declares it:
+
+| Attribute | `unit` |
+| --- | --- |
+| `st.switchLevel.level` | `%` |
+| `st.colorTemperature.colorTemperature` | `K` |
+| `st.thermostatHeatingSetpoint.heatingSetpoint` | `C` |
+| `st.colorControl.hue`, `st.colorControl.saturation` | **none** |
+| `st.fanSpeed.fanSpeed`, `st.switch.switch`, `st.healthCheck.healthStatus` | **none** |
+
 ## Proactive State Callbacks
 
 ### Dispatcher integration
@@ -266,6 +280,21 @@ State callbacks are delivered through the shared [notifications dispatcher](noti
 After a user links their account, SmartThings sends a `grantCallbackAccess` interaction containing an authorization `code`, the SmartThings `clientId`, and the callback URLs (`oauthToken`, `stateCallback`). The Schema App exchanges the code for callback access/refresh tokens by POSTing an `accessTokenRequest` to the `oauthToken` URL, authenticating with the `clientId` **plus the Client Secret read from SSM** (`/rmng/smartthings/client_secret`) — `grantCallbackAccess` itself does **not** include the secret. The resulting tokens are stored per-user in the `rmng-user-endpoints` table as a `smartthings` integration row (see [Token storage](#token-storage)).
 
 > SmartThings sends `grantCallbackAccess` automatically as part of account linking. `requestGrantCallbackAccess: true` on a `discoveryResponse` is **only** for re-requesting tokens after a refresh failure — do not set it during normal discovery, or SmartThings will reject the link.
+
+### Token lifetime and refresh (`refreshAccessTokens`)
+
+The callback access token SmartThings issues lives **24 hours**. `access_expires_at` is stored alongside it, and the next state callback past that point refreshes before sending.
+
+The refresh is a **different interaction type from the initial exchange**, though both POST to the same `oauthToken` URL:
+
+| Interaction | `headers.interactionType` | `callbackAuthentication.grantType` | Credential sent |
+| --- | --- | --- | --- |
+| Initial exchange, after `grantCallbackAccess` | `accessTokenRequest` | `authorization_code` | `code` |
+| Refresh of an expired token | `refreshAccessTokens` | `refresh_token` | `refreshToken` |
+
+Both carry the `clientId` and the Client Secret from SSM. SmartThings admits only the pairing above and answers `400` with `globalError.errorEnum: "UNSUPPORTED-GRANT-TYPE"` for any other combination — notably for a `refresh_token` grant sent under `accessTokenRequest`.
+
+Getting this wrong fails in a way that is easy to misread: linking works, callbacks work, and then the channel goes silent exactly 24 hours later when the first refresh is attempted, with the devices in the app frozen on their last reported state. `test_smartthings_state_callback_refreshes_expired_token` covers it by backdating `access_expires_at` — the refresh path is otherwise unreachable inside a test run.
 
 ### Token storage
 
@@ -297,11 +326,16 @@ On `integrationDeleted`, the user's `smartthings` rows are removed.
 When a device shadow updates (and the device emits `"smartthings"` in its `notify` map):
 
 1. The shadow update triggers the notifications dispatcher
-2. The SmartThings notification service marshals the update to SmartThings capability states — only devices present in the delta are reported; if no device changed, the marshal step returns an empty result and the callback is skipped
+2. The SmartThings notification service marshals the update to SmartThings capability states. Which devices are reported depends on what moved:
+   - **Params changed** — only the devices present in the delta are reported, each with its mapped capability states.
+   - **Connectivity only** (a delta carrying `online` with no `params`, which is what a connect or disconnect produces) — every discoverable device on the node is reported with `st.healthCheck` alone. Without this a node could be online for hours and still read offline in the app, since nothing else pushes reachability and SmartThings polls `stateRefresh` only on its own schedule.
+   - **Neither** — the marshal step returns an empty result and the callback is skipped.
 3. For each target user, for each stored callback endpoint:
-   - Check token expiry → refresh via the stored refresh token against the row's `token_callback_url` if needed (requires `ssm:GetParameter` on `/rmng/smartthings/*` for the client credentials)
+   - Check token expiry → refresh via `refreshAccessTokens` against the row's `token_callback_url` if needed (requires `ssm:GetParameter` on `/rmng/smartthings/*` for the client credentials)
    - POST the state callback to the user's stored `stateCallback` URL
 4. Always includes `st.healthCheck` with connectivity status (`online`/`offline`)
+
+A device that reports `online` **before** it knows its integration flags defeats all of this: `update_shadows` attaches the `notify` map only for integrations already enabled, so the one update carrying the transition to online reaches the dispatcher with no notify services and is dropped at the front door. A device (or simulator) must apply the `getSTEn`/`getAlexaEn`/`getGVAEn` responses before writing its presence — they arrive in the same `from_cloud` response as `getGroupInfo`, so ordering within that handler is what decides it.
 
 The callback body must be a full ST Schema envelope — `headers` (with `interactionType: "stateCallback"`, `schema: "st-schema"`, `version: "1.0"`, `requestId`), `authentication` (the user's callback access token as a Bearer token), and `deviceState`. Omitting the `headers`/`authentication` envelope causes SmartThings to reject the callback with `BAD-REQUEST "Invalid or unspecified schema"`.
 
@@ -401,8 +435,12 @@ Until the connector is WWST-certified it is a **test integration**, so Developer
 ### Re-trigger Discovery
 
 To refresh the device list after adding new nodes (or to recover from a failed link):
-1. Remove the integration from the app
-2. Re-add it via **My Testing Devices** (repeats the OAuth + discovery flow)
+1. Remove the integration: **Menu (☰)** → **⚙ Settings** → **Linked services** → tap the connector → **Unlink**. This also removes the devices and Routines it contributed.
+2. Re-add it — via **My Testing Devices** if the connector is owned by your own Samsung account, or by re-opening the invitation's Accept URL if you were invited as a tester ([Schema Invitations](#step-6-test-with-schema-invitations)). Either repeats the OAuth + discovery flow.
+
+Removing and re-adding is the **only** way to obtain fresh callback tokens. SmartThings sends `grantCallbackAccess` on a new authorization, not on reopening the app, signing in again, or re-running discovery — so a connector whose stored tokens have gone bad stays broken until it is unlinked. `integrationDeleted` deletes the user's stored rows on the way out, and the re-link writes a new one.
+
+*Checkpoint*: `rmng-st-action-<rmng_region>` logs show `integrationDeleted`, then `grantCallbackAccess`, then `discoveryRequest`; the `rmng-user-endpoints` row for `smartthings#<endpoint>` carries an `access_expires_at` 24 hours out.
 
 ### End-to-End Verification Walkthrough
 

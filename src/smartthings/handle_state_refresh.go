@@ -196,18 +196,18 @@ func mapShadowToSTStates(deviceCfg *config.NodeCfgDevice, deviceData map[string]
 					Component:  ComponentMain,
 					Capability: CapabilityColorControl,
 					Attribute:  AttributeHue,
-					Value:      hue,
+					Value:      HueToST(hue),
 				})
 			}
 
 		case ParamTypeSaturation:
 			if sat, ok := toNumericValue(value); ok {
+				// st.colorControl declares no unit for saturation or hue, and SmartThings fails the whole response with BAD-RESPONSE if one is sent.
 				states = append(states, STState{
 					Component:  ComponentMain,
 					Capability: CapabilityColorControl,
 					Attribute:  AttributeSaturation,
 					Value:      sat,
-					Unit:       "%",
 				})
 			}
 

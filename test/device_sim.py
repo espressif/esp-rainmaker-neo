@@ -299,9 +299,7 @@ class DeviceSim:
                 message_type, message = self.message_queue.get(timeout=1)  # Wait for 1 second
 
                 if message_type == 'from_cloud':
-                    # Handle group info updates
-                    if "getGroupInfo" in message:
-                        self.handle_group_info_update(message)
+                    # Flags first: handle_group_info_update writes `online: True`, and update_shadows attaches the notify map only for integrations already known to be enabled, so the other order sends that update with nothing to dispatch on.
                     # Handle Alexa enabled status
                     if "getAlexaEn" in message:
                         self.handle_alexa_enabled_response(message)
@@ -311,6 +309,9 @@ class DeviceSim:
                     # Handle SmartThings enabled status
                     if "getSTEn" in message:
                         self.handle_st_enabled_response(message)
+                    # Handle group info updates
+                    if "getGroupInfo" in message:
+                        self.handle_group_info_update(message)
                 elif message_type == 'params' and self.shadow_name:
                     # Apply the SDK's auto-mode-switch logic before mirroring
                     # the desired-params write back into the reported shadow,

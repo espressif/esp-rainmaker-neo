@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_details_db"
@@ -60,6 +61,23 @@ var stLightCfg = config.NodeCfg{
 				{ID: "name", DataType: "string", Type: "esp.param.name"},
 				{ID: "brightness", DataType: "int", Type: ParamTypeBrightness},
 				{ID: "cct", DataType: "int", Type: ParamTypeCCT},
+			},
+		},
+	},
+	Info: config.NodeCfgInfo{FWVersion: "1.0", Model: "esp.device.lightbulb"},
+}
+
+// stColorCfg is an RGBW light: colorControl attributes alongside ones that carry units.
+var stColorCfg = config.NodeCfg{
+	Devices: []config.NodeCfgDevice{
+		{
+			ID:   "Colour Light",
+			Type: "esp.device.lightbulb",
+			Params: []config.NodeCfgDeviceParam{
+				{ID: "power", DataType: "bool", Type: ParamTypePower},
+				{ID: "hue", DataType: "int", Type: ParamTypeHue},
+				{ID: "saturation", DataType: "int", Type: ParamTypeSaturation},
+				{ID: "brightness", DataType: "int", Type: ParamTypeBrightness},
 			},
 		},
 	},
@@ -431,6 +449,43 @@ var _ = Describe("SmartThings handlers", func() {
 			Expect(health).To(Equal("online"))
 		})
 
+		It("omits unit on colorControl attributes but keeps it where the capability declares one", func() {
+			// st.colorControl declares no unit while st.switchLevel does, and an undeclared unit fails the whole response, so one spec pins the distinction.
+			colorNodeID := "st-color-node"
+			rmngUserCtx.SetAllow(utils.NodeAll, colorNodeID)
+			test_utils.ManuallyAddNodeToGroup(ctx, testGroup.GroupID, colorNodeID)
+			seedNodeConfig(colorNodeID, stColorCfg)
+			setNodeOnline(colorNodeID, testGroup.GroupID, true)
+			seedReportedShadow(colorNodeID, testGroup.GroupID, map[string]interface{}{
+				"Colour Light": map[string]interface{}{
+					"power": true, "hue": 120, "saturation": 80, "brightness": 60,
+				},
+			})
+
+			req := stRequest(userID, InteractionStateRefreshRequest)
+			req.Devices = []STCommandDevice{{ExternalDeviceID: GetDeviceID(colorNodeID, "Colour Light")}}
+
+			resp, err := HandleStateRefresh(ctx, req)
+			Expect(err).To(BeNil())
+
+			ds := findDeviceState(resp.DeviceState, GetDeviceID(colorNodeID, "Colour Light"))
+			Expect(ds).NotTo(BeNil())
+			Expect(ds.DeviceError).To(BeEmpty())
+
+			// SmartThings hue is a percentage; the device reports degrees.
+			hue, ok := stateValue(ds.States, CapabilityColorControl, AttributeHue)
+			Expect(ok).To(BeTrue())
+			Expect(hue).To(BeNumerically("~", 33.3, 0.05))
+
+			units := map[string]string{}
+			for _, st := range ds.States {
+				units[st.Capability+"."+st.Attribute] = st.Unit
+			}
+			Expect(units).To(HaveKeyWithValue(CapabilityColorControl+"."+AttributeSaturation, ""))
+			Expect(units).To(HaveKeyWithValue(CapabilityColorControl+"."+AttributeHue, ""))
+			Expect(units).To(HaveKeyWithValue(CapabilitySwitchLevel+"."+AttributeLevel, "%"))
+		})
+
 		It("reports healthStatus offline when the node is not connected", func() {
 			setNodeOnline(switchNodeID, testGroup.GroupID, false)
 			seedReportedShadow(switchNodeID, testGroup.GroupID, map[string]interface{}{
@@ -689,6 +744,31 @@ var _ = Describe("SmartThings handlers", func() {
 			Expect(entries[0].TokenCallbackURL).To(Equal("https://st/token"))
 		})
 
+		It("refreshes with the refreshAccessTokens interaction, not accessTokenRequest", func() {
+			// A refresh_token grant under accessTokenRequest is rejected, so pin the type.
+			mockHTTP := mock.NewMockHTTPClient()
+			httpclient.Set(mockHTTP)
+			tokenResp := `{"headers":{"schema":"st-schema","version":"1.0","interactionType":"accessTokenResponse","requestId":"r1"},` +
+				`"callbackAuthentication":{"accessToken":"refreshed-access-token","refreshToken":"refreshed-refresh-token","expiresIn":86400}}`
+			Expect(mockHTTP.RegisterResponse("https://st/token", "POST", 200, tokenResp)).To(BeNil())
+
+			token, err := refreshCallbackToken(ctx, "https://st/token")("old-refresh-token")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(token.AccessToken).To(Equal("refreshed-access-token"))
+
+			Expect(mockHTTP.Requests).To(HaveLen(1))
+			body, err := mockHTTP.Requests[0].GetBody()
+			Expect(err).NotTo(HaveOccurred())
+			raw, err := io.ReadAll(body)
+			Expect(err).NotTo(HaveOccurred())
+
+			var sent accessTokenRequest
+			Expect(json.Unmarshal(raw, &sent)).To(Succeed())
+			Expect(sent.Headers.InteractionType).To(Equal(InteractionRefreshAccessTokens))
+			Expect(sent.CallbackAuthentication.GrantType).To(Equal("refresh_token"))
+			Expect(sent.CallbackAuthentication.RefreshToken).To(Equal("old-refresh-token"))
+		})
+
 		It("errors when callbackAuthentication is missing", func() {
 			req := stRequest(userID, InteractionGrantCallbackAccess)
 			req.CallbackURLs = &STCallbackURLs{OAuthToken: "https://st/token", StateCallback: "https://st/cb"}
@@ -814,6 +894,13 @@ var _ = Describe("SmartThings handlers", func() {
 			Expect(stNotif.GetType()).To(Equal(notification.NotificationServiceTypeUserSpecific))
 		})
 
+		It("opts into connectivity-only shadow events", func() {
+			// Without this the dispatcher skips the service before Marshal is reached.
+			cn, ok := interface{}(stNotif).(notification.ConnectivityNotifier)
+			Expect(ok).To(BeTrue())
+			Expect(cn.NotifyOnConnectivityChange()).To(BeTrue())
+		})
+
 		It("Send (broadcast) returns an error since notifications are user-specific", func() {
 			Expect(stNotif.Send(nil)).To(HaveOccurred())
 		})
@@ -855,6 +942,65 @@ var _ = Describe("SmartThings handlers", func() {
 				health, ok := stateValue(ds.States, CapabilityHealthCheck, "healthStatus")
 				Expect(ok).To(BeTrue())
 				Expect(health).To(Equal("online"))
+			})
+
+			It("reports healthCheck alone when only connectivity changed", func() {
+				online := true
+				notif := &notification.Notification{
+					NotificationType: notification.NotificationTypeShadowUpdate,
+					ShadowUpdateData: &notification.ShadowUpdateNotification{
+						NodeID: switchNodeID,
+						// A connect writes `online` with no params delta.
+						Delta: node.ReportedOrDesiredShadow{Online: &online},
+						State: node.ReportedOrDesiredShadow{
+							Online: &online,
+							Params: map[string]interface{}{"Switch": map[string]interface{}{"power": true}},
+						},
+					},
+				}
+
+				out, err := stNotif.Marshal(notif)
+				Expect(err).To(BeNil())
+				Expect(out).NotTo(BeNil())
+
+				payload, ok := out.(*STStateCallbackPayload)
+				Expect(ok).To(BeTrue())
+
+				ds := findDeviceState(payload.DeviceState, GetDeviceID(switchNodeID, "Switch"))
+				Expect(ds).NotTo(BeNil())
+				Expect(ds.States).To(HaveLen(1))
+
+				health, ok := stateValue(ds.States, CapabilityHealthCheck, "healthStatus")
+				Expect(ok).To(BeTrue())
+				Expect(health).To(Equal("online"))
+			})
+
+			It("reports healthCheck offline when a disconnect is the only change", func() {
+				offline := false
+				notif := &notification.Notification{
+					NotificationType: notification.NotificationTypeShadowUpdate,
+					ShadowUpdateData: &notification.ShadowUpdateNotification{
+						NodeID: switchNodeID,
+						Delta:  node.ReportedOrDesiredShadow{Online: &offline},
+						State: node.ReportedOrDesiredShadow{
+							Online: &offline,
+							Params: map[string]interface{}{"Switch": map[string]interface{}{"power": true}},
+						},
+					},
+				}
+
+				out, err := stNotif.Marshal(notif)
+				Expect(err).To(BeNil())
+
+				payload, ok := out.(*STStateCallbackPayload)
+				Expect(ok).To(BeTrue())
+
+				ds := findDeviceState(payload.DeviceState, GetDeviceID(switchNodeID, "Switch"))
+				Expect(ds).NotTo(BeNil())
+
+				health, ok := stateValue(ds.States, CapabilityHealthCheck, "healthStatus")
+				Expect(ok).To(BeTrue())
+				Expect(health).To(Equal("offline"))
 			})
 
 			It("reports healthCheck offline when the shadow reports the node offline", func() {

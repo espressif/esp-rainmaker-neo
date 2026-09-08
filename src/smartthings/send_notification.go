@@ -52,6 +52,11 @@ func (s *STNotification) GetType() notification.NotificationServiceType {
 	return notification.NotificationServiceTypeUserSpecific
 }
 
+// st.healthCheck is the only thing that tells SmartThings a device is reachable, and without opting in the dispatcher skips this service before Marshal runs.
+func (s *STNotification) NotifyOnConnectivityChange() bool {
+	return true
+}
+
 func (s *STNotification) Send(notif interface{}) error {
 	return rmerror.NewRMError(nil, "SmartThings notifications must be sent to specific users")
 }
@@ -144,9 +149,23 @@ func (s *STNotification) Marshal(notif *notification.Notification) (interface{},
 		}
 	}
 
+	// A connect or disconnect arrives as a delta carrying `online` alone, so the loop below matches no device and would return an empty payload; report healthCheck on its own instead, or reachability never reaches the app.
+	connectivityOnly := shadowUpdate.Delta.Online != nil && len(shadowUpdate.Delta.Params) == 0
+
 	var deviceStates []STDeviceState
 
 	for _, device := range nodeCfg.Devices {
+		if connectivityOnly {
+			if !IsSTDiscoverable(&device) {
+				continue
+			}
+			deviceStates = append(deviceStates, STDeviceState{
+				ExternalDeviceID: GetDeviceID(shadowUpdate.NodeID, device.ID),
+				States:           []STState{healthCheckState(online)},
+			})
+			continue
+		}
+
 		if !changedDevices[device.ID] {
 			continue
 		}
@@ -198,18 +217,20 @@ func marshalDeviceStates(deviceCfg *config.NodeCfgDevice, deviceData map[string]
 	states := mapShadowToSTStates(deviceCfg, deviceData)
 
 	// Always include healthCheck
+	return append(states, healthCheckState(online))
+}
+
+func healthCheckState(online bool) STState {
 	healthStatus := "online"
 	if !online {
 		healthStatus = "offline"
 	}
-	states = append(states, STState{
+	return STState{
 		Component:  ComponentMain,
 		Capability: CapabilityHealthCheck,
 		Attribute:  AttributeHealthStatus,
 		Value:      healthStatus,
-	})
-
-	return states
+	}
 }
 
 // STStateCallbackPayload is the payload sent to the SmartThings state callback endpoint.
@@ -304,22 +325,23 @@ func newCallbackHeaders(interactionType string) STHeaders {
 	}
 }
 
-// refreshCallbackToken returns an oauth refresh callback bound to one endpoint's token URL.
-// It sends an accessTokenRequest with grantType "refresh_token" to the SmartThings token
-// endpoint. The clientId and clientSecret are fetched from SSM since they are not available
-// in the refresh context.
+// The refresh is its own interaction type: sending the refresh_token grant under accessTokenRequest is rejected with UNSUPPORTED-GRANT-TYPE. Client credentials come from SSM, skipped in test mode as exchangeCodeForTokens skips them.
 func refreshCallbackToken(ctx context.Context, oauthTokenURL string) func(string) (*integrationauth.TokenResponse, error) {
 	return func(refreshToken string) (*integrationauth.TokenResponse, error) {
-		clientID, clientSecret, err := getSTClientCredentials(ctx)
-		if err != nil {
-			return nil, err
+		var clientID, clientSecret string
+		if !isTestMode() {
+			var err error
+			clientID, clientSecret, err = getSTClientCredentials(ctx)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		reqBody := accessTokenRequest{
 			Headers: accessTokenRequestHeaders{
 				Schema:          "st-schema",
 				Version:         "1.0",
-				InteractionType: "accessTokenRequest",
+				InteractionType: InteractionRefreshAccessTokens,
 				RequestID:       uuid.New().String(),
 			},
 			CallbackAuthentication: accessTokenRequestAuth{
