@@ -1,4 +1,4 @@
-# Node Registration Feature Design
+# Node Registration
 
 ## 1. Overview
 

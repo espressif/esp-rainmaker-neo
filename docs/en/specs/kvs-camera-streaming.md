@@ -1,4 +1,4 @@
-# KVS Camera Streaming Feature Design
+# Camera Streaming
 
 ## 1. Overview
 

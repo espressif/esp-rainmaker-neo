@@ -1,4 +1,4 @@
-# Indexed Parameters (the `iparams` shadow)
+# Indexed Parameters
 
 Every node carries one **named shadow called `iparams`** — the *indexed*
 parameters shadow. It holds the slow-moving, searchable facts about a node

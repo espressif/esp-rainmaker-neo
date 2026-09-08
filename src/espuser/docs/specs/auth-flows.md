@@ -1,4 +1,4 @@
-# ESP User token endpoints (token, userinfo, revoke, refresh)
+# Token and other OAuth 2.0 Flows
 
 > The **authorization-code + PKCE browser flow** is
 > [authorize-code-flow.md](authorize-code-flow.md); **upstream-provider federation**

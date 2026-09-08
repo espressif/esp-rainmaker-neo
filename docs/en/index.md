@@ -10,61 +10,120 @@ the contracts it holds with nodes and apps. The node side of those same contract
 is specified in the ESP RainMaker Neo firmware documentation.
 
 Each page is self-contained and covers one feature area. Start with
-[User Management, Authentication & Credentials](specs/user_auth.md) and
-[Node association](specs/node_assoc.md) — almost everything else assumes the
+[User Identity & Credentials](specs/user_auth.md) and
+[Node Association](specs/node_assoc.md) — almost everything else assumes the
 identity and ownership model they establish.
 
 ```{toctree}
 :hidden:
-:caption: Identity and access
+:caption: User Identity
 :maxdepth: 1
 
 specs/user_auth
+specs/espuser/oidc-oauth2
+specs/espuser/authorize-code-flow
+specs/espuser/auth-flows
+specs/espuser/federation
+specs/espuser/external-provider
+specs/espuser/legacy-user-auth
+specs/espuser/email-sender
+```
+
+```{toctree}
+:hidden:
+:caption: Node Identity
+:maxdepth: 1
+
+specs/assisted-claiming
+specs/node_reg
+specs/node_connection
+```
+
+```{toctree}
+:hidden:
+:caption: User Node Management
+:maxdepth: 1
+
 specs/node_assoc
 specs/group
 ```
 
 ```{toctree}
 :hidden:
-:caption: Admin Dashboard
+:caption: Node Control
 :maxdepth: 1
 
-specs/admin/index
-specs/admin/authentication
-specs/admin/apis
-specs/admin/data-model
-specs/admin/rbac
-specs/admin/dashboard
-specs/admin/fleet-indexing
-specs/admin/data-population
-```
-
-```{toctree}
-:hidden:
-:caption: Node lifecycle
-:maxdepth: 1
-
-specs/assisted-claiming
-specs/node_reg
-specs/node_connection
 specs/node_params_messaging
-specs/device_management
-```
-
-```{toctree}
-:hidden:
-:caption: Features
-:maxdepth: 1
-
 specs/schedules
 specs/automations
 specs/group-control-feature
+```
+
+```{toctree}
+:hidden:
+:caption: Node Data
+:maxdepth: 1
+
+specs/device_management
 specs/timeseries
+specs/s3-device-file-storage
+specs/kvs-camera-streaming
+```
+
+```{toctree}
+:hidden:
+:caption: User messaging
+:maxdepth: 1
+
 specs/notifications
 specs/notifications-push
 specs/notifications-webhooks
-specs/s3-device-file-storage
-specs/kvs-camera-streaming
+```
+
+```{toctree}
+:hidden:
+:caption: Admin Identity
+:maxdepth: 1
+
+specs/espuser/admin_auth
+specs/admin/authentication
+specs/admin/rbac
+```
+
+```{toctree}
+:hidden:
+:caption: Admin User Management
+:maxdepth: 1
+
+specs/espuser/admin-clients
+```
+
+```{toctree}
+:hidden:
+:caption: Admin Node Management
+:maxdepth: 1
+
+specs/admin/data-model
+specs/admin/fleet-indexing
+specs/admin/apis
+specs/admin/dashboard
+```
+
+```{toctree}
+:hidden:
+:caption: Admin OTA
+:maxdepth: 1
+
+specs/ota
+```
+
+```{toctree}
+:hidden:
+:caption: Admin Platform
+:maxdepth: 1
+
+specs/iot_event_mode
+specs/limits
 ```
 
 ```{toctree}
@@ -87,16 +146,6 @@ specs/mcp
 
 ```{toctree}
 :hidden:
-:caption: Platform
-:maxdepth: 1
-
-specs/iot_event_mode
-specs/deploy-publish
-specs/limits
-```
-
-```{toctree}
-:hidden:
 :caption: Contributing
 :maxdepth: 1
 
@@ -104,79 +153,133 @@ contribute/contributor-agreement
 contribute/style-guide
 contribute/documenting-code
 contribute/testing
+specs/deploy-publish
+specs/admin/data-population
 ```
 
-## Identity and access
+## User Identity
 
-- [user_auth](specs/user_auth.md) — Cognito user pools, the identity pool, the
-  three IAM roles, and the two credential planes (identity-pool credentials vs.
-  `AssumeRole` with a per-session policy).
-- [node_assoc](specs/node_assoc.md) — user–node association: how a node is
-  claimed, what makes the claim secure, and how ownership is torn down.
-- [group](specs/group.md) — the group model, group permissions and access
-  control, naming rules, capacity limits, and the group APIs.
+- [User Identity & Credentials](specs/user_auth.md) — Cognito user pools, the
+  identity pool, the three IAM roles, and the two credential planes
+  (identity-pool credentials vs. `AssumeRole` with a per-session policy).
 
-## Admin Dashboard
+The remaining pages are the ESP User provider itself — the endpoint-level detail
+behind that overview:
 
-Everything an admin or super admin can reach. See
-[the section overview](specs/admin/index.md) for the reading order; the pages
-cover [authentication and permissions](specs/admin/authentication.md),
-[the admin APIs](specs/admin/apis.md), [the data model](specs/admin/data-model.md),
-[RBAC](specs/admin/rbac.md), [the dashboard itself](specs/admin/dashboard.md),
-[fleet indexing](specs/admin/fleet-indexing.md) and, for contributors,
-[populating a deployment with data](specs/admin/data-population.md).
+- [OIDC Discovery & JWKS](specs/espuser/oidc-oauth2.md) — the discovery document
+  and the published signing keys.
+- [Authorization Endpoint](specs/espuser/authorize-code-flow.md) — the browser
+  login: the authorization-code + PKCE handshake, and the flow record behind it.
+- [Token Endpoint](specs/espuser/auth-flows.md) — refresh-token rotation and the
+  token, userinfo and revoke endpoints.
+- [Brokered Federation](specs/espuser/federation.md) — upstream identity
+  providers, brokered rather than passed through.
+- [External Identity Providers](specs/espuser/external-provider.md) — the
+  external providers a deployment can attach.
+- [Native Auth](specs/espuser/legacy-user-auth.md) — the `/v1/user/auth/*`
+  surface kept for backward compatibility.
+- [Email Senders](specs/espuser/email-sender.md) — how the sender address for an
+  outbound OTP is chosen.
 
-## Node lifecycle
+## Node Identity
 
-- [assisted-claiming](specs/assisted-claiming.md) — how a node acquires its
+- [Assisted Claiming](specs/assisted-claiming.md) — how a node acquires its
   identity: the claim-initiate and claim-verify APIs, the reservation table,
   and the KMS-backed certificate issuer behind them.
-- [node_reg](specs/node_reg.md) — node registration, including the asynchronous
-  bulk CSV job that runs on ECS Fargate.
-- [node_connection](specs/node_connection.md) — the connection lifecycle: the
-  actors involved, the clocks that govern them, and what each timeout does.
-- [node_params_messaging](specs/node_params_messaging.md) — device↔cloud
+- [Node Registration](specs/node_reg.md) — node registration, including the
+  asynchronous bulk CSV job that runs on ECS Fargate.
+- [Node Connection Lifecycle](specs/node_connection.md) — the connection
+  lifecycle: the actors involved, the clocks that govern them, and what each
+  timeout does.
+
+## User Node Management
+
+- [Node Association](specs/node_assoc.md) — user–node association: how a node is
+  claimed, what makes the claim secure, and how ownership is torn down.
+- [Groups](specs/group.md) — the group model, group permissions and access
+  control, naming rules, capacity limits, and the group APIs.
+
+## Node Control
+
+- [Node Parameters & Messaging](specs/node_params_messaging.md) — device↔cloud
   messaging: shadow vs. `to_cloud`/`from_cloud` vs. indexed params.
-- [device_management](specs/device_management.md) — the `iparams` indexed-params
-  shadow: who writes each section, the DynamoDB mirror rule, and the document
-  shape.
-
-## Features
-
-- [schedules](specs/schedules.md) — the schedule data model and payload shape,
+- [Schedules](specs/schedules.md) — the schedule data model and payload shape,
   its access control, and the `schedules` (API) ↔ `Schedules` (firmware) key
   translation.
-- [automations](specs/automations.md) — per-node triggers (pushed to the node as
-  service config) and group-scoped automations (evaluated in the cloud).
-- [group-control-feature](specs/group-control-feature.md) — one publish
-  controlling many devices, mapped onto subgroups and addressed by device type.
-- [timeseries](specs/timeseries.md) — the ingest path (MQTT → IoT rule →
+- [Triggers & Automations](specs/automations.md) — per-node triggers (pushed to
+  the node as service config) and group-scoped automations (evaluated in the
+  cloud).
+- [Group Control](specs/group-control-feature.md) — one publish controlling many
+  devices, mapped onto subgroups and addressed by device type.
+
+## Node Data
+
+- [Indexed Parameters](specs/device_management.md) — the `iparams` indexed-params
+  shadow: who writes each section, the DynamoDB mirror rule, and the document
+  shape.
+- [Time Series](specs/timeseries.md) — the ingest path (MQTT → IoT rule →
   DynamoDB → stream → aggregator) and the read path.
-- [notifications](specs/notifications.md) — the dispatcher and service-registry
-  model that the individual channels plug into.
-- [notifications-push](specs/notifications-push.md) — the mobile push channel.
-- [notifications-webhooks](specs/notifications-webhooks.md) — the outbound
-  webhook channel.
-- [s3-device-file-storage](specs/s3-device-file-storage.md) — per-device file
+- [Device File Storage](specs/s3-device-file-storage.md) — per-device file
   storage in S3.
-- [kvs-camera-streaming](specs/kvs-camera-streaming.md) — Kinesis Video Streams
+- [Camera Streaming](specs/kvs-camera-streaming.md) — Kinesis Video Streams
   camera streaming.
+
+## User messaging
+
+- [Notifications](specs/notifications.md) — the dispatcher and service-registry
+  model that the individual channels plug into.
+- [Mobile Push Notifications](specs/notifications-push.md) — the mobile push
+  channel.
+- [Outbound Webhooks](specs/notifications-webhooks.md) — the outbound webhook
+  channel.
+
+## Admin Identity
+
+- [Admin Authentication](specs/espuser/admin_auth.md) — the provider side of
+  admin login.
+- [Admin Sessions & Permissions](specs/admin/authentication.md) — how an admin
+  session is established, and the IAM permissions it carries.
+- [RBAC & Authorization](specs/admin/rbac.md) — roles, and what each may do.
+
+## Admin User Management
+
+- [OAuth Client Registry](specs/espuser/admin-clients.md) — the runtime
+  configuration surface every OAuth flow reads: redirect URIs, PKCE
+  enforcement, and confidential-client secrets.
+
+## Admin Node Management
+
+- [Data Model](specs/admin/data-model.md) — the tables behind the admin plane.
+- [Fleet Indexing](specs/admin/fleet-indexing.md) — fleet indexing and shadow
+  access.
+- [Admin APIs](specs/admin/apis.md) — the admin lambda endpoints, plus the
+  regular user APIs an admin may call.
+- [Admin Dashboard](specs/admin/dashboard.md) — the dashboard itself.
+
+## Admin OTA
+
+- [OTA Firmware Updates](specs/ota.md) — AWS IoT Jobs and Streams driven
+  entirely from the dashboard with admin credentials, the two-section job
+  document, and the two roles that keep the image readable by the service
+  without making the service assumable by an operator.
+
+## Admin Platform
+
+- [Node Scalability](specs/iot_event_mode.md) — SQS-backed lambdas and the
+  runtime mode flip.
+- [Limits and Quotas](specs/limits.md) — the AWS service limits this deployment
+  operates against, and what each means at ESP RainMaker Neo scale.
 
 ## Voice assistants
 
-- [alexa](specs/alexa.md) — the Alexa Smart Home integration.
-- [gva](specs/gva.md) — the Google Voice Assistant integration.
-- [smartthings](specs/smartthings.md) — the Samsung SmartThings integration.
+- [Alexa Smart Home](specs/alexa.md) — the Alexa Smart Home integration.
+- [Google Voice Assistant](specs/gva.md) — the Google Voice Assistant
+  integration.
+- [Samsung SmartThings](specs/smartthings.md) — the SmartThings integration.
 
-## Platform
+## AI assistants
 
-- [iot_event_mode](specs/iot_event_mode.md) — SQS-backed lambdas and the runtime
-  mode flip.
-- [deploy-publish](specs/deploy-publish.md) — the two deployment flows
-  (self-deploy vs. the published installer template) and the operator inputs
-  each takes.
-- [limits](specs/limits.md) — the AWS service limits this deployment operates
-  against, and what each means at ESP RainMaker Neo scale.
+- [MCP Server](specs/mcp.md) — the MCP server surface.
 
 ## Contributing
 
@@ -186,11 +289,17 @@ request needs. (`CONTRIBUTING.md`, `SECURITY.md` and `LICENSE` live at the root
 because GitHub surfaces them from there; everything longer-form lives under
 `docs/`.)
 
-These pages go deeper on individual topics: the
-[contributor agreement](contribute/contributor-agreement.md), the
-[style guide](contribute/style-guide.md),
-[documentation expectations](contribute/documenting-code.md) and
-[testing](contribute/testing.md).
+These pages go deeper on individual topics:
+
+- [Contributor Agreement](contribute/contributor-agreement.md) — the CLA.
+- [Style Guide](contribute/style-guide.md) — how these specs are written.
+- [Code Documentation](contribute/documenting-code.md) — documentation
+  expectations for code.
+- [Testing](contribute/testing.md) — what a change is expected to test.
+- [Deployment](specs/deploy-publish.md) — the two deployment flows (self-deploy
+  vs. the published installer template) and the operator inputs each takes.
+- [Data Population](specs/admin/data-population.md) — populating a deployment
+  with data.
 
 ## API reference
 

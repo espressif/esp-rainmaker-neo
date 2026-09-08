@@ -1,4 +1,4 @@
-# Group Control Feature Design
+# Group Control
 
 ## 1. Overview
 

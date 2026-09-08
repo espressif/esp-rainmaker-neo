@@ -1,4 +1,4 @@
-# GVA (Google Voice Assistant)
+# Google Voice Assistant
 
 ## What is GVA
 

@@ -1,4 +1,4 @@
-# Node Parameters & Device↔Cloud Messaging
+# Node Parameters & Messaging
 
 ## What this covers
 

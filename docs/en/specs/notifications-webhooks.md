@@ -1,4 +1,4 @@
-# Notifications — Outbound Webhooks
+# Outbound Webhooks
 
 > See [notifications.md](notifications.md) for the dispatcher and service-registry model that this channel plugs into. This page covers only the webhook-specific surface.
 

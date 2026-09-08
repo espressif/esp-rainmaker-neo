@@ -1,4 +1,4 @@
-# User Management, Authentication & Credentials
+# User Identity & Credentials
 
 ## 1. Overview
 
@@ -77,9 +77,9 @@ both federated by one Identity Pool (§2.2):
   **access token** for credential vending. Token issuance, the passwordless
   OTP flow, `sub` derivation, and JWKS publication are owned by the ESP User
   provider — see
-  `src/espuser/docs/specs/auth-flows.md`
+  [auth-flows](espuser/auth-flows.md)
   and
-  `src/espuser/docs/specs/oidc-oauth2.md`.
+  [oidc-oauth2](espuser/oidc-oauth2.md).
   ESP RainMaker Neo only *consumes* that access token to vend AWS credentials and resolve
   the caller.
 - **Admins** authenticate against a Cognito **admin user pool**, whose users
@@ -213,8 +213,8 @@ claim:
 - **End users** present ESP User OIDC tokens, verified against the ESP User
   issuer's published JWKS — RS256 only, `alg: none` rejected (RFC 8725),
   `iss` = the ESP User issuer, unexpired. See
-  `src/espuser/docs/specs/auth-flows.md` and
-  `src/espuser/docs/specs/oidc-oauth2.md`.
+  [auth-flows](espuser/auth-flows.md) and
+  [oidc-oauth2](espuser/oidc-oauth2.md).
 - **Admins** present Cognito tokens, validated against the admin pool's JWKS
   when the token's `iss` is that pool.
 
@@ -553,8 +553,8 @@ The response echoes the `endpoint_id`; callers **must persist it** to later
 - **ESP User OIDC token issuance** — the passwordless OTP flow, `sub`
   derivation, PKCE/authorize-code mechanics, id-token claim contents, and JWKS
   publication are owned by the ESP User provider (see
-  `src/espuser/docs/specs/auth-flows.md`,
-  `src/espuser/docs/specs/oidc-oauth2.md`).
+  [auth-flows](espuser/auth-flows.md),
+  [oidc-oauth2](espuser/oidc-oauth2.md)).
   This spec covers only how ESP RainMaker Neo *consumes* the resulting access token to vend
   AWS credentials and resolve/authorize the caller.
 - **The MQTT connection lifecycle** the assume-role credentials feed into —

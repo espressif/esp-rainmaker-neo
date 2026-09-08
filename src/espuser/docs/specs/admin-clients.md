@@ -1,4 +1,4 @@
-# Admin — OAuth Client Registry
+# OAuth Client Registry
 
 ## What this is
 
@@ -77,7 +77,7 @@ Returns every client. By default the `secret` is omitted; pass **`?get_secret=tr
 
 ## Seeding the current clients (deploy-time)
 
-The clients that exist today are created by a **deploy-time custom resource** in the **base stack** ([esp_user_base_stack.py](../../esp_user_base_stack.py)) (not in the clients-API/core stack). Each create is a conditional `PutItem` on `attribute_not_exists(client_id)`, so **a client that already exists is left untouched** — re-deploys never clobber a client an admin has since edited.
+The clients that exist today are created by a **deploy-time custom resource** in the **base stack** (not the clients-API/core stack). Each create is a conditional `PutItem` on `attribute_not_exists(client_id)`, so **a client that already exists is left untouched** — re-deploys never clobber a client an admin has since edited.
 
 Seed set = ESP-User OIDC clients for the current first-party apps, with `client_id` fixed so the apps and tests keep a stable id. Each is an OAuth 2.1 `authorization_code`/`refresh_token` client:
 
@@ -90,7 +90,7 @@ Seed set = ESP-User OIDC clients for the current first-party apps, with `client_
 
 ## Consumers of the registry
 
-- **OTP direct-token** ([auth-flows.md](auth-flows.md#direct-token-otp-native-first-party)): `POST /v1/auth/otp/initiate` looks the client up in the registry and rejects an **unknown** client with `invalid_client`. **Any registered client may use direct-token OTP** — there is no per-client gate. This is safe because client registration is superadmin-only (there is no dynamic/third-party registration — RFC 7591 is deferred), so every registered client is first-party by construction. If third-party or dynamic registration is ever added, a per-client gate must be reintroduced before then.
+- **OTP direct-token** ([auth-flows.md](auth-flows.md)): `POST /v1/auth/otp/initiate` looks the client up in the registry and rejects an **unknown** client with `invalid_client`. **Any registered client may use direct-token OTP** — there is no per-client gate. This is safe because client registration is superadmin-only (there is no dynamic/third-party registration — RFC 7591 is deferred), so every registered client is first-party by construction. If third-party or dynamic registration is ever added, a per-client gate must be reintroduced before then.
 - **Token / authorize** (later slices): confidential-client auth against the stored `secret`, `redirect_uris`/`require_pkce` enforcement.
 
 ## Storage

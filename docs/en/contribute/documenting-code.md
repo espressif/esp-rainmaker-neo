@@ -1,4 +1,4 @@
-# Documenting Code
+# Code Documentation
 
 Three documentation surfaces exist, and a change is only complete when the
 relevant ones are updated. CI validates the API specs.

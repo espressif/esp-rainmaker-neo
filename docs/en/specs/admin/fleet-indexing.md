@@ -1,4 +1,4 @@
-# Fleet Indexing & Shadow Access
+# Fleet Indexing
 
 
 Applied at deploy time by a CDK custom resource calling

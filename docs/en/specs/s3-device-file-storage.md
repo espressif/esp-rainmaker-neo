@@ -1,4 +1,4 @@
-# S3 Device File Storage Feature Design
+# Device File Storage
 
 ## 1. Overview
 

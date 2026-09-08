@@ -1,12 +1,12 @@
-# Authorization Code + PKCE Flow (browser login)
+# Authorization Flow
 
 ## What this is
 
 The standard OAuth 2.1 / OIDC browser login: a client (e.g. the Alexa or Google Voice Assistant account-linking web view) redirects the user to `GET /oauth2/authorize`, the user logs in passwordlessly via OTP on a **service-served login UI**, and we hand the client back a single-use **authorization code** at its `redirect_uri`. The client then exchanges that code (with its PKCE verifier) at `POST /oauth2/token` for the token set.
 
-This is the interactive counterpart to [direct-token OTP](auth-flows.md#direct-token-otp-native-first-party): same OTP first factor, but the browser only ever carries an opaque flow id and the final code — never tokens or claims.
+This is the interactive counterpart to [direct-token OTP](auth-flows.md): same OTP first factor, but the browser only ever carries an opaque flow id and the final code — never tokens or claims.
 
-> Alexa account-linking runs here: the voice platform is a browser authorization-code + PKCE client of this surface. The access token issued here is what an end user later exchanges for AWS/IoT credentials — see [user_auth.md](../../../docs/en/specs/user_auth.md).
+> Alexa account-linking runs here: the voice platform is a browser authorization-code + PKCE client of this surface. The access token issued here is what an end user later exchanges for AWS/IoT credentials — see [user_auth.md](../user_auth.md).
 
 ## Why it is needed
 
@@ -144,7 +144,7 @@ redirect_uri=<same redirect_uri used at authorize>
 
 ## espuser-auth-flows
 
-The flow record threading a request from `/oauth2/authorize` through OTP login to the issued `code`. New table; add to `USER_TABLE_NAMES` / `USER_INDEX_NAMES` in [base_res_constants.py](../../base_res_constants.py). `ManagedTable` via the GSI orchestrator like the other `espuser-*` tables. TTL'd; holds no long-lived PII.
+The flow record threading a request from `/oauth2/authorize` through OTP login to the issued `code`. New table; add to `USER_TABLE_NAMES` / `USER_INDEX_NAMES`. `ManagedTable` via the GSI orchestrator like the other `espuser-*` tables. TTL'd; holds no long-lived PII.
 
 **Keys**: `flow_id` (PK), `sk` (SK).
 

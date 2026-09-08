@@ -1,4 +1,4 @@
-# Node connection lifecycle
+# Node Connection Lifecycle
 
 ## What this covers
 

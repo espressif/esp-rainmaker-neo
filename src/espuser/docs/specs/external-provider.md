@@ -1,4 +1,4 @@
-# External identity providers
+# Federated Identity Providers
 
 Every upstream identity provider is configuration, not deployment. A provider is one row in
 `espuser-identity-providers`, reached over the public internet, and our deployment holds no authority

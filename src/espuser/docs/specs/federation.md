@@ -1,4 +1,4 @@
-# Upstream identity providers — brokered federation
+# Brokered Federation
 
 > Implements the brokered-federation design (the
 > Dex "normalize and reissue" broker) for the first concrete upstream provider,

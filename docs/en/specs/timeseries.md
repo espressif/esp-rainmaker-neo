@@ -1,4 +1,4 @@
-# Timeseries
+# Time Series
 
 ## 1. Overview
 

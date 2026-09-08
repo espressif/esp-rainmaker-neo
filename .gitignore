@@ -49,3 +49,6 @@ test/test_data/notify_data.json
 
 # Dashboard build-time env (may hold account-specific URLs); .env.development.local is npm-run-dev derived
 dashboard/.env.development.local
+
+# Generated at build time by docs/conf_common.py.
+docs/en/specs/espuser/

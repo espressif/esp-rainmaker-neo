@@ -1,4 +1,4 @@
-# Populating a deployment with data
+# Data Population
 
 This page is a **contributor walkthrough**, not a specification: it shows how a
 fresh deployment is seeded with enough data for the admin dashboard to have

@@ -1,4 +1,4 @@
-# IoT Event Mode: SQS-backed Lambdas with Runtime Mode Flip
+# Node Scalability
 
 ## 1. Overview
 
