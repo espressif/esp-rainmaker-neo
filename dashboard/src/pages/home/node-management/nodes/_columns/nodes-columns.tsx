@@ -15,9 +15,8 @@ import { ThingStatusBadge } from "@/components/thing/thing-status-badge";
 import { TypeModelCell } from "../_components/type-model-cell/type-model-cell";
 
 export interface ThingRow {
-  thingId: string;
-  thingName: string | null;
-  awsThingName: string;
+  nodeId: string;
+  displayName: string | null;
   online: boolean | null;
   deviceType: string | null;
   deviceModel: string | null;
@@ -67,7 +66,7 @@ function StatusCell({
 export function getNodesColumns(t: TFunction): ColumnDef<ThingRow>[] {
   return [
     {
-      accessorKey: "thingId",
+      accessorKey: "nodeId",
       header: t("common:columns.nameId", "Name / ID"),
       enableHiding: false,
       cell: ({ row }) => {
@@ -79,8 +78,8 @@ export function getNodesColumns(t: TFunction): ColumnDef<ThingRow>[] {
               online={thing.online}
             />
             <ThingNameCell
-              thingId={thing.thingId}
-              thingName={thing.thingName ?? thing.awsThingName}
+              nodeId={thing.nodeId}
+              displayName={thing.displayName}
             />
           </div>
         );

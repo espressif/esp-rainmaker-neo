@@ -64,7 +64,7 @@ export function getGroupNodesColumns(
 ): ColumnDef<ThingRow>[] {
   const columns: ColumnDef<ThingRow>[] = [
     {
-      accessorKey: "thingId",
+      accessorKey: "nodeId",
       header: t("common:columns.nameId", "Name / ID"),
       enableHiding: false,
       cell: ({ row }) => {
@@ -76,8 +76,8 @@ export function getGroupNodesColumns(
               online={thing.online}
             />
             <ThingNameCell
-              thingId={thing.thingId}
-              thingName={thing.thingName ?? thing.awsThingName}
+              nodeId={thing.nodeId}
+              displayName={thing.displayName}
             />
           </div>
         );
@@ -106,7 +106,7 @@ export function getGroupNodesColumns(
         <div className="flex items-center justify-end opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
           <GroupNodesRowActions
             groupName={groupName}
-            thingName={row.original.awsThingName}
+            thingName={row.original.nodeId}
           />
         </div>
       ),

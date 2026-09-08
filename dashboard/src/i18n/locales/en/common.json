@@ -142,6 +142,11 @@
     "digit": "Must contain a digit",
     "specialCharacter": "Must contain a special character"
   },
+  "passwordRequirements": {
+    "label": "Password requirements",
+    "met": "Requirement met",
+    "unmet": "Requirement not met"
+  },
   "passwordErrors": {
     "incorrectCurrentPassword": "Your current password is not correct. Try again.",
     "sessionExpired": "Your session has expired. Sign in again to change your password.",
@@ -209,8 +214,6 @@
     "emailInvalid": "Please enter a valid email address",
     "passwordRequired": "Password is required",
     "currentPasswordRequired": "Current password is required",
-    "confirmPasswordRequired": "Please confirm your new password",
-    "passwordsDoNotMatch": "Passwords do not match",
     "codeRequired": "Confirmation code is required",
     "codeInvalid": "Enter the 6-digit code you received"
   },

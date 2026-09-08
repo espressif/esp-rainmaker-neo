@@ -73,8 +73,8 @@ export function getAwsThingsColumns(
               online={thing.online}
             />
             <ThingNameCell
-              thingId={thing.thingId ?? thing.thingName}
-              thingName={thing.displayName ?? thing.thingName}
+              nodeId={thing.thingName}
+              displayName={thing.displayName}
             />
           </div>
         );

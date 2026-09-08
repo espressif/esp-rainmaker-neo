@@ -48,6 +48,31 @@ function readDeviceFields(reported: Record<string, unknown> | undefined) {
   }
 }
 
+/**
+ * Fall back to the disconnect timestamp when the shadow has never carried an
+ * `online` metadata timestamp — e.g. a node that has only ever gone offline
+ * still tells us when it did so. Values are in milliseconds here, so we scale
+ * them down to match the seconds-based `metadata.reported.online.timestamp`
+ * that every downstream caller expects.
+ */
+function readLastSeen(
+  reported: Record<string, unknown> | undefined,
+  metadataReported: Record<string, unknown> | undefined,
+): number | null {
+  const metadataTs = readTimestamp(metadataReported?.online)
+  if (metadataTs != null) {
+    return metadataTs
+  }
+  const disconnectInfo = reported?.disconnect_info as
+    | { last_disconnect_ts?: unknown }
+    | undefined
+  const disconnectTs = disconnectInfo?.last_disconnect_ts
+  if (typeof disconnectTs === 'number') {
+    return Math.floor(disconnectTs / 1000)
+  }
+  return null
+}
+
 function extractFromParsedShadow(parsed: unknown): IparamsFields {
   if (!parsed || typeof parsed !== 'object') {
     return { ...EMPTY_IPARAMS_FIELDS }
@@ -62,7 +87,7 @@ function extractFromParsedShadow(parsed: unknown): IparamsFields {
     deviceType: deviceFields.deviceType,
     deviceModel: deviceFields.deviceModel,
     fwVersion: deviceFields.fwVersion,
-    lastSeen: readTimestamp(metadata?.online),
+    lastSeen: readLastSeen(reported, metadata),
     displayName: deviceFields.displayName,
   }
 }

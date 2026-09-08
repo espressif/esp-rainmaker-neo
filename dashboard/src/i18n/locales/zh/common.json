@@ -142,6 +142,11 @@
     "digit": "必须包含一个数字",
     "specialCharacter": "必须包含一个特殊字符"
   },
+  "passwordRequirements": {
+    "label": "密码要求",
+    "met": "已满足要求",
+    "unmet": "未满足要求"
+  },
   "passwordErrors": {
     "incorrectCurrentPassword": "当前密码不正确，请重试。",
     "sessionExpired": "您的会话已过期，请重新登录后再修改密码。",
@@ -209,8 +214,6 @@
     "emailInvalid": "请输入有效的邮箱地址",
     "passwordRequired": "请输入密码",
     "currentPasswordRequired": "请输入当前密码",
-    "confirmPasswordRequired": "请确认新密码",
-    "passwordsDoNotMatch": "两次输入的密码不一致",
     "codeRequired": "请输入验证码",
     "codeInvalid": "请输入收到的 6 位验证码"
   },

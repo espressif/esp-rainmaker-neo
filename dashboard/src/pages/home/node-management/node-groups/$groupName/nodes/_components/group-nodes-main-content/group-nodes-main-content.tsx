@@ -87,7 +87,7 @@ export default function GroupNodesMainContent({
         onRowClick={(row) =>
           void navigate({
             to: "/home/node-management/nodes/$thingName",
-            params: { thingName: row.awsThingName },
+            params: { thingName: row.nodeId },
           })
         }
         tableRowClassName="group"

@@ -10,7 +10,7 @@ import { useSetState } from "react-use";
 import { useAuthStore } from "@/stores/auth.store";
 import { listThings, searchThings } from "@/aws/services/thing.service";
 import { useTokenPagination } from "@/hooks/use-token-pagination";
-import { extractIparamsFields } from "./iparams-fields";
+import { extractIparamsFields } from "@/aws/utils/iparams-fields";
 import { buildThingsSearchQuery } from "./_utils/build-things-search-query";
 import type { ThingRow } from "./_columns/nodes-columns";
 import {
@@ -70,9 +70,8 @@ export function useNodes(enabled: boolean) {
               fields.lastSeen = Math.floor(connectivity.timestamp / 1000);
             }
             return {
-              thingId: thing.thingId ?? thing.thingName ?? "",
-              thingName: fields.displayName,
-              awsThingName: thing.thingName ?? "",
+              nodeId: thing.thingName ?? "",
+              displayName: fields.displayName,
               online: fields.online,
               deviceType: fields.deviceType,
               deviceModel: fields.deviceModel,
@@ -91,9 +90,8 @@ export function useNodes(enabled: boolean) {
 
         return {
           things: response.things.map((thing) => ({
-            thingId: thing.thingName ?? "",
-            thingName: null,
-            awsThingName: thing.thingName ?? "",
+            nodeId: thing.thingName ?? "",
+            displayName: null,
             online: null,
             deviceType: null,
             deviceModel: null,

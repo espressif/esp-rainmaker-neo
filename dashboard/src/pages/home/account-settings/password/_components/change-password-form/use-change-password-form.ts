@@ -34,7 +34,6 @@ import {
 const EMPTY_VALUES: ChangePasswordRequestSchema = {
   old_password: "",
   new_password: "",
-  confirm_password: "",
 };
 
 interface UseChangePasswordFormOptions {
@@ -46,8 +45,7 @@ interface UseChangePasswordFormOptions {
  * the translated requirements checklist, and failure messages.
  *
  * `mode: "onTouched"` gives feedback as soon as a field is left rather than only on
- * submit — with three password fields, waiting until submit means fixing all of them
- * at once.
+ * submit, so a policy failure surfaces the moment the admin moves off the field.
  */
 export function useChangePasswordForm({
   onSuccess,

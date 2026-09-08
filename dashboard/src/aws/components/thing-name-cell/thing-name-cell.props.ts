@@ -5,6 +5,6 @@
  */
 
 export interface ThingNameCellProps {
-  thingId: string;
-  thingName?: string | null;
+  nodeId: string
+  displayName?: string | null
 }

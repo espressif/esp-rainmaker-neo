@@ -7,22 +7,29 @@
 import { CopiableText } from "@espressif/dashboard-ui-components/components";
 import type { ThingNameCellProps } from "./thing-name-cell.props";
 
-export function ThingNameCell({ thingName, thingId }: ThingNameCellProps) {
-  const displayName = thingName?.trim();
-  const id = thingId.trim();
-  const showIdLine = id.length > 0 && id !== displayName;
+export function ThingNameCell({ nodeId, displayName }: ThingNameCellProps) {
+  const name = displayName?.trim();
+  const id = nodeId.trim();
+
+  if (!name) {
+
+    return (
+      <div className="min-w-0 flex flex-col">
+        <CopiableText
+          text={id}
+          className="text-sm font-normal truncate leading-tight"
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="min-w-0 flex flex-col">
-      {displayName ? (
-        <p className="text-sm font-semibold truncate leading-tight">{displayName}</p>
-      ) : null}
-      {showIdLine ? (
-        <CopiableText
-          text={id}
-          className="text-xs text-muted-foreground truncate leading-tight"
-        />
-      ) : null}
+      <p className="text-sm font-semibold truncate leading-tight">{name}</p>
+      <CopiableText
+        text={id}
+        className="text-xs text-muted-foreground truncate leading-tight"
+      />
     </div>
   );
 }

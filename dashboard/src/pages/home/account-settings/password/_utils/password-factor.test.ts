@@ -28,7 +28,6 @@ describe("changePasswordRequestFor", () => {
   const values = {
     old_password: "OldPass1!",
     new_password: "NewPass1!",
-    confirm_password: "NewPass1!",
   };
 
   it("carries the previous password when changing", () => {

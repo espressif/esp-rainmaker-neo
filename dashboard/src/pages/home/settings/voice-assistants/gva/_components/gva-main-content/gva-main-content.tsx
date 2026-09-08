@@ -9,6 +9,7 @@ import { Plus } from "lucide-react";
 import {
   Button,
   FullSizeError,
+  SectionCard,
   Skeleton,
 } from "@espressif/dashboard-ui-components/components";
 import type { GvaConfigGetResponse } from "@/api/integrations";
@@ -53,34 +54,45 @@ export default function GvaMainContent({
 
   if (error && !isNotFoundError(error)) {
     return (
-      <FullSizeError
-        title={t("gva.fetchError", "Failed to load GVA configuration")}
-        illustration={<CustomIcon type="google-assistant" size={48} />}
-      >
-        {normalizeApiError(error, t("gva.fetchError", "Failed to load GVA configuration"))}
-      </FullSizeError>
+      <SectionCard
+        variant="outline"
+        color="error"
+        primaryText={normalizeApiError(
+          error,
+          t("gva.fetchError", "Failed to load GVA configuration"),
+        )}
+        icon={<CustomIcon type="google-assistant" size={20} aria-hidden />}
+        allowCollapse={false}
+      />
     );
   }
 
   if (!hasConfiguration(data)) {
     return (
-      <FullSizeError
-        title={t("gva.notConfiguredTitle", "GVA not configured")}
-        illustration={<CustomIcon type="google-assistant" size={48} />}
-      >
-        <div className="flex flex-col items-center gap-4">
-          <span>{t("gva.notConfiguredDescription", "No Google Voice Assistant configuration found yet.")}</span>
-          <Button
-            type="button"
-            variant="default"
-            fullWidth={false}
-            onClick={onConfigure}
-            startIcon={<Plus className="h-4 w-4" aria-hidden />}
-          >
-            {t("gva.configureButton", "Configure")}
-          </Button>
-        </div>
-      </FullSizeError>
+      <SectionCard allowCollapse={false} variant="soft" color="silver">
+        <FullSizeError
+          title={t("gva.notConfiguredTitle", "GVA not configured")}
+          illustration={<CustomIcon type="google-assistant" size={48} />}
+        >
+          <div className="flex flex-col items-center gap-4">
+            <span>
+              {t(
+                "gva.notConfiguredDescription",
+                "No Google Voice Assistant configuration found yet.",
+              )}
+            </span>
+            <Button
+              type="button"
+              variant="default"
+              fullWidth={false}
+              onClick={onConfigure}
+              startIcon={<Plus className="h-4 w-4" aria-hidden />}
+            >
+              {t("gva.configureButton", "Configure")}
+            </Button>
+          </div>
+        </FullSizeError>
+      </SectionCard>
     );
   }
 

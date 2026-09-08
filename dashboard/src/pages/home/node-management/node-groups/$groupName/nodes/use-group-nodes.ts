@@ -39,9 +39,8 @@ export function useGroupNodes(groupName: string) {
     return thingNames.map((name) => {
       const fields = enrichment[name];
       return {
-        thingId: name,
-        thingName: fields?.displayName ?? null,
-        awsThingName: name,
+        nodeId: name,
+        displayName: fields?.displayName ?? null,
         online: fields?.online ?? null,
         deviceType: fields?.deviceType ?? null,
         deviceModel: fields?.deviceModel ?? null,
