@@ -13,6 +13,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
 )
 
+// UserInfo carries the resolved caller. IsAdmin — set when the caller was resolved
+// through the admin Cognito pool — is the only privilege field any authorisation
+// decision reads. IsSuperAdmin mirrors the pool's `custom:super_admin` attribute so
+// the flag survives on existing accounts, but nothing authorises on it.
 type UserInfo struct {
 	Email           string `json:"email,omitempty"`
 	PhoneNumber     string `json:"phone_number,omitempty"`

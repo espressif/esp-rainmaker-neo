@@ -107,7 +107,7 @@ def _admin_cognito_auth(region, client_id, auth_flow, auth_parameters):
     return _CognitoResponse(200, payload)
 
 class User:
-    def __init__(self, username, password, region, identity_pool_id, api_gateway_url, user_api_gateway_url, iot_endpoint, admin_user_pool_id="", admin_client_id="", is_super_admin=False, end_user_pool_id=""):
+    def __init__(self, username, password, region, identity_pool_id, api_gateway_url, user_api_gateway_url, iot_endpoint, admin_user_pool_id="", admin_client_id="", is_admin=False, end_user_pool_id=""):
         self.username = username
         self.password = password
         self.region = region
@@ -139,7 +139,7 @@ class User:
         self.shadow_queue = queue.Queue()
         self.connection_queue = queue.Queue()
         self.disable_reconnect = False
-        self.is_super_admin = is_super_admin
+        self.is_admin = is_admin
         self.disconnect_future = None
         self.previous_disconnect_time = 0
         self._session = None  # Cached requests session for connection reuse
@@ -172,8 +172,8 @@ class User:
             self._session.close()
             self._session = None
 
-    def create_super_admin_via_cognito(self, email=None, password=None, user_id=None):
-        """Provision a super admin in the admin Cognito pool (no DB record). Returns the user_id.
+    def create_admin_via_cognito(self, email=None, password=None, user_id=None):
+        """Provision a admin in the admin Cognito pool (no DB record). Returns the user_id.
 
         `user_id` overrides the derived value for identities that must keep a stable id. Pass
         `password=False` for an identity that never signs in, so no password exists to be used.
@@ -197,13 +197,13 @@ class User:
                 ],
             )
         except cognito.exceptions.UsernameExistsException:
-            user_log(f"Super admin {email} already exists; refreshing its attributes")
+            user_log(f"Admin {email} already exists; refreshing its attributes")
         except Exception as e:  # noqa: BLE001
-            user_log(f"Failed to create super admin {email}: {e}")
+            user_log(f"Failed to create admin {email}: {e}")
             return None
 
         # Stamped separately, and on every call: an account that already existed would otherwise keep
-        # whatever attributes it has, and a super admin missing custom:user_id resolves to no accessor
+        # whatever attributes it has, and a admin missing custom:user_id resolves to no accessor
         # and is refused by every admin gate.
         try:
             cognito.admin_update_user_attributes(
@@ -215,7 +215,7 @@ class User:
                 ],
             )
         except Exception as e:  # noqa: BLE001
-            user_log(f"Failed to stamp super admin attributes for {email}: {e}")
+            user_log(f"Failed to stamp admin attributes for {email}: {e}")
             return None
 
         if password is False:
@@ -228,7 +228,7 @@ class User:
                 Permanent=True,
             )
         except Exception as e:  # noqa: BLE001
-            user_log(f"Failed to set super admin password for {email}: {e}")
+            user_log(f"Failed to set admin password for {email}: {e}")
             return None
         return user_id
 
@@ -291,7 +291,7 @@ class User:
     def get_cognito_token(self):
 
         try:
-            if self.is_super_admin:
+            if self.is_admin:
                 response = self.signin(is_admin=True)
             else:
                 response = self.signin()
@@ -429,7 +429,7 @@ class User:
         """Make a Bearer-authenticated request.
 
         token: the JWT to put in the Authorization header. Left unset it is the
-            access token, except for a superadmin: the admin methods and the
+            access token, except for a admin: the admin methods and the
             identity pool's cognito-idp provider both reject a Cognito access
             token, which carries no aud, so those take the ID token.
         """
@@ -445,7 +445,7 @@ class User:
             self._verify_cors(path, intended_method=method, api_gateway_url=api_url)
 
         if token is None:
-            token = self.token if self.is_super_admin else self.access_token
+            token = self.token if self.is_admin else self.access_token
         headers = {}
         if data is not None:
             headers["Content-Type"] = "application/json"
@@ -910,7 +910,7 @@ class User:
             "private_key": key_pem,
         }
 
-    # --- Assisted-claiming CA administration (superadmin only, §3.9) ---
+    # --- Assisted-claiming CA administration (admin only, §3.9) ---
 
     def claim_admin_set_config(self, config, skip_cors_check=False):
         """POST /v1/admin/claiming/config — set the certificate configuration."""
@@ -946,7 +946,7 @@ class User:
     def assume_role_admin(self, group_id, subgroup_id=None):
         """Assume role with admin privileges for a specific group/subgroup.
 
-        This is only available for super admin users.
+        This is only available for admin users.
 
         Args:
             group_id (str): The group ID to get access to
@@ -2372,7 +2372,7 @@ class User:
     def get_mobile_platform(self, integration_id):
         """Get one integration's admin detail via GET /v1/admin/integrations/{integrationId}.
 
-        Returns (status_code, parsed_body_or_text). Super-admin only — a
+        Returns (status_code, parsed_body_or_text). Admin only — a
         non-admin caller gets 403. Used by tests to assert the admin GET-one
         detail (e.g. bundle_id / project_id) that the public list omits.
         """
@@ -3112,8 +3112,8 @@ class User:
             data=urlencode(payload),
         )
 
-    # ----- Admin OAuth client registry (/v1/admin/clients, superadmin) -----
-    # Uses make_user_api_request: ESP User API + Bearer token (must be a super_admin).
+    # ----- Admin OAuth client registry (/v1/admin/clients, admin) -----
+    # Uses make_user_api_request: ESP User API + Bearer token (must be a admin).
 
     def create_oauth_client(self, client):
         """POST /v1/admin/clients — register a client. `client` is the request dict."""
@@ -3132,7 +3132,7 @@ class User:
         """DELETE /v1/admin/clients/{client_id} — permanently deletes the client."""
         return self.make_user_api_request('DELETE', f'/v1/admin/clients/{client_id}')
 
-    # ----- Admin post-deployment credentials (/v1/admin/credentials, superadmin) -----
+    # ----- Admin post-deployment credentials (/v1/admin/credentials, admin) -----
     # Each stack vends credentials for the account values it owns, so the dashboard reads
     # them from the browser.
 

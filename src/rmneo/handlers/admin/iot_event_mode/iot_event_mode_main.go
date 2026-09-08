@@ -190,7 +190,7 @@ func flipRule(ctx context.Context, cfg ruleConfig, mode string) error {
 
 // systemContext returns an rmngctx with full system permissions, used for
 // DB access on paths that have already authorised at the lambda layer
-// (handlePut, after IsSuperAdmin) or that run as part of the deploy-time
+// (handlePut, after IsAdmin) or that run as part of the deploy-time
 // custom resource (handleReapply, no user involved).
 func systemContext(ctx context.Context) *rmngctx.RmngContext {
 	return rmngctx.NewRmngContextWithCtx(ctx, utils.NewSystemActor())
@@ -236,7 +236,7 @@ func handlePut(ctx context.Context, request events.APIGatewayProxyRequest, updat
 	// the rules in the new mode with no stored record, so a subsequent
 	// deploy's reapply would see nil config and silently revert.
 	//
-	// IsSuperAdmin has already been verified by handleAPIRequest; the DB
+	// IsAdmin has already been verified by handleAPIRequest; the DB
 	// call uses a SystemActor context so the in-DB IsAuthorized check is
 	// satisfied regardless of the original caller's identity.
 	adminDB := admin_config_db.NewAdminConfigDB(systemContext(ctx))
@@ -340,7 +340,7 @@ func handleAPIRequest(ctx context.Context, request events.APIGatewayProxyRequest
 		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Unauthorized")), nil
 	}
 	authedUser, ok := rctx.GetAccessor().(*user.User)
-	if !ok || !authedUser.IsSuperAdmin(rctx) {
+	if !ok || !authedUser.IsAdmin(rctx) {
 		return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("Forbidden")), nil
 	}
 

@@ -57,7 +57,7 @@
   "previewSignInTooltip": "Opens the sign-in page your users see, in a new tab",
   "previewSignInFailed": "Could not open the sign-in preview",
   "previewSignInFailedMessage": "The sign-in page could not be prepared. Try again.",
-  "previewSignInForbidden": "Registering the preview callback needs superadmin access.",
+  "previewSignInForbidden": "Registering the preview callback needs admin access.",
   "noRedirectUris": "No redirect URIs configured",
   "gva": {
     "heading": "GVA Configuration",

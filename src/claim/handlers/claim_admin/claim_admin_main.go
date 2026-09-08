@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
-Claim admin API: superadmin-only configuration and bootstrap of the claiming CA.
+Claim admin API: admin-only configuration and bootstrap of the claiming CA.
 
 This backs POST/GET /v1/admin/claiming/config (set/read the certificate
 configuration) and POST/GET /v1/admin/claiming/ca (mint the CA, or read it). It
 mirrors the other admin configuration endpoints: every call is gated on the
-caller being a superadmin, and a regular user is refused.
+caller being an admin, and a regular user is refused.
 
 The claiming configuration (mode, per-claimant quota, subject, CA/leaf validity,
 CA common name) is a single JSON document in SSM, shared with leaf issuance and
@@ -81,7 +81,7 @@ func route(ctx context.Context, request events.APIGatewayProxyRequest) (int, int
 		return http.StatusForbidden, utils.NewAPIStatus("Forbidden"), nil
 	}
 	acc, ok := rctx.GetAccessor().(*user.User)
-	if !ok || !acc.IsSuperAdmin(rctx) {
+	if !ok || !acc.IsAdmin(rctx) {
 		return http.StatusForbidden, utils.NewAPIStatus("Forbidden"), nil
 	}
 

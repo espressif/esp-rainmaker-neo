@@ -22,7 +22,7 @@ import (
 
 const (
 	testAdminCredsRoleArn = "arn:aws:iam::123456789012:role/rmng-admin-creds-role-us-east-1"
-	superAdminID          = "admin-creds-super-admin-id"
+	adminID               = "admin-creds-admin-id"
 )
 
 // requestForUser builds a request that identifies userID as a Cognito admin —
@@ -40,6 +40,14 @@ func requestForUser(userID string, body Request) events.APIGatewayProxyRequest {
 	}
 }
 
+// requestForEndUser is requestForUser for a federated end user: the OIDC provider
+// string routes auth away from the admin pool, which is the only way to be a non-admin.
+func requestForEndUser(userID string, body Request) events.APIGatewayProxyRequest {
+	request := requestForUser(userID, body)
+	request.RequestContext.Identity.CognitoAuthenticationProvider = test_utils.OIDCAuthProvider(userID)
+	return request
+}
+
 var _ = Describe("Rmng Admin Creds Main", func() {
 	var (
 		ctx     context.Context
@@ -54,12 +62,12 @@ var _ = Describe("Rmng Admin Creds Main", func() {
 		GinkgoT().Setenv("ADMIN_CREDS_ROLE_ARN", testAdminCredsRoleArn)
 		GinkgoT().Setenv("AWS_REGION", "us-east-1")
 
-		test_utils.SetupTestAdminUser(ctx, superAdminID, "admin-creds-admin@example.com")
+		test_utils.SetupTestAdminUser(ctx, adminID, "admin-creds-admin@example.com")
 	})
 
-	Describe("super admin (happy path)", func() {
+	Describe("admin (happy path)", func() {
 		It("returns scoped credentials and assumes the admin-creds role", func() {
-			resp, err := handleRequest(ctx, requestForUser(superAdminID, Request{}))
+			resp, err := handleRequest(ctx, requestForUser(adminID, Request{}))
 			Expect(err).To(BeNil())
 			Expect(resp.StatusCode).To(Equal(http.StatusOK))
 
@@ -77,7 +85,7 @@ var _ = Describe("Rmng Admin Creds Main", func() {
 		})
 
 		It("vends a read-only concurrency lookup, and nothing that can change a setting", func() {
-			_, err := handleRequest(ctx, requestForUser(superAdminID, Request{}))
+			_, err := handleRequest(ctx, requestForUser(adminID, Request{}))
 			Expect(err).To(BeNil())
 
 			policy := *stsMock.GetLastAssumeRoleInput().Policy
@@ -93,16 +101,16 @@ var _ = Describe("Rmng Admin Creds Main", func() {
 		})
 
 		It("appends the session suffix to the role session name", func() {
-			_, err := handleRequest(ctx, requestForUser(superAdminID, Request{SessionSuffix: "abc123"}))
+			_, err := handleRequest(ctx, requestForUser(adminID, Request{SessionSuffix: "abc123"}))
 			Expect(err).To(BeNil())
 			Expect(*stsMock.GetLastAssumeRoleInput().RoleSessionName).To(Equal("RmngAdminSession-abc123"))
 		})
 	})
 
 	Describe("negative cases", func() {
-		It("rejects a non-super-admin user with 403", func() {
-			test_utils.SetupTestNonAdminUserInAdminPool(ctx, "plain-admin-id", "plain-admin@example.com")
-			resp, err := handleRequest(ctx, requestForUser("plain-admin-id", Request{}))
+		It("rejects a non-admin user with 403", func() {
+			test_utils.SetupTestNonAdminUser(ctx, "plain-user-id", "plain-user@example.com")
+			resp, err := handleRequest(ctx, requestForEndUser("plain-user-id", Request{}))
 			Expect(err).To(BeNil())
 			Expect(resp.StatusCode).To(Equal(http.StatusForbidden))
 			Expect(stsMock.GetLastAssumeRoleInput()).To(BeNil())
@@ -110,20 +118,20 @@ var _ = Describe("Rmng Admin Creds Main", func() {
 
 		It("returns 500 when the admin-creds role ARN is not configured", func() {
 			os.Unsetenv("ADMIN_CREDS_ROLE_ARN")
-			resp, err := handleRequest(ctx, requestForUser(superAdminID, Request{}))
+			resp, err := handleRequest(ctx, requestForUser(adminID, Request{}))
 			Expect(err).To(BeNil())
 			Expect(resp.StatusCode).To(Equal(http.StatusInternalServerError))
 		})
 
 		It("returns 500 when AssumeRole fails", func() {
 			stsMock.AssumeRoleError = errors.New("access denied")
-			resp, err := handleRequest(ctx, requestForUser(superAdminID, Request{}))
+			resp, err := handleRequest(ctx, requestForUser(adminID, Request{}))
 			Expect(err).To(BeNil())
 			Expect(resp.StatusCode).To(Equal(http.StatusInternalServerError))
 		})
 
 		It("returns 400 for a session suffix that is not alphanumeric", func() {
-			resp, err := handleRequest(ctx, requestForUser(superAdminID, Request{SessionSuffix: "bad suffix!"}))
+			resp, err := handleRequest(ctx, requestForUser(adminID, Request{SessionSuffix: "bad suffix!"}))
 			Expect(err).To(BeNil())
 			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
 		})

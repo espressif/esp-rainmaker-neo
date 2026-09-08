@@ -19,7 +19,7 @@ For config_key="iot_event_mode" the attributes are:
 - publish_input (String): "direct" | "sqs"
 - timeseries (String): "direct" | "sqs"
 - updated_at (Number): unix milliseconds
-- updated_by (String): superAdmin user id (or "system" when written by
+- updated_by (String): admin user id (or "system" when written by
   the deploy-time reapply path)
 
 Access Control:
@@ -27,7 +27,7 @@ Access Control:
 - Reads require AdminConfigGet on the config_key.
 - Writes require AdminConfigSet on the config_key.
 - Granted only to SystemActor (deploy-time reapply path, full access)
-  or to superAdmin callers (after IsSuperAdmin passes at the lambda
+  or to admin callers (after IsAdmin passes at the lambda
   layer, which then constructs a SystemActor context for dbcore.DB access).
 - This table is never reachable from regular user-facing APIs.
 

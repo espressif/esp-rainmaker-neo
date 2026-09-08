@@ -24,7 +24,7 @@ from arn_utils import get_table_arn
 
 
 class IotEventModeCore(Construct):
-    """superAdmin REST API to flip the rule action on node_disconnected_rule,
+    """Admin REST API to flip the rule action on node_disconnected_rule,
     node_to_cloud_rule, and node_ts_batch_rule between Lambda-direct and SQS
     at runtime, without redeploying. Both action paths are pre-provisioned by
     the node and timeseries handler stacks.

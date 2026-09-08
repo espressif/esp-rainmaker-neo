@@ -418,7 +418,7 @@ def resolve_cfgd(outputs, skill_name):
 def run_setup(client, cfgd, vendor_id, skill_id, post_config_fn):
     """Full SMAPI setup pipeline. post_config_fn(skill_id, client_id, client_secret,
     redirect_uris) performs the backend config-API POST -- SigV4 for the CLI, the
-    super-admin user's session for morpheus.py. Returns the skill_id."""
+    admin user's session for morpheus.py. Returns the skill_id."""
     from ask_smapi_model.v1.skill.create_skill_request import CreateSkillRequest
     from ask_smapi_model.v1.skill.manifest.skill_manifest_envelope import SkillManifestEnvelope
 

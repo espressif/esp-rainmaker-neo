@@ -31,14 +31,16 @@ func NewAdminAuthService(ctx context.Context) (*AdminAuthService, error) {
 	}, nil
 }
 
-// Sentinel errors from RequireSuperAdmin so callers can map to HTTP status without HTTP types leaking here.
+// Sentinel errors from RequireAdmin so callers can map to HTTP status without HTTP types leaking here.
 var (
-	ErrMissingToken  = fmt.Errorf("authorization token is required")
-	ErrNotSuperAdmin = fmt.Errorf("super_admin privilege required")
+	ErrMissingToken = fmt.Errorf("authorization token is required")
+	ErrNotAdmin     = fmt.Errorf("admin privilege required")
 )
 
-// RequireSuperAdmin returns the caller's UserInfo only if the token carries custom:super_admin (empty ⇒ ErrMissingToken, non-superadmin ⇒ ErrNotSuperAdmin).
-func RequireSuperAdmin(ctx context.Context, token string) (UserInfo, error) {
+// RequireAdmin returns the caller's UserInfo if the token verifies against the admin
+// user pool (empty ⇒ ErrMissingToken, anything the admin pool did not issue ⇒ ErrNotAdmin).
+// Membership of the admin pool is the whole privilege: there is no second tier above it.
+func RequireAdmin(ctx context.Context, token string) (UserInfo, error) {
 	if token == "" {
 		return UserInfo{}, ErrMissingToken
 	}
@@ -48,17 +50,7 @@ func RequireSuperAdmin(ctx context.Context, token string) (UserInfo, error) {
 	}
 	info, err := svc.ParseUserInfoFromToken(ctx, token)
 	if err != nil {
-		return UserInfo{}, err
-	}
-	// Cognito access tokens omit custom attributes, so a missing claim needs a live lookup before
-	// concluding the caller is not a superadmin.
-	if !info.IsSuperAdmin {
-		if resolved, lookupErr := svc.GetUserFromProviderUsingToken(ctx, token); lookupErr == nil {
-			info = resolved
-		}
-	}
-	if !info.IsSuperAdmin {
-		return UserInfo{}, ErrNotSuperAdmin
+		return UserInfo{}, ErrNotAdmin
 	}
 	return info, nil
 }

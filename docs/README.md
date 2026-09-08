@@ -66,7 +66,7 @@ implements it:
 | Group | The question it answers |
 |---|---|
 | Identity and access | Who is allowed to do what, and what data decides that |
-| Admin Dashboard | What an admin or super admin can reach |
+| Admin Dashboard | What an admin can reach |
 | Node lifecycle | How a node progresses from registration to steady-state messaging |
 | Features | What an end user can do with a node once it is running |
 | Voice assistants | How a third-party assistant platform is integrated |

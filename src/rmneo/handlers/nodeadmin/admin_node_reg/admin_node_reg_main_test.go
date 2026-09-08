@@ -1216,17 +1216,23 @@ var _ = Describe("Admin Nodes Registration auth gate", func() {
 		adminID = "auth-gate-admin"
 		nonAdminID = "auth-gate-non-admin"
 		test_utils.SetupTestAdminUser(ctx, adminID, "admin@example.com")
-		test_utils.SetupTestNonAdminUserInAdminPool(ctx, nonAdminID, "user@example.com")
+		test_utils.SetupTestNonAdminUser(ctx, nonAdminID, "user@example.com")
 	})
 
 	makeRequest := func(userID, path, method string) events.APIGatewayProxyRequest {
+		// Admin-pool callers carry a CognitoSignIn provider; the end user carries the
+		// OIDC one, which is what makes them a non-admin.
+		provider := ":CognitoSignIn:" + userID
+		if userID == nonAdminID {
+			provider = test_utils.OIDCAuthProvider(userID)
+		}
 		return events.APIGatewayProxyRequest{
 			HTTPMethod: method,
 			Path:       path,
 			RequestContext: events.APIGatewayProxyRequestContext{
 				Identity: events.APIGatewayRequestIdentity{
 					CognitoIdentityID:             userID,
-					CognitoAuthenticationProvider: ":CognitoSignIn:" + userID,
+					CognitoAuthenticationProvider: provider,
 				},
 			},
 		}
@@ -1236,22 +1242,22 @@ var _ = Describe("Admin Nodes Registration auth gate", func() {
 	// only — the unit-test auth mock synthesises a user for any Cognito
 	// identity, so the rctx == nil branch isn't reachable from here.
 
-	It("returns 403 for a non-super-admin user on POST /v1/admin/nodes", func() {
+	It("returns 403 for a non-admin user on POST /v1/admin/nodes", func() {
 		resp, err := handleRequest(ctx, makeRequest(nonAdminID, "/v1/admin/nodes", "POST"))
 		Expect(err).To(BeNil())
 		Expect(resp.StatusCode).To(Equal(http.StatusForbidden))
 		Expect(resp.Body).To(ContainSubstring("Forbidden"))
 	})
 
-	It("returns 403 for a non-super-admin user on GET /v1/admin/nodes/registration-jobs", func() {
+	It("returns 403 for a non-admin user on GET /v1/admin/nodes/registration-jobs", func() {
 		resp, err := handleRequest(ctx, makeRequest(nonAdminID, "/v1/admin/nodes/registration-jobs", "GET"))
 		Expect(err).To(BeNil())
 		Expect(resp.StatusCode).To(Equal(http.StatusForbidden))
 		Expect(resp.Body).To(ContainSubstring("Forbidden"))
 	})
 
-	It("admits a super-admin past the auth gate", func() {
-		// A super-admin on an unknown path should reach the 404 router
+	It("admits an admin past the auth gate", func() {
+		// An admin on an unknown path should reach the 404 router
 		// branch — proving the auth gate passed.
 		resp, err := handleRequest(ctx, makeRequest(adminID, "/v1/admin/nodes/unknown-route", "GET"))
 		Expect(err).To(BeNil())

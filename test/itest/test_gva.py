@@ -69,9 +69,9 @@ def _make_service_account(project_id="test-gva-project-123", client_email="test@
     }
 
 @pytest.mark.xdist_group("gva_config")
-def test_gva_post_then_get_configuration(super_admin_user):
+def test_gva_post_then_get_configuration(admin_user):
     """Test POST then GET /v1/admin/integrations/gva/configuration to verify round-trip."""
-    admin = super_admin_user
+    admin = admin_user
     admin.get_aws_credentials()
 
     sa = _make_service_account(project_id="test-gva-project-123", client_email="test@test-gva-project-123.iam.gserviceaccount.com")
@@ -94,9 +94,9 @@ def test_gva_post_then_get_configuration(super_admin_user):
 
 
 @pytest.mark.xdist_group("gva_config")
-def test_gva_update_configuration(super_admin_user):
+def test_gva_update_configuration(admin_user):
     """Test that POST with different values updates the configuration."""
-    admin = super_admin_user
+    admin = admin_user
     admin.get_aws_credentials()
 
     # POST initial configuration

@@ -46,8 +46,15 @@ var _ = Describe("Claim Initiate", func() {
 		callerB   = "claim-caller-b"
 		testMac   = "AA:BB:CC:DD:EE:FF"
 		otherMac  = "11:22:33:44:55:66"
-		superUser = "claim-super-admin"
+		adminUser = "claim-admin"
 	)
+
+	authProviderFor := func(userID string) string {
+		if userID == adminUser {
+			return ":CognitoSignIn:" + userID
+		}
+		return test_utils.OIDCAuthProvider(userID)
+	}
 
 	makeRequest := func(userID, body string) events.APIGatewayProxyRequest {
 		return events.APIGatewayProxyRequest{
@@ -57,8 +64,10 @@ var _ = Describe("Claim Initiate", func() {
 			Body:       body,
 			RequestContext: events.APIGatewayProxyRequestContext{
 				Identity: events.APIGatewayRequestIdentity{
-					CognitoIdentityID:             userID,
-					CognitoAuthenticationProvider: ":CognitoSignIn:" + userID,
+					CognitoIdentityID: userID,
+					// Admin-pool callers carry a CognitoSignIn provider; ordinary
+					// claiming callers are federated end users, so they carry the OIDC one.
+					CognitoAuthenticationProvider: authProviderFor(userID),
 				},
 			},
 		}
@@ -87,9 +96,9 @@ var _ = Describe("Claim Initiate", func() {
 		ctx = context.Background()
 		test_utils.TestSetup()
 		storeClaimingConfig(ctx, enabledConfig())
-		test_utils.SetupTestNonAdminUserInAdminPool(ctx, callerA, "caller-a@example.com")
-		test_utils.SetupTestNonAdminUserInAdminPool(ctx, callerB, "caller-b@example.com")
-		test_utils.SetupTestAdminUser(ctx, superUser, "super@example.com")
+		test_utils.SetupTestNonAdminUser(ctx, callerA, "caller-a@example.com")
+		test_utils.SetupTestNonAdminUser(ctx, callerB, "caller-b@example.com")
+		test_utils.SetupTestAdminUser(ctx, adminUser, "admin@example.com")
 	})
 
 	Describe("reservation", func() {
@@ -275,10 +284,10 @@ var _ = Describe("Claim Initiate", func() {
 			Expect(resp.StatusCode).To(Equal(http.StatusNotFound))
 		})
 
-		// Claiming is open to any authenticated caller; a superadmin is not a
+		// Claiming is open to any authenticated caller; an admin is not a
 		// special case here, and gets a reservation like anyone else.
-		It("serves a superadmin caller the same way", func() {
-			resp := initiateFor(superUser, testMac)
+		It("serves an admin caller the same way", func() {
+			resp := initiateFor(adminUser, testMac)
 			Expect(resp.StatusCode).To(Equal(http.StatusCreated), resp.Body)
 		})
 	})

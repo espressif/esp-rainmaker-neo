@@ -82,11 +82,11 @@ var _ = Describe("Alexa Config", func() {
 		seedVAClient(ctx)
 		userID := "51bbf520-70a1-70ac-627f-07d1af2a930c"
 
-		// Set up super admin user using helper function
+		// Set up admin user using helper function
 		_, _ = test_utils.SetupTestAdminUser(ctx, userID, "test-user-email")
 
-		// Set up dummy non-admin user (in the admin pool) for the authorization test
-		_, _ = test_utils.SetupTestNonAdminUserInAdminPool(ctx, "test-dummy-user-id", "test-dummy-user-email")
+		// Set up a federated end user (outside the admin pool) for the authorization test
+		_, _ = test_utils.SetupTestNonAdminUser(ctx, "test-dummy-user-id", "test-dummy-user-email")
 
 		// Setup default request
 		req = AlexaCfgRequest{
@@ -353,9 +353,9 @@ var _ = Describe("Alexa Config", func() {
 			Expect(response.Body).To(ContainSubstring("Failed to add Alexa trigger"))
 		})
 
-		It("should fail when user is not super admin", func() {
+		It("should fail when the caller is not an admin", func() {
 			request.RequestContext.Identity.CognitoIdentityID = "test-dummy-user-id"
-			request.RequestContext.Identity.CognitoAuthenticationProvider = ":CognitoSignIn:test-dummy-user-id"
+			request.RequestContext.Identity.CognitoAuthenticationProvider = test_utils.OIDCAuthProvider("test-dummy-user-id")
 			requestBody, _ := json.Marshal(req)
 			request.Body = string(requestBody)
 

@@ -2,7 +2,7 @@
 
 ## What this is
 
-The superadmin-only API that registers and manages the OAuth/OIDC **clients** the IdP issues tokens to — the mobile app, the dashboard, the Alexa skill, and any future first- or third-party relying party. It is CRUD over the `espuser-oauth-clients` table: create a client, list them (optionally with their secrets), patch a client, and delete it. This spec is the authoritative record of the client registry as built.
+The admin-only API that registers and manages the OAuth/OIDC **clients** the IdP issues tokens to — the mobile app, the dashboard, the Alexa skill, and any future first- or third-party relying party. It is CRUD over the `espuser-oauth-clients` table: create a client, list them (optionally with their secrets), patch a client, and delete it. This spec is the authoritative record of the client registry as built.
 
 ## Why it is needed
 
@@ -11,14 +11,14 @@ Onboarding a new app or changing its redirect URIs must not require a code deplo
 ## Access control
 
 - **Authorizer**: the admin Cognito pool authorizer (`CognitoAuthorizer`), not our RS256 token — clients are configured by ESP admins, who authenticate against Cognito (D2/D4), never by end users.
-- **Claim**: the handler additionally requires `custom:super_admin == true` on the token; a plain admin is rejected `403`. Client registration is a superadmin operation (D47).
+- **Claim**: the handler verifies the bearer token against the admin user pool's JWKS; a token that pool did not issue is rejected `403`. Admin-pool membership is the whole privilege, so every admin may register clients (D47).
 - Path prefix `/v1/admin/clients` (D47 API-surface table).
 
 ## Key rules (enforced on write)
 
 These OAuth 2.1 client invariants are enforced at create/patch so the admin UI fails fast:
 
-1. **Client secrets are stored in plaintext and are retrievable.** A confidential client's secret is stored as-is in the row and returned both at Create and by List when the caller passes `get_secret=true`. **This is a deliberate, weaker-than-hashing posture** (a table read exposes usable secrets) chosen so an admin can look a lost secret back up instead of rotating. It is acceptable here only because the table is superadmin-only and there is no dynamic/third-party client registration; if that changes, move to hashing (secret shown once) or encryption-at-rest. There is no rotate endpoint — to replace a secret, delete and recreate the client.
+1. **Client secrets are stored in plaintext and are retrievable.** A confidential client's secret is stored as-is in the row and returned both at Create and by List when the caller passes `get_secret=true`. **This is a deliberate, weaker-than-hashing posture** (a table read exposes usable secrets) chosen so an admin can look a lost secret back up instead of rotating. It is acceptable here only because the table is admin-only and there is no dynamic/third-party client registration; if that changes, move to hashing (secret shown once) or encryption-at-rest. There is no rotate endpoint — to replace a secret, delete and recreate the client.
 2. **`redirect_uris` are exact-match strings** — no wildcards, no path-prefix matching (RFC 9700 / OAuth 2.1).
 3. **`grant_types` may not contain `implicit` or `password`** (ROPC) — rejected. `response_types` is `["code"]` only.
 4. **`public` clients** may not carry a secret and have `require_pkce` forced `true`. **`confidential`** clients get a generated secret. The `token_endpoint_auth_method` is **derived, not stored** — `none` for public, implied by the secret for confidential. (M2M is not a distinct type: it is a confidential client with the `client_credentials` grant, which arrives with the token-endpoint M2M slice — `client_credentials` is not an accepted grant yet.)
@@ -44,7 +44,7 @@ All requests carry the admin Cognito token in `Authorization`. Errors use the AP
 > **Scope of this slice.** The body carries only fields with a live consumer today. Reserved for later slices (not accepted yet): `jwks_uri`, `audiences`, `post_logout_redirect_uris`, `branding_id`, and `token_ttls` — (M2M/`private_key_jwt`, RFC 8707 resource indicators, RP-initiated logout, hosted-UI branding, and per-client TTLs are later slices). They will be added to the schema when their features land; adding fields is Native.
 
 **Process**:
-1. Authorize (admin Cognito token + `custom:super_admin`).
+1. Authorize (token verified against the admin Cognito pool).
 2. Validate the Key Rules above; reject on the first violation with `400` and a specific message.
 3. Generate an opaque `client_id` (a caller-supplied `client_id` is honored for the seed path so `rm_mobile` etc. are stable — collision-checked with a conditional write).
 4. For `confidential`: generate a high-entropy secret and store it (plaintext) on the row.
@@ -90,7 +90,7 @@ Seed set = ESP-User OIDC clients for the current first-party apps, with `client_
 
 ## Consumers of the registry
 
-- **OTP direct-token** ([auth-flows.md](auth-flows.md)): `POST /v1/auth/otp/initiate` looks the client up in the registry and rejects an **unknown** client with `invalid_client`. **Any registered client may use direct-token OTP** — there is no per-client gate. This is safe because client registration is superadmin-only (there is no dynamic/third-party registration — RFC 7591 is deferred), so every registered client is first-party by construction. If third-party or dynamic registration is ever added, a per-client gate must be reintroduced before then.
+- **OTP direct-token** ([auth-flows.md](auth-flows.md)): `POST /v1/auth/otp/initiate` looks the client up in the registry and rejects an **unknown** client with `invalid_client`. **Any registered client may use direct-token OTP** — there is no per-client gate. This is safe because client registration is admin-only (there is no dynamic/third-party registration — RFC 7591 is deferred), so every registered client is first-party by construction. If third-party or dynamic registration is ever added, a per-client gate must be reintroduced before then.
 - **Token / authorize** (later slices): confidential-client auth against the stored `secret`, `redirect_uris`/`require_pkce` enforcement.
 
 ## Storage

@@ -29,7 +29,7 @@ from py_sdk.test_group import Group
 from py_sdk.test_user import User
 from test.itest.conftest import CA_CERT, DEBUG, IOT_ENDPOINT, REGION, connect_device_with_retry
 
-# Claiming configuration the suite bootstraps with, via the superadmin admin API
+# Claiming configuration the suite bootstraps with, via the admin admin API
 # (§3.9). Shared by the bootstrap fixture and the tests that assert the
 # configured identity reaches issued certificates. `mode` is part of this
 # document now — it is what activates claiming at runtime (the claim group
@@ -138,7 +138,7 @@ def claimed_nodes():
 def _bootstrap_claiming_ca():
     """Stand up the claiming CA before the suite runs.
 
-    The CA is minted at runtime through the superadmin admin API (§3.9), not at
+    The CA is minted at runtime through the admin admin API (§3.9), not at
     deploy time, so the suite bootstraps it itself: set the certificate
     configuration, then mint. Idempotent — a repeat mint is a no-op — and
     tolerant of a claiming-disabled deployment, where the per-test skip below
@@ -553,17 +553,17 @@ def _not_before(cert):
     return getattr(cert, "not_valid_before_utc", None) or cert.not_valid_before
 
 
-def test_admin_config_round_trips_and_mint_is_idempotent(super_admin_user, test_user1):
-    """The superadmin config + mint API: a non-admin is refused, config
+def test_admin_config_round_trips_and_mint_is_idempotent(admin_user, test_user1):
+    """The admin config + mint API: a non-admin is refused, config
     round-trips, and a repeat mint is a no-op against the already-bootstrapped CA."""
     # A regular authenticated user is refused at the admin gate.
     denied = test_user1.claim_admin_set_config(CLAIM_CONFIG)
     assert denied.status_code == 403, denied.text
 
-    put = super_admin_user.claim_admin_set_config(CLAIM_CONFIG)
+    put = admin_user.claim_admin_set_config(CLAIM_CONFIG)
     assert put.status_code == 200, put.text
 
-    got = super_admin_user.claim_admin_get_config()
+    got = admin_user.claim_admin_get_config()
     assert got.status_code == 200, got.text
     cfg = got.json()["config"]
     assert cfg["mode"] == "user_authenticated"
@@ -572,14 +572,14 @@ def test_admin_config_round_trips_and_mint_is_idempotent(super_admin_user, test_
     assert cfg["leaf_validity_years"] == 10
 
     # A recognized-but-unimplemented mode is refused at the config API.
-    bad = super_admin_user.claim_admin_set_config({**CLAIM_CONFIG, "mode": "device_attested"})
+    bad = admin_user.claim_admin_set_config({**CLAIM_CONFIG, "mode": "device_attested"})
     assert bad.status_code == 400, bad.text
 
     # The session fixture already minted the CA, so this reports it unchanged.
-    mint = super_admin_user.claim_admin_mint_ca()
+    mint = admin_user.claim_admin_mint_ca()
     assert mint.status_code == 200, mint.text
 
-    ca = super_admin_user.claim_admin_get_ca()
+    ca = admin_user.claim_admin_get_ca()
     assert ca.status_code == 200, ca.text
     assert "BEGIN CERTIFICATE" in ca.json()["ca_certificate"]
 

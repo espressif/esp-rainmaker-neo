@@ -29,7 +29,7 @@ Account linking runs against the ESP User OIDC identity provider, not Cognito. A
 - **Scopes**: `openid`, `email`, `phone`, `profile`
 - **Redirect URIs**: registered dynamically by the config API (there are no hardcoded initial values); each POST unions its URIs onto the client's existing set, so the Alexa and Google Voice redirect URIs coexist on the shared `va-client` row
 - **Client ID**: `va-client` — the registry client id (also available in SSM `/espuser/base/va-client-id`)
-- **Client Secret**: the generated secret for `va-client`, retrievable via the superadmin clients API (`GET /v1/admin/clients?get_secret=true`) or SSM `/espuser/base/va-client-secret`
+- **Client Secret**: the generated secret for `va-client`, retrievable via the admin clients API (`GET /v1/admin/clients?get_secret=true`) or SSM `/espuser/base/va-client-secret`
 - **OIDC endpoints**: the `authorization_endpoint` and `token_endpoint` published in the discovery document (`/.well-known/openid-configuration`). Both are served on the ESP User API Gateway base (`EspUserApiUrl`): `<api-url>/oauth2/authorize` and `<api-url>/oauth2/token`.
 
 ### Automated Setup (recommended)
@@ -47,7 +47,7 @@ manual (it is an end-user OAuth consent flow that Amazon does not expose to SMAP
    - On its **Web Settings**, add Allowed Return URL exactly: `http://127.0.0.1:9090/cb`.
    - The profile must live in the **same developer account** that owns the skill/vendor.
 2. **AWS credentials — only for the standalone-script path** (the morpheus.py path posts
-   the config as the `--user` super-admin instead, so it needs no AWS creds):
+   the config as the `--user` admin instead, so it needs no AWS creds):
    ```bash
    aws sso login --profile <profile>
    export AWS_PROFILE=<profile>
@@ -56,7 +56,7 @@ manual (it is an end-user OAuth consent flow that Amazon does not expose to SMAP
 #### Run
 
 **Via morpheus.py** (recommended — the config-API POST is authenticated as the given
-super-admin user, no AWS creds needed). All inputs come from a config file:
+admin user, no AWS creds needed). All inputs come from a config file:
 
 ```json
 // alexa_skills_config.json
@@ -68,7 +68,7 @@ super-admin user, no AWS creds needed). All inputs come from a config file:
 }
 ```
 ```bash
-python cli/morpheus.py --user super_admin@example.com
+python cli/morpheus.py --user admin@example.com
 > alexa_setup_auto          # reads alexa_skills_config.json by default
 ```
 
@@ -134,7 +134,7 @@ done before calling the Store Configuration API.
    - **Authorization URI**: the discovery document's `authorization_endpoint` (`<api-url>/oauth2/authorize`)
    - **Access Token URI**: the discovery document's `token_endpoint` (`<api-url>/oauth2/token`)
    - **Client ID**: `va-client` (the OIDC client id; SSM `/espuser/base/va-client-id`)
-   - **Client Secret**: the `va-client` secret from the superadmin clients API (`GET /v1/admin/clients?get_secret=true`) or SSM `/espuser/base/va-client-secret`
+   - **Client Secret**: the `va-client` secret from the admin clients API (`GET /v1/admin/clients?get_secret=true`) or SSM `/espuser/base/va-client-secret`
    - **Scope**: `openid`, `email`, `phone`, `profile`
    - **Alexa Redirect URLs**: Copy the redirect URLs shown by Amazon (e.g., `https://pitangui.amazon.com/api/skill/link/...`, `https://layla.amazon.com/api/skill/link/...`, `https://alexa.amazon.co.jp/api/skill/link/...`)
 
@@ -150,7 +150,7 @@ Store the configuration by calling the admin configuration API below. It persist
 
 **API**: `POST /v1/admin/integrations/alexa/configuration`
 
-**Authorization**: Super admin only (SigV4)
+**Authorization**: Admin only (SigV4)
 
 **Request**:
 ```json

@@ -257,7 +257,7 @@ The rule and Lambda support two runtime delivery modes:
   three receives and then moved to `timeseries-ingest-dlq`, which retains them
   for 14 days.
 
-The superAdmin `/v1/admin/iot-event-mode` API switches
+The admin `/v1/admin/iot-event-mode` API switches
 `node_ts_batch_rule` together with the presence and publish-input rules. Both
 paths are always provisioned, so switching does not require a deployment.
 SQS mode provides queuing, invocation batching, retry isolation, and

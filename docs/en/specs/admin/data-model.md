@@ -7,7 +7,7 @@
 | Field            | Type    | Purpose               |
 | ---------------- | ------- | --------------------- |
 | `email`          | String  | Indexed               |
-| `is_super_admin` | Boolean | Super admin flag      |
+| `is_super_admin` | Boolean | Legacy admin flag; not read by any code path |
 | `phone`          | String  | Indexed               |
 | `provider`       | String  | `"COGNITO"`           |
 | `user_id` (PK)   | String  | Cognito identity      |

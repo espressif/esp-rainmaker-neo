@@ -36,12 +36,12 @@ with open('test_config.json', 'r') as f:
 # Find admin user
 admin_user = None
 for user in config.get('users', []):
-    if user.get('super_admin', False):
+    if user.get('admin', user.get('super_admin', False)):
         admin_user = user
         break
 
 if not admin_user:
-    print("ERROR: No super_admin user found in test_config.json")
+    print("ERROR: No admin user found in test_config.json")
     sys.exit(1)
 
 USERNAME = admin_user['name']

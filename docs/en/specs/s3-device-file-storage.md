@@ -127,7 +127,7 @@ flowchart TB
    `{"services": ["s3"]}`.
 2. Lambda confirms the node belongs to the group and the caller has access to
    it (full-group access, or a shared subgroup the node is tagged with).
-   Super-admins pass unconditionally. Anything else is `403`.
+   Admins pass unconditionally. Anything else is `403`.
 3. Lambda builds a session policy with S3 statements scoped to
    `node-data/{nodeId}/*` — that node only.
 4. Lambda calls `STS:AssumeRole` on IoT User Role with the session policy.

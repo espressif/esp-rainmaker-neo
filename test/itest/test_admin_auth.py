@@ -50,9 +50,9 @@ def cognito():
 
 
 def _provision_admin(email, password):
-    """Provision a super admin in the admin pool, yielding the address, then remove it.
+    """Provision a admin in the admin pool, yielding the address, then remove it.
 
-    Delegates to the same `create_super_admin_via_cognito` the harness uses everywhere else,
+    Delegates to the same `create_admin_via_cognito` the harness uses everywhere else,
     including its `password=False` contract for an identity with no password at all — which is
     exactly the shape the seeding custom resource now produces. It stamps `custom:super_admin`
     and a derived `custom:user_id`, without which every admin gate refuses the caller.
@@ -67,7 +67,7 @@ def _provision_admin(email, password):
     )
     cognito = boto3.client("cognito-idp", region_name=REGION)
     try:
-        assert provisioner.create_super_admin_via_cognito(
+        assert provisioner.create_admin_via_cognito(
             email=email, password=password,
         ), f"failed to provision admin {email}"
         yield email

@@ -108,10 +108,10 @@ POST /v1/groups/{groupId}/subgroups/{subGroupId}/assumed-roles
 ```
 
 encode exactly one group, at ~850 characters regardless of how many groups the
-caller has — but they are **restricted to super-admins**, so a regular client
+caller has — but they are **restricted to admins**, so a regular client
 cannot use them to sidestep the ceiling. Opening them to regular users would
 require resolving the caller's *own* scope for the requested group; the
-super-admin path grants full-group access through a system actor, and reusing it
+admin path grants full-group access through a system actor, and reusing it
 for a regular user would hand a `subentity` member the whole group's ARNs.
 
 Two further properties are worth knowing:

@@ -54,7 +54,7 @@ python3 morpheus.py --user someone@example.com           # prompts for the passw
 python3 morpheus.py --user admin@example.com --is-admin     # authenticate against the admin pool
 ```
 
-Add `--is-admin` when the account is a super admin, so it authenticates against the admin pool rather than the end-user one.
+Add `--is-admin` when the account is an admin, so it authenticates against the admin pool rather than the end-user one.
 
 The password is read from `--password`, then `RMNG_PASSWORD`, then an interactive prompt. Prefer the prompt or the environment variable: a password passed in `--password` is visible to other processes on the machine and is kept in your shell history.
 
@@ -68,7 +68,7 @@ For quick validation against a scratch deployment, `--setup-test-data` creates a
 python3 morpheus.py --setup-test-data
 ```
 
-On a fresh checkout this also writes `test_config.json` from `test_config.default.json`, generating passwords and device certificates. It needs admin AWS credentials, since it provisions users in Cognito. The seeded super admin is marked `"super_admin": true` in that file, so `--is-admin` is not needed to use it.
+On a fresh checkout this also writes `test_config.json` from `test_config.default.json`, generating passwords and device certificates. It needs admin AWS credentials, since it provisions users in Cognito. The seeded admin is marked `"admin": true` in that file, so `--is-admin` is not needed to use it.
 
 Since we created both test users and devices through `test_config.json`, we can now act as a user or as a device.
 
@@ -119,9 +119,9 @@ subscribe node_rsa params local       # subscribe to a node's named shadows
 register_client_ios com.app.id <token>  # register a push endpoint
 ```
 
-#### `--user <super-admin>` — Super-admin CLI
+#### `--user <admin>` — Admin CLI
 
-Same prompt as the User CLI, but for a super admin, so auth routes through the admin pool. Adds deployment-wide admin commands — these return 403 for a regular user. Pass `--is-admin` for an existing account; a seeded one is already marked `"super_admin": true` in the config.
+Same prompt as the User CLI, but for an admin, so auth routes through the admin pool. Adds deployment-wide admin commands — these return 403 for a regular user. Pass `--is-admin` for an existing account; a seeded one is already marked `"admin": true` in the config.
 
 ```bash
 python3 morpheus.py --user admin@example.com --is-admin

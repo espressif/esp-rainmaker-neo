@@ -55,14 +55,14 @@ A comprehensive, secure, and scalable user management system that can be integra
 
 ## Inputs from user
 
-- Default superadmin user email (can be changed later)
+- Default admin user email (can be changed later)
 
 ## Resources
 
 ### User
 
 - Cognito User Pool
-- A default root superadmin user
+- A default root admin user
 - APIs:
   - User
     - Signup (Can there be a link for verification?)
@@ -86,11 +86,11 @@ TODO: Scope
 - Cognito User Pool
 - Cognito User Pool Clients for dashboard and admin cli - TODO: configurable?
 - Cognito User Pool Domain - TODO: required?
-- A default superadmin user
+- A default admin user
 - APIs:
   - Own account
     - Same as [User](README.md#user)
-    - Change superadmin user
+    - Change admin user
   - User accounts
     - User management CRUD (including search by tags, email, phone number, name, active users, created_at, ) (Includes cloud to cloud auth)
     - RBAC for admins

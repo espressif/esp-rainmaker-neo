@@ -22,7 +22,7 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 )
 
-// Superadmin OAuth client registry (admin authorizer + custom:super_admin). Spec: espuser/docs/en/specs/admin-clients.md.
+// Admin OAuth client registry (admin authorizer). Spec: espuser/docs/en/specs/admin-clients.md.
 const (
 	pathClients    = "/v1/admin/clients"
 	pathClientByID = "/v1/admin/clients/{client_id}"
@@ -39,14 +39,14 @@ type ClientWriteRequest struct {
 	RequirePKCE  *bool     `json:"require_pkce,omitempty"`
 }
 
-// requireSuperAdmin gates on the custom:super_admin claim via auth.RequireSuperAdmin, mapping its errors to status codes.
-func requireSuperAdmin(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, bool) {
-	_, err := auth.RequireSuperAdmin(ctx, rmngrequest.ExtractAuthToken(request.Headers))
+// requireAdmin gates on the token verifying against the admin user pool via auth.RequireAdmin, mapping its errors to status codes.
+func requireAdmin(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, bool) {
+	_, err := auth.RequireAdmin(ctx, rmngrequest.ExtractAuthToken(request.Headers))
 	switch {
 	case err == nil:
 		return events.APIGatewayProxyResponse{}, true
-	case errors.Is(err, auth.ErrNotSuperAdmin):
-		return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("super_admin required")), false
+	case errors.Is(err, auth.ErrNotAdmin):
+		return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("admin privileges required")), false
 	case errors.Is(err, auth.ErrMissingToken):
 		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Unauthorized")), false
 	default:
@@ -80,7 +80,7 @@ func handleCreate(ctx context.Context, request events.APIGatewayProxyRequest) (e
 }
 
 func handleList(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	// get_secret=true returns each client's plaintext secret (superadmin-only surface).
+	// get_secret=true returns each client's plaintext secret (admin-only surface).
 	getSecret := strings.EqualFold(request.QueryStringParameters["get_secret"], "true")
 	list, err := clientsService(ctx).List(getSecret)
 	if err != nil {
@@ -149,7 +149,7 @@ func derefSlice(s *[]string) []string {
 }
 
 func handleClientsRequest(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	if resp, ok := requireSuperAdmin(ctx, request); !ok {
+	if resp, ok := requireAdmin(ctx, request); !ok {
 		return resp, nil
 	}
 

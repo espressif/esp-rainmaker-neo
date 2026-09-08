@@ -183,7 +183,7 @@ The action surface is split by intent; everything else is shared.
 | `GET`  | `/v1/admin/nodes/update-jobs/{requestId}` | Aggregate status of one update job |
 | `GET`  | `/v1/admin/nodes/update-jobs/{requestId}/failed-nodes` | Paginated audit failure list |
 
-All endpoints are gated by super-admin.
+All endpoints are gated by admin.
 
 Two things the shape does **not** do:
 
@@ -499,7 +499,7 @@ URL for that single object (15-minute expiry) and returns it inline. The URL
 is generated fresh on every status call, so it is never stale; the client
 (dashboard or script) fetches the bytes **directly from S3**, bypassing the
 Lambda/API-Gateway response path entirely. Access control is preserved
-end-to-end: the URL is minted only for a caller who passed super-admin RBAC
+end-to-end: the URL is minted only for a caller who passed admin RBAC
 on the status endpoint, is scoped to the single object, and expires in 15
 minutes. This requires a presigned-GET helper (the existing presign helper
 is PUT-only). No new read-side IAM is required — the registration/update
@@ -773,9 +773,9 @@ jobs. The container image is the same.
 
 ## 5. Security Analysis
 
-### 5.1 Super-admin gating
+### 5.1 Admin gating
 
-All registration and update endpoints sit behind super-admin RBAC (the
+All registration and update endpoints sit behind admin RBAC (the
 node-admin add permission for writes, the node-admin registration-status
 permission for reads). The same gates apply to `failed-nodes` reads — a
 tenant who cannot see the job record cannot see its failure list.

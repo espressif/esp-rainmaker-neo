@@ -14,7 +14,7 @@ Outbound notifications delivered to a user's installed mobile app via APNS (iOS)
 
 ## Pre-requisites
 
-- A super admin has registered a push integration via `POST /v1/admin/integrations?integration_type=apns|apns_sandbox|gcm` (creates an SNS Platform Application — see [Register Integration](#register-integration)).
+- A admin has registered a push integration via `POST /v1/admin/integrations?integration_type=apns|apns_sandbox|gcm` (creates an SNS Platform Application — see [Register Integration](#register-integration)).
 - The mobile app has obtained an APNS/GCM device token from the OS.
 - The user is authenticated and has registered the device via `PUT /v1/integrations/{integrationId}/endpoints` (creates an SNS Platform Endpoint and returns an `endpoint_id` — see [Register Endpoint](#register-endpoint)).
 
@@ -65,7 +65,7 @@ The notifications surface is part of the unified integrations tree. Push integra
 
 **API**: `POST /v1/admin/integrations?integration_type=apns|apns_sandbox|gcm`
 
-**Access Control**: Super-admin only — non-admin callers get `403`.
+**Access Control**: Admin only — non-admin callers get `403`.
 
 #### Obtaining the credentials
 
@@ -147,7 +147,7 @@ arn:aws:sns:<region>:<account>:app/<PLATFORM_TYPE>/<platform_app_name>
 
 **API**: `GET /v1/admin/integrations` (optionally filtered by `?integration_type=...`)
 
-**Access Control**: Super-admin only.
+**Access Control**: Admin only.
 
 **Process**:
 
@@ -160,7 +160,7 @@ arn:aws:sns:<region>:<account>:app/<PLATFORM_TYPE>/<platform_app_name>
 
 **API**: `GET /v1/admin/integrations/{integrationId}`
 
-**Access Control**: Super-admin only.
+**Access Control**: Admin only.
 
 **Response (APNS variant)** — only `bundle_id` is recoverable from SNS; `key_id` / `team_id` are not stored on the platform application and are not returned:
 
@@ -188,13 +188,13 @@ arn:aws:sns:<region>:<account>:app/<PLATFORM_TYPE>/<platform_app_name>
 
 For APNS the `.p8` body is never returned (SNS does not expose `PlatformCredential` for APNS in a recoverable form). For GCM the service-account JSON — including the private key — **is** returned.
 
-> Security note: the GCM response returns sensitive credential material verbatim (the service-account private key). Keep this endpoint restricted to super-admins and avoid logging or caching its response.
+> Security note: the GCM response returns sensitive credential material verbatim (the service-account private key). Keep this endpoint restricted to admins and avoid logging or caching its response.
 
 ### Update Integration Credentials
 
 **API**: `PUT /v1/admin/integrations/{integrationId}`
 
-**Access Control**: Super-admin only.
+**Access Control**: Admin only.
 
 **Request body**: same shape as the matching variant of `IntegrationConfigRequest` for the integration's type.
 
@@ -212,7 +212,7 @@ For GCM, the new key's `project_id` must match the existing integration's projec
 
 **API**: `DELETE /v1/admin/integrations/{integrationId}`
 
-**Access Control**: Super-admin only.
+**Access Control**: Admin only.
 
 **Process**:
 

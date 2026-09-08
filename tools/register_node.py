@@ -13,8 +13,8 @@ Usage:
     python tools/register_node.py --cert /path/to/cert.pem --config /path/to/rmng-outputs.json
 
 Environment variables (optional):
-    ADMIN_USERNAME      - Super admin username
-    ADMIN_PASSWORD      - Super admin password
+    ADMIN_USERNAME      - Admin username
+    ADMIN_PASSWORD      - Admin password
 """
 
 import argparse
@@ -48,7 +48,7 @@ def load_config(config_path):
 
 
 def signin(region, admin_client_id, username, password):
-    """Sign in as super admin against the admin Cognito pool and return the ID token.
+    """Sign in as admin against the admin Cognito pool and return the ID token.
 
     Admins have no admin-auth API; they authenticate against Cognito directly.
     """
@@ -138,9 +138,9 @@ def main():
     parser.add_argument("--ca-cert",
                         help="Path to the CA certificate PEM file")
     parser.add_argument("--username", default=os.environ.get("ADMIN_USERNAME"),
-                        help="Super admin username (or set ADMIN_USERNAME env var)")
+                        help="Admin username (or set ADMIN_USERNAME env var)")
     parser.add_argument("--password", default=os.environ.get("ADMIN_PASSWORD"),
-                        help="Super admin password (or set ADMIN_PASSWORD env var)")
+                        help="Admin password (or set ADMIN_PASSWORD env var)")
     parser.add_argument("--thing-groups", nargs="+",
                         help="IoT Thing Group names to add the node to")
     parser.add_argument("--tags", nargs="+",

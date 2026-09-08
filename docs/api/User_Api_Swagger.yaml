@@ -81,7 +81,7 @@ tags:
       request/response compatible. Credentials verify against the bundled
       Cognito pool server-side; every token returned is an ESP User token.
   - name: Admin Clients
-    description: Superadmin-only OAuth client registry
+    description: Admin-only OAuth client registry
   - name: Admin Creds
     description:
       Scoped AWS credentials the dashboard uses to run seevral admin steps
@@ -803,14 +803,14 @@ paths:
           $ref: "#/components/responses/InternalServerError"
 
   # ==========================================
-  # Admin — OAuth Client Registry (superadmin)
+  # Admin — OAuth Client Registry (admin)
   # ==========================================
 
   /v1/admin/clients:
     post:
       summary: Create OAuth client
       description: |
-        Registers a new OAuth/OIDC client. Superadmin only. `redirect_uris` must
+        Registers a new OAuth/OIDC client. Admin only. `redirect_uris` must
         be exact matches (no wildcards); `implicit` and `password` grants are not
         allowed; public clients must use PKCE. For confidential clients a secret
         is generated and its plaintext is returned **once** in this response.
@@ -845,7 +845,7 @@ paths:
         Lists every registered client. By default the secret is omitted; pass
         `get_secret=true` to include each confidential client's plaintext secret
         (this is how a lost secret is recovered — there is no rotate endpoint).
-        Whether a client has a secret is implied by `client_type`. Superadmin only.
+        Whether a client has a secret is implied by `client_type`. Admin only.
       tags:
         - Admin Clients
       security:
@@ -894,7 +894,7 @@ paths:
       description: |
         Replaces a client's mutable fields with the request body (full update — omitted
         fields reset to empty/default). `client_id`, `client_type`, and the secret cannot
-        be changed. The same validation rules as create are applied. Superadmin only.
+        be changed. The same validation rules as create are applied. Admin only.
       tags:
         - Admin Clients
       security:
@@ -925,7 +925,7 @@ paths:
       description: |
         Permanently deletes the client. Already-issued tokens keep working until
         they expire, but the client can no longer authorize, exchange, or use OTP.
-        Superadmin only.
+        Admin only.
       tags:
         - Admin Clients
       security:
@@ -942,7 +942,7 @@ paths:
 
   /v1/admin/credentials:
     post:
-      summary: Get espuser-scoped AWS credentials (superadmin)
+      summary: Get espuser-scoped AWS credentials (admin)
       description: |
         Returns short-lived STS credentials whose session policy is scoped to the
         espuser-owned post-deployment actions the dashboard performs itself: SNS SMS
@@ -1567,7 +1567,7 @@ components:
       name: Authorization
       in: header
       description: |
-        Admin Cognito User Pool JWT, for the superadmin APIs (`/v1/admin/*`).
+        Admin Cognito User Pool JWT, for the admin APIs (`/v1/admin/*`).
         End-user routes take an ESP User token instead — see `bearerAuth`.
       x-amazon-apigateway-authtype: cognito_user_pools
     bearerAuth:
