@@ -118,6 +118,32 @@ def _shadow_name(device, group_id):
     return name
 
 
+def _declare_light(device, group_id):
+    """Declares one bool and one bounded int on the node, subscribes to its params topic, and returns that topic. With no `devices` key there is nothing for a write to contradict, so every rejection and repair case needs this config first."""
+    device.connect()
+    device.get_group_info()
+    assert device.set_node_config({
+        "devices": [{
+            "id": "Light",
+            "type": "esp.device.lightbulb",
+            "primary": "Power",
+            "params": [
+                {"id": "Power", "type": "esp.param.power", "data_type": "bool",
+                 "properties": ["read", "write"]},
+                {"id": "Brightness", "type": "esp.param.brightness", "data_type": "int",
+                 "properties": ["read", "write"], "bounds": {"min": 0, "max": 100}},
+            ],
+        }],
+        "info": {"fw_version": "1.0"},
+    })
+
+    shadow_name = _shadow_name(device, group_id)
+    assert device.shadow_connect([shadow_name])
+    params_topic = f"rainmaker/nodes/{device.node_thing_name}/user/{shadow_name}/params"
+    assert device.subscribe(topic=params_topic)
+    return params_topic
+
+
 # --- Protocol level -----------------------------------------------------------------------
 
 def test_mcp_get_returns_401():
@@ -532,30 +558,7 @@ def test_mcp_set_params_rejects_a_parameter_the_device_never_declared(associated
     device, group_id, test_user1, _ = associated_device
     node_id = device.node_thing_name
 
-    device.connect()
-    device.get_group_info()
-    # A config that positively declares its devices: with no `devices` key there is nothing to
-    # contradict, and validation correctly stands aside (see test_mcp_set_params).
-    assert device.set_node_config({
-        "devices": [{
-            "id": "Light",
-            "type": "esp.device.lightbulb",
-            "primary": "Power",
-            "params": [
-                {"id": "Power", "type": "esp.param.power", "data_type": "bool",
-                 "properties": ["read", "write"]},
-                {"id": "Brightness", "type": "esp.param.brightness", "data_type": "int",
-                 "properties": ["read", "write"], "bounds": {"min": 0, "max": 100}},
-            ],
-        }],
-        "info": {"fw_version": "1.0"},
-    })
-
-    shadow_name = _shadow_name(device, group_id)
-    assert device.shadow_connect([shadow_name])
-    params_topic = f"rainmaker/nodes/{node_id}/user/{shadow_name}/params"
-    assert device.subscribe(topic=params_topic)
-
+    _declare_light(device, group_id)
     client = mcp_client(test_user1)
 
     unknown_device = client.set_params(group_id, node_id, {"OTA": {"Trigger": True}})
@@ -566,7 +569,8 @@ def test_mcp_set_params_rejects_a_parameter_the_device_never_declared(associated
     assert unknown_param.is_error
     assert "Brightness" in unknown_param.text, "the error must name the writable parameters"
 
-    wrong_type = client.set_params(group_id, node_id, {"Light": {"Power": "on"}})
+    # A string no boolean can be read out of; the quoted spellings of one are repaired instead — see test_mcp_set_params_repairs_a_quoted_value.
+    wrong_type = client.set_params(group_id, node_id, {"Light": {"Power": "red"}})
     assert wrong_type.is_error
     assert "boolean" in wrong_type.text
 
@@ -583,6 +587,27 @@ def test_mcp_set_params_rejects_a_parameter_the_device_never_declared(associated
     result = client.set_params(group_id, node_id, accepted).json()
     assert result["succeeded"] == 1
     assert device.wait_for_params_message(timeout=10) == accepted
+
+
+def test_mcp_set_params_repairs_a_quoted_value(associated_device, mcp_client):
+    """A boolean or number sent as a string is published as a real boolean or number. Asserted at the wire because firmware refuses an update of the wrong type, so publishing the string would be a success the device drops."""
+    device, group_id, test_user1, _ = associated_device
+    node_id = device.node_thing_name
+
+    _declare_light(device, group_id)
+    client = mcp_client(test_user1)
+
+    assert client.set_params(group_id, node_id, {"Light": {"Power": "true", "Brightness": "80"}}).json()["succeeded"] == 1
+    assert device.wait_for_params_message(timeout=10) == {"Light": {"Power": True, "Brightness": 80}}
+
+    assert client.set_params(group_id, node_id, {"Light": {"Power": "off"}}).json()["succeeded"] == 1
+    assert device.wait_for_params_message(timeout=10) == {"Light": {"Power": False}}
+
+    # Repair is not clamping: a number the bounds refuse is still refused.
+    out_of_bounds = client.set_params(group_id, node_id, {"Light": {"Brightness": "150"}})
+    assert out_of_bounds.is_error
+    assert "0-100" in out_of_bounds.text
+    assert device.wait_for_params_message(timeout=5) is None, "a rejected write must not be published"
 
 
 def test_mcp_list_devices_reports_what_a_write_will_accept(associated_device, mcp_client):

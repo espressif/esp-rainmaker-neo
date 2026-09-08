@@ -80,13 +80,12 @@ var _ = Describe("NodeCfg.ValidateParams", func() {
 				map[string]interface{}{"Colour Light": map[string]interface{}{"Temperature": 20.0}},
 				config.ViolationReadOnly, "read-only"),
 			Entry("a string where a bool is declared", richLight(),
-				map[string]interface{}{"Colour Light": map[string]interface{}{"Power": "on"}},
+				map[string]interface{}{"Colour Light": map[string]interface{}{"Power": "red"}},
 				config.ViolationWrongType, "a boolean (true/false)"),
 			Entry("a fraction where a whole number is declared", richLight(),
 				map[string]interface{}{"Colour Light": map[string]interface{}{"V": 80.5}},
 				config.ViolationWrongType, "a whole number"),
-			// Not coerced. Firmware does not coerce either, so accepting it would publish a
-			// message the device drops and report success — the failure being removed here.
+			// The validator itself never coerces: judging and repairing are separate steps, and a caller that wants the repair calls params.Repair first — which is what the MCP write path does, so a quoted number reaching this check unrepaired means no data_type declared it.
 			Entry("a numeric string where a number is declared", richLight(),
 				map[string]interface{}{"Colour Light": map[string]interface{}{"V": "80"}},
 				config.ViolationWrongType, "a whole number"),

@@ -5,6 +5,8 @@
 package utils
 
 import (
+	"math"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -29,6 +31,96 @@ var _ = Describe("Type Utilities", func() {
 			result := PtrValue(ptr)
 			Expect(result).To(Equal(0)) // Zero value for int
 		})
+	})
+
+	Describe("ToNumber", func() {
+		DescribeTable("reads a number out of a decoded value",
+			func(value interface{}, want float64, readable bool) {
+				number, ok := ToNumber(value)
+				Expect(ok).To(Equal(readable))
+				if readable {
+					Expect(number).To(Equal(want))
+				}
+			},
+			Entry("a JSON number", float64(80), float64(80), true),
+			Entry("a float32", float32(1.5), float64(1.5), true),
+			Entry("an int", 42, float64(42), true),
+			Entry("an int64", int64(42), float64(42), true),
+			Entry("a uint8", uint8(7), float64(7), true),
+			Entry("NaN", math.NaN(), float64(0), false),
+			Entry("positive infinity", math.Inf(1), float64(0), false),
+			// A number's text form is ParseNumber's business, so a caller type-checking a value is not told a string is a number.
+			Entry("a numeric string", "80", float64(0), false),
+			Entry("a bool", true, float64(0), false),
+			Entry("nil", nil, float64(0), false),
+		)
+	})
+
+	Describe("ParseNumber", func() {
+		DescribeTable("reads a number out of its text form",
+			func(text string, want float64, readable bool) {
+				number, ok := ParseNumber(text)
+				Expect(ok).To(Equal(readable))
+				if readable {
+					Expect(number).To(Equal(want))
+				}
+			},
+			Entry("a whole number", "80", float64(80), true),
+			Entry("a decimal", "21.5", float64(21.5), true),
+			Entry("a negative number", "-4", float64(-4), true),
+			Entry("surrounding space", " 80 ", float64(80), true),
+			Entry("exponent notation", "1e3", float64(1000), true),
+			Entry("a word", "high", float64(0), false),
+			Entry("an empty string", "", float64(0), false),
+			Entry("NaN spelled out", "NaN", float64(0), false),
+			Entry("infinity spelled out", "Inf", float64(0), false),
+		)
+	})
+
+	Describe("ToInt64", func() {
+		DescribeTable("narrows a whole number",
+			func(number float64, want int64, narrowed bool) {
+				value, ok := ToInt64(number)
+				Expect(ok).To(Equal(narrowed))
+				if narrowed {
+					Expect(value).To(Equal(want))
+				}
+			},
+			Entry("a whole number", float64(80), int64(80), true),
+			Entry("a whole number written as a decimal", float64(80.0), int64(80), true),
+			Entry("a negative whole number", float64(-80), int64(-80), true),
+			Entry("zero", float64(0), int64(0), true),
+			Entry("a fraction", 80.5, int64(0), false),
+			Entry("beyond int64", 1e30, int64(0), false),
+		)
+	})
+
+	Describe("ToBool", func() {
+		DescribeTable("reads a boolean out of a value",
+			func(value interface{}, want bool, readable bool) {
+				flag, ok := ToBool(value)
+				Expect(ok).To(Equal(readable))
+				if readable {
+					Expect(flag).To(Equal(want))
+				}
+			},
+			Entry("a bool", true, true, true),
+			Entry("a false bool", false, false, true),
+			Entry(`"true"`, "true", true, true),
+			Entry(`"false"`, "false", false, true),
+			Entry("capitals and spaces", " TRUE ", true, true),
+			Entry(`"on"`, "on", true, true),
+			Entry(`"off"`, "off", false, true),
+			Entry(`"yes"`, "yes", true, true),
+			Entry(`"no"`, "no", false, true),
+			Entry(`"1"`, "1", true, true),
+			Entry(`"0"`, "0", false, true),
+			Entry("1 as a number", 1, true, true),
+			Entry("0 as a number", float64(0), false, true),
+			Entry("a number that is neither", 2, false, false),
+			Entry("a word that is not a boolean", "red", false, false),
+			Entry("nil", nil, false, false),
+		)
 	})
 
 	Describe("ConvertAnyToAny", func() {

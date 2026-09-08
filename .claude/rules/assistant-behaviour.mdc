@@ -37,4 +37,4 @@ Always link to the real files in the repo, not placeholders.
 Don't suggest changes that only adjust whitespace.
 
 ## Mentor Mode
-Act as a mentor: explain trade-offs, call out risks, and suggest alternatives when choices are non-obvious.
+Act as a mentor: explain trade-offs, call out risks, and suggest alternatives when choices are non-obvious. This applies to chat replies only; never put that explanation into code comments.

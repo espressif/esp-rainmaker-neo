@@ -9,10 +9,7 @@ import (
 	"strings"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_details_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/config"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )
 
@@ -130,54 +127,4 @@ func SplitIDs(value string) []string {
 		}
 	}
 	return ids
-}
-
-// validateParamsForNode checks a params payload against what the node declared in its config,
-// returning the message to hand back to the model, or "" when the write may proceed.
-//
-// The whole point is that set_params is a generic write: a model can name a device or parameter
-// the node never had, and the cloud used to publish it, get ignored by firmware, and report
-// success. Checking here is the only place it can be caught — there is no acknowledgement from
-// the device to check afterwards.
-//
-// Every branch that cannot judge the write lets it through, and says why in the log. Config is
-// firmware-reported and its ingest is never schema-checked, so sparse and malformed configs are
-// normal; refusing on missing metadata would make working devices uncontrollable, which is worse
-// than the silent no-op being fixed. Only a config that positively contradicts the write rejects.
-func validateParamsForNode(rmngCtx *rmngctx.RmngContext, nodeID string, params map[string]interface{}) string {
-	skip := func(reason string) string {
-		rlog.Debug(rmngCtx).Str("node_id", nodeID).Str("validation_skipped", reason).
-			Msg("Publishing params without validating them against node config")
-		return ""
-	}
-
-	nodeDetails, err := node_details_db.NewNodeDetailsDB(rmngCtx).GetNodeDetails(nodeID)
-	if err != nil || nodeDetails == nil {
-		// A DynamoDB blip must not make a lamp uncontrollable: availability of the write path
-		// must not become worse than it was before this check existed.
-		return skip("config_unreadable")
-	}
-	cfgData, err := nodeDetails.GetServiceData(configService.GetName())
-	if err != nil || cfgData == nil {
-		// A node registered but never connected has no config and is still worth writing to.
-		return skip("config_absent")
-	}
-	nodeCfg, err := config.ToNodeCfg(cfgData)
-	if err != nil {
-		return skip("config_undecodable")
-	}
-	if nodeCfg.SkipValidation() {
-		return skip("config_not_judgeable")
-	}
-
-	violations := nodeCfg.ValidateParams(params)
-	if len(violations) == 0 {
-		return ""
-	}
-	for _, violation := range violations {
-		rlog.Info(rmngCtx).Str("node_id", nodeID).Str("validation_rejected", string(violation.Kind)).
-			Str("device", violation.Device).Str("param", violation.Param).
-			Msg("Refused a params write the node's config contradicts")
-	}
-	return config.ViolationsMessage(nodeID, violations)
 }

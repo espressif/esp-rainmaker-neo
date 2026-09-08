@@ -88,7 +88,7 @@ undeclared parameter was accepted, published, ignored by firmware, and reported 
 `succeeded: 1` — the user was told a change happened that never did.
 
 Writes are therefore validated against the node's own config before publishing, in
-`NodeCfg.ValidateParams`. Two things make it safe to enforce:
+`NodeCfg.ValidateParams`, driven by `service/params`. Two things make it safe to enforce:
 
 - **Only a positive contradiction rejects.** Config is firmware-reported and its ingest is never
   schema-checked, so sparse and malformed configs are normal. A missing `data_type`, an absent
@@ -110,6 +110,10 @@ is stable across every device, which is the mapping a typed API would have suppl
 Schedules are validated identically. A schedule's `action` is a params payload, so leaving it
 unchecked would simply teach a refused model to route the same invented parameter through
 `set_schedule` and surface the failure at 7am.
+
+Rejection alone turned out to be the wrong answer for one class of mistake. A model that sends `{"Power": "true"}` for a boolean has the intent exactly right and the JSON type wrong, and the smaller models do not read the type out of the error and correct themselves — they retry the identical payload until they run out of turns, which left device control unusable on models whose reads and OAuth worked fine, at a tool invocation per attempt. Relaxing the check was not an option either: firmware fixes a parameter's type at creation and refuses an update of any other type (`ESP_RMAKER_INVALID_ARG`), so accepting the string would publish a message the device drops — the silent no-op again.
+
+So the repair lives with the write. `service/params` is the seam every checked params write goes through: it reads the node's config, repairs the payload, has `NodeCfg.ValidateParams` judge the repaired one, and publishes that — the publish of the repaired payload, not the check, is the load-bearing part. `set_params` calls `ParamsService.Publish`, `set_schedule` calls `ParamsService.Check` because a schedule's action is stored rather than published, and the MCP tools are left with what is theirs: authorization, and how a refusal is reported per node. It is narrower than the validator: `params.Repair` turns a quoted boolean (`"true"`, `"on"`, `"1"`) or a quoted number (`"80"`) into one, against a `data_type` the config actually declares, and nothing else moves. An undeclared type, an unknown parameter, `"red"` for a boolean, `2` for a boolean, `"50.5"` for an int — all travel through untouched and are answered by the validator as before. The repair never makes a value acceptable: `"150"` on a 0-100 parameter becomes `150` and is then refused by the bounds check.
 
 This covers the MCP caller only. Apps publish params straight to MQTT with scoped STS credentials
 and no Lambda in the path, and the voice integrations publish through

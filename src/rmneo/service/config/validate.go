@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils"
 )
 
 // Validating a params write against the node's own config exists for one caller in particular: an
@@ -65,14 +67,15 @@ const (
 	maxMessageLen      = 400
 )
 
-// dataType values this validator understands. Anything else — a typo, "object", a future
-// addition — is unjudgeable and skipped rather than guessed at.
+// data_type values this validator understands. Anything else — a typo, "object", a future addition — is unjudgeable and skipped rather than guessed at.
+//
+// Exported because a param's declared type is the vocabulary of the whole write path, not just of this file: the params service repairs values against these same names, and a second copy of the strings is how the two would drift apart.
 const (
-	dataTypeBool   = "bool"
-	dataTypeInt    = "int"
-	dataTypeFloat  = "float"
-	dataTypeString = "string"
-	dataTypeArray  = "array"
+	DataTypeBool   = "bool"
+	DataTypeInt    = "int"
+	DataTypeFloat  = "float"
+	DataTypeString = "string"
+	DataTypeArray  = "array"
 )
 
 // SkipValidation reports whether this config carries too little to judge any write at all.
@@ -293,10 +296,7 @@ func (nc NodeCfg) entryIDs() []string {
 
 // ValidateParams checks a set_params-shaped payload against what the node declared.
 //
-// It never mutates params, and it never coerces: a caller publishes its own map or nothing at all.
-// Coercing "80" to 80 would turn this into a transform every caller had to adopt, and would put
-// back the silent failure it exists to remove — firmware does not coerce, so a coerced-looking
-// success would still be a message the device drops.
+// It never mutates params and it never coerces: this reports what the config says, and nothing more. Repairing an obvious type mistake is the params service's job (params.Repair), and is deliberately a separate step — a caller that publishes what it validated gets both, and a caller that only wants to know whether a payload is acceptable is not handed a rewritten map it then has to remember to use.
 //
 // A nil result means the config does not contradict the write, which is also what a config too
 // sparse to judge returns.
@@ -418,16 +418,16 @@ func (nc NodeCfg) validateParam(deviceID, paramID string, value interface{}) (Vi
 // does not fit. An undeclared or unrecognised data_type is unjudgeable, so it passes.
 func (p NodeCfgDeviceParam) typeMismatch(value interface{}) (expected string, ok bool) {
 	switch p.DataType {
-	case dataTypeBool:
+	case DataTypeBool:
 		if _, isBool := value.(bool); !isBool {
 			return "a boolean (true/false)", false
 		}
-	case dataTypeString:
+	case DataTypeString:
 		if _, isString := value.(string); !isString {
 			return "a string", false
 		}
-	case dataTypeInt:
-		number, isNumber := asFloat(value)
+	case DataTypeInt:
+		number, isNumber := utils.ToNumber(value)
 		if !isNumber {
 			return "a whole number", false
 		}
@@ -436,11 +436,11 @@ func (p NodeCfgDeviceParam) typeMismatch(value interface{}) (expected string, ok
 		if math.Trunc(number) != number {
 			return "a whole number", false
 		}
-	case dataTypeFloat:
-		if _, isNumber := asFloat(value); !isNumber {
+	case DataTypeFloat:
+		if _, isNumber := utils.ToNumber(value); !isNumber {
 			return "a number", false
 		}
-	case dataTypeArray:
+	case DataTypeArray:
 		if _, isArray := value.([]interface{}); !isArray {
 			return "an array", false
 		}
@@ -451,7 +451,7 @@ func (p NodeCfgDeviceParam) typeMismatch(value interface{}) (expected string, ok
 // outOfBounds range-checks any numeric value that has usable bounds. It keys off the value being
 // numeric rather than off data_type, because plenty of configs carry bounds while omitting the type.
 func (p NodeCfgDeviceParam) outOfBounds(value interface{}) (expected string, ok bool) {
-	number, isNumber := asFloat(value)
+	number, isNumber := utils.ToNumber(value)
 	if !isNumber {
 		return "", true
 	}
@@ -466,30 +466,6 @@ func (p NodeCfgDeviceParam) outOfBounds(value interface{}) (expected string, ok 
 		return p.rangeSpec(), false
 	}
 	return "", true
-}
-
-// asFloat accepts the float64 every JSON number decodes to, plus the Go integer types a
-// hand-built map may carry. NaN and infinities are not numbers any device can use.
-func asFloat(value interface{}) (float64, bool) {
-	var number float64
-	switch typed := value.(type) {
-	case float64:
-		number = typed
-	case float32:
-		number = float64(typed)
-	case int:
-		number = float64(typed)
-	case int32:
-		number = float64(typed)
-	case int64:
-		number = float64(typed)
-	default:
-		return 0, false
-	}
-	if math.IsNaN(number) || math.IsInf(number, 0) {
-		return 0, false
-	}
-	return number, true
 }
 
 // ViolationsMessage renders violations into the single line a model is shown. It names the
