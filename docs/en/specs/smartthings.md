@@ -1,4 +1,4 @@
-# SmartThings
+# Samsung SmartThings
 
 ## What is SmartThings
 

@@ -1,4 +1,4 @@
-# Legacy native user auth (`/v1/user/auth/*`) — backward compatibility
+# Native Auth
 
 > **Compatibility exception to the "users are passwordless" decision.**
 > Apps built against `main` call the native `/v1/user/auth/*` endpoints

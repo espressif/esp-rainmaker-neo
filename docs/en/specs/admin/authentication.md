@@ -1,4 +1,4 @@
-# Authentication and Permissions
+# Admin Sessions & Permissions
 
 How an admin session is established, and what the IAM role behind it can do.
 [user_auth.md](../user_auth.md) is the authority for the identity model as a

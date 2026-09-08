@@ -1,4 +1,4 @@
-# Email sender resolution
+# Email Senders
 
 ## What this is
 

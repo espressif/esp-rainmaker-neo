@@ -1,4 +1,4 @@
-# Group
+# Groups
 
 ## What is group
 

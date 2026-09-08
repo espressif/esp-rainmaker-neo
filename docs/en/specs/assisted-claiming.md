@@ -1,4 +1,4 @@
-# Assisted Claiming Feature Design
+# Assisted Claiming
 
 ## 1. Overview
 

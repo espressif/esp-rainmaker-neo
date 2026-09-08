@@ -1,4 +1,4 @@
-# Limits
+# Limits and Quotas
 
 **S**oft limits are adjustable through AWS Support; **h**ard ones are not. Several
 defaults are lower in some regions — check the

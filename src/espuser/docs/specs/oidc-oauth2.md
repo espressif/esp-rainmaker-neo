@@ -77,7 +77,7 @@ semantics:
 > credentials via Cognito identity-pool OIDC federation; that mechanism (the
 > identity pool, the device-users role, STS `AssumeRoleWithWebIdentity`) is
 > owned by the ESP RainMaker Neo side — see
-> [docs/en/specs/user_auth.md](../../../docs/en/specs/user_auth.md).
+> [user_auth.md](../user_auth.md).
 
 ## Design
 

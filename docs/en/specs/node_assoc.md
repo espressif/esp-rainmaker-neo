@@ -1,4 +1,4 @@
-# Node association
+# Node Association
 
 ## What is node association
 

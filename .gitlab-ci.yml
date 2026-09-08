@@ -556,6 +556,8 @@ sync_events:
 
 .docs_changes: &docs_changes
   - docs/**/*
+  # Pulled into the build by docs/conf_common.py.
+  - src/espuser/docs/**/*
   - .gitlab-ci.yml
 
 build_docs:
@@ -618,12 +620,10 @@ deploy_docs_production:
     DOCS_DEPLOY_SERVER_USER: "$DOCS_PROD_SERVER_USER"
     DOCS_DEPLOY_PATH: "$DOCS_PROD_PATH"
     DOCS_DEPLOY_URL_BASE: "$DOCS_PROD_URL_BASE"
-  # allow_failure keeps this non-blocking: under rules: a manual job defaults to
-  # blocking, and the project requires a green pipeline to merge.
-  allow_failure: true
+  # No allow_failure: this runs only on post-merge main pipelines, never on an
+  # MR, so a failure cannot block a merge -- and a failed publish must be loud.
   # The changes: filter must mirror build_docs': this job needs: it, and a
   # pipeline that creates the deploy without the build is a YAML error.
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
       changes: *docs_changes
-      when: manual

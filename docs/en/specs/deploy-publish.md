@@ -1,4 +1,4 @@
-# Deploy & Publish: Two Deployment Flows and Operator Inputs
+# Deployment
 
 ## 1. Overview
 
