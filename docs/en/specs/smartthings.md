@@ -461,10 +461,10 @@ Ordered checklist for a developer verifying the whole pipeline on a fresh deploy
 
    *Checkpoint*: `GET /v1/admin/integrations/smartthings/configuration` returns the `client_id`; the `espuser-oauth-clients` row for `va-client` lists the three redirect URIs.
 
-4. **Bring up a test user and device.** Use `cli/morpheus.py` to create a user and register a node (see `cli/README.md`), then run the device simulator:
+4. **Bring up a test user and device.** Use `morpheus` to create a user and register a node (see `cli/README.md`), then run the device simulator:
 
    ```bash
-   python3 test/device_sim.py --device <device-id-from-test_config.json>
+   morpheus device-sim <device-id-from-test_config.json>
    ```
 
    *Checkpoint*: the simulator boots and requests `getSTEn`; before discovery it prints `SmartThings enabled status updated: False`.

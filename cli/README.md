@@ -1,185 +1,333 @@
-# Getting Started with `morpheus.py`
+# `morpheus` — the ESP RainMaker Neo console client
 
-`morpheus.py` is an interactive CLI for configuring and exercising an ESP RainMaker Neo deployment end-to-end: it authenticates users against Cognito, registers/destroys IoT nodes, drives the user-facing REST API, connects to MQTT as a user or a simulated device, and manages groups, sharing, mobile push platforms, Matter association, and licenses. It allows developers to test and validate any deployment based feature, without needing a device or phone app around.
+`morpheus` configures and exercises an ESP RainMaker Neo deployment end to end. It authenticates
+users, registers and destroys IoT nodes, drives the user-facing REST API, connects to MQTT as a user
+or as a simulated device, and manages groups, sharing, mobile push platforms and Matter
+commissioning. It validates any deployment feature with no device and no phone app.
 
-The script talks to a *specific* deployment. To do that it needs the following things:
+It installs as a command and runs from any directory, against any deployment, with no checkout of
+this repository.
 
-1. **Deployment outputs** — Each ESP RainMaker Neo deployment captures it commonly used outputs into an output file. This file is used by phone apps, dashboard, this CLI or any other clients to communicate with the deployment. This CLI requires this file to point at a specific deployment. It will either use a local `rmng-outputs.json` (local) or a published URL via the `--client-outputs` parameter.
-2. **AWS Credentials** - To keep things simple, in the code, this CLI also relies on directly accessing AWS resources using Python's boto3 module. The CLI expects that the terminal, from where the CLI is executed, can perform actions on the AWS Account and region, that the client outputs point to. It checks this on startup and refuses to run against a mismatched account or region; pass `--skip-account-check` to override.
+To reach a deployment, `morpheus` needs its **outputs**: every deployment publishes its common
+outputs to one file, which phone apps, the dashboard and this client all read. `morpheus` reads
+`rmng-outputs.json`, or the source given by `--client-outputs`.
+
+Most of `morpheus` needs nothing else. Driving a deployment as a user or a node goes through the
+deployment's own API and its MQTT broker — an end user signs in against the API and is handed
+credentials by it — so `morpheus --client-outputs <url> user someone@example.com` works with no AWS
+account, no profile, and no checkout.
+
+**AWS credentials** are needed only by the commands that reach AWS directly: `test-data`,
+`bot-user`, and `admin ses` / `admin sns`. Each of those creates, deletes or sweeps real resources,
+so they check that the credentials name the account in the outputs and refuse to run against
+another one. The region is not enforced: every AWS client is built with the region from the outputs,
+so a differing ambient region is reported and ignored.
 
 ---
 
-## 1. Prerequisites
-
-- Python 3.12
-- AWS credentials in your environment (`aws configure` / `AWS_PROFILE` / env vars), for the AWS account and region.
-- A deployed ESP RainMaker Neo environment, and its outputs file.
-
-## 2. Install dependencies
+## 1. Install
 
 ```bash
-python3 -m venv myenv
-source myenv/bin/activate
-pip install -r requirements.txt
+pip install esp-morpheus
 ```
 
-## 3. Get the deployment outputs
-
-`morpheus.py` reads the merged stack outputs from a JSON file keyed by stack name (`espuser-base`, `espuser-core`, `rmng-base`, `rmng-core`, …). You can supply it two ways:
-
-**Local file (default).** With no flag, `morpheus.py` reads `rmng-outputs.json` from the repo root, so it resolves the same whichever directory you run from:
+From a checkout, install it in place:
 
 ```bash
-python3 morpheus.py --user username@example.com
+pip install -e ./cli
 ```
 
-**From a URL.** Point `--client-outputs` at a published outputs file (e.g. the per-region client-outputs in S3) and it's fetched over HTTP at startup — no manual download:
+Needs Python 3.12 or later.
+
+## 2. Point it at a deployment
+
+The outputs are a JSON file keyed by stack name (`espuser-base`, `espuser-core`, `rmng-base`,
+`rmng-core`, ...). Give `morpheus` a path or a URL.
+
+**A local file (default).** With no flag, `morpheus` reads `rmng-outputs.json`. Inside a checkout,
+a relative path resolves against the repo root, so it resolves the same from every directory;
+outside one, it resolves against the working directory.
 
 ```bash
-python3 morpheus.py --client-outputs https://rmng-public-assets-123456789012.s3.us-east-1.amazonaws.com/ap-south-1/rmng-client-outputs.json --user user@example.com
+morpheus user someone@example.com
 ```
 
-`--client-outputs` accepts a local path **or** an `http(s)://` URL. A relative path resolves against the repo root, not your working directory. When omitted, the default is `rmng-outputs.json` at the repo root.
-
-## 4. Pick an identity
-
-Everything the CLI does, it does as somebody. There are two ways to get that identity.
-
-### Use an account that already exists
-
-Pass any account already provisioned in the deployment.
+**A URL.** Point `--client-outputs` at a published outputs file, such as the per-region
+client-outputs in S3. It is fetched at startup, so nothing is downloaded by hand.
 
 ```bash
-python3 morpheus.py --user someone@example.com           # prompts for the password
-python3 morpheus.py --user admin@example.com --is-admin     # authenticate against the admin pool
+morpheus --client-outputs https://rmng-public-assets-123456789012.s3.us-east-1.amazonaws.com/ap-south-1/rmng-client-outputs.json \
+         user someone@example.com
 ```
 
-Add `--is-admin` when the account is an admin, so it authenticates against the admin pool rather than the end-user one.
+`MORPHEUS_OUTPUTS` sets the same value, so a shell session can pick a deployment once.
 
-The password is read from `--password`, then `RMNG_PASSWORD`, then an interactive prompt. Prefer the prompt or the environment variable: a password passed in `--password` is visible to other processes on the machine and is kept in your shell history.
+## 3. Pick an identity
 
-This covers the user side only. The CLI can also simulate a device, more about that later in this README.
+Everything `morpheus` does, it does as somebody.
+
+### An account that already exists
+
+Pass any account provisioned in the deployment.
+
+```bash
+morpheus user someone@example.com            # prompts for the password
+morpheus user --admin admin@example.com      # authenticates against the admin pool
+```
+
+Add `--admin` when the account is an admin. `--admin` and `--password` belong to `user`, so they
+come before the identity; everything after it is the subcommand.
+
+The password is read from `--password`, then `RMNG_PASSWORD`, then a prompt. Prefer the prompt or
+the environment variable: a password in `--password` is visible to other processes and lands in
+shell history.
+
+`morpheus` signs in before running anything, so a wrong password is reported at the prompt rather
+than by whichever command you run first. A typed one can be retyped, up to three tries; one from
+`--password` or `RMNG_PASSWORD` fails straight away with exit code 3, since a script cannot answer
+a prompt. `auth` is the exception — it provisions an account that may not exist yet, so it runs
+even when sign-in fails, and the interactive prompt opens on a warning for the same reason.
 
 ### Or seed test users and devices
 
-For quick validation against a scratch deployment, `--setup-test-data` creates a known set of users and nodes from `test_config.json`: it registers every user and node, creates a default `Home` group per user, associates nodes flagged with `associate_to`. This helps you quickly get started on development with a set of test entities.
+For quick validation against a scratch deployment, `test-data setup` creates a known set of users
+and nodes from `test_config.json`. It registers every user and node, creates a default `Home` group
+per user, and associates nodes flagged with `associate_to`.
 
 ```bash
-python3 morpheus.py --setup-test-data
+morpheus test-data setup
 ```
 
-On a fresh checkout this also writes `test_config.json` from `test_config.default.json`, generating passwords and device certificates. It needs admin AWS credentials, since it provisions users in Cognito. The seeded admin is marked `"admin": true` in that file, so `--is-admin` is not needed to use it.
-
-Since we created both test users and devices through `test_config.json`, we can now act as a user or as a device.
+On a fresh install this also writes `test_config.json` from the packaged defaults, generating
+passwords and device certificates. It needs admin AWS credentials, since it provisions users in
+Cognito. The seeded admin is marked `"admin": true`, so `--admin` is not needed to use it.
 
 ```bash
-python3 morpheus.py --user somebode@example.com
-python3 morpheus.py --device node_rsa
+morpheus user someone@example.com
+morpheus device node_rsa
 ```
 
-`--destroy-test-data` removes them again: the seeded devices, their groups, and any leftover `test-*` certificates. It deletes only test-created things, leaving the rest of the deployment alone.
+`test-data destroy` removes them again: the seeded devices, their groups, and any leftover `test-*`
+certificates. It deletes only test-created things and leaves the rest of the deployment alone.
 
-## 5. Entering a context
+### Or create the CI bot user
 
-`morpheus.py` drops you into an interactive prompt scoped to a user or device. Type commands at the prompt; `q` / `quit` exits the context.
-
-There are **two layers** here. `--user` and `--device` are the lower-level **raw operations** — you drive one user-side or device-side call at a time from the prompt. `--app-sim` and `--device-sim` sit on top of them and are **simulators**: each runs the sequence of those raw operations that we recommend a real phone app (`--app-sim`) or a real device (`--device-sim`) performs.
-
-| Command | Layer | Enters | Notes |
-| -------------------------------------------- | --------- | ---------------- | ------------------------------------------------------------- |
-| `python3 morpheus.py --user user@example.com` | raw | User CLI | Auth, groups, API calls, MQTT, sharing, push, Matter, license |
-| `python3 morpheus.py --device node_rsa` | raw | Device CLI | Connect, shadows, to-cloud, group info, direct notify |
-| `python3 morpheus.py --app-sim user@example.com` | simulator | App simulator | Recommended sequence of `--user` ops; needs a user id from config |
-| `python3 morpheus.py --device-sim node_multi` | simulator | Device simulator | Recommended sequence of `--device` ops; needs a device id from config |
-
-All four contexts accept `--client-outputs <path-or-url>` to target a specific deployment; the simulators are handed the same resolved source as the raw contexts.
-
-`get` / `post` / `put` / `patch` / `delete <path> [data]` let you hit any API route directly. Type an unknown command at any prompt to print its full command list.
-
-### Raw operations
-
-Lower-level contexts — you drive one user-side or device-side call at a time.
-
-#### `--user` — User CLI
-
-Acts as an end user. Main context for the user-facing REST API and a user's MQTT session. Takes any existing account, or a seeded one by index or name.
+`bot-user create` creates an IAM user with AdministratorAccess for CI, and writes its access keys to
+`bot-iam-user-credentials.json` next to `test_config.json`. The name defaults to `bot`. Pass another
+one, and `morpheus` saves it as `ci_bot_user` in `test_config.json`, so `delete` and `show` find it
+again.
 
 ```bash
-python3 morpheus.py --user user@example.com
+morpheus bot-user create            # or: morpheus bot-user create rmng-ci
+morpheus bot-user show
+morpheus bot-user delete
 ```
 
-```
-auth                                  # authenticate + register the user
-list_groups                           # fetch & cache the user's groups
-create_group My Home                  # create a group
-assoc node_rsa <group_id>             # associate a device into a group
-get v1/user/nodes                     # raw GET against the user API
-connect                               # assume role + connect to MQTT
-subscribe node_rsa params local       # subscribe to a node's named shadows
-register_client_ios com.app.id <token>  # register a push endpoint
-```
+One bot at a time. There is a single credentials file, so a second user under another name would
+overwrite the keys of the first and leave it in IAM with a live admin key nothing tracks. `create`
+refuses a new name until `delete` removes the current bot. A name IAM no longer has is stale, and
+does not block a create.
 
-#### `--user <admin>` — Admin CLI
+A second `create` under the same name fails rather than invalidate the key CI is using. Use
+`create --rotate` to replace the keys of an existing user, which is the way back when the
+credentials file is lost.
 
-Same prompt as the User CLI, but for an admin, so auth routes through the admin pool. Adds deployment-wide admin commands — these return 403 for a regular user. Pass `--is-admin` for an existing account; a seeded one is already marked `"admin": true` in the config.
+## 4. One command, or a prompt
+
+Every command runs two ways. Name it on the command line and `morpheus` runs it and exits:
 
 ```bash
-python3 morpheus.py --user admin@example.com --is-admin
+morpheus user someone@example.com group list
 ```
 
-```
-register_ios_platform key.p8 <key_id> <team_id> <bundle_id> sandbox
-register_android_platform service-account.json
-list_mobile_platforms
-alexa_setup
-setup_ses_sender
-```
-
-#### `--device` — Device CLI
-
-Acts as a physical node using the cert/key from `nodes[]`, connecting to AWS IoT over MQTT/TLS.
-
-```bash
-python3 morpheus.py --device node_rsa
-```
+Name no subcommand and `morpheus` opens a prompt bound to that identity, where the
+`morpheus user someone@example.com` prefix is implicit:
 
 ```
-connect                               # connect + subscribe to from_cloud topic
-get_group_info                        # fetch the node's group/subgroup IDs
-publish params {"Light":{"power":true}}   # update a named shadow
-to_cloud {"temp":25}                  # publish to the node->cloud topic
-direct_notify file:test/direct_notification_example.json
+$ morpheus user someone@example.com
+User context: someone@example.com
+Type help for commands, q to leave.
+someone@example.com > group create My Home
+someone@example.com > api get v1/user/nodes
+someone@example.com > q
 ```
 
-### Simulators
+Tab completes the command tree. `help` lists the commands and `help <command>` prints its full help,
+both generated from the same tree the dispatcher uses, so neither can drift. A bad command, a failed
+call and `Ctrl-C` all return you to the prompt; `q`, `quit` and `Ctrl-D` leave.
 
-Higher-level contexts that sit on top of the raw operations — each runs the sequence of raw calls we recommend a real device or phone app performs.
-
-#### `--device-sim <thing_name>` — Device simulator
-
-A higher-level fake node that reports params and tags. Requires the node's `test_config.json` entry to have `node_cfg` and `node_tags` (only `node_multi` / `node_switch` qualify in the default config).
-
-```bash
-python3 morpheus.py --device-sim node_multi
-```
+## 5. The command tree
 
 ```
-update_params {"Light":{"brightness":80}}   # push a param update
-update_tags {"location":"hall"}              # push a tag update
+morpheus [--client-outputs SRC] [--json] [--raw] [-v]
+  user [--password PW] [--admin] <identity> [SUBCOMMAND...]   # no subcommand -> prompt
+      auth  connect  subscribe  publish  read-shadow  upload-file
+      api                    get | post | put | patch | delete
+      group                  create | list | rename | add-capabilities | share
+      group subgroup         create | rename | add-node | remove-node | share
+      node                   assoc | remove | claim
+      matter                 initiate | verify | confirm | get-noc
+      sharing                list | accept | reject
+      push                   register-ios | register-android | register
+      admin integrations     alexa | gva | smartthings
+      admin platforms        register-ios | register-android | list
+                             update-ios | update-android | delete
+      admin nodes            register | bulk-register | bulk-status
+      admin iot-event-mode   get | set
+      admin claiming         enable
+      admin ses              setup-sender | request-production
+      admin sns              request-production
+  device <node> [SUBCOMMAND...]                               # no subcommand -> prompt
+      connect  shadow-connect  subscribe  publish  to-cloud  group-info
+      set-node-config  direct-notify
+  app-sim [--password PW] [--admin] <identity>
+      list  select  stats  update  update-group  update-subgroup  prov
+      schedule               set | get | delete
+      automation             create | add-trigger | add-action | complete
+                             list | get | delete
+  device-sim <node>
+      update-params  update-tags
+  test-data                  setup | destroy
+  bot-user                   create [NAME] [--rotate] | delete [NAME] | show
+  gen-device <name> <rsa|ec> [--stdout] [--force]
+  guide                      alexa | gva | smartthings | ios | android
 ```
 
-#### `--app-sim <user-id>` — App simulator
+There are **two layers**. `user` and `device` are the raw operations: one user-side or device-side
+call at a time. `app-sim` and `device-sim` sit on top and run the sequence of raw operations a real
+phone app or a real node performs.
 
-Simulates the mobile app for a user: groups, automations, schedules, BLE provisioning, bridges.
+The `admin` group appears only for an admin identity. `guide` needs no identity at all.
 
-```bash
-python3 morpheus.py --app-sim user@example.com
+### `user` — the user API and a user's MQTT session
+
+```
+auth                                       # authenticate and register the user
+group list                                 # groups, with their nodes and subgroup ids
+group create My Home                       # create a group
+group create --matter My Home              # create it as a Matter fabric
+node assoc node_rsa <group_id>             # associate a device into a group
+api get v1/user/nodes                      # raw GET against the user API
+connect                                    # assume role, then connect to MQTT
+subscribe node_rsa params local            # subscribe to a node's named shadows
+push register-ios com.app.id <token>       # register a push endpoint
+sharing list                               # pending shares
 ```
 
+### `user <admin> admin` — deployment-wide operations
+
+Same prompt, but for an admin, so authentication routes through the admin pool. These return 403 for
+a regular user.
+
 ```
-list                                  # list the user's groups
-select <group_id>                     # choose the active home
+admin platforms register-ios key.p8 <key_id> <team_id> <bundle_id> --sandbox
+admin platforms register-android service-account.json
+admin platforms list
+admin integrations alexa setup-auto
+admin integrations smartthings setup st-config.json
+admin nodes bulk-register nodes.csv --tags created_by:ci
+admin iot-event-mode set sqs
+admin claiming enable
+admin ses setup-sender
+```
+
+### `device` — a physical node
+
+Acts as a node using the certificate and key from `nodes[]`, over MQTT/TLS.
+
+```
+connect                                    # connect and subscribe to from_cloud
+group-info                                 # the node's group and subgroup ids
+publish params {"Light":{"power":true}}    # update a named shadow
+to-cloud {"temp":25}                       # publish to the node-to-cloud topic
+direct-notify --file notification.json
+set-node-config node_config.json
+```
+
+### `device-sim <thing_name>` — the device simulator
+
+A node that reports params and tags. Unlike `app-sim`, this one does need a `test_config.json`
+entry: a node authenticates with a certificate and key, which cannot be typed at a prompt. The
+entry also needs `node_cfg` and `node_tags`; only `node_multi` and `node_switch` qualify in the
+default config.
+
+```
+update-params {"Light":{"brightness":80}}
+update-tags {"location":"hall"}
+```
+
+### `app-sim <identity>` — the app simulator
+
+The mobile app for a user: groups, automations, schedules and BLE provisioning. It resolves and
+checks IDENTITY exactly as `morpheus user` does, prompting for a password, so it drives any account
+in the deployment rather than only the ones in `test_config.json`.
+
+```
+list                                       # the user's groups
+select <group_id>                          # choose the active home
 update <node_id> {"Light":{"power":true}}
-automation ...                        # drive an automation
-prov ...                              # BLE provisioning
+automation create Evening lights
+schedule get <node_id>
+prov                                       # BLE provisioning; needs IDF_PATH
 ```
+
+## 6. Output
+
+By default a command prints a curated view of its result. Two flags change that:
+
+| Flag | Effect |
+| --------- | ------------------------------------------------------------------------ |
+| `--raw` | Print each payload as JSON, to see what the API returned rather than the fields the command chose to show. |
+| `--json` | The same JSON, plus stdout reserved for it — every message goes to stderr. |
+| `-v` | Add the API request trace, printed verbatim. |
+
+The request trace is off unless you ask for it, and prints bodies verbatim so a token can be
+decoded and its claims checked. That means it shows real credentials — `POST /v1/user/credentials`
+answers with a live secret key and session token — so redirect it rather than pasting it around.
+
+## 7. Scripting
+
+`--json` puts the payload on stdout and every other word on stderr, so a command pipes straight into
+`jq`:
+
+```bash
+morpheus --json user someone@example.com api get v1/user/nodes | jq -e '.nodes'
+```
+
+Exit codes say what happened, so a script can branch without parsing text:
+
+| Code | Meaning |
+| ---- | ------------------------------------------------ |
+| 0 | Success |
+| 1 | The command ran and failed |
+| 2 | Usage error: an unknown command or a bad argument |
+| 3 | Authentication or authorisation failed |
+
+## 8. Where state lives
+
+Inside a checkout, `morpheus` keeps using the paths that are already there: `cli/test_config.json`,
+`cli/.*.command_history` and `.sim/`. Installed, it uses XDG directories and writes nothing to the
+working directory.
+
+| What | In a checkout | Installed |
+| ------------------- | -------------------------- | --------------------------------- |
+| `test_config.json` | `cli/` | `~/.config/morpheus/` |
+| Command history | `cli/.<context>.command_history` | `~/.cache/morpheus/` |
+| Simulator caches | `.sim/<name>/` | `~/.cache/morpheus/sim/<name>/` |
+| Vendored `esp_prov` | `.vendor/` | `~/.cache/morpheus/vendor/` |
+
+`MORPHEUS_CONFIG` overrides the config file, `MORPHEUS_CONFIG_DIR` and `MORPHEUS_CACHE_DIR` the
+directories.
+
+## 9. The Python SDK
+
+The same distribution ships the SDK the CLI is built on, so a test or a script can drive a
+deployment directly:
+
+```python
+from esp_morpheus.sdk.user import User
+from esp_morpheus.outputs import RmngSettings
+```
+
+From a clone of this repo, `py_sdk.test_user` and the other pre-rename paths keep working and
+name the same modules; they need no install, because `py_sdk/__init__.py` finds `cli/src` itself.

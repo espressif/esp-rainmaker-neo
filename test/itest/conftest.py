@@ -6,6 +6,7 @@
 Shared fixtures, helpers, and configuration for integration tests.
 
 Run all tests: pytest test/itest/ -v -s
+Trace every API request and response: add --request-log
 Run a specific test: pytest test/itest/ -v -s -k "test_name"
 If some tests start failing due to mqtt connections, try running: pytest test/itest/ -v -s -m "not unsafe"
 """
@@ -15,6 +16,7 @@ import requests
 from urllib.parse import urlparse
 from scripts.rmng_outputs import find_outputs
 from scripts.rmng_outputs import load as load_rmng_outputs
+from py_sdk import test_user as user_sdk
 from py_sdk.test_user import User, user_log
 
 from py_sdk.test_device import Device, generate_key_and_cert, split_combined_cert_pem, validate_tags
@@ -197,6 +199,13 @@ NOTIFY_DATA_REL_PATH = "test_data/notify_data.json"
 NOTIFY_DATA_ENV_VAR = "RMNG_NOTIFY_DATA_JSON"
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--request-log", action="store_true",
+        help="Print every API request and response the SDK makes. Off by default: the trace "
+             "carries bearer tokens and STS session credentials.")
+
+
 def pytest_configure(config):
     """Materialize the JSON-blob env vars to their gitignored files if the files don't exist.
 
@@ -204,6 +213,8 @@ def pytest_configure(config):
     them to disk once at startup so every xdist worker (and email_utils) reads a single source of truth.
     An existing local file is never overwritten — fill the file directly to override the env blob. Nothing is
     written when only the superproject supplies the blob; the loaders read that copy in place.
+
+    Also applies --request-log here, so every xdist worker sets the SDK flag for itself.
     """
     for env_var, rel_path in (
         (NOTIFY_DATA_ENV_VAR, NOTIFY_DATA_REL_PATH),
@@ -219,6 +230,8 @@ def pytest_configure(config):
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w") as f:
                 json.dump(parsed, f, indent=2)
+
+    user_sdk.request_logging = config.getoption("--request-log")
 
 
 def _notify_data() -> dict:

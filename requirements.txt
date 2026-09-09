@@ -5,15 +5,21 @@ aws-cdk-lib==2.262.1
 aws-cdk-cli==2.1133.0
 constructs==10.7.1
 
+# These pins are the dev environment. A new CLI dependency belongs
+# in cli/pyproject.toml first, and here only if this environment must pin it.
+
+# CLI (Morpheus) — editable install, puts `morpheus` on PATH for `make itest-setup`.
+# The path is relative to the working directory, so run pip from the repo root.
+-e ./cli
+
 # AWS SDK
 boto3==1.43.57
 botocore==1.43.57
 awscrt==0.36.1
 awsiotsdk==1.31.0
 s3transfer==0.19.2
-iam-rolesanywhere-session==2.3.0
 
-# Alexa Skill Automation (src/scripts/alexa_setup.py — SMAPI setup via ask-smapi-sdk)
+# Alexa Skill Automation (SMAPI setup via ask-smapi-sdk)
 ask-smapi-sdk==1.0.0
 ask-smapi-model==1.36.0
 ask-sdk-model-runtime==1.0.1
@@ -23,7 +29,7 @@ cryptography==50.0.0
 PyJWT==2.13.0
 cffi==2.1.0
 
-# BLE Provisioning (esp_prov — app_sim `prov` command)
+# BLE Provisioning (esp_prov — app-sim `prov` command)
 # protobuf is deliberately held on 6.x and must NOT be moved to 7.x:
 # esp_rmaker_chal_resp_pb2.py was generated with protoc (libprotoc 32.x → gen
 # runtime 6.32) and the IDF python env ships protobuf 6.x. 6.33.6 is the newest

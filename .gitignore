@@ -8,17 +8,17 @@ cdk-outputs*
 rmng-outputs*
 cdk-output.yaml
 rmng-outputs.json
-cli/config_data/bot-iam-user-credentials.json
+bot-iam-user-credentials.json
 coverage.out*
 coverage.xml
 .DS_Store
 .vscode
 myenv/
 .envrc
-cli/.app_sim.command_history
-cli/.device_sim.command_history
-cli/.user.command_history
-cli/.device.command_history
+cli/.*.command_history
+cli/build/
+cli/*.egg-info/
+cli/src/*.egg-info/
 *.txt
 # Exempt from the *.txt rule above; the docs build needs it tracked.
 !docs/requirements.txt

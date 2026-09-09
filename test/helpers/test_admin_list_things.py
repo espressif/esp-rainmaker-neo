@@ -36,7 +36,7 @@ with open('test_config.json', 'r') as f:
 # Find admin user
 admin_user = None
 for user in config.get('users', []):
-    if user.get('admin', user.get('super_admin', False)):
+    if user.get('admin', False):
         admin_user = user
         break
 

@@ -66,9 +66,9 @@ Once connected, the device publishes to `$aws/things/{thingName}/shadow/name/ipa
 
 | File                                   | Purpose                                                                                      |
 | -------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `test/app_sim.py`                      | App simulator                                                                                |
-| `test/device_sim.py`                   | Device simulator (MQTT connect, shadow publish)                                              |
+| `cli/src/esp_morpheus/sims/app.py`     | App simulator (`morpheus app-sim`)                                                           |
+| `cli/src/esp_morpheus/sims/device.py`  | Device simulator (`morpheus device-sim`): MQTT connect, shadow publish                       |
 | `test/itest/conftest.py`               | Admin user fixture (`_init_admin_user()`, `admin_user`)                                |
 | `test/itest/test_admin.py`             | Admin auth, role assumption, group/subgroup access                                           |
 | `test/itest/test_node_registration.py` | Single & bulk registration with admin groups and tags                                        |
-| `test/test_user.py`                    | `register_node()`, `bulk_register_nodes()`, `assume_role_admin()`, `admin_get_node_groups()` |
+| `cli/src/esp_morpheus/sdk/user.py`     | `register_node()`, `bulk_register_nodes()`, `assume_role_admin()`, `admin_get_node_groups()` |

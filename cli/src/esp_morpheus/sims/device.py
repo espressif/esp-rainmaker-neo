@@ -2,18 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import argparse
 import json
-import sys
-from scripts.rmng_outputs import REPO_ROOT, TEST_CONFIG_PATH, RmngSettings
-from py_sdk.test_device import Device, generate_key_and_cert
+from .. import paths
+from ..outputs import TEST_CONFIG_PATH, RmngSettings
+from ..sdk.device import Device
 import time
-from prompt_toolkit import PromptSession
-from prompt_toolkit.history import FileHistory
-from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from queue import Queue, Empty
 import threading
-import traceback
 import hashlib
 import os
 import pathlib
@@ -74,10 +69,9 @@ class DeviceSim:
         self.should_stop = False
         self.group_info_received = threading.Event()
 
-        # Repo-anchored so the cache is shared no matter which directory the simulator runs from;
-        # a cache that looks empty from a new CWD would re-push config the node already has.
-        self.cache_dir = pathlib.Path(REPO_ROOT) / '.sim' / 'device'
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        # Never CWD-anchored: a cache that looks empty from a new directory would re-push
+        # config the node already has.
+        self.cache_dir = paths.sim_cache_dir('device')
         self.cache_file = self.cache_dir / f"{device_id}-config-cache"
 
         # Store the last known ncfg_ver value to avoid reading shadow
@@ -100,9 +94,9 @@ class DeviceSim:
 
     def _read_json_file(self, file_path):
         # node_cfg/node_tags in test_config.json are stored repo-relative (e.g. "cli/cli_data/..."),
-        # so anchor them rather than resolving against whatever directory the CLI was started in.
-        if not os.path.isabs(file_path):
-            file_path = os.path.join(REPO_ROOT, file_path)
+        # which resolves against the checkout when there is one and against the packaged data
+        # directory when there is not.
+        file_path = paths.resolve_data(file_path)
         with open(file_path, 'r') as config_file:
             return json.load(config_file)
 
@@ -668,88 +662,3 @@ class DeviceSim:
             self.device.unsubscribe(topic)
         self.device.disconnect()
         print("Disconnected from MQTT")
-
-    def run_interactive(self):
-        """Run the simulator in interactive mode"""
-        # Create a session with persistent history
-        session = PromptSession(
-            history=FileHistory(os.path.join(REPO_ROOT, 'cli', '.device_sim.command_history')),
-            auto_suggest=AutoSuggestFromHistory()
-        )
-
-        # Main simulation loop
-        try:
-            while True:
-                user_input = session.prompt("Enter command (q|quit for exit): ")
-                try:
-                    command = user_input.split(maxsplit=1)
-                    match command[0]:
-                        case "update_params":
-                            if len(command) < 2:
-                                print("Please provide JSON data. Usage: update_params {\"device1\": {\"param1\": value}}")
-                                continue
-                            try:
-                                params_data = json.loads(command[1])
-                                if not isinstance(params_data, dict):
-                                    print(f"Warning: Expected dict but got {type(params_data)}")
-                                    continue
-
-                                if self.update_shadows(params_data):
-                                    print("Successfully updated shadows")
-                                else:
-                                    print("Failed to update shadows")
-                            except json.JSONDecodeError as e:
-                                print(f"Invalid JSON format: {e}")
-
-                        case "update_tags":
-                            if len(command) < 2:
-                                print("Please provide JSON data. Usage: update_tags {\"tag1\": value}")
-                                continue
-                            try:
-                                tags_data = json.loads(command[1])
-                                payload = self._tags_to_update_payload(tags_data)
-                                if self.device.update_named_shadow(self.ishadow_name, payload):
-                                    print("Successfully updated tags")
-                                else:
-                                    print("Failed to update tags")
-                            except json.JSONDecodeError:
-                                print("Invalid JSON format")
-
-                        case "q" | "quit":
-                            break
-
-                        case _:
-                            print("Unknown command. Available commands:")
-                            print("  update_params {json_data}  - Update device parameters")
-                            print("  update_tags {json_data}    - Update device tags")
-                            print("  quit                       - Exit simulator")
-                except IndexError:
-                    print("Invalid command format")
-        except KeyboardInterrupt:
-            print("Simulator stopped by user")
-        finally:
-            self.stop()
-
-def main():
-    parser = argparse.ArgumentParser(description="Device Behavior Simulator")
-    parser.add_argument('--device', required=True, help='Device ID from test_config.json')
-
-    args = parser.parse_args()
-
-    try:
-        # Create and start the device simulator
-        simulator = DeviceSim(args.device)
-        if simulator.start():
-            simulator.run_interactive()
-        else:
-            print("Failed to start simulator")
-            sys.exit(1)
-    except Exception as e:
-        print(f"Error running simulator: {str(e)}")
-        print(traceback.format_exc())
-        sys.exit(1)
-
-if __name__ == "__main__":
-    main()
-
-# python3 device_sim.py --device <device_id>

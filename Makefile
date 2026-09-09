@@ -212,7 +212,7 @@ publish-%: go_build $$(call needs_dashboard,$$*)
 destroy-%: SWEEP_GROUPS = $(call reverse,$(call groups_for,$*))
 destroy-%: SWEEP_FLAGS = --destroy
 destroy-%:
-	python3 cli/morpheus.py --destroy-test-data || true
+	morpheus test-data destroy || true
 	$(sweep)
 
 # --- Lint / vulnerability scanning / tests ------------------------------------
@@ -273,7 +273,7 @@ itest:  ## Run the pytest integration suite against a deployed stack
 
 # --- Test setup / teardown ---------------------------------------------------
 # itest-setup deploys the standalone test webhook mock (cdk/apps/test_infra.py), captures its
-# API Gateway URL, and seeds the test users/devices via cli/morpheus.py. Assumes the
+# API Gateway URL, and seeds the test users/devices via morpheus. Assumes the
 # rmng stack group is already deployed; the notification itest points
 # rmng-notifications at this mock.
 itest-setup: go_build  ## Deploy the itest webhook mock and seed test data
@@ -284,7 +284,7 @@ itest-setup: go_build  ## Deploy the itest webhook mock and seed test data
 		--asset-parallelism true --outputs-file build/cdk/cdk-outputs-test.json
 	@echo "Test infra deployed. API Gateway URL:"
 	@python3 -c "import json; print(json.load(open('build/cdk/cdk-outputs-test.json'))['rmng-test-infra-base']['ApiGatewayUrl'])"
-	python3 cli/morpheus.py --setup-test-data
+	morpheus test-data setup
 
 test-infra-destroy:  ## Destroy the itest webhook mock
 	cdk destroy --all --app "python3 cdk/apps/test_infra.py" --force
