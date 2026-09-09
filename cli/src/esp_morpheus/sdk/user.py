@@ -18,6 +18,7 @@ import jwt
 from awsiot import mqtt
 from awsiot import iotshadow
 from ..outputs import DEFAULT_ESP_USER_CLIENT_ID, RmngSettings
+from .errors import requires
 from .util import shadow_to_unstructured
 from . import smartthings
 import random
@@ -32,6 +33,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography import x509
 
 blue = "\033[94m"
+cyan = "\033[96m"
 reset = "\033[0m"
 
 # Seeded end-user OIDC client id, read from CDK outputs when available (falls back to the stable
@@ -66,13 +68,38 @@ def trace_response(response):
 # Track verified CORS paths per API gateway URL and HTTP method to handle multiple gateways
 _verified_cors_paths = {}  # {(api_gateway_url, http_method): set(paths)}
 
-# Define colored logging function for User
+_log_sink = None
+
+
+def set_log_sink(sink):
+    """Send the user trace to `sink` instead of stdout, such as the CLI's -v channel."""
+    global _log_sink
+    _log_sink = sink
+
+
 def user_log(message):
-    """Print message with User prefix in cyan color."""
-    # ANSI color codes: Cyan for User
-    CYAN = '\033[96m'
-    RESET = '\033[0m'
-    print(f"{CYAN}[User]{RESET} {message}")
+    """One line of user trace: what the app is doing, not what happened to it."""
+    if _log_sink is None:
+        print(f"{cyan}[User]{reset} {message}")
+    else:
+        _log_sink(message)
+
+
+_event_sink = None
+
+
+def set_event_sink(sink):
+    """Send protocol events to `sink` instead of stdout."""
+    global _event_sink
+    _event_sink = sink
+
+
+def user_event(message):
+    """One protocol event: something the cloud told the app, which a caller is waiting to see."""
+    if _event_sink is None:
+        print(f"{cyan}[User]{reset} {message}")
+    else:
+        _event_sink(message)
 
 
 class _CognitoResponse:
@@ -135,6 +162,9 @@ def _admin_cognito_auth(region, client_id, auth_flow, auth_parameters):
     return _CognitoResponse(200, payload)
 
 class User:
+    not_ready_subject = 'user'
+    not_ready_log = staticmethod(user_log)
+
     def __init__(self, username, password, region, identity_pool_id, api_gateway_url, user_api_gateway_url, iot_endpoint, admin_user_pool_id="", admin_client_id="", is_admin=False, end_user_pool_id=""):
         self.username = username
         self.password = password
@@ -162,6 +192,7 @@ class User:
         self.group_ids = []  # New array to store group IDs
         self.devices = [] # New array to store devices associated with the user
         self.mqtt_connection = None  # Initialize mqtt_connection
+        self.not_ready = None
         self.mqtt_credentials = None # Initialize MQTT credentials
         self.shadow_client = None  # Initialize shadow_client
         self.shadow_queue = queue.Queue()
@@ -1363,12 +1394,12 @@ class User:
             if "reported" in shadow_state["state"]:
                 reported = shadow_state["state"]["reported"]
                 version = shadow_state.get("version", "?")
-                user_log(f"[{shadow_name}][v{version}][reported] {blue}updated to{reset} {reported}")
+                user_event(f"[{shadow_name}][v{version}][reported] {blue}updated to{reset} {reported}")
 
             if "desired" in shadow_state["state"]:
                 desired = shadow_state["state"]["desired"]
                 version = shadow_state.get("version", "?")
-                user_log(f"[{shadow_name}][v{version}][desired] {blue}updated to{reset} {desired}")
+                user_event(f"[{shadow_name}][v{version}][desired] {blue}updated to{reset} {desired}")
 
             # Add shadow state to the queue for tests to process
             try:
@@ -1377,21 +1408,18 @@ class User:
                 user_log(f"Error adding shadow state to queue: {e}")
 
     def on_named_shadow_delta_updated(self, shadow_name, payload):
-        user_log(f"Named shadow delta updated for '{shadow_name}':")
+        user_event(f"Named shadow delta updated for '{shadow_name}':")
         if 'version' in payload:
-            user_log(f"Version: {payload['version']}")
+            user_event(f"Version: {payload['version']}")
         if 'state' in payload:
-            user_log("Delta State:")
-            user_log(payload['state'])
+            user_event("Delta State:")
+            user_event(payload['state'])
         if 'metadata' in payload:
-            user_log("Delta Metadata:")
-            user_log(payload['metadata'])
+            user_event("Delta Metadata:")
+            user_event(payload['metadata'])
 
+    @requires('mqtt', blocked=False)
     def mqtt_publish(self, thing_name, data, shadow_name=None):
-        if not self.mqtt_connection:
-            user_log("Error: MQTT not connected. Call mqtt_connect first.")
-            return False
-
         try:
             # Parse the JSON string into a dictionary if it's a string
             state = data if isinstance(data, dict) else json.loads(data)
@@ -1443,11 +1471,8 @@ class User:
     def clear_group_ids(self):
         self.group_ids = []
 
+    @requires('mqtt', blocked=False)
     def mqtt_publish_to_topic(self, thing_name, topic_name, data):
-        if not self.mqtt_connection:
-            user_log("Error: MQTT not connected. Call mqtt_connect() first.")
-            return False
-
         try:
             full_topic = f"rainmaker/nodes/{thing_name}/user/{topic_name}"
             user_log(f"Publishing to topic '{full_topic}' for thing '{thing_name}'")
@@ -1465,6 +1490,7 @@ class User:
             user_log(f"Error publishing message: {str(e)}")
             return False
 
+    @requires('mqtt', blocked=False)
     def mqtt_publish_to_group_control(self, group_id, data, subgroup_id=None):
         """Publish to a device-type-addressed group/subgroup control topic.
 
@@ -1475,10 +1501,6 @@ class User:
         Payload is keyed by device type, e.g.
         {"esp.device.light": {"params": {"esp.param.power": True}}}.
         """
-        if not self.mqtt_connection:
-            user_log("Error: MQTT not connected. Call mqtt_connect() first.")
-            return False
-
         if subgroup_id is None:
             full_topic = f"rainmaker/nodes/groups/{group_id}/control"
         else:
@@ -1499,11 +1521,8 @@ class User:
             user_log(f"Error publishing group devtype-control message: {str(e)}")
             return False
 
+    @requires('mqtt', blocked=False)
     def read_shadow(self, thing_name, shadow_name):
-        if not self.mqtt_connection:
-            user_log("Error: MQTT not connected. Call mqtt_connect() first.")
-            return False
-
         topic = f"$aws/things/{thing_name}/shadow/name/{shadow_name}/get"
         message = "{}"
 

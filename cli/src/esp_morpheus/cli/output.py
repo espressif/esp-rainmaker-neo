@@ -66,11 +66,12 @@ def configure(json_mode=False, raw=False, verbose=0):
     from ..sdk import user as _user_sdk
     _user_sdk.request_logging = bool(verbose)
 
-    # The device trace is progress detail: route it to -v. A protocol event is a result and
-    # stays visible.
+    # An SDK trace is progress detail: route it to -v. A protocol event is a result and stays
+    # visible.
     from ..sdk import device as _device_sdk
-    _device_sdk.set_log_sink(trace)
-    _device_sdk.set_event_sink(event)
+    for sdk in (_device_sdk, _user_sdk):
+        sdk.set_log_sink(trace)
+        sdk.set_event_sink(event)
 
     if _state.payload_stream is not None:
         sys.stdout = _state.payload_stream

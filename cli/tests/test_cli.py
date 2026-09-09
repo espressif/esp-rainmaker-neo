@@ -703,6 +703,8 @@ def test_the_guard_does_not_touch_an_exception_from_the_method():
     class Probe:
         mqtt_connection = None
         not_ready = None
+        not_ready_subject = 'probe'
+        not_ready_log = staticmethod(print)
 
         @requires('mqtt', blocked=False)
         def boom(self):
@@ -814,6 +816,88 @@ def test_connect_prints_what_the_cloud_sends_back(capsys):
     shown = capsys.readouterr().out
     assert 'rainmaker/nodes/node_light/from_cloud' in shown
     assert 'grp-1' in shown
+
+
+def _unready_user(**ready):
+    """A User with every precondition unmet, past __init__ so it needs no MQTT stack."""
+    from esp_morpheus.sdk.user import User
+
+    account = User.__new__(User)
+    account.username = 'someone@example.com'
+    account.token = 'a-token'
+    account.mqtt_connection = account.shadow_client = None
+    account.not_ready = None
+    for name, value in ready.items():
+        setattr(account, name, value)
+    return account
+
+
+def _user_ctx(account):
+    ctx = click.Context(user, obj=Session())
+    ctx.obj.select_user(account.username)
+    ctx.obj._user = account
+    return ctx
+
+
+# Every guarded User method, all of which report a refusal through their return value.
+@pytest.mark.parametrize('method, args', [
+    ('mqtt_publish', ('node_light', {})),
+    ('mqtt_publish_to_topic', ('node_light', 'params-g1/params', {})),
+    ('mqtt_publish_to_group_control', ('grp-1', {})),
+    ('read_shadow', ('node_light', 'local')),
+])
+def test_a_blocked_user_call_returns_what_it_always_returned(method, args):
+    """The guard reports the condition without changing any caller's contract."""
+    account = _unready_user()
+    assert getattr(account, method)(*args) is False
+    assert account.not_ready.need == 'mqtt'
+
+
+def test_a_precondition_names_the_subject_it_is_about():
+    """One token, two subjects: the node and the app each hold an MQTT connection of their own."""
+    account = _unready_user()
+    account.read_shadow('node_light', 'local')
+    assert str(account.not_ready) == 'the user has no MQTT connection'
+
+    node = _unready_node()
+    node.publish_to_cloud({})
+    assert str(node.not_ready) == 'the node has no MQTT connection'
+
+
+def test_a_user_command_names_the_precondition_and_the_remedy(capsys):
+    account = _unready_user()
+    shell.dispatch(user, _user_ctx(account),
+                   ['publish', 'node_light', 'params-g1/params', '{"Power":true}'])
+    message = capsys.readouterr().out
+    assert 'the user has no MQTT connection' in message
+    assert 'run `connect` first' in message
+
+
+def test_a_user_failure_of_its_own_is_not_blamed_on_a_precondition(capsys):
+    """A reason recorded by an earlier command may not leak into the next one's message."""
+    account = _unready_user()
+    ctx = _user_ctx(account)
+    shell.dispatch(user, ctx, ['read-shadow', 'node_light', 'local'])
+    capsys.readouterr()
+
+    account.mqtt_connection = object()
+    shell.dispatch(user, ctx, ['publish', 'node_light', 'params-g1/params', 'not-json'])
+    message = capsys.readouterr().out
+    assert 'Invalid JSON' in message
+    assert 'MQTT connection' not in message
+
+
+def test_a_shadow_arrival_does_not_wait_for_v(capsys):
+    """What the cloud told the app happened, so it shows; what the app is doing does not."""
+    from esp_morpheus.sdk import user as sdk
+
+    output.configure(verbose=0)
+    sdk.user_log("Publishing to topic 'rainmaker/nodes/node_light/user/params-g1/params'")
+    assert capsys.readouterr().out == ''
+
+    sdk.user_event('[local][v4][reported] updated to {"Power": true}')
+    # Printed literally: rich would read `[reported]` as a style and fail on it.
+    assert '[local][v4][reported]' in capsys.readouterr().out
 
 
 def test_a_protocol_event_does_not_wait_for_v(capsys):

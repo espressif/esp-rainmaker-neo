@@ -84,6 +84,9 @@ def setup_logging(debug):
         logging.getLogger("awsiot").setLevel(logging.CRITICAL)
 
 class Device:
+    not_ready_subject = 'node'
+    not_ready_log = staticmethod(device_log)
+
     def __init__(self, node_thing_name, node_key, node_combined_cert, ca_cert, iot_endpoint, region, debug=False):
         self.node_thing_name = node_thing_name
         self.node_key = node_key

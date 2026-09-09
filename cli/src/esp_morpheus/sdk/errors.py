@@ -8,17 +8,20 @@ The SDK states the condition; the caller words the remedy. A phrase here names w
 never a Python method: the same Device drives the REPL, `morpheus device`, the simulators and the
 itests, and none of them share a vocabulary.
 
+A guarded class declares the subject its phrases are about, and where its trace goes, as
+`not_ready_subject` and `not_ready_log`. Device and User share the tokens they have in common.
+
 An unmet precondition raises NotReadyError, so a method that has no falsy value to return cannot
 refuse a call in silence. A method whose callers read a return value says so — `blocked=False` or
 `blocked=None` — and keeps the contract it already had.
 
-Either way the condition lands on `device.not_ready` as a token the caller can match on, which is
+Either way the condition lands on `not_ready` as a token the caller can match on, which is
 how a caller says more than "it failed" without parsing prose.
 """
 
 import functools
 
-# Precondition token -> the Device attribute that carries it, and the phrase naming what is absent.
+# Precondition token -> the attribute that carries it, and the phrase naming what is absent.
 _PRECONDITIONS = {
     'mqtt': ('mqtt_connection', 'MQTT connection'),
     'shadow': ('shadow_client', 'shadow connection'),
@@ -30,17 +33,18 @@ _PRECONDITIONS = {
 
 
 class NotReady:
-    """What a device operation blocked on.
+    """What an operation blocked on.
 
     @note A record, not an exception: `need` is the contract a caller matches on, and the string
-    form is a lowercase noun phrase the caller joins to its own words.
+    form is a lowercase clause the caller joins to its own words.
     """
 
-    def __init__(self, need):
+    def __init__(self, need, subject):
         self.need = need
+        self.subject = subject
 
     def __str__(self):
-        return f"the node has no {_PRECONDITIONS[self.need][1]}"
+        return f"the {self.subject} has no {_PRECONDITIONS[self.need][1]}"
 
 
 class NotReadyError(Exception):
@@ -54,12 +58,11 @@ class NotReadyError(Exception):
         super().__init__(str(blocked))
 
 
-def block(device, need):
-    """Record `need` as what blocked the current call on `device`, and trace it."""
-    from .device import device_log  # deferred: device imports this module
-    device.not_ready = NotReady(need)
-    device_log(f"Not ready: {device.not_ready}")
-    return device.not_ready
+def block(subject, need):
+    """Record `need` as what blocked the current call on `subject`, and trace it."""
+    subject.not_ready = NotReady(need, subject.not_ready_subject)
+    subject.not_ready_log(f"Not ready: {subject.not_ready}")
+    return subject.not_ready
 
 
 def requires(*needs, blocked=NotReadyError):

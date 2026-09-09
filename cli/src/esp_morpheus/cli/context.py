@@ -331,12 +331,57 @@ class Session:
 pass_session = click.make_pass_decorator(Session)
 
 
-def pass_user(f):
-    """Give a subcommand the User its `morpheus user <identity>` group resolved, signed in."""
+# A precondition token the SDK records -> the command that satisfies it. The SDK names the
+# condition and nothing else; these tables are the only place that words the remedy.
+USER_REMEDY = {
+    'mqtt': 'connect',
+}
+
+DEVICE_REMEDY = {
+    'mqtt': 'connect',
+    'shadow': 'shadow-connect <name>',
+    'group_info': 'group-info',
+}
+
+
+def explain(failure, blocked, remedies):
+    """Add the precondition the subject blocked on to a command's own failure message.
+
+    `blocked` is a NotReady or a NotReadyError: both name the condition and carry the token.
+
+    @note The clauses are joined, never merged: the SDK words its own phrase, so nothing here may
+    assume where it ends.
+    """
+    remedy = remedies.get(blocked.need)
+    return f"{failure}: {blocked}; run `{remedy}` first." if remedy else f"{failure}: {blocked}"
+
+
+def _pass_ready(f, resolve, remedies):
+    """Give `f` the subject `resolve` returns, and name the precondition it failed on.
+
+    Every command comes through one of these, so a command that failed on an unmet precondition
+    names which one, and a new command needs no code of its own to do it.
+    """
     @click.pass_context
     def wrapper(ctx, *args, **kwargs):
-        return ctx.invoke(f, ctx.find_object(Session).authenticated_user(), *args, **kwargs)
+        subject = resolve(ctx.find_object(Session))
+        # Scope the record to this command: in the REPL the subject outlives the line typed.
+        subject.not_ready = None
+        try:
+            return ctx.invoke(f, subject, *args, **kwargs)
+        except NotReadyError as e:
+            # A precondition the SDK refuses to fail silently on, so the command reported nothing.
+            output.fail(explain('Failed', e, remedies))
+        except output.CommandError as e:
+            if subject.not_ready is None:
+                raise
+            raise type(e)(explain(e.format_message(), subject.not_ready, remedies)) from None
     return click.decorators.update_wrapper(wrapper, f)
+
+
+def pass_user(f):
+    """Give a subcommand the User its `morpheus user <identity>` group resolved, signed in."""
+    return _pass_ready(f, lambda session: session.authenticated_user(), USER_REMEDY)
 
 
 def pass_unverified_user(f):
@@ -349,24 +394,5 @@ def pass_unverified_user(f):
 
 
 def pass_device(f):
-    """Give a subcommand the Device its `morpheus device <node>` group resolved.
-
-    Every device command comes through here, so a command that failed on an unmet precondition
-    names which one, and a new command needs no code of its own to do it.
-    """
-    @click.pass_context
-    def wrapper(ctx, *args, **kwargs):
-        from .device import explain  # deferred: cli.device imports this module
-        device = ctx.find_object(Session).device
-        # Scope the record to this command: in the REPL the device outlives the line typed.
-        device.not_ready = None
-        try:
-            return ctx.invoke(f, device, *args, **kwargs)
-        except NotReadyError as e:
-            # A precondition the SDK refuses to fail silently on, so the command reported nothing.
-            output.fail(explain('Failed', e))
-        except output.CommandError as e:
-            if device.not_ready is None:
-                raise
-            raise type(e)(explain(e.format_message(), device.not_ready)) from None
-    return click.decorators.update_wrapper(wrapper, f)
+    """Give a subcommand the Device its `morpheus device <node>` group resolved."""
+    return _pass_ready(f, lambda session: session.device, DEVICE_REMEDY)

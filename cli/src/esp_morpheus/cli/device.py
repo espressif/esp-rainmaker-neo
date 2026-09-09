@@ -9,26 +9,6 @@ import click
 from . import output
 from .context import pass_device
 
-# A precondition token the SDK records -> the command that satisfies it. The SDK names the
-# condition and nothing else; this table is the only place that words the remedy.
-REMEDY = {
-    'mqtt': 'connect',
-    'shadow': 'shadow-connect <name>',
-    'group_info': 'group-info',
-}
-
-
-def explain(failure, blocked):
-    """Add the precondition the node blocked on to a command's own failure message.
-
-    `blocked` is a NotReady or a NotReadyError: both name the condition and carry the token.
-
-    @note The clauses are joined, never merged: the SDK words its own phrase, so nothing here may
-    assume where it ends.
-    """
-    remedy = REMEDY.get(blocked.need)
-    return f"{failure}: {blocked}; run `{remedy}` first." if remedy else f"{failure}: {blocked}"
-
 
 @click.command()
 @pass_device
