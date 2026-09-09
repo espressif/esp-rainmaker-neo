@@ -17,6 +17,7 @@ Mirrors test_alexa.py / test_gva.py for parity. Two layers are covered:
 
 Run all: pytest test/itest/test_smartthings.py -v -s
 """
+import base64
 import os
 import subprocess
 import sys
@@ -530,7 +531,7 @@ def test_smartthings_command_color_control(capability_device):
     ds = _run_capability_command(
         capability_device, "RGBLight",
         [{"component": "main", "capability": "st.colorControl", "command": "setColor",
-          "arguments": [{"hue": 120, "saturation": 80}]}],
+          "arguments": [{"hue": 33.3, "saturation": 80}]}],
         {"Hue": 120, "Saturation": 80},
     )
     attrs = {s["attribute"] for s in ds["states"] if s["capability"] == "st.colorControl"}
@@ -880,6 +881,91 @@ def test_smartthings_state_callback(user_with_1_dev_each_in_2_groups, webhook_mo
     _assert_st_reported(
         webhook_mock_base_url, webhook_mock_api_key, callback_token, light1_id,
         {("st.switch", "switch"): "off"})
+
+
+def _st_endpoint_key(user_sub, state_callback_url):
+    """The (user_id, integration_endpoint) key of a stored SmartThings callback row.
+
+    endpoint_id is the state-callback URL under base64url without padding -- see
+    user_integration_db.EncodeEndpointID.
+    """
+    endpoint_id = base64.urlsafe_b64encode(state_callback_url.encode()).decode().rstrip("=")
+    return {"user_id": user_sub, "integration_endpoint": f"smartthings#{endpoint_id}"}
+
+
+def _st_callback_token_row(user_sub, state_callback_url):
+    table = boto3.resource("dynamodb", region_name=REGION).Table("rmng-user-endpoints")
+    return table.get_item(Key=_st_endpoint_key(user_sub, state_callback_url)).get("Item")
+
+
+def _expire_st_callback_token(user_sub, state_callback_url):
+    """Backdate the stored access token so the next callback has to refresh it.
+
+    Tokens live 24 hours, so the refresh path is unreachable without forcing the expiry.
+    """
+    table = boto3.resource("dynamodb", region_name=REGION).Table("rmng-user-endpoints")
+    table.update_item(
+        Key=_st_endpoint_key(user_sub, state_callback_url),
+        UpdateExpression="SET integration_token.access_expires_at = :past",
+        ExpressionAttributeValues={":past": int(time.time()) - 60},
+    )
+
+
+@pytest.mark.xdist_group("env_mut")
+def test_smartthings_state_callback_refreshes_expired_token(
+        user_with_1_dev_each_in_2_groups, webhook_mock, st_action_test_mode):
+    """An expired callback token is refreshed and the stateCallback still lands.
+
+    The refresh is its own interaction (refreshAccessTokens), and a refresh_token grant
+    sent under accessTokenRequest is rejected with UNSUPPORTED-GRANT-TYPE. Every other
+    test here takes the already-fresh path, so nothing else covers it.
+    """
+    webhook_mock_base_url, webhook_mock_api_key = webhook_mock
+    if not ST_REGION_ARNS:
+        pytest.skip("No rmng-st-core regions in rmng-outputs.json")
+    region, arn = ST_REGION_ARNS[0]
+
+    device1, _device2, group1_id, _group2_id, test_user1 = user_with_1_dev_each_in_2_groups
+    test_user1.get_aws_credentials()
+
+    assert device1.connect(), "Failed to connect to MQTT"
+    shadow_name = f"params-{group1_id}"
+    assert device1.shadow_connect([shadow_name]), "Failed to connect to shadow"
+    device1.update_named_shadow(shadow_name, {
+        "online": True,
+        "Light1": {"Power": False, "Brightness": 0},
+    })
+
+    test_user1.st_discover_devices(lambda_arn=arn, region=region)
+
+    state_callback_url = f"{webhook_mock_base_url}/v1/smartthings/data"
+    callback_token = f"st-cb-refresh-{test_user1.sub}"
+    test_user1.st_grant_callback(
+        callback_token,
+        f"{webhook_mock_base_url}/v1/smartthings/token",
+        state_callback_url,
+        lambda_arn=arn, region=region)
+
+    stored = _st_callback_token_row(test_user1.sub, state_callback_url)
+    assert stored, "grantCallbackAccess stored no callback row"
+    expiry_before = int(stored["integration_token"]["access_expires_at"])
+
+    _expire_st_callback_token(test_user1.sub, state_callback_url)
+
+    # The mock echoes the grant back as the access token, so the capture key is unchanged.
+    light1_id = st_external_device_id(device1.node_thing_name, "Light1")
+    device1.update_named_shadow(shadow_name, {
+        "Light1": {"Power": True, "Brightness": 40},
+        "notify": {"version": 1, "smartthings": True},
+    })
+    _assert_st_reported(
+        webhook_mock_base_url, webhook_mock_api_key, callback_token, light1_id,
+        {("st.switch", "switch"): "on", ("st.switchLevel", "level"): 40})
+
+    # The expiry moving forward proves a refresh happened, not a silently failed backdate.
+    refreshed = _st_callback_token_row(test_user1.sub, state_callback_url)
+    assert int(refreshed["integration_token"]["access_expires_at"]) >= expiry_before, \
+        "callback token expiry was not renewed, so no refresh was persisted"
 
 
 # ---------------------------------------------------------------------------

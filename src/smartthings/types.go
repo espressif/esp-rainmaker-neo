@@ -21,6 +21,15 @@ const (
 	InteractionCommandResponse      = "commandResponse"
 	InteractionStateCallback        = "stateCallback"
 	InteractionDiscoveryCallback    = "discoveryCallback"
+
+	// The code exchange and the refresh post to the same oauthToken URL but are separate interaction types, each admitting exactly one grantType; SmartThings answers UNSUPPORTED-GRANT-TYPE for any other pairing.
+	InteractionAccessTokenRequest  = "accessTokenRequest"
+	InteractionRefreshAccessTokens = "refreshAccessTokens"
+)
+
+const (
+	CommandSetHue        = "setHue"
+	CommandSetSaturation = "setSaturation"
 )
 
 // SmartThings capability constants

@@ -7,9 +7,11 @@ package smartthings
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/config"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
@@ -102,6 +104,30 @@ func ParseDeviceID(externalDeviceID string) (nodeID string, deviceName string, e
 
 // GetSTCapabilities maps RMNG device parameter types to SmartThings capabilities.
 // It always includes st.healthCheck and deduplicates capabilities.
+// SmartThings hue is a percentage 0-100 while esp.param.hue is degrees 0-360; saturation is 0-100 on both sides.
+const stHueScale = 3.6
+
+func HueToDevice(hue float64) int {
+	return int(math.Round(math.Min(math.Max(hue, 0), 100) * stHueScale))
+}
+
+func HueToST(hue float64) float64 {
+	return math.Round(math.Min(math.Max(hue, 0), 360)/stHueScale*10) / 10
+}
+
+func STCapabilitiesForDevice(device *config.NodeCfgDevice) []string {
+	paramTypes := make([]string, 0, len(device.Params))
+	for _, param := range device.Params {
+		paramTypes = append(paramTypes, param.Type)
+	}
+	return GetSTCapabilities(paramTypes)
+}
+
+// Discovery drops any device whose params map to nothing beyond the always-present healthCheck, so nothing else may report state for one either.
+func IsSTDiscoverable(device *config.NodeCfgDevice) bool {
+	return len(STCapabilitiesForDevice(device)) > 1
+}
+
 func GetSTCapabilities(paramTypes []string) []string {
 	capabilitySet := make(map[string]bool)
 

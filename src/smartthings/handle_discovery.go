@@ -153,16 +153,10 @@ func buildSTDevices(ctx *rmngctx.RmngContext, nodeID string, groupID string) []S
 
 	var devices []STDiscoveryDevice
 	for _, device := range nodeCfg.Devices {
-		// Collect param types for capability mapping
-		var paramTypes []string
-		for _, param := range device.Params {
-			paramTypes = append(paramTypes, param.Type)
-		}
-
-		capabilities := GetSTCapabilities(paramTypes)
+		capabilities := STCapabilitiesForDevice(&device)
 
 		// Exclude devices with only healthCheck (no supported capability params)
-		if len(capabilities) <= 1 {
+		if !IsSTDiscoverable(&device) {
 			continue
 		}
 

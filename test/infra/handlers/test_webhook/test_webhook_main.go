@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 
@@ -18,6 +19,14 @@ import (
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
+)
+
+// The two token interactions post to the same oauthToken URL and are told apart only by headers.interactionType, each admitting exactly one grant type.
+const (
+	stAccessTokenRequest     = "accessTokenRequest"
+	stRefreshAccessTokens    = "refreshAccessTokens"
+	stGrantAuthorizationCode = "authorization_code"
+	stGrantRefreshToken      = "refresh_token"
 )
 
 type tokenRequest struct {
@@ -118,11 +127,8 @@ func handleGVAToken(ctx context.Context, request events.APIGatewayProxyRequest) 
 	return utils.APIGwRespJSON(http.StatusOK, resp), nil
 }
 
-// handleSTToken answers a SmartThings accessTokenRequest. The Schema flow posts
-// an envelope carrying either a code (grantCallbackAccess) or a refreshToken, and
-// expects the tokens nested under callbackAuthentication. The code/refresh value
-// is echoed back as the access token so a test can predict what the state
-// callback will present, which is the key the capture endpoint stores under.
+// The code/refresh value is echoed back as the access token so a test can predict what the state callback will present, which is the key the capture endpoint stores under.
+// The interactionType/grantType pairing is enforced because SmartThings enforces it: only "authorization_code" under accessTokenRequest and only "refresh_token" under refreshAccessTokens.
 func handleSTToken(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	body, err := parseBody(request)
 	if err != nil {
@@ -133,20 +139,54 @@ func handleSTToken(ctx context.Context, request events.APIGatewayProxyRequest) (
 	if auth == nil {
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("callbackAuthentication is required")), nil
 	}
-	grant, _ := auth["code"].(string)
-	if grant == "" {
-		grant, _ = auth["refreshToken"].(string)
+
+	requestID, interactionType := "", ""
+	if headers, ok := body["headers"].(map[string]interface{}); ok {
+		requestID, _ = headers["requestId"].(string)
+		interactionType, _ = headers["interactionType"].(string)
 	}
+
+	grantType, _ := auth["grantType"].(string)
+	code, _ := auth["code"].(string)
+	refreshToken, _ := auth["refreshToken"].(string)
+
+	var grant string
+	switch interactionType {
+	case stAccessTokenRequest:
+		if grantType != stGrantAuthorizationCode {
+			return stUnsupportedGrantType(requestID, interactionType, grantType), nil
+		}
+		grant = code
+	case stRefreshAccessTokens:
+		if grantType != stGrantRefreshToken {
+			return stUnsupportedGrantType(requestID, interactionType, grantType), nil
+		}
+		grant = refreshToken
+	default:
+		return stUnsupportedGrantType(requestID, interactionType, grantType), nil
+	}
+
 	if grant == "" {
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("code or refreshToken is required")), nil
 	}
 
-	requestID := ""
-	if headers, ok := body["headers"].(map[string]interface{}); ok {
-		requestID, _ = headers["requestId"].(string)
-	}
-
 	return utils.APIGwRespJSON(http.StatusOK, webhook.IssueSTToken(requestID, grant, grant)), nil
+}
+
+// Mirrors the body SmartThings returns for a grant it will not honour, so a caller that mishandles it fails here as it would against the real platform.
+func stUnsupportedGrantType(requestID, interactionType, grantType string) events.APIGatewayProxyResponse {
+	return utils.APIGwRespJSON(http.StatusBadRequest, map[string]interface{}{
+		"headers": map[string]string{
+			"schema":          "st-schema",
+			"version":         "1.0",
+			"interactionType": interactionType,
+			"requestId":       requestID,
+		},
+		"globalError": map[string]string{
+			"errorEnum": "UNSUPPORTED-GRANT-TYPE",
+			"detail":    fmt.Sprintf("grant type: %s is not supported", grantType),
+		},
+	})
 }
 
 // --- Capture (data) endpoints ---------------------------------------------
