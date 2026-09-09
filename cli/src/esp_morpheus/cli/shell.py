@@ -20,8 +20,10 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.completion import NestedCompleter
 from prompt_toolkit.history import FileHistory
+from prompt_toolkit.patch_stdout import patch_stdout
 
 from .. import paths
+from ..sdk.errors import NotReadyError
 from . import output
 
 EXIT_WORDS = ('q', 'quit', 'exit')
@@ -129,7 +131,10 @@ def run(group, ctx, prompt, history_name):
     output.info("Type [bold]help[/bold] for commands, [bold]q[/bold] to leave.")
     while True:
         try:
-            line = session.prompt(prompt)
+            # A subscription delivers on the MQTT thread: print above the prompt, not over it.
+            # raw, because the default proxy rewrites every escape it is given to `?`.
+            with patch_stdout(raw=True):
+                line = session.prompt(prompt)
         except KeyboardInterrupt:
             continue
         except EOFError:
@@ -146,7 +151,9 @@ def run(group, ctx, prompt, history_name):
         if args[0].lower() in EXIT_WORDS:
             return
         if args[0].lower() == 'help':
-            _print_help(group, ctx, args[1:])
+            # A listing is many writes, and a subscription may deliver in the middle of it.
+            with output.block():
+                _print_help(group, ctx, args[1:])
             continue
 
         dispatch(group, ctx, args)
@@ -178,6 +185,9 @@ def dispatch(group, ctx, args):
         e.show()
     except NoCredentialsError:
         output.missing_credentials().show()
+    except NotReadyError as e:
+        # Only outside `pass_device`, which words a remedy for the commands it wraps.
+        output.err(f"Failed: {e}")
     except SystemExit as e:
         # A stray process exit from a library: one command may not end the session.
         output.err(e.code if isinstance(e.code, str) else f"Command exited ({e.code}).")

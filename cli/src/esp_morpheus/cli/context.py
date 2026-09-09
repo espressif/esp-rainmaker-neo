@@ -20,6 +20,7 @@ import click
 from .. import paths
 from ..outputs import OutputsError, RmngSettings, verify_aws_identity
 from ..sdk.device import Device, generate_key_and_cert
+from ..sdk.errors import NotReadyError
 from ..sdk.user import User
 from . import output
 
@@ -348,8 +349,24 @@ def pass_unverified_user(f):
 
 
 def pass_device(f):
-    """Give a subcommand the Device its `morpheus device <node>` group resolved."""
+    """Give a subcommand the Device its `morpheus device <node>` group resolved.
+
+    Every device command comes through here, so a command that failed on an unmet precondition
+    names which one, and a new command needs no code of its own to do it.
+    """
     @click.pass_context
     def wrapper(ctx, *args, **kwargs):
-        return ctx.invoke(f, ctx.find_object(Session).device, *args, **kwargs)
+        from .device import explain  # deferred: cli.device imports this module
+        device = ctx.find_object(Session).device
+        # Scope the record to this command: in the REPL the device outlives the line typed.
+        device.not_ready = None
+        try:
+            return ctx.invoke(f, device, *args, **kwargs)
+        except NotReadyError as e:
+            # A precondition the SDK refuses to fail silently on, so the command reported nothing.
+            output.fail(explain('Failed', e))
+        except output.CommandError as e:
+            if device.not_ready is None:
+                raise
+            raise type(e)(explain(e.format_message(), device.not_ready)) from None
     return click.decorators.update_wrapper(wrapper, f)

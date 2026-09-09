@@ -11,11 +11,13 @@ jq without filtering out progress lines. Both modes report failure through the e
 
 import json as _json
 import sys
+import threading
 
 import click
-from rich.console import Console
+from rich.console import Console, Group
 from rich.syntax import Syntax
 from rich.table import Table
+from rich.text import Text
 
 EXIT_OK = 0
 EXIT_FAILURE = 1
@@ -42,6 +44,9 @@ class _State:
     json_mode = False
     raw = False
     verbose = 0
+    # A subscription delivers on the MQTT thread while a command prints from the main one.
+    # Anything that writes more than once holds this, so one block cannot land inside another.
+    lock = threading.RLock()
     # Where the payload goes. Under --json this is the real stdout, kept aside while sys.stdout
     # itself is pointed at stderr.
     payload_stream = None
@@ -60,6 +65,12 @@ def configure(json_mode=False, raw=False, verbose=0):
     # The SDK's request trace carries bearer tokens, so it is opt-in behind -v.
     from ..sdk import user as _user_sdk
     _user_sdk.request_logging = bool(verbose)
+
+    # The device trace is progress detail: route it to -v. A protocol event is a result and
+    # stays visible.
+    from ..sdk import device as _device_sdk
+    _device_sdk.set_log_sink(trace)
+    _device_sdk.set_event_sink(event)
 
     if _state.payload_stream is not None:
         sys.stdout = _state.payload_stream
@@ -126,9 +137,51 @@ def debug(message):
         _state.msg.print(f"[dim]{message}[/dim]")
 
 
+def trace(message):
+    """A line of the SDK's own progress detail, shown under -v.
+
+    @note The text is printed literally: it carries `[reported]` and other words rich would read
+    as markup.
+    """
+    if _state.verbose:
+        _state.msg.print(message, markup=False, highlight=False, style='dim')
+
+
 def plain(message=''):
     """Literal text, unstyled. For the guide output, which is a formatted document already."""
     _state.msg.print(message, markup=False, highlight=False)
+
+
+def event(message):
+    """A protocol event the node reports as text, such as a shadow update it was told about.
+
+    @note Not gated on -v: an event is something that happened, not a note about progress.
+    """
+    _state.msg.print(message, markup=False, highlight=False)
+
+
+def block():
+    """Hold the terminal for a group of writes that must stay together.
+
+    @note Two threads write here: a command on the main one, a subscription on the MQTT one.
+    Whoever writes more than once takes this, so the two orders interleave but never split.
+    """
+    return _state.lock
+
+
+def inbound(topic, message):
+    """A message that arrived on a subscription, printed where it arrived.
+
+    @note One write, on the message channel. One write because the prompt is redrawn after each
+    of them; the message channel because it is no command's result, so a script reading stdout
+    must not find it among the payloads.
+    """
+    with block():
+        _state.msg.print(Group(
+            Text(f"<-- {topic}", style='dim'),
+            Syntax(_json.dumps(message, indent=2, default=str), 'json',
+                   theme='ansi_dark', background_color='default'),
+        ))
 
 
 # --- payloads: always stdout ------------------------------------------------
@@ -151,10 +204,15 @@ def emit_kv(title, mapping, min_width=0):
     if structured():
         emit_json(mapping)
         return
-    if title:
-        _state.out.print(f"[bold]{title}[/bold]")
     width = max((len(str(k)) for k in mapping), default=0)
     width = max(width, min_width)
+    with block():
+        _emit_fields(title, mapping, width)
+
+
+def _emit_fields(title, mapping, width):
+    if title:
+        _state.out.print(f"[bold]{title}[/bold]")
     for key, value in mapping.items():
         if isinstance(value, (list, tuple)):
             # A list of ids reads as one per line. These stay in the value column: they are fields,
@@ -207,10 +265,11 @@ def emit_response(response, success_message=None, ok_statuses=(200, 201, 202, 20
         ok(success_message or f"{response.status_code} {response.reason or ''}".strip())
         return None
 
-    if success_message:
-        ok(success_message)
-    if show_body:
-        emit_json(body)
+    with block():
+        if success_message:
+            ok(success_message)
+        if show_body:
+            emit_json(body)
     return body
 
 

@@ -30,6 +30,7 @@ from awscrt import io, mqtt
 from awsiot import iotshadow, mqtt_connection_builder
 from queue import Queue, Empty
 
+from .errors import block, requires
 from .util import shadow_to_unstructured
 
 blue = "\033[94m"
@@ -37,10 +38,38 @@ green = "\033[92m"
 red = "\033[91m"
 reset = "\033[0m"
 
-# Define colored logging function for Device
+_log_sink = None
+
+
+def set_log_sink(sink):
+    """Send the device trace to `sink` instead of stdout, such as the CLI's -v channel."""
+    global _log_sink
+    _log_sink = sink
+
+
 def device_log(message):
-    """Print message with Device prefix in green color."""
-    print(f"{green}[Device]{reset} {message}")
+    """One line of device trace: what the node is doing, not what happened to it."""
+    if _log_sink is None:
+        print(f"{green}[Device]{reset} {message}")
+    else:
+        _log_sink(message)
+
+
+_event_sink = None
+
+
+def set_event_sink(sink):
+    """Send protocol events to `sink` instead of stdout."""
+    global _event_sink
+    _event_sink = sink
+
+
+def device_event(message):
+    """One protocol event: something the cloud told the node, which a caller is waiting to see."""
+    if _event_sink is None:
+        print(f"{green}[Device]{reset} {message}")
+    else:
+        _event_sink(message)
 
 def setup_logging(debug):
     if debug:
@@ -83,17 +112,15 @@ class Device:
         setup_logging(self.debug)
         self.iot_data_client = None
         self.group_id = None
+        self.not_ready = None
 
+    @requires('node_id', 'node_cert', blocked=False)
     def register_test_node(self, admin_group_names=None, capabilities=None, caller_identity=None):
         """Register this device as a node via a direct invoke of the rmng-admin-node-reg Lambda.
 
         caller_identity is the API-Gateway CognitoAuthenticationProvider string of a REAL
         admin"""
         node_thing_name = self.node_thing_name
-
-        if not node_thing_name or not self.node_cert:
-            device_log("Error: node_thing_name or node_cert not found in test_config.json")
-            return False
 
         tags = ["created_by:test"]
 
@@ -158,11 +185,8 @@ class Device:
             device_log(f"An error occurred: {e}")
             return False
 
+    @requires('node_key', blocked=None)
     def sign_challenge(self, challenge):
-        if not self.node_key:
-            device_log("Error: node_key not set")
-            return None
-
         try:
             # Load the private key
             private_key = load_pem_private_key(
@@ -202,6 +226,7 @@ class Device:
             device_log(f"Error signing challenge: {str(e)}")
             return None
 
+    @requires('node_key', blocked=None)
     def sign_matter_attestation(self, nocsr_elements: bytes, attestation_challenge: bytes) -> bytes:
         """Sign Matter attestation data (NOCSRElements || AttestationChallenge) with device's private key.
 
@@ -212,10 +237,6 @@ class Device:
         Returns:
             bytes: 64-byte raw r||s ECDSA signature, or None on failure
         """
-        if not self.node_key:
-            device_log("Error: node_key not set")
-            return None
-
         try:
             import hashlib
 
@@ -384,12 +405,9 @@ class Device:
         except Exception as e:
             device_log(f"Error processing message: {str(e)}")
 
+    @requires('shadow', blocked=False)
     def update_named_shadow(self, shadow_name, state):
         state = reported_or_desired_shadow_to_structured(state)
-
-        if not self.shadow_client:
-            device_log("Error: Shadow client not initialized. Call connect() first.")
-            return False
 
         try:
             device_log(f"[{shadow_name}] {blue}updating to{reset} {state}")
@@ -496,44 +514,44 @@ class Device:
         device_log(f"Subscribed to named shadow events for '{shadow_name}' successfully")
 
     def on_update_shadow_accepted(self, response):
-        device_log(f"Shadow update accepted: Version: {response.version}")
+        device_event(f"Shadow update accepted: Version: {response.version}")
         if response.state:
             if response.state.reported:
-                device_log(f"Reported State: {response.state.reported}")
+                device_event(f"Reported State: {response.state.reported}")
             if response.state.desired:
-                device_log(f"Desired State: {response.state.desired}")
+                device_event(f"Desired State: {response.state.desired}")
 
     def on_update_shadow_rejected(self, error):
-        device_log(f"Shadow update rejected:")
-        device_log(f"Error code: {error.code}")
-        device_log(f"Error message: {error.message}")
+        device_event(f"Shadow update rejected:")
+        device_event(f"Error code: {error.code}")
+        device_event(f"Error message: {error.message}")
 
     def on_shadow_delta_updated(self, delta):
-        device_log(f"Shadow delta updated: Version: {delta.version}")
+        device_event(f"Shadow delta updated: Version: {delta.version}")
         if delta.state:
-            device_log(f"Delta State: {delta.state}")
+            device_event(f"Delta State: {delta.state}")
         if delta.metadata:
-            device_log(f"Delta Metadata: {delta.metadata}")
+            device_event(f"Delta Metadata: {delta.metadata}")
 
     def on_named_shadow_updated(self, shadow_name, response):
         if response.current.state:
             if response.current.state.reported:
-                device_log(f"[{shadow_name}][v{response.current.version}][reported] {blue}updated to{reset} {response.current.state.reported}")
+                device_event(f"[{shadow_name}][v{response.current.version}][reported] {blue}updated to{reset} {response.current.state.reported}")
             if response.current.state.desired:
-                device_log(f"[{shadow_name}][v{response.current.version}][desired] {blue}updated to{reset} {response.current.state.desired}")
+                device_event(f"[{shadow_name}][v{response.current.version}][desired] {blue}updated to{reset} {response.current.state.desired}")
 
     def on_named_shadow_delta_updated(self, shadow_name, delta):
         if delta.state:
-            device_log(f"[{shadow_name}][v{delta.version}][delta] {blue}updated to{reset} {delta.state}")
+            device_event(f"[{shadow_name}][v{delta.version}][delta] {blue}updated to{reset} {delta.state}")
         if delta.metadata:
-            device_log(f"[{shadow_name}][v{delta.version}][metadata] {blue}updated to{reset} {delta.metadata}")
+            device_event(f"[{shadow_name}][v{delta.version}][metadata] {blue}updated to{reset} {delta.metadata}")
 
     def on_update_named_shadow_accepted(self, shadow_name, response):
         if response.state:
             if response.state.reported:
-                device_log(f"[{shadow_name}][v{response.version}][reported] {blue}update accepted{reset} {response.state.reported}")
+                device_event(f"[{shadow_name}][v{response.version}][reported] {blue}update accepted{reset} {response.state.reported}")
             if response.state.desired:
-                device_log(f"[{shadow_name}][v{response.version}][desired] {blue}update accepted{reset} {response.state.desired}")
+                device_event(f"[{shadow_name}][v{response.version}][desired] {blue}update accepted{reset} {response.state.desired}")
 
     def __shadow_parse_input(self, input_str):
         try:
@@ -551,11 +569,8 @@ class Device:
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON data: {e}")
 
+    @requires('shadow', blocked=False)
     def update_shadow(self, state_json, shadow_name=None):
-        if not self.shadow_client:
-            device_log("Error: Shadow not connected. Call shadow_connect() first.")
-            return False
-
         try:
             # Parse the JSON string into a dictionary
             state = self.__shadow_parse_input(state_json)
@@ -632,12 +647,9 @@ class Device:
                 capture_output=True, timeout=30,
             )
 
+    @requires('node_id', blocked=False)
     def destroy_test_node(self):
         node_thing_name = self.node_thing_name
-
-        if not node_thing_name:
-            device_log("Error: node_thing_name not found in test_config.json")
-            return False
 
         # Create boto3 client
         iot_client = boto3.client('iot', region_name=self.region)
@@ -764,6 +776,7 @@ class Device:
             device_log(f"Failed to get thing shadow: {str(e)}")
             return None
 
+    @requires('mqtt', blocked=False)
     def _publish_to_topic(self, topic, data, description="message"):
         """Internal method to publish data to a specific MQTT topic.
 
@@ -775,10 +788,6 @@ class Device:
         Returns:
             bool: True if successful, False otherwise
         """
-        if not self.mqtt_connection:
-            device_log("Error: MQTT not connected. Call connect() first.")
-            return False
-
         try:
             device_log(f"Publishing {description} to topic: {topic}")
 
@@ -800,6 +809,7 @@ class Device:
             traceback.print_exc()
             return False
 
+    @requires('mqtt', blocked=False)
     def publish_to_cloud(self, data, basic_ingest=True):
         """Publish data to the to_cloud topic.
 
@@ -817,6 +827,7 @@ class Device:
             topic = f"$aws/rules/node_to_cloud_rule/{topic}"
         return self._publish_to_topic(topic, data, "message")
 
+    @requires('mqtt', 'group_info', blocked=False)
     def send_direct_notification(self, data, basic_ingest=True):
         """Send a direct notification using the device's own group and subgroup information.
 
@@ -836,15 +847,6 @@ class Device:
         Returns:
             bool: True if successful, False otherwise
         """
-        if not self.mqtt_connection:
-            device_log("Error: MQTT not connected. Call connect() first.")
-            return False
-
-        # Check if we have group information
-        if not hasattr(self, 'group_id') or not self.group_id:
-            device_log("Error: Device group information not available. Call get_group_info() first.")
-            return False
-
         # Build the topic suffix with group/subgroup information
         topic_suffix = f"{self.group_id}"
         if hasattr(self, 'subgroup_ids') and self.subgroup_ids:
@@ -879,11 +881,8 @@ class Device:
         return False
 
 
+    @requires('mqtt', blocked=None)
     def get_group_info(self, timeout=15):
-        if not self.mqtt_connection:
-            device_log("Error: MQTT not connected. Call connect() first.")
-            return None
-
         # Clear the queue before sending the request
         while not self.from_cloud_queue.empty():
             self.from_cloud_queue.get_nowait()
@@ -903,16 +902,13 @@ class Device:
 
         return None
 
+    @requires('mqtt', blocked=None)
     def get_schedule_version(self, timeout=5):
         """Get the current schedule version from the device.
 
         Returns:
             int: Schedule version if successful, None if failed
         """
-        if not self.mqtt_connection:
-            device_log("Error: MQTT not connected. Call connect() first.")
-            return None
-
         # Clear the queue before sending the request
         while not self.from_cloud_queue.empty():
             self.from_cloud_queue.get_nowait()
@@ -940,16 +936,13 @@ class Device:
         device_log(f"Timeout waiting for getSchedVer response after {timeout} seconds")
         return None
 
+    @requires('mqtt', blocked=None)
     def get_schedule_details(self, timeout=10):
         """Get the current schedule details from the device.
 
         Returns:
             dict: Schedule details if successful, None if failed
         """
-        if not self.mqtt_connection:
-            device_log("Error: MQTT not connected. Call connect() first.")
-            return None
-
         # Clear the queue before sending the request
         while not self.from_cloud_queue.empty():
             self.from_cloud_queue.get_nowait()
@@ -995,6 +988,7 @@ class Device:
 
         return None
 
+    @requires('mqtt', 'group_info', blocked=False)
     def publish_timeseries_data(self, k, data_type, value, cumulative=False, timezone="UTC", timestamp=None, basic_ingest=True):
         """Publish timeseries data to the device's timeseries topic.
 
@@ -1012,15 +1006,6 @@ class Device:
         Returns:
             bool: True if successful, False otherwise
         """
-        if not self.mqtt_connection:
-            device_log("Error: MQTT not connected. Call connect() first.")
-            return False
-
-        # Check if we have group information
-        if not hasattr(self, 'group_id') or not self.group_id:
-            device_log("Error: Device group information not available. Call get_group_info() first.")
-            return False
-
         # Build the topic suffix with group information
         topic_suffix = f"{self.group_id}"
         if hasattr(self, 'subgroup_ids') and self.subgroup_ids:
@@ -1052,18 +1037,13 @@ class Device:
 
         return self._publish_to_topic(topic, payload, "timeseries data")
 
+    @requires('mqtt', 'group_info', blocked=False)
     def publish_timeseries_batch(self, data_points, basic_ingest=True):
         """Publish multiple independently queryable timeseries points in one MQTT message.
 
         Each item must contain ``k``, ``dt``, ``t`` (Unix seconds), and
         ``v``. Device-side publishing is limited to 100 items per message.
         """
-        if not self.mqtt_connection:
-            device_log("Error: MQTT not connected. Call connect() first.")
-            return False
-        if not hasattr(self, 'group_id') or not self.group_id:
-            device_log("Error: Device group information not available. Call get_group_info() first.")
-            return False
         if not isinstance(data_points, list) or not data_points:
             device_log("Error: Timeseries batch must contain at least one data point.")
             return False
@@ -1081,11 +1061,8 @@ class Device:
 
         return self._publish_to_topic(topic, {"data": data_points}, "timeseries batch data")
 
+    @requires('mqtt', blocked=False)
     def set_node_config(self, config_data):
-        if not self.mqtt_connection:
-            device_log("Error: MQTT not connected. Call connect() first.")
-            return False
-
         # Clear the queue before sending the request
         while not self.from_cloud_queue.empty():
             self.from_cloud_queue.get_nowait()
@@ -1158,6 +1135,7 @@ class Device:
                            f"(attempt {attempt}/{attempts}); retrying")
                 time.sleep(delay)
 
+    @requires('mqtt', blocked=False)
     def subscribe(self, topic=None, callback=None, shadow_name=None):
         """Subscribe to a topic or shadow events.
 
@@ -1166,17 +1144,12 @@ class Device:
             callback (callable): Optional callback function for messages
             shadow_name (str): Optional shadow name for shadow subscriptions
         """
+        if shadow_name and not self.shadow_client:
+            block(self, 'shadow')
+            return False
+
         try:
-            if not self.mqtt_connection:
-                device_log("Not connected to MQTT")
-                return False
-
             if shadow_name:
-                # Handle shadow subscriptions
-                if not self.shadow_client:
-                    device_log("Shadow client not initialized")
-                    return False
-
                 shadow_topics = [
                     f"$aws/things/{self.node_thing_name}/shadow/name/{shadow_name}/update/accepted",
                     f"$aws/things/{self.node_thing_name}/shadow/name/{shadow_name}/update/rejected",
@@ -1227,11 +1200,8 @@ class Device:
             device_log(f"Error in subscribe: {str(e)}")
             return False
 
+    @requires('mqtt', blocked=False)
     def unsubscribe(self, full_topic):
-        if not self.mqtt_connection:
-            device_log("Error: MQTT not connected.")
-            return False
-
         try:
             # Unsubscribe from topic
             future, _ = self.mqtt_connection.unsubscribe(
@@ -1279,16 +1249,13 @@ class Device:
         """Wait for a shadow message"""
         return self.wait_for_message(self.shadow_queue, timeout)
 
+    @requires('mqtt', blocked=None)
     def get_trigger_version(self, timeout=30):
         """Get the current trigger version from the device.
 
         Returns:
             int: Trigger version if successful, None if failed
         """
-        if not self.mqtt_connection:
-            device_log("Error: MQTT not connected. Call connect() first.")
-            return None
-
         # Clear the queue before sending the request
         while not self.from_cloud_queue.empty():
             self.from_cloud_queue.get_nowait()
@@ -1336,16 +1303,13 @@ class Device:
         device_log(f"Timeout waiting for trigger update after {timeout} seconds")
         return None
 
+    @requires('mqtt', blocked=None)
     def get_trigger_details(self, timeout=5):
         """Get the current trigger details from the device.
 
         Returns:
             dict: Trigger details if successful, None if failed
         """
-        if not self.mqtt_connection:
-            device_log("Error: MQTT not connected. Call connect() first.")
-            return None
-
         # Clear the queue before sending the request
         while not self.from_cloud_queue.empty():
             self.from_cloud_queue.get_nowait()

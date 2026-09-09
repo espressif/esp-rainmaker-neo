@@ -15,6 +15,7 @@ import click
 from botocore.exceptions import NoCredentialsError
 
 from .. import __version__, paths
+from ..sdk.errors import NotReadyError
 from . import device as device_commands
 from . import groups, matter, nodes, output, sharing, shell, sims
 from . import user as user_commands
@@ -209,6 +210,9 @@ def main():
         error = output.missing_credentials()
         error.show()
         raise SystemExit(error.exit_code)
+    except NotReadyError as e:
+        output.err(f"Failed: {e}")
+        raise SystemExit(output.EXIT_FAILURE)
     except Exception as e:  # noqa: BLE001
         output.err(f"{type(e).__name__}: {e}")
         output.debug(traceback.format_exc())

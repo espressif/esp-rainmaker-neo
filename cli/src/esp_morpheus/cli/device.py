@@ -9,11 +9,36 @@ import click
 from . import output
 from .context import pass_device
 
+# A precondition token the SDK records -> the command that satisfies it. The SDK names the
+# condition and nothing else; this table is the only place that words the remedy.
+REMEDY = {
+    'mqtt': 'connect',
+    'shadow': 'shadow-connect <name>',
+    'group_info': 'group-info',
+}
+
+
+def explain(failure, blocked):
+    """Add the precondition the node blocked on to a command's own failure message.
+
+    `blocked` is a NotReady or a NotReadyError: both name the condition and carry the token.
+
+    @note The clauses are joined, never merged: the SDK words its own phrase, so nothing here may
+    assume where it ends.
+    """
+    remedy = REMEDY.get(blocked.need)
+    return f"{failure}: {blocked}; run `{remedy}` first." if remedy else f"{failure}: {blocked}"
+
 
 @click.command()
 @pass_device
 def connect(device):
-    """Connect the node and subscribe to its from_cloud topic."""
+    """Connect the node and subscribe to its from_cloud topic.
+
+    Whatever the cloud sends afterwards prints as it arrives.
+    """
+    # Registered before connecting, so a reply that arrives during the handshake is not missed.
+    device.register_callback('from_cloud', output.inbound)
     if not device.connect():
         output.fail('Failed to connect the device or subscribe to from_cloud')
     output.ok('Connected and subscribed to from_cloud')
@@ -34,12 +59,12 @@ def shadow_connect(device, shadow_name):
 @click.option('--topic', help='Raw topic to subscribe to.')
 @pass_device
 def subscribe(device, shadow_name, topic):
-    """Subscribe to a named shadow or a raw topic."""
+    """Subscribe to a named shadow or a raw topic, printing what arrives on it."""
     if bool(shadow_name) == bool(topic):
         raise click.UsageError('give exactly one of --shadow or --topic')
     what = f"named shadow {shadow_name}" if shadow_name else f"topic {topic}"
-    subscribed = (device.subscribe(shadow_name=shadow_name) if shadow_name
-                  else device.subscribe(topic=topic))
+    subscribed = (device.subscribe(shadow_name=shadow_name, callback=output.inbound) if shadow_name
+                  else device.subscribe(topic=topic, callback=output.inbound))
     if not subscribed:
         output.fail(f"Failed to subscribe to {what}")
     output.ok(f"Subscribed to {what}")
@@ -93,6 +118,9 @@ def direct_notify(device, data, file_path):
 def group_info(device):
     """Fetch and print the node's group and subgroups."""
     device.get_group_info()
+    # A refused call says nothing about the node's groups, so the absence of one is not an answer.
+    if device.not_ready is not None:
+        output.fail('Failed to fetch the group info')
     if not device.group_id:
         output.fail('The node is not associated with any group')
     fields = {'group_id': device.group_id}

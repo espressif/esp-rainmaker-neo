@@ -16,7 +16,7 @@ from botocore.exceptions import ClientError
 from click.testing import CliRunner
 
 from esp_morpheus.cli import output, shell
-from esp_morpheus.cli.context import Session
+from esp_morpheus.cli.context import Session, pass_device
 from esp_morpheus.cli.main import cli, device, user
 from esp_morpheus.outputs import OutputsError
 
@@ -622,6 +622,314 @@ def test_app_sim_still_reads_test_config_when_given_no_user(outputs_file, tmp_pa
 def test_app_sim_takes_the_same_password_options_as_user(run):
     listing = run('app-sim', '--help').output
     assert '--password' in listing and '--admin' in listing
+
+
+# --- preconditions ----------------------------------------------------------
+
+def _unready_node(**ready):
+    """A Device with every precondition unmet, past __init__ so it needs no MQTT stack."""
+    from esp_morpheus.sdk.device import Device
+
+    node = Device.__new__(Device)
+    node.mqtt_connection = node.shadow_client = node.group_id = None
+    node.node_key = node.node_cert = node.node_thing_name = None
+    node.not_ready = None
+    for name, value in ready.items():
+        setattr(node, name, value)
+    return node
+
+
+def _device_ctx(node):
+    ctx = click.Context(device, obj=Session())
+    ctx.obj.select_device('node_light')
+    ctx.obj._device = node
+    return ctx
+
+
+# Every guarded method that reports a refusal through its return value, with that value.
+@pytest.mark.parametrize('method, blocked, args', [
+    ('sign_challenge', None, ('challenge',)),
+    ('sign_matter_attestation', None, (b'nocsr', b'challenge')),
+    ('update_named_shadow', False, ('local', {})),
+    ('update_shadow', False, ('{}',)),
+    ('destroy_test_node', False, ()),
+    ('register_test_node', False, ()),
+    ('publish_to_cloud', False, ({},)),
+    ('send_direct_notification', False, ({},)),
+    ('get_group_info', None, ()),
+    ('get_schedule_version', None, ()),
+    ('get_schedule_details', None, ()),
+    ('publish_timeseries_data', False, ('k', 'int', 1)),
+    ('publish_timeseries_batch', False, ([{'k': 'a'}],)),
+    ('set_node_config', False, ({},)),
+    ('subscribe', False, ()),
+    ('unsubscribe', False, ('topic',)),
+    ('get_trigger_version', None, ()),
+    ('get_trigger_details', None, ()),
+])
+def test_a_blocked_call_returns_what_it_always_returned(method, blocked, args):
+    """The guard reports the condition without changing any caller's contract."""
+    node = _unready_node()
+    assert getattr(node, method)(*args) is blocked
+    assert node.not_ready is not None
+
+
+def test_a_refusal_is_never_silent_by_default():
+    """A method that states no return value raises, so a caller cannot miss the refusal."""
+    from esp_morpheus.sdk.errors import NotReadyError, requires
+
+    class Probe:
+        node_thing_name = None
+        not_ready = None
+        not_ready_subject = 'node'
+        not_ready_log = staticmethod(print)
+
+        @requires('node_id')
+        def act(self):
+            return 'ran'
+
+    probe = Probe()
+    with pytest.raises(NotReadyError) as raised:
+        probe.act()
+    assert raised.value.need == 'node_id'
+    assert str(raised.value) == 'the node has no thing name'
+    assert probe.not_ready.need == 'node_id'
+
+
+def test_the_guard_does_not_touch_an_exception_from_the_method():
+    """The guard checks preconditions and then stands aside."""
+    from esp_morpheus.sdk.errors import requires
+
+    class Probe:
+        mqtt_connection = None
+        not_ready = None
+
+        @requires('mqtt', blocked=False)
+        def boom(self):
+            raise RuntimeError('from the body')
+
+    probe = Probe()
+    assert probe.boom() is False
+
+    probe.mqtt_connection = object()
+    with pytest.raises(RuntimeError, match='from the body'):
+        probe.boom()
+    assert probe.not_ready is None
+
+
+def test_the_first_unmet_precondition_is_the_one_reported():
+    """A node with neither connection nor group info needs connecting before grouping."""
+    node = _unready_node()
+    node.send_direct_notification({})
+    assert node.not_ready.need == 'mqtt'
+
+    node.mqtt_connection = object()
+    node.send_direct_notification({})
+    assert node.not_ready.need == 'group_info'
+
+
+def test_a_call_that_runs_clears_an_earlier_reason():
+    node = _unready_node()
+    assert node.get_group_info() is None
+    node.mqtt_connection = object()
+    node.subscribe(topic='rainmaker/nodes/node_light/from_cloud')
+    assert node.not_ready is None
+
+
+def test_the_shadow_branch_reports_the_shadow_it_needs():
+    """`subscribe --shadow` needs more than the connection the decorator can check."""
+    node = _unready_node(mqtt_connection=object(), node_thing_name='node_light')
+    assert node.subscribe(shadow_name='local') is False
+    assert node.not_ready.need == 'shadow'
+
+
+def test_a_command_names_the_precondition_and_the_remedy(capsys):
+    node = _unready_node(mqtt_connection=object(), node_thing_name='node_light')
+    ctx = _device_ctx(node)
+    shell.dispatch(device, ctx, ['direct-notify', '{"push":true}'])
+    message = capsys.readouterr().out
+    assert 'the node has no group info' in message
+    assert 'run `group-info` first' in message
+
+
+def test_a_refused_call_is_not_read_as_an_answer(capsys):
+    """`group-info` may not conclude the node has no group when it never got to ask."""
+    node = _unready_node()
+    shell.dispatch(device, _device_ctx(node), ['group-info'])
+    message = capsys.readouterr().out
+    assert 'Failed to fetch the group info' in message
+    assert 'run `connect` first' in message
+    assert 'not associated with any group' not in message
+
+
+def test_a_failure_of_its_own_is_not_blamed_on_a_precondition(capsys):
+    """A reason recorded by an earlier command may not leak into the next one's message."""
+    node = _unready_node(mqtt_connection=object(), node_thing_name='node_light')
+    ctx = _device_ctx(node)
+    shell.dispatch(device, ctx, ['direct-notify', '{"push":true}'])
+    capsys.readouterr()
+
+    shell.dispatch(device, ctx, ['publish', 'local', 'not-json'])
+    message = capsys.readouterr().out
+    assert 'Invalid JSON' in message
+    assert 'group info' not in message
+
+
+def test_a_raised_precondition_reaches_the_shell_with_its_remedy(capsys):
+    """A command that refuses by raising names the condition and the remedy, like one that
+    refuses by returning."""
+    from esp_morpheus.sdk.errors import requires
+
+    @click.command('probe')
+    @pass_device
+    def probe(node):
+        requires('node_id')(lambda self: None)(node)
+
+    group = click.Group('device', commands={'probe': probe})
+    node = _unready_node(group_id=None)
+    ctx = _device_ctx(node)
+    shell.dispatch(group, ctx, ['probe'])
+    message = capsys.readouterr().out
+    assert 'the node has no thing name' in message
+    assert 'NotReadyError' not in message
+
+
+def test_connect_prints_what_the_cloud_sends_back(capsys):
+    """A reply on from_cloud is a result, so `connect` registers a printer for it."""
+    import json as _json
+    from queue import Queue
+
+    node = _unready_node(mqtt_connection=object(), node_thing_name='node_light')
+    node.from_cloud_queue = Queue()
+    node.callbacks = {'from_cloud': None, 'params': None, 'shadow': None}
+    node.connect = lambda: True
+
+    ctx = _device_ctx(node)
+    shell.dispatch(device, ctx, ['connect'])
+    assert node.callbacks['from_cloud'] is output.inbound
+    capsys.readouterr()
+
+    node.on_message_received('rainmaker/nodes/node_light/from_cloud',
+                             _json.dumps({'getGroupInfo': {'pgrp': 'grp-1'}}).encode())
+    shown = capsys.readouterr().out
+    assert 'rainmaker/nodes/node_light/from_cloud' in shown
+    assert 'grp-1' in shown
+
+
+def test_a_protocol_event_does_not_wait_for_v(capsys):
+    """What the cloud told the node happened, so it shows; what the node is doing does not."""
+    from esp_morpheus.sdk import device as sdk
+
+    sdk.device_event('[local][v4][reported] update accepted {"Power": true}')
+    assert 'update accepted' in capsys.readouterr().out
+
+    sdk.device_log('Subscribing to topic: rainmaker/nodes/node_light/from_cloud')
+    assert capsys.readouterr().out == ''
+
+
+def test_a_message_prints_where_it_arrived(capsys):
+    """Inline and in order: a message is not held until the command that it landed during ends."""
+    output.inbound('rainmaker/nodes/node_light/params-g1/params', {'Power': True})
+    output.ok('the command finished')
+    shown = capsys.readouterr().out
+    assert shown.index('Power') < shown.index('the command finished')
+
+
+def test_a_record_is_never_cut_open_by_a_message():
+    """The two orders interleave; they must not split. A message delivered from another thread
+    part-way through a record has to wait for the record, and no longer."""
+    import threading
+    from rich.console import Console
+
+    arrived = []
+
+    class InterruptingFile:
+        """A terminal that lets a subscription deliver in the middle of a record."""
+
+        def __init__(self):
+            self.lines = []
+            self.intruder = None
+
+        def write(self, text):
+            self.lines.append(text)
+            if self.intruder is None:
+                self.intruder = threading.Thread(target=output.inbound, args=(
+                    'rainmaker/nodes/node_light/params-g1/params', {'Power': True}))
+                self.intruder.start()
+                arrived.append(True)
+
+        def flush(self):
+            pass
+
+        def isatty(self):
+            return False
+
+    terminal = InterruptingFile()
+    output._state.out = output._state.msg = Console(file=terminal, soft_wrap=True, width=100)
+    output.emit_kv('Group info', {'group_id': 'gzncge', 'subgroup_ids': ['a', 'b']})
+    terminal.intruder.join(timeout=5)
+    assert arrived, 'the subscription never got a chance to interrupt'
+
+    text = ''.join(terminal.lines)
+    record_ends = text.index('gzncge') + len('gzncge')
+    assert text.index('Power') > record_ends, 'the message landed inside the record'
+
+
+def test_a_nested_block_is_allowed():
+    """A helper that takes the lock may be called from a caller that already holds it."""
+    with output.block():
+        with output.block():
+            output.ok('nested')
+
+
+def test_an_idle_message_prints_in_one_write():
+    """The prompt is redrawn after every write, so a split block would have one drawn through
+    the middle of it."""
+    class CountingFile:
+        def __init__(self):
+            self.writes = []
+
+        def write(self, text):
+            self.writes.append(text)
+
+        def flush(self):
+            pass
+
+        def isatty(self):
+            return False
+
+    from rich.console import Console
+
+    counted = CountingFile()
+    output._state.msg = Console(file=counted, soft_wrap=True)
+    output.inbound('rainmaker/nodes/node_light/from_cloud', {'getGroupInfo': {'pgrp': 'g1'}})
+    body = ''.join(counted.writes)
+    assert len([w for w in counted.writes if w.strip()]) == 1
+    assert 'rainmaker/nodes/node_light/from_cloud' in body
+    assert 'getGroupInfo' in body
+
+
+def test_an_inbound_message_is_not_a_payload(capsys):
+    """Under --json a subscription delivers whenever it likes, so it must stay off stdout."""
+    output.configure(json_mode=True)
+    output.inbound('rainmaker/nodes/node_light/from_cloud', {'getGroupInfo': {'pgrp': 'grp-1'}})
+    output.emit_json({'group_id': 'grp-1'})
+    captured = capsys.readouterr()
+    assert 'getGroupInfo' in captured.err
+    assert 'getGroupInfo' not in captured.out
+
+
+def test_the_device_trace_is_quiet_until_v(capsys):
+    from esp_morpheus.sdk import device as sdk
+
+    output.configure(verbose=0)
+    sdk.device_log('Subscribing to topic: rainmaker/nodes/node_light/from_cloud')
+    assert capsys.readouterr().out == ''
+
+    output.configure(verbose=1)
+    sdk.device_log('[local][v3][reported] updated to {"x": 1}')
+    # Printed literally: rich would read `[reported]` as a style and fail on it.
+    assert '[local][v3][reported]' in capsys.readouterr().out
 
 
 # --- the shell --------------------------------------------------------------
