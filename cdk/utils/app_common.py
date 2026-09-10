@@ -1545,16 +1545,22 @@ def create_cloudfront_function(
     return fn
 
 
-def cloudfront_security_headers() -> cloudfront.ResponseSecurityHeadersBehavior:
-    """nosniff, SAMEORIGIN, strict-origin-when-cross-origin, and HSTS for a year."""
+def cloudfront_security_headers(
+    frame_option: cloudfront.HeadersFrameOption = cloudfront.HeadersFrameOption.SAMEORIGIN,
+) -> cloudfront.ResponseSecurityHeadersBehavior:
+    """nosniff, SAMEORIGIN, strict-origin-when-cross-origin, and HSTS for a year.
+
+    `frame_option=None` omits X-Frame-Options so any site may frame the response;
+    the header has no "allow any origin" value, and ALLOW-FROM is not supported.
+    """
     return cloudfront.ResponseSecurityHeadersBehavior(
         # nosniff: honour the declared Content-Type instead of sniffing it.
         content_type_options=cloudfront.ResponseHeadersContentTypeOptions(override=True),
         # SAMEORIGIN: no third-party framing (clickjacking).
         frame_options=cloudfront.ResponseHeadersFrameOptions(
-            frame_option=cloudfront.HeadersFrameOption.SAMEORIGIN,
+            frame_option=frame_option,
             override=True,
-        ),
+        ) if frame_option is not None else None,
         # Cross-origin requests send the origin only, keeping IDs out of Referer.
         referrer_policy=cloudfront.ResponseHeadersReferrerPolicy(
             referrer_policy=cloudfront.HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN,

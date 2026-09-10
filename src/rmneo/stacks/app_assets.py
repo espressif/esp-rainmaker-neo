@@ -27,6 +27,7 @@ from constructs import Construct
 from arn_utils import get_cloudfront_distribution_arn
 from app_common import (
     CommonResources,
+    cloudfront_security_headers,
     create_cloudfront_behavior,
     create_cloudfront_cache_policy,
     create_cloudfront_distribution,
@@ -171,11 +172,14 @@ class AppAssets(Construct):
             origin_access_control=app_assets_oac,
         )
 
+        # frame_option=None: the web app is embeddable in any site (see app/embed),
+        # and X-Frame-Options has no value that permits that — it has to be absent.
         response_headers_policy = create_cloudfront_response_headers_policy(
             self, "AppAssetsResponseHeaders",
             name=f"{RESOURCE_NAME}-headers",
             comment="Permissions-Policy and baseline security headers for the RMNG app assets",
             custom_headers=[("Permissions-Policy", PERMISSIONS_POLICY_HEADER)],
+            security_headers_behavior=cloudfront_security_headers(frame_option=None),
         )
 
         # security_headers_behavior=None: HSTS and friends are meaningless to the
