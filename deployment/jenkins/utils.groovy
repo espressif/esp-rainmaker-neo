@@ -269,9 +269,22 @@ def build_and_deploy() {
             println("Skipping deployment as per DEPLOY_MODE: ${env.DEPLOY_MODE}")
         }
     }
+
+    deploy_test_infra()
+
     println('Deploy done')
 }
 
+
+def deploy_test_infra() {
+    println('Deploying itest webhook mock and seeding test data')
+    sh '''
+    . ./aws_creds
+    cd /root/esp-rainmaker-neo
+    make itest-setup
+    '''
+    println('Test infra setup done')
+}
 
 def deploy_test() {
     println('Run deployment test')
@@ -281,7 +294,7 @@ def deploy_test() {
 
     if [ "$RUN_TEST" = "true" ]; then
         echo "Running deployment tests"
-        pytest test_api.py -v -s --capture=tee-sys --html=/root/esp-rainmaker-neo/report.html --self-contained-html
+        make itest
     else
         echo "Skipping deployment test"
     fi
