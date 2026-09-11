@@ -108,6 +108,9 @@ def print_gva_instructions(settings):
     output.plain('   - Keys > Add Key > Create New Key > JSON, and download it')
     output.plain('5. Store it: morpheus admin integrations gva setup '
                  '<service_account.json>')
+    output.plain('')
+    output.plain('Steps 3-5 can be run in one command instead (needs gcloud auth):')
+    output.plain('   morpheus admin integrations gva setup-auto <gcp_project_id>')
 
 
 def print_ios_instructions(settings):

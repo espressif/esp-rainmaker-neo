@@ -9,6 +9,7 @@ import os
 import click
 
 from ...sdk import alexa_setup as alexa_smapi
+from ...sdk import gva_setup as gva_gcp
 from .. import output
 from ..context import Session, pass_session, pass_user
 from ..guide import print_alexa_instructions
@@ -150,6 +151,29 @@ def gva_setup(ctx, service_account_json):
     config = output.read_json_file(service_account_json, 'service account')
     output.emit_response(session.user.gva_post_configuration(config),
                          'Google Home configuration stored')
+
+
+@gva.command('setup-auto')
+@click.argument('project_id')
+@click.argument('service_account_name', required=False)
+@pass_user
+def gva_auto(user, project_id, service_account_name):
+    """Enable the HomeGraph API, create the report-state service account and key on PROJECT_ID,
+    then store the key.
+
+    Replaces the console procedure in the spec (enable API, create account, grant the OpenID
+    Connect Identity Token Creator role, download a key, re-upload it). The Google-side work runs
+    locally against your `gcloud` credentials; only the config POST goes through this admin's
+    session, so no separate AWS credentials are needed.
+
+    The Google Home Developer Console part (creating the Home project and the cloud-to-cloud
+    integration) has no public API and stays manual.
+    """
+    def post_config(service_account_json):
+        output.emit_response(user.gva_post_configuration(service_account_json),
+                             'Google Home configuration stored')
+
+    gva_gcp.setup(post_config, project_id, service_account_name)
 
 
 @integrations.group('smartthings')
