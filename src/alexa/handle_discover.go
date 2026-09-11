@@ -13,10 +13,31 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/config"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/parallel"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 
 	rmngctx "github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )
+
+// vaDiscoveryFanout bounds the per-node workers one directive may run. High enough that a
+// large account clears Alexa's 8s deadline, low enough that a single discovery does not
+// push DynamoDB or IoT into throttling.
+const vaDiscoveryFanout = 25
+
+// nodeRef is a node together with the group it was reached through, which is what the
+// per-node permission load needs.
+type nodeRef struct {
+	nodeID  string
+	groupID string
+}
+
+// discoveryResult carries each node's outcome so one failure stays that node's own. done
+// separates a worker that ran and produced nothing from one that never ran at all.
+type discoveryResult struct {
+	endpoints []DiscoveryEndpoint
+	err       error
+	done      bool
+}
 
 func HandleDiscovery(ctx context.Context, request AlexaRequest) (AlexaResponse, error) {
 	// Extract token from payload
@@ -45,21 +66,49 @@ func HandleDiscovery(ctx context.Context, request AlexaRequest) (AlexaResponse, 
 		return AlexaResponse{}, rmerror.NewRMError(err, "failed to list groups")
 	}
 
-	// Collect all accessible nodes
-	var endpoints []DiscoveryEndpoint
-
+	// Flatten the group walk to one node list, then build the endpoints concurrently.
+	// Alexa gives Discover 8 seconds and each node costs several sequential AWS round
+	// trips (node config, the Alexa-enabled write and its MQTT notify, the permission
+	// load, the shadow read). Serially that is well over the budget for even a modest
+	// account, and the failure is silent: the Lambda's own timeout is far longer, so it
+	// finishes, logs a valid response, and Alexa has already discarded it.
+	// Group membership is in hand from ListGroupForUser(loadNodes=true), so pairing each
+	// node with the group it was reached through costs nothing.
+	var refs []nodeRef
 	for _, grp := range groups {
 		rlog.Debug(rmngCtx).Interface("group", grp).Send()
-		// Get nodes in main group
-		for nodeID, _ := range grp.NodeGroupEntries {
-			rlog.Debug(rmngCtx).Str("nodeID", nodeID).Send()
-			multi_endpoints, err := createEndpointFromNode(rmngCtx, nodeID, grp.GroupID)
-			if err != nil {
-				rlog.Error(rmngCtx).Err(err).Send()
-				continue
-			}
-			rlog.Debug(rmngCtx).Interface("multi_endpoints", multi_endpoints).Send()
-			endpoints = append(endpoints, multi_endpoints...)
+		for nodeID := range grp.NodeGroupEntries {
+			refs = append(refs, nodeRef{nodeID: nodeID, groupID: grp.GroupID})
+		}
+	}
+
+	// The fan-out inherits the caller's deadline, so dispatch stops once the Lambda's
+	// budget is gone rather than building endpoints nobody will read.
+	results, _, err := parallel.ProcessParallel(ctx, refs,
+		func(ref nodeRef) discoveryResult {
+			endpoints, err := createEndpointFromNode(rmngCtx, ref.nodeID, ref.groupID)
+			return discoveryResult{endpoints: endpoints, err: err, done: true}
+		},
+		parallel.ParallelOptions{MaxRoutines: vaDiscoveryFanout, CollectResults: true},
+	)
+	if err != nil {
+		return AlexaResponse{}, rmerror.NewRMError(err, "discovery fan-out did not complete")
+	}
+
+	// One node must not cost the account its other endpoints: a failure is logged and
+	// skipped, exactly as the serial loop did.
+	var endpoints []DiscoveryEndpoint
+	for i, result := range results {
+		switch {
+		case !result.done:
+			// ProcessParallel recovers panics into a zero result, which would otherwise
+			// drop the node with no trace at all.
+			rlog.Error(rmngCtx).Str("nodeID", refs[i].nodeID).Msg("discovery worker did not run for node")
+		case result.err != nil:
+			rlog.Error(rmngCtx).Err(result.err).Str("nodeID", refs[i].nodeID).Send()
+		default:
+			rlog.Debug(rmngCtx).Interface("multi_endpoints", result.endpoints).Send()
+			endpoints = append(endpoints, result.endpoints...)
 		}
 	}
 
