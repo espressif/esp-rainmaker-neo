@@ -228,7 +228,8 @@ admin integrations smartthings setup st-config.json
 admin nodes bulk-register nodes.csv --tags created_by:ci
 admin iot-event-mode set sqs
 admin claiming enable
-admin ses setup-sender
+admin ses setup-sender otp@company.com     # SES mails a link; the owner opens it
+admin ses setup-sender --mailosaur         # mint a test address and open the link for you
 ```
 
 ### `device` — a physical node

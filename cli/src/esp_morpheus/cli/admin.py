@@ -14,6 +14,7 @@ import os
 
 import click
 
+from .. import paths
 from ..sdk import alexa_setup as alexa_smapi
 from . import output
 from .context import Session, pass_session, pass_user
@@ -439,48 +440,65 @@ def ses():
     """Simple Email Service, which delivers the OTP emails."""
 
 
+def _mailosaur_credentials(session):
+    """Mailosaur server ID and API key from the CLI config; fails when either is missing."""
+    server_id = session.config.get('mailosaur_server_id')
+    api_key = session.config.get('mailosaur_api_key')
+    if not server_id or not api_key:
+        output.fail('Set mailosaur_server_id and mailosaur_api_key in '
+                    f"{paths.test_config_path()} to use --mailosaur.")
+    return server_id, api_key
+
+
 @ses.command('setup-sender')
+@click.argument('email', required=False)
+@click.option('--mailosaur', 'use_mailosaur', is_flag=True,
+              help='Mint a Mailosaur address and follow its verification link automatically.')
+@click.option('--wait', 'wait_seconds', type=float, default=300.0, show_default=True,
+              help='Seconds to wait for the address to become verified.')
 @pass_session
-def ses_setup_sender(session):
-    """Verify a Mailosaur address as the SES sender, then select it.
+def ses_setup_sender(session, email, use_mailosaur, wait_seconds):
+    """Verify the address the OTP emails are sent from, then select it.
 
-    Reads the SES verification link out of the Mailosaur inbox and follows it, so no real mailbox
-    and no manual click are needed.
+    SES mails a verification link to EMAIL, which its owner opens; re-run this afterwards to select
+    the address. --mailosaur instead mints a test address and opens the link for you.
     """
-    import time
+    from ..sdk import mailosaur
+    from ..sdk import ses as ses_sdk
 
-    import boto3
-
-    from ..sdk.email_utils import (generate_mailosaur_email_specific,
-                                   verify_ses_identity_via_mailosaur)
+    if bool(email) == use_mailosaur:
+        output.fail('Name the address to verify, or pass --mailosaur to mint one.')
 
     settings = session.require_aws()
-    # The local part is scoped by account and region so concurrent accounts each verify and read
-    # their own inbox; SES identities are per account and region.
-    prefix = session.config.get('otp_ses_sender_prefix', 'ses-sender')
-    email = generate_mailosaur_email_specific(
-        f"{prefix}-{settings.account_id}-{settings.region}")
-    if not email:
-        output.fail('Mailosaur is not configured (mailosaur_server_id / api_key).')
-    if not verify_ses_identity_via_mailosaur(email, settings.region):
-        output.fail(f"Could not verify SES identity {email} via Mailosaur.")
+    confirm = None
+
+    if use_mailosaur:
+        server_id, api_key = _mailosaur_credentials(session)
+        # The local part is scoped by account and region so concurrent accounts each verify and read
+        # their own inbox; SES identities are per account and region.
+        prefix = session.config.get('otp_ses_sender_prefix', 'ses-sender')
+        email = mailosaur.address(f"{prefix}-{settings.account_id}-{settings.region}", server_id)
+
+        def confirm(since):
+            return mailosaur.follow_link(server_id, api_key, ses_sdk.VERIFICATION_LINK_PATTERN,
+                                         recipient_email=email, since_timestamp=since)
+
+    if ses_sdk.is_verified(email, settings.region):
+        output.info(f"{email} is already verified.")
+    else:
+        if not use_mailosaur:
+            output.info(f"SES is mailing a verification link to {email}; open it to finish.")
+        if not ses_sdk.ensure_verified(email, settings.region, confirm=confirm,
+                                       timeout=wait_seconds):
+            output.fail(f"{email} is still unverified. Open the link SES sent, then run this again.")
+        output.ok(f"Verified {email}.")
 
     session.config['otp_ses_sender'] = email
     path = session.write_config()
-    output.ok(f"Verified {email}; saved as otp_ses_sender in {path}")
+    output.ok(f"Saved as otp_ses_sender in {path}")
 
-    # Written straight to espuser-admin-configs: there is no admin API for senders, and OTP
-    # dispatch reads the active sender from this row.
     try:
-        boto3.client('dynamodb', region_name=settings.region).put_item(
-            TableName='espuser-admin-configs',
-            Item={
-                'config_name': {'S': 'email-sender'},
-                'subtype': {'S': 'global'},
-                'value': {'S': email},
-                'updated_at': {'N': str(int(time.time()))},
-            },
-        )
+        ses_sdk.set_active_sender(email, settings.region)
         output.ok(f"Marked {email} as the active global sender.")
     except Exception as e:  # noqa: BLE001 - the identity is verified either way
         output.fail(f"Verified {email} but could not mark it active: {e}")

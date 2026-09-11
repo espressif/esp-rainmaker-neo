@@ -3318,28 +3318,6 @@ class User:
 
         return response
 
-    def _otp_login(self, email, scope="openid email"):
-        """Drive a full native/direct-token email OTP login and return the verify response.
-
-        Reads the emailed code from Mailosaur for `email` (or self.mailosaur_email
-        if set), so the caller's address must be a Mailosaur inbox in integration
-        runs. Returns the /v1/auth/otp/verify response, which carries the token set
-        (and JIT-creates the user) on success.
-        """
-        from .email_utils import get_verification_code_from_server
-        before = time.time()
-        init = self.otp_initiate(email, client_id=ESP_USER_CLIENT_ID, scope=scope)
-        if init.status_code != 200:
-            return init
-        flow_id = init.json().get("flow_id")
-        if not flow_id:
-            return init
-        time.sleep(2)
-        code = get_verification_code_from_server(since_timestamp=before, recipient_email=email)
-        if code is None:
-            return _CognitoResponse(401, {"message": "no OTP code delivered"})
-        return self.otp_verify(flow_id, code)
-
     def refresh_tokens(self, refresh_token=None):
         """Rotate end-user tokens at the OAuth token endpoint
         (POST /oauth2/token, grant_type=refresh_token).
