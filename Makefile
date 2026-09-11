@@ -212,7 +212,7 @@ publish-%: go_build $$(call needs_dashboard,$$*)
 destroy-%: SWEEP_GROUPS = $(call reverse,$(call groups_for,$*))
 destroy-%: SWEEP_FLAGS = --destroy
 destroy-%:
-	morpheus test-data destroy || true
+	morpheus admin test-data destroy || true
 	$(sweep)
 
 # --- Lint / vulnerability scanning / tests ------------------------------------
@@ -284,7 +284,7 @@ itest-setup: go_build  ## Deploy the itest webhook mock and seed test data
 		--asset-parallelism true --outputs-file build/cdk/cdk-outputs-test.json
 	@echo "Test infra deployed. API Gateway URL:"
 	@python3 -c "import json; print(json.load(open('build/cdk/cdk-outputs-test.json'))['rmng-test-infra-base']['ApiGatewayUrl'])"
-	morpheus test-data setup
+	morpheus admin test-data setup
 
 test-infra-destroy:  ## Destroy the itest webhook mock
 	cdk destroy --all --app "python3 cdk/apps/test_infra.py" --force

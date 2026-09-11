@@ -24,6 +24,10 @@ EXIT_FAILURE = 1
 EXIT_USAGE = 2
 EXIT_AUTH = 3
 
+# Where a context block's notes line up. A value past it keeps its own note beside it rather than
+# pushing every other row's off the terminal.
+CONTEXT_VALUE_WIDTH = 44
+
 
 class CommandError(click.ClickException):
     """A command that ran and failed. Exits 1."""
@@ -131,6 +135,21 @@ def info(message):
 
 def warn(message):
     _state.msg.print(f"[yellow]![/yellow] {message}")
+
+
+def context_rows(title, rows):
+    """A block of (label, value, note) rows on the message channel, its three columns aligned.
+
+    @note A value carries markup, so the column is measured as it renders, not as it is written.
+    """
+    labels = max(len(label) for label, _, _ in rows)
+    values = min(max(Text.from_markup(value).cell_len for _, value, _ in rows), CONTEXT_VALUE_WIDTH)
+    with block():
+        _state.msg.print(f"[bold]{title}[/bold]")
+        for label, value, note in rows:
+            pad = ' ' * max(values - Text.from_markup(value).cell_len, 0)
+            tail = f"{pad}   [dim]{note}[/dim]" if note else ''
+            _state.msg.print(f"  [dim]{label.ljust(labels)}[/dim]  {value}{tail}")
 
 
 def debug(message):

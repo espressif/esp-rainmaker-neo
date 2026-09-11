@@ -2,11 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""`morpheus guide <topic>` — the console-side half of each integration setup.
+"""`morpheus admin guide <topic>` — the console-side half of each integration setup.
 
 These print what an operator must do in somebody else's console, filled in with this deployment's
-ARNs and URLs. They never touch the identity, so they need no password: they were user-context
-commands only because that is where the old dispatcher put everything.
+ARNs and URLs. Under `admin` because each one ends in an admin command, not because it needs an
+identity or credentials: it reads the outputs and prints text.
 """
 
 import click
@@ -50,7 +50,7 @@ def print_alexa_instructions(settings):
     output.plain(f'   - Your Client Id: {VA_CLIENT_ID}')
     output.plain(f'   - Your Secret: {VA_SECRET_HINT}')
     output.plain('   - Scope: add openid email phone profile')
-    output.plain('3. Store the credentials: morpheus user <admin> admin integrations alexa setup '
+    output.plain('3. Store the credentials: morpheus admin integrations alexa setup '
                  '<config_file>')
 
 
@@ -78,7 +78,7 @@ def print_smartthings_instructions(settings):
     output.plain('   - OAuth Scope: openid email phone profile')
     output.plain('4. Save. SmartThings then issues its OWN Client ID and Secret. Note the '
                  'direction: these differ from the credentials in step 3.')
-    output.plain('5. Store them: morpheus user <admin> admin integrations smartthings setup '
+    output.plain('5. Store them: morpheus admin integrations smartthings setup '
                  '<config_file>, where the file holds')
     output.plain('   {"client_id": "<SmartThings client id>", '
                  '"client_secret": "<SmartThings client secret>"}')
@@ -106,7 +106,7 @@ def print_gva_instructions(settings):
     output.plain('   - IAM & Admin > Service Accounts > Create Service Account')
     output.plain('   - Role: Service Account OpenID Connect Identity Token Creator')
     output.plain('   - Keys > Add Key > Create New Key > JSON, and download it')
-    output.plain('5. Store it: morpheus user <admin> admin integrations gva setup '
+    output.plain('5. Store it: morpheus admin integrations gva setup '
                  '<service_account.json>')
 
 
@@ -121,7 +121,7 @@ def print_ios_instructions(settings):
     output.plain('   - Type: Apple Push Notifications service (APNs)')
     output.plain('   - Point it at the App ID created above')
     output.plain('   - Download the .p8 key file and note the Key ID (used as <key_id>)')
-    output.plain('3. Register it: morpheus user <admin> admin platforms register-ios '
+    output.plain('3. Register it: morpheus admin platforms register-ios '
                  '<p8_key_file> <key_id> <team_id> <bundle_id> [--sandbox]')
 
 
@@ -131,7 +131,7 @@ def print_android_instructions(settings):
     output.plain('1. Create or choose a project')
     output.plain('2. Go to Settings > Service accounts')
     output.plain("3. On the Firebase Admin SDK tab, click Generate new private key and download it")
-    output.plain('4. Register it: morpheus user <admin> admin platforms register-android '
+    output.plain('4. Register it: morpheus admin platforms register-android '
                  '<service_account.json>')
 
 

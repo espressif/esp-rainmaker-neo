@@ -17,11 +17,11 @@ deployment's own API and its MQTT broker — an end user signs in against the AP
 credentials by it — so `morpheus --client-outputs <url> user someone@example.com` works with no AWS
 account, no profile, and no checkout.
 
-**AWS credentials** are needed only by the commands that reach AWS directly: `test-data`,
-`bot-user`, and `admin ses` / `admin sns`. Each of those creates, deletes or sweeps real resources,
-so they check that the credentials name the account in the outputs and refuse to run against
-another one. The region is not enforced: every AWS client is built with the region from the outputs,
-so a differing ambient region is reported and ignored.
+**AWS credentials** are needed only under `morpheus admin`, which holds the whole privileged
+surface: every command that reaches AWS directly or calls the admin API. The ones that reach AWS
+create, delete or sweep real resources, so they check that the credentials name the account in the
+outputs and refuse to run against another one. The region is not enforced: every AWS client is
+built with the region from the outputs, so a differing ambient region is reported and ignored.
 
 ---
 
@@ -72,11 +72,11 @@ Pass any account provisioned in the deployment.
 
 ```bash
 morpheus user someone@example.com            # prompts for the password
-morpheus user --admin admin@example.com      # authenticates against the admin pool
 ```
 
-Add `--admin` when the account is an admin. `--admin` and `--password` belong to `user`, so they
-come before the identity; everything after it is the subcommand.
+This tree is the end-user API and nothing else: it signs in against the end-user pool, and an admin
+account belongs to `morpheus admin`. `--password` belongs to `user`, so it comes before the
+identity; everything after it is the subcommand.
 
 The password is read from `--password`, then `RMNG_PASSWORD`, then a prompt. Prefer the prompt or
 the environment variable: a password in `--password` is visible to other processes and lands in
@@ -90,37 +90,39 @@ even when sign-in fails, and the interactive prompt opens on a warning for the s
 
 ### Or seed test users and devices
 
-For quick validation against a scratch deployment, `test-data setup` creates a known set of users
-and nodes from `test_config.json`. It registers every user and node, creates a default `Home` group
-per user, and associates nodes flagged with `associate_to`.
+For quick validation against a scratch deployment, `admin test-data setup` creates a known set of
+users and nodes from `test_config.json`. It registers every user and node, creates a default `Home`
+group per user, and associates nodes flagged with `associate_to`.
 
 ```bash
-morpheus test-data setup
+morpheus admin test-data setup
 ```
 
 On a fresh install this also writes `test_config.json` from the packaged defaults, generating
 passwords and device certificates. It needs admin AWS credentials, since it provisions users in
-Cognito. The seeded admin is marked `"admin": true`, so `--admin` is not needed to use it.
+Cognito. The seeded admin is marked `"admin": true`, which is how `morpheus admin` finds it without
+naming one.
 
 ```bash
 morpheus user someone@example.com
 morpheus device node_rsa
 ```
 
-`test-data destroy` removes them again: the seeded devices, their groups, and any leftover `test-*`
-certificates. It deletes only test-created things and leaves the rest of the deployment alone.
+`admin test-data destroy` removes them again: the seeded devices, their groups, and any leftover
+`test-*` certificates. It deletes only test-created things and leaves the rest of the deployment
+alone.
 
 ### Or create the CI bot user
 
-`bot-user create` creates an IAM user with AdministratorAccess for CI, and writes its access keys to
-`bot-iam-user-credentials.json` next to `test_config.json`. The name defaults to `bot`. Pass another
-one, and `morpheus` saves it as `ci_bot_user` in `test_config.json`, so `delete` and `show` find it
-again.
+`admin bot-user create` creates an IAM user with AdministratorAccess for CI, and writes its access
+keys to `bot-iam-user-credentials.json` next to `test_config.json`. The name defaults to `bot`. Pass
+another one, and `morpheus` saves it as `ci_bot_user` in `test_config.json`, so `delete` and `show`
+find it again.
 
 ```bash
-morpheus bot-user create            # or: morpheus bot-user create rmng-ci
-morpheus bot-user show
-morpheus bot-user delete
+morpheus admin bot-user create      # or: morpheus admin bot-user create rmng-ci
+morpheus admin bot-user show
+morpheus admin bot-user delete
 ```
 
 One bot at a time. There is a single credentials file, so a second user under another name would
@@ -160,7 +162,7 @@ call and `Ctrl-C` all return you to the prompt; `q`, `quit` and `Ctrl-D` leave.
 
 ```
 morpheus [--client-outputs SRC] [--json] [--raw] [-v]
-  user [--password PW] [--admin] <identity> [SUBCOMMAND...]   # no subcommand -> prompt
+  user [--password PW] <identity> [SUBCOMMAND...]             # no subcommand -> prompt
       auth  connect  subscribe  publish  read-shadow  upload-file
       api                    get | post | put | patch | delete
       group                  create | list | rename | add-capabilities | share
@@ -169,35 +171,40 @@ morpheus [--client-outputs SRC] [--json] [--raw] [-v]
       matter                 initiate | verify | confirm | get-noc
       sharing                list | accept | reject
       push                   register-ios | register-android | register
-      admin integrations     alexa | gva | smartthings
-      admin platforms        register-ios | register-android | list
-                             update-ios | update-android | delete
-      admin nodes            register | bulk-register | bulk-status
-      admin iot-event-mode   get | set
-      admin claiming         enable
-      admin ses              setup-sender | request-production
-      admin sns              request-production
   device <node> [SUBCOMMAND...]                               # no subcommand -> prompt
       connect  shadow-connect  subscribe  publish  to-cloud  group-info
       set-node-config  direct-notify
-  app-sim [--password PW] [--admin] <identity>
+  admin [IDENTITY] [--password PW] [SUBCOMMAND...]            # no subcommand -> prompt
+      integrations           alexa | gva | smartthings
+      platforms              register-ios | register-android | list
+                             update-ios | update-android | delete
+      nodes                  register | bulk-register | bulk-status
+      iot-event-mode         get | set
+      claiming               enable
+      ses                    setup-sender | request-production
+      sns                    request-production
+      test-data              setup | destroy
+                             gen-device <name> <rsa|ec> [--stdout] [--force]
+      bot-user               create [NAME] [--rotate] | delete [NAME] | show
+      guide                  alexa | gva | smartthings | ios | android
+  app-sim [--password PW] <identity>
       list  select  stats  update  update-group  update-subgroup  prov
       schedule               set | get | delete
       automation             create | add-trigger | add-action | complete
                              list | get | delete
   device-sim <node>
       update-params  update-tags
-  test-data                  setup | destroy
-  bot-user                   create [NAME] [--rotate] | delete [NAME] | show
-  gen-device <name> <rsa|ec> [--stdout] [--force]
-  guide                      alexa | gva | smartthings | ios | android
 ```
 
 There are **two layers**. `user` and `device` are the raw operations: one user-side or device-side
 call at a time. `app-sim` and `device-sim` sit on top and run the sequence of raw operations a real
 phone app or a real node performs.
 
-The `admin` group appears only for an admin identity. `guide` needs no identity at all.
+`admin` is the third tree, and the only privileged one: everything that needs AWS credentials or the
+admin API is under it, so what the rest of `morpheus` reaches is what an ordinary account reaches.
+`guide` and `test-data gen-device` are the exceptions in the other direction — they need neither,
+and sit there because each one's other half is an admin command: `guide` prints the console side of
+a setup, and the node `gen-device` writes is inert until `test-data setup` registers it.
 
 ### `user` — the user API and a user's MQTT session
 
@@ -214,22 +221,35 @@ push register-ios com.app.id <token>       # register a push endpoint
 sharing list                               # pending shares
 ```
 
-### `user <admin> admin` — deployment-wide operations
+### `admin` — deployment-wide operations
 
-Same prompt, but for an admin, so authentication routes through the admin pool. These return 403 for
-a regular user.
+One tree for everything privileged, so what the rest of `morpheus` can reach is what an ordinary
+account can reach.
+
+Its commands split in two. `integrations`, `platforms`, `nodes`, `iot-event-mode` and `claiming`
+call the admin API, which returns 403 for a regular user, so they need an admin identity: name one
+before the command, and without it `morpheus` uses the admin `test_config.json` flags. `ses`, `sns`,
+`test-data` and `bot-user` call AWS directly and need no identity at all — only credentials for the
+account the outputs name.
+
+```bash
+morpheus admin platforms list
+morpheus admin admin@example.com platforms list
+morpheus admin                             # a prompt over the same tree
+```
 
 ```
-admin platforms register-ios key.p8 <key_id> <team_id> <bundle_id> --sandbox
-admin platforms register-android service-account.json
-admin platforms list
-admin integrations alexa setup-auto
-admin integrations smartthings setup st-config.json
-admin nodes bulk-register nodes.csv --tags created_by:ci
-admin iot-event-mode set sqs
-admin claiming enable
-admin ses setup-sender otp@company.com     # SES mails a link; the owner opens it
-admin ses setup-sender --mailosaur         # mint a test address and open the link for you
+platforms register-ios key.p8 <key_id> <team_id> <bundle_id> --sandbox
+platforms register-android service-account.json
+integrations alexa setup-auto
+integrations smartthings setup st-config.json
+nodes bulk-register nodes.csv --tags created_by:ci
+iot-event-mode set sqs
+claiming enable
+ses setup-sender otp@company.com           # SES mails a link; the owner opens it
+ses setup-sender --mailosaur               # mint a test address and open the link for you
+test-data setup
+bot-user create
 ```
 
 ### `device` — a physical node

@@ -6,7 +6,7 @@
 
 Everything here was a module global in cli/morpheus.py, which forced the outputs file to be read and
 the AWS identity to be checked before argparse had even chosen a command. The deployment now
-resolves on first use, so `morpheus --help` and `morpheus guide alexa` need no credentials.
+resolves on first use, so `morpheus --help` and `morpheus admin guide alexa` need no credentials.
 """
 
 import getpass
@@ -18,18 +18,21 @@ import string
 import click
 
 from .. import paths
-from ..outputs import OutputsError, RmngSettings, verify_aws_identity
+from ..outputs import OutputsError, RmngSettings, resolve_source, verify_aws_identity
 from ..sdk.device import Device, generate_key_and_cert
 from ..sdk.errors import NotReadyError
 from ..sdk.user import User
 from . import output
 
-ADMINISTRATOR_ACCESS_POLICY_ARN = 'arn:aws:iam::aws:policy/AdministratorAccess'
 TEST_CONFIG_DEFAULTS = 'test_config.default.json'
 
 # Tries at the prompt before giving up, counting the first. Only a typed password is re-asked for:
 # one from --password or RMNG_PASSWORD came from a script, which cannot answer.
 PASSWORD_ATTEMPTS = 3
+
+# How a command that found no identity says where one comes from. `morpheus admin` replaces it,
+# because its identity is an option and half its commands need none.
+USER_IDENTITY_HINT = 'this command runs under `morpheus user <identity>`.'
 
 
 def generate_password(length=16):
@@ -51,6 +54,7 @@ class Session:
         self.json_mode = json_mode
         self.verbose = verbose
         self._settings = None
+        self.settings_error = None
         self._aws_verified = False
         self._config = None
         # The `user` and `device` groups record which identity was asked for; the object is built
@@ -61,7 +65,10 @@ class Session:
         self._device = None
         self._password_prompted = False
         self.password = None
+        # Only `morpheus admin` sets this: an identity given there that test_config.json does not
+        # carry signs in against the admin pool. `user` and `app-sim` are the end-user API.
         self.is_admin = False
+        self.identity_hint = USER_IDENTITY_HINT
 
     # --- the identity this invocation acts as -------------------------------
 
@@ -80,7 +87,7 @@ class Session:
         """
         if self._user is None:
             if self._user_identity is None:
-                output.fail('No user selected; this command runs under `morpheus user <identity>`.')
+                output.fail(f"No user selected; {self.identity_hint}")
             self._user = self.get_user(self._user_identity)
         return self._user
 
@@ -122,30 +129,6 @@ class Session:
             self._device = self.get_node(self._device_identity)
         return self._device
 
-    @property
-    def selected_user_is_admin(self):
-        """Whether the selected identity is an admin, without provisioning anything.
-
-        Read while rendering help, so it must not resolve the user or reach the deployment: it
-        answers from test_config.json and the --admin flag alone.
-        """
-        if self._user is not None:
-            return self._user.is_admin
-        if self._user_identity is None:
-            return False
-        if self.is_admin:
-            return True
-        entry = self._config_entry_for(self._user_identity)
-        return bool(entry and entry.get('admin', False))
-
-    def _config_entry_for(self, identity):
-        users = self.config.get('users', [])
-        try:
-            index = int(identity)
-        except ValueError:
-            return next((u for u in users if u.get('name') == identity), None)
-        return users[index] if 0 <= index < len(users) else None
-
     # --- deployment ---------------------------------------------------------
 
     @property
@@ -157,7 +140,24 @@ class Session:
                 self._settings = RmngSettings.from_source(self.outputs_source)
             except OutputsError as e:
                 output.fail(e.message)
+            except (OSError, ValueError) as e:
+                # A missing or malformed file, or an unreachable URL: named, not raised raw.
+                reason = getattr(e, 'strerror', None) or e
+                output.fail(f"Could not read deployment outputs from "
+                            f"{resolve_source(self.outputs_source)}: {reason}. Name another with "
+                            "`--client-outputs <file|url>`.")
         return self._settings
+
+    def try_settings(self):
+        """The deployment, or None with the reason in `settings_error`.
+
+        For the context banner, which reports an unresolved deployment rather than aborting on it.
+        """
+        try:
+            return self.settings
+        except output.CommandError as e:
+            self.settings_error = e.format_message()
+            return None
 
     def require_aws(self):
         """Check that the ambient AWS credentials describe this deployment.
@@ -195,7 +195,8 @@ class Session:
             with open(path, 'r') as handle:
                 return json.load(handle)
         except FileNotFoundError:
-            output.debug(f"No test_config.json at {path}; run `morpheus test-data setup` to create it.")
+            output.debug(f"No test_config.json at {path}; run `morpheus admin test-data setup` "
+                         'to create it.')
             return None
         except json.JSONDecodeError as e:
             output.fail(f"Invalid JSON in {path}: {e}")

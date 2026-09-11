@@ -89,7 +89,7 @@ make lint        # rmng-lint over ./src/...
 make test        # Ginkgo unit tests + coverage, for rmng and its submodules
 
 # Integration tests: one-time setup per environment — deploys the test infra
-# and seeds test users/nodes via `morpheus test-data setup`
+# and seeds test users/nodes via `morpheus admin test-data setup`
 make itest-setup
 make itest       # pytest test/itest/, HTML report in build/tests/
 ```
@@ -156,4 +156,4 @@ It needs AWS credentials for the target account and region for some commands, pl
 
 See the [CLI guide](cli/README.md).
 
-**Tests** — `pytest cli/tests` covers the command tree, the shell and the output formatter offline. `make itest-setup` calls `morpheus test-data setup` to seed test users and nodes.
+**Tests** — `pytest cli/tests` covers the command tree, the shell and the output formatter offline. `make itest-setup` calls `morpheus admin test-data setup` to seed test users and nodes.

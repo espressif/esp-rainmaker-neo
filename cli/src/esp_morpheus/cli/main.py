@@ -4,9 +4,12 @@
 
 """The `morpheus` command.
 
-`user` and `device` take an identity and then either run one subcommand and exit, or — given no
-subcommand — open a REPL bound to that identity. The same click tree serves both, so a command
-reachable from the shell is reachable from a script, and vice versa.
+`user`, `device` and `admin` take an identity and then either run one subcommand and exit, or —
+given no subcommand — open a REPL bound to that identity. The same click tree serves both, so a
+command reachable from the shell is reachable from a script, and vice versa.
+
+`admin` is the whole privileged surface: anything that needs AWS credentials or the admin API sits
+under it, so what the rest of the tree can reach is what an ordinary account can reach.
 """
 
 import traceback
@@ -17,12 +20,11 @@ from botocore.exceptions import NoCredentialsError
 from .. import __version__, paths
 from ..sdk.errors import NotReadyError
 from . import device as device_commands
-from . import groups, matter, nodes, output, sharing, shell, sims
+from . import groups, matter, nodes, output, sharing, sims
 from . import user as user_commands
 from .admin import admin
 from .context import Session
-from .guide import guide
-from .testdata import bot_user, gen_device, test_data
+from .shell import ContextGroup
 
 CONTEXT_SETTINGS = {'help_option_names': ['-h', '--help'], 'max_content_width': 100}
 
@@ -46,75 +48,24 @@ def cli(ctx, client_outputs, json_mode, raw, verbose):
     ctx.obj = Session(outputs_source=client_outputs, json_mode=json_mode, verbose=verbose)
 
 
-def _record_identity(ctx, param, value):
-    """Bind the identity onto the session while parsing, not after.
-
-    `--help` is eager, so it prints and exits before a group callback ever runs. The admin surface
-    is hidden or shown by who is asking, and help is exactly when that must already be known — so
-    these parameters are eager too, and record without resolving anything.
-    """
-    session = ctx.find_object(Session)
-    if session is not None and value is not None:
-        (session.select_device if param.name == 'node' else session.select_user)(value)
-    return value
-
-
-def _record_admin(ctx, param, value):
-    session = ctx.find_object(Session)
-    if session is not None:
-        session.is_admin = value
-    return value
-
-
-class ContextGroup(click.Group):
-    """A group that takes an identity, then runs a subcommand or opens a REPL over its own tree."""
-
-    def __init__(self, *args, repl_prompt=None, history=None, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.repl_prompt = repl_prompt
-        self.history = history
-
-    def open_shell(self, ctx, label):
-        shell.run(self, ctx, self.repl_prompt.format(label=label), self.history)
-
-    def resolve_command(self, ctx, args):
-        """Say what to do when one of this group's own options follows the identity.
-
-        click stops parsing a group's options at its first positional, so `user alice --admin auth`
-        reaches here with `--admin` where a subcommand should be. Untreated that reads as an unknown
-        command, which points at the wrong thing.
-        """
-        name = args[0] if args else ''
-        if name.startswith('-'):
-            for param in self.params:
-                if name in getattr(param, 'opts', []) + getattr(param, 'secondary_opts', []):
-                    metavar = self.params[0].make_metavar(ctx) if self.params else 'IDENTITY'
-                    raise click.UsageError(
-                        f"{name} is an option of `{ctx.info_name}`, so it goes before the "
-                        f"identity: {ctx.command_path} {name} {metavar} ...", ctx=ctx)
-        return super().resolve_command(ctx, args)
-
-
 @cli.group(cls=ContextGroup, invoke_without_command=True,
            repl_prompt='{label} > ', history='user')
-@click.argument('identity', required=False, metavar='IDENTITY', is_eager=True,
-                callback=_record_identity)
+@click.argument('identity', required=False, metavar='IDENTITY')
 @click.option('--password', help='Password for an identity that test_config.json does not carry. '
                                  'Also read from RMNG_PASSWORD, else prompted for. Prefer either '
                                  'over argv, which other processes and shell history can see.')
-@click.option('--admin', 'is_admin', is_flag=True, is_eager=True, callback=_record_admin,
-              help='Authenticate IDENTITY against the admin pool. Only needed for identities that '
-                   'test_config.json does not already flag as admin.')
 @click.pass_context
-def user(ctx, identity, password, is_admin):
-    """Act as IDENTITY: an email address, or an index or name in test_config.json.
+def user(ctx, identity, password):
+    """Act as IDENTITY, an end user: an email address, or an index or name in test_config.json.
 
+    This tree is the end-user API and nothing else. The privileged surface is `morpheus admin`.
     With no subcommand, this opens an interactive prompt bound to that identity.
     """
     if identity is None:
         raise click.MissingParameter(ctx=ctx, param_hint='IDENTITY', param_type='argument')
     session = ctx.find_object(Session)
     session.password = password
+    session.select_user(identity)
     if ctx.invoked_subcommand is None:
         # Warn rather than abort: an account that does not exist yet cannot sign in, and `auth`
         # from this prompt is how it gets created.
@@ -125,8 +76,7 @@ def user(ctx, identity, password, is_admin):
 
 @cli.group(cls=ContextGroup, invoke_without_command=True,
            repl_prompt='{label} > ', history='device')
-@click.argument('node', required=False, metavar='NODE', is_eager=True,
-                callback=_record_identity)
+@click.argument('node', required=False, metavar='NODE')
 @click.pass_context
 def device(ctx, node):
     """Act as NODE: an index or thing name in test_config.json.
@@ -136,6 +86,7 @@ def device(ctx, node):
     if node is None:
         raise click.MissingParameter(ctx=ctx, param_hint='NODE', param_type='argument')
     session = ctx.find_object(Session)
+    session.select_device(node)
     if ctx.invoked_subcommand is None:
         output.info(f"Device context: [bold]{session.device.node_thing_name}[/bold]")
         ctx.command.open_shell(ctx, session.device.node_thing_name)
@@ -147,19 +98,16 @@ def device(ctx, node):
 @click.argument('identity')
 @click.option('--password', help='Password for an identity that test_config.json does not carry. '
                                  'Also read from RMNG_PASSWORD, else prompted for.')
-@click.option('--admin', 'is_admin', is_flag=True,
-              help='Authenticate IDENTITY against the admin pool.')
 @click.pass_context
-def app_sim(ctx, identity, password, is_admin):
+def app_sim(ctx, identity, password):
     """Run the sequence of user operations a real phone app performs, as IDENTITY.
 
-    IDENTITY is an email address, or an index or name in test_config.json.
+    IDENTITY is an end user: an email address, or an index or name in test_config.json.
     """
     from ..sims.app import AppSim
 
     session = ctx.find_object(Session)
     session.password = password
-    session.is_admin = is_admin
     session.select_user(identity)
     # The identity resolves the same way `morpheus user` resolves it — prompting for a password and
     # checking it — rather than through the simulator's own copy of the lookup.
@@ -190,16 +138,11 @@ user.add_command(nodes.node)
 user.add_command(matter.matter)
 user.add_command(sharing.sharing)
 user.add_command(sharing.push)
-user.add_command(admin)
-user.add_command(guide)
 
 for command in device_commands.COMMANDS:
     device.add_command(command)
 
-cli.add_command(test_data)
-cli.add_command(bot_user)
-cli.add_command(gen_device)
-cli.add_command(guide)
+cli.add_command(admin)
 
 
 def main():

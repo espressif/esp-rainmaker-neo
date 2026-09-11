@@ -68,7 +68,7 @@ admin user, no AWS creds needed). All inputs come from a config file:
 }
 ```
 ```bash
-morpheus user admin@example.com admin integrations alexa setup-auto
+morpheus admin integrations alexa setup-auto
 # reads alexa_skills_config.json by default
 ```
 
@@ -87,7 +87,7 @@ deployment's API Gateway URL, Lambda ARNs and pool ids.
 
 #### Helpful commands
 
-Inside the `morpheus user <admin>` context (config-driven, no env vars). The config file
+Inside the `morpheus admin` context (config-driven, no env vars). The config file
 defaults to `alexa_skills_config.json`; pass `--config` only to override:
 ```
 admin integrations alexa setup-auto [--config config.json] [skill name]
@@ -96,7 +96,7 @@ admin integrations alexa delete-skill <skill_id>
 ```
 
 The standalone script exposes the same operations plus read-only diagnostics
-(used mainly in CI / without a morpheus user session):
+(used mainly in CI / without a morpheus admin session):
 ```bash
 ./myenv/bin/python tools/alexa_setup.py --skill-id ... --status          # per-step report
 ./myenv/bin/python tools/alexa_setup.py --skill-id ... --status --debug  # + raw SMAPI JSON

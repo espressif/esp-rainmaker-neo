@@ -9,15 +9,16 @@ codes, and the shell's error containment — holds without one.
 """
 
 import json
+import os
 
 import click
 import pytest
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, ProfileNotFound
 from click.testing import CliRunner
 
 from esp_morpheus.cli import output, shell
 from esp_morpheus.cli.context import Session, pass_device
-from esp_morpheus.cli.main import cli, device, user
+from esp_morpheus.cli.main import admin, cli, device, user
 from esp_morpheus.outputs import OutputsError
 
 
@@ -38,10 +39,13 @@ def plain_output():
     ['--help'],
     ['user', '--help'],
     ['device', '--help'],
-    ['guide', '--help'],
-    ['test-data', '--help'],
-    ['bot-user', '--help'],
-    ['gen-device', '--help'],
+    ['admin', '--help'],
+    ['admin', 'guide', '--help'],
+    ['admin', 'test-data', '--help'],
+    ['admin', 'bot-user', '--help'],
+    ['admin', 'platforms', '--help'],
+    ['admin', 'integrations', 'alexa', '--help'],
+    ['admin', 'test-data', 'gen-device', '--help'],
     ['user', 'someone', 'api', '--help'],
     ['user', 'someone', 'group', '--help'],
     ['user', 'someone', 'group', 'subgroup', '--help'],
@@ -66,38 +70,86 @@ def test_version(run):
     assert run('--version').exit_code == 0
 
 
-def test_admin_group_is_hidden_for_an_end_user(run):
-    """The admin surface exists but stays out of an end user's help."""
-    listing = run('user', 'someone@example.com', '--help').output
-    assert 'admin' not in listing.split('Commands:')[1]
+def test_the_privileged_surface_is_one_top_level_tree(run):
+    """Every command that needs AWS credentials or the admin API sits under `admin`, so what the
+    rest of the tree reaches is what an ordinary account reaches."""
+    top = run('--help').output.split('Commands:')[1]
+    assert 'admin' in top
+    for moved in ('test-data', 'bot-user'):
+        assert moved not in top
+    assert 'admin' not in run('user', 'someone@example.com', '--help').output.split('Commands:')[1]
 
 
-def test_admin_group_is_listed_for_an_admin(run):
-    listing = run('user', '--admin', 'someone', '--help').output
-    assert 'admin' in listing.split('Commands:')[1]
+def test_admin_is_the_only_config_key_that_grants_the_admin_pool(outputs_file, tmp_path,
+                                                                 monkeypatch):
+    """`super_admin` was the pre-rename key, and its compatibility shim never worked: it read
+    `admin` on both sides. Only `admin` grants the admin pool, so a stale entry is a plain user."""
+    from esp_morpheus.cli.admin import _configured_admin
+
+    monkeypatch.setenv('MORPHEUS_CONFIG_DIR', str(tmp_path))
+    (tmp_path / 'test_config.json').write_text(json.dumps({'users': [
+        {'name': 'stale@example.com', 'password': 'pw', 'super_admin': True},
+        {'name': 'boss@example.com', 'password': 'pw', 'admin': True}]}))
+    session = Session(outputs_source=outputs_file)
+    assert _configured_admin(session) == 'boss@example.com'
+    assert session.get_user('boss@example.com').is_admin
+    assert not session.get_user('stale@example.com').is_admin
+
+
+def test_the_admin_identity_is_optional(run):
+    """Half of these commands call AWS rather than the admin API, so a required identity would
+    lock them out."""
+    listing = run('admin', '--help').output
+    assert '[IDENTITY] [OPTIONS] COMMAND' in listing and '--password' in listing
+
+
+def test_a_first_word_that_names_a_command_is_that_command(run, outputs_file, tmp_path,
+                                                           monkeypatch):
+    """The identity being optional is what makes the word ambiguous: click would read `guide` as
+    an identity and then find no command at all."""
+    monkeypatch.setenv('MORPHEUS_CONFIG_DIR', str(tmp_path))
+    selected = []
+    monkeypatch.setattr(Session, 'select_user', lambda self, identity: selected.append(identity))
+
+    assert run('--client-outputs', outputs_file, 'admin', 'guide', 'ios').exit_code == 0
+    assert selected == []
+
+    assert run('--client-outputs', outputs_file, 'admin', 'boss@example.com', 'guide',
+               'ios').exit_code == 0
+    assert selected == ['boss@example.com']
+
+
+def test_a_mistyped_admin_command_says_it_was_read_as_the_identity(run, tmp_path, monkeypatch):
+    """Any first word is a plausible identity, so a command that does not exist silently becomes
+    one. The error has to say which way the line was read."""
+    monkeypatch.setenv('MORPHEUS_CONFIG_DIR', str(tmp_path))
+    result = run('admin', 'platfroms', 'list')
+    assert result.exit_code == output.EXIT_USAGE
+    assert "read as the identity ('platfroms')" in result.output
 
 
 def test_a_group_option_after_the_identity_says_where_it_goes(run):
     """click stops parsing a group's options at its positional, so this would otherwise read as
     an unknown command and point at the wrong thing."""
-    result = run('user', 'someone', '--admin', 'admin', 'platforms')
+    result = run('user', 'someone', '--password', 'pw', 'api')
     assert result.exit_code == output.EXIT_USAGE
     assert 'goes before the identity' in result.output
 
 
 def test_guide_runs_without_authenticating(run, monkeypatch, tmp_path):
-    """`guide` prints console steps, so it must not need an identity or a password."""
+    """`guide` sits under `admin` because its steps end in an admin command, not because it needs
+    anything: it must still run with no identity, no password and no credentials."""
     outputs = tmp_path / 'outputs.json'
     outputs.write_text(json.dumps({'rmng-base': {
         'StackRegion': 'us-east-1', 'StackAccountId': '1', 'IdentityPoolId': 'p',
         'ApiGatewayUrl': 'https://api', 'IoTEndpointUrl': 'iot', 'DefaultThingPolicyName': 'pol'}}))
-    result = run('--client-outputs', str(outputs), 'guide', 'ios')
+    result = run('--client-outputs', str(outputs), 'admin', 'guide', 'ios')
     assert result.exit_code == 0
     assert 'Apple Push Notifications' in result.output
 
 
 def test_guide_rejects_an_unknown_topic(run):
-    assert run('guide', 'nonsense').exit_code == output.EXIT_USAGE
+    assert run('admin', 'guide', 'nonsense').exit_code == output.EXIT_USAGE
 
 
 # --- AWS credentials --------------------------------------------------------
@@ -186,6 +238,121 @@ def test_unreadable_outputs_fail_the_command_not_the_process(monkeypatch):
         Session(outputs_source='rmng-outputs.json').settings
 
 
+# --- the admin context banner -----------------------------------------------
+
+class BannerUser:
+    def __init__(self, token=None):
+        self.username = 'boss@example.com'
+        self.token = token
+
+
+class FakeBoto:
+    """A boto3 session that hands over credentials but refuses to build a client."""
+
+    def __init__(self, credentials=True):
+        self.credentials = type('Credentials', (), {'method': 'sso'})() if credentials else None
+
+    def get_credentials(self):
+        return self.credentials
+
+    def client(self, *args, **kwargs):
+        raise AssertionError('the banner must not call AWS')
+
+
+def test_the_banner_names_both_identities(outputs_file, monkeypatch, capsys):
+    """`admin` holds two of them — the admin account and the ambient AWS credentials — and naming
+    only one left the other to be guessed at."""
+    from esp_morpheus.cli import admin as admin_module
+
+    monkeypatch.setattr(admin_module, '_aws_row', lambda: ('sso, AWS_PROFILE=esp-test', 'account checked later'))
+    session = Session(outputs_source=outputs_file)
+    session.authenticated_user = lambda on_failure='raise': BannerUser(token='t')
+
+    assert admin_module._print_context(session, 'boss@example.com') == 'boss@example.com'
+    shown = capsys.readouterr().out
+    assert '111122223333 / ap-south-1' in shown
+    assert 'boss@example.com' in shown
+    assert 'AWS_PROFILE=esp-test' in shown
+
+    # The notes are a column of their own: two identities read as two, not as one run-on line.
+    rows = [line for line in shown.splitlines() if line.startswith('  ')]
+    assert len({len(line) - len(line.rsplit('   ', 1)[-1]) for line in rows}) == 1
+
+
+def test_the_deployment_row_shortens_a_path_below_the_working_directory(tmp_path, monkeypatch):
+    """The absolute path to an in-repo outputs file pushes every other note off the terminal."""
+    from esp_morpheus.cli import admin as admin_module
+
+    monkeypatch.chdir(tmp_path)
+    inside = str(tmp_path / 'build' / 'rmng-outputs.json')
+    assert admin_module._source_label(inside) == os.path.join('build', 'rmng-outputs.json')
+
+    outside = str(tmp_path.parent / 'elsewhere.json')
+    assert admin_module._source_label(outside) == outside
+    assert admin_module._source_label('https://x/out.json') == 'https://x/out.json'
+
+
+def test_the_banner_reports_a_deployment_it_could_not_read(monkeypatch, capsys, tmp_path):
+    """No outputs file is a state the prompt still opens in, so the banner reports it rather than
+    aborting — and signs nobody in, because the admin pool is named by the outputs."""
+    from esp_morpheus.cli import admin as admin_module
+
+    def explode(on_failure='raise'):
+        raise AssertionError('an unresolved deployment cannot sign anybody in')
+
+    monkeypatch.setattr(admin_module, '_aws_row', lambda: ('sso', ''))
+    session = Session(outputs_source=str(tmp_path / 'absent.json'))
+    session.authenticated_user = explode
+
+    assert admin_module._print_context(session, 'boss@example.com') is None
+    shown = capsys.readouterr().out
+    assert 'unresolved' in shown and 'absent.json' in shown
+
+
+def test_the_banner_says_where_an_admin_comes_from(outputs_file, monkeypatch, capsys):
+    """Half of these commands need no admin account, so none selected is a state, not an error."""
+    from esp_morpheus.cli import admin as admin_module
+
+    monkeypatch.setattr(admin_module, '_aws_row', lambda: ('sso', ''))
+    assert admin_module._print_context(Session(outputs_source=outputs_file), None) is None
+    assert 'morpheus admin <identity>' in capsys.readouterr().out
+
+
+def test_the_banner_names_a_sign_in_that_failed(outputs_file, monkeypatch, capsys):
+    """The prompt opens either way: an admin that does not exist yet is created from inside it."""
+    from esp_morpheus.cli import admin as admin_module
+
+    monkeypatch.setattr(admin_module, '_aws_row', lambda: ('sso', ''))
+    session = Session(outputs_source=outputs_file)
+    session.authenticated_user = lambda on_failure='raise': BannerUser()
+
+    assert admin_module._print_context(session, 'boss@example.com') == 'boss@example.com'
+    assert 'sign-in failed' in capsys.readouterr().out
+
+
+def test_the_banner_reports_credentials_without_reaching_aws(monkeypatch):
+    """Resolving them for real would force credentials on a prompt whose admin half needs none."""
+    from esp_morpheus.cli import admin as admin_module
+
+    monkeypatch.setenv('AWS_PROFILE', 'esp-test')
+    monkeypatch.setattr(admin_module.boto3.session, 'Session', lambda: FakeBoto())
+    assert 'AWS_PROFILE=esp-test' in admin_module._aws_row()[0]
+
+    monkeypatch.setattr(admin_module.boto3.session, 'Session', lambda: FakeBoto(credentials=False))
+    assert 'none found' in admin_module._aws_row()[0]
+
+
+def test_the_banner_reports_credentials_it_could_not_load(monkeypatch):
+    """An expired SSO token or an unknown profile raises here; the prompt still has to open."""
+    from esp_morpheus.cli import admin as admin_module
+
+    def reject():
+        raise ProfileNotFound(profile='gone')
+
+    monkeypatch.setattr(admin_module.boto3.session, 'Session', reject)
+    assert 'unusable' in admin_module._aws_row()[0]
+
+
 def test_the_shell_survives_a_stray_process_exit():
     """A library that calls sys.exit must not take the session with it."""
     @click.command('boom')
@@ -200,7 +367,7 @@ def test_there_is_no_way_to_skip_the_account_check(run):
     """The check only runs for commands that create, delete or sweep real resources, so an escape
     hatch would only ever weaken it where a wrong account is unrecoverable."""
     assert '--skip-account-check' not in run('--help').output
-    assert run('--skip-account-check', 'test-data', 'setup').exit_code == output.EXIT_USAGE
+    assert run('--skip-account-check', 'admin', 'test-data', 'setup').exit_code == output.EXIT_USAGE
 
 
 # --- password verification --------------------------------------------------
@@ -336,7 +503,7 @@ def test_auth_does_not_pre_verify_the_password(monkeypatch):
 
 def test_gen_device_stdout_prints_the_material_and_writes_nothing(run, tmp_path, monkeypatch):
     monkeypatch.setenv('MORPHEUS_CONFIG_DIR', str(tmp_path))
-    result = run('gen-device', 'node_test', 'ec', '--stdout')
+    result = run('admin', 'test-data', 'gen-device', 'node_test', 'ec', '--stdout')
     assert result.exit_code == 0
     assert 'BEGIN CERTIFICATE' in result.output
     assert not (tmp_path / 'test_config.json').exists()
@@ -348,7 +515,7 @@ def test_gen_device_appends_to_test_config(run, tmp_path, monkeypatch):
     config = tmp_path / 'test_config.json'
     config.write_text(json.dumps({'nodes': [{'thing_name': 'node_ec', 'cert': 'c', 'key': 'k'}]}))
 
-    assert run('gen-device', 'node_test', 'ec').exit_code == 0
+    assert run('admin', 'test-data', 'gen-device', 'node_test', 'ec').exit_code == 0
     nodes = json.loads(config.read_text())['nodes']
     assert [n['thing_name'] for n in nodes] == ['node_ec', 'node_test']
     assert 'BEGIN CERTIFICATE' in nodes[1]['cert']
@@ -358,7 +525,7 @@ def test_gen_device_seeds_the_defaults_when_there_is_no_config(run, tmp_path, mo
     """`test-data setup` writes the same defaults, so dead-ending the caller there would reach a
     larger side effect than doing it here."""
     monkeypatch.setenv('MORPHEUS_CONFIG_DIR', str(tmp_path))
-    assert run('gen-device', 'node_test', 'ec').exit_code == 0
+    assert run('admin', 'test-data', 'gen-device', 'node_test', 'ec').exit_code == 0
     config = json.loads((tmp_path / 'test_config.json').read_text())
     assert config['users'] and config['ca_cert']
     assert config['nodes'][-1]['thing_name'] == 'node_test'
@@ -369,7 +536,7 @@ def test_gen_device_refuses_to_overwrite_without_force(run, tmp_path, monkeypatc
     config = tmp_path / 'test_config.json'
     config.write_text(json.dumps({'nodes': [{'thing_name': 'node_test', 'cert': 'c', 'key': 'k'}]}))
 
-    result = run('gen-device', 'node_test', 'ec')
+    result = run('admin', 'test-data', 'gen-device', 'node_test', 'ec')
     assert result.exit_code == output.EXIT_FAILURE
     assert json.loads(config.read_text())['nodes'][0]['cert'] == 'c'
 
@@ -382,7 +549,7 @@ def test_gen_device_force_keeps_the_other_node_fields(run, tmp_path, monkeypatch
         {'thing_name': 'node_test', 'cert': 'c', 'key': 'k',
          'associate_to': 'test-user1@example.com', 'node_cfg': 'node_config_va_multi.json'}]}))
 
-    assert run('gen-device', 'node_test', 'ec', '--force').exit_code == 0
+    assert run('admin', 'test-data', 'gen-device', 'node_test', 'ec', '--force').exit_code == 0
     entry = json.loads(config.read_text())['nodes'][0]
     assert 'BEGIN CERTIFICATE' in entry['cert']
     assert entry['associate_to'] == 'test-user1@example.com'
@@ -390,7 +557,7 @@ def test_gen_device_force_keeps_the_other_node_fields(run, tmp_path, monkeypatch
 
 
 def test_gen_device_rejects_a_bad_key_type(run):
-    assert run('gen-device', 'node_test', 'dsa').exit_code == output.EXIT_USAGE
+    assert run('admin', 'test-data', 'gen-device', 'node_test', 'dsa').exit_code == output.EXIT_USAGE
 
 
 # --- bot-user ---------------------------------------------------------------
@@ -457,17 +624,17 @@ class FakeIam:
 @pytest.fixture
 def bot(tmp_path, monkeypatch, outputs_file):
     """`bot-user <args>` against a fake IAM, with test_config.json and the keys under tmp_path."""
-    from esp_morpheus.cli import testdata
+    from esp_morpheus.cli.admin import botuser
 
     monkeypatch.setenv('MORPHEUS_CONFIG_DIR', str(tmp_path))
     monkeypatch.setattr('esp_morpheus.cli.context.verify_aws_identity', lambda settings: None)
     iam = FakeIam()
-    monkeypatch.setattr(testdata.boto3, 'client', lambda service, **kwargs: iam)
+    monkeypatch.setattr(botuser.boto3, 'client', lambda service, **kwargs: iam)
 
     runner = CliRunner()
 
     def invoke(*args):
-        return runner.invoke(cli, ['--client-outputs', outputs_file, 'bot-user', *args])
+        return runner.invoke(cli, ['--client-outputs', outputs_file, 'admin', 'bot-user', *args])
 
     invoke.iam = iam
     invoke.config = tmp_path / 'test_config.json'
@@ -619,9 +786,10 @@ def test_app_sim_still_reads_test_config_when_given_no_user(outputs_file, tmp_pa
     assert sim.user.username == 'seeded@example.com'
 
 
-def test_app_sim_takes_the_same_password_options_as_user(run):
-    listing = run('app-sim', '--help').output
-    assert '--password' in listing and '--admin' in listing
+def test_neither_user_nor_app_sim_authenticates_against_the_admin_pool(run):
+    """Both trees are the end-user API. The admin pool is reached under `morpheus admin` alone."""
+    for listing in (run('user', '--help').output, run('app-sim', '--help').output):
+        assert '--password' in listing and '--admin' not in listing
 
 
 # --- preconditions ----------------------------------------------------------
@@ -1050,9 +1218,17 @@ def test_completion_tree_follows_the_command_tree():
     assert 'help' not in tree['group']
 
 
-def test_completion_tree_hides_admin_from_an_end_user():
+def test_completion_tree_has_no_admin_under_a_user():
     with _shell_ctx() as ctx:
         assert 'admin' not in shell._completion_tree(user, ctx)
+
+
+def test_admin_completion_tree():
+    ctx = click.Context(admin, obj=Session())
+    with ctx:
+        tree = shell._completion_tree(admin, ctx)
+    assert {'test-data', 'bot-user', 'platforms', 'ses', 'sns', 'guide'} <= set(tree)
+    assert 'setup' in tree['test-data']
 
 
 def test_device_completion_tree():

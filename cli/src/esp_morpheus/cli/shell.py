@@ -198,3 +198,32 @@ def dispatch(group, ctx, args):
     except Exception as e:  # noqa: BLE001 - a bad command must not end the session
         output.err(f"{type(e).__name__}: {e}")
         output.debug(traceback.format_exc())
+
+
+class ContextGroup(click.Group):
+    """A group that binds an identity, then runs a subcommand or opens a REPL over its own tree."""
+
+    def __init__(self, *args, repl_prompt=None, history=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.repl_prompt = repl_prompt
+        self.history = history
+
+    def open_shell(self, ctx, label):
+        run(self, ctx, self.repl_prompt.format(label=label), self.history)
+
+    def resolve_command(self, ctx, args):
+        """Say what to do when one of this group's own options follows the identity.
+
+        click stops parsing a group's options at its first positional, so `user alice --password pw
+        api` reaches here with `--password` where a subcommand should be. Untreated that reads as an
+        unknown command, which points at the wrong thing.
+        """
+        name = args[0] if args else ''
+        if name.startswith('-'):
+            for param in self.params:
+                if name in getattr(param, 'opts', []) + getattr(param, 'secondary_opts', []):
+                    metavar = self.params[0].make_metavar(ctx) if self.params else 'IDENTITY'
+                    raise click.UsageError(
+                        f"{name} is an option of `{ctx.info_name}`, so it goes before the "
+                        f"identity: {ctx.command_path} {name} {metavar} ...", ctx=ctx)
+        return super().resolve_command(ctx, args)
