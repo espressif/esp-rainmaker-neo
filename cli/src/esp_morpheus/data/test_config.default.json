@@ -29,16 +29,16 @@
       "thing_name": "node_multi",
       "cert": "",
       "key": "",
-      "node_cfg": "cli/cli_data/node_config_va_multi.json",
-      "node_tags": "cli/cli_data/node_tags.json",
+      "node_cfg": "node_config_va_multi.json",
+      "node_tags": "node_tags.json",
       "associate_to": "test-user1@example.com"
     },
     {
       "thing_name": "node_switch",
       "cert": "",
       "key": "",
-      "node_cfg": "cli/cli_data/node_config_va_switch.json",
-      "node_tags": "cli/cli_data/node_tags.json",
+      "node_cfg": "node_config_va_switch.json",
+      "node_tags": "node_tags.json",
       "associate_to": "test-user1@example.com"
     }
   ],

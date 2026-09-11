@@ -32,8 +32,8 @@ esp-rainmaker-neo/
 ├── cdk/                      apps/ (one per stack group) · utils/ (shared
 │                             constructs) · cdk/Stackfile.yaml · outputs/ · cdk.out/
 ├── dashboard/                admin dashboard (React + Vite + Tailwind)
-├── cli/                      morpheus.py — drive a deployment interactively
-├── py_sdk/                   Python SDK
+├── cli/                      esp-morpheus — the installable `morpheus` console client
+├── py_sdk/                   pre-rename SDK import path; binds cli/src/esp_morpheus/sdk
 ├── test/                     integration tests, simulators, itest infra stacks
 ├── docs/                     documentation source (Sphinx) + api/ (OpenAPI/AsyncAPI)
 ├── scripts/                  scripts
@@ -64,11 +64,10 @@ Prerequisites:
 - [Node.js 24](https://nodejs.org/)
 
 ```shell
-# One-time: submodules + Python environment
+# One-time: submodules + Python environment (run from the repo root)
 git submodule update --init --recursive
 python3 -m venv myenv && source myenv/bin/activate
 pip3 install -r requirements.txt
-
 # Point at the right account/region (optional if your defaults are correct)
 export AWS_REGION=ap-south-1
 export AWS_PROFILE=dev
@@ -90,7 +89,7 @@ make lint        # rmng-lint over ./src/...
 make test        # Ginkgo unit tests + coverage, for rmng and its submodules
 
 # Integration tests: one-time setup per environment — deploys the test infra
-# and seeds test users/nodes via morpheus.py --setup-test-data
+# and seeds test users/nodes via `morpheus admin test-data setup`
 make itest-setup
 make itest       # pytest test/itest/, HTML report in build/tests/
 ```
@@ -143,14 +142,18 @@ Both integrations are cloud-side and live in this repo, so they deploy with ever
 
 ## CLI (Morpheus)
 
-`cli/morpheus.py` is an interactive CLI to exercise a deployment end-to-end — as a user, an admin, or a simulated device — without needing a phone app or real hardware.
-
-It reuses the same Python 3.12 venv as the backend, and needs AWS credentials for the target account/region plus the deployment's outputs — either a local `rmng-outputs.json` at the repo root, or the published URL:
+`morpheus` is a console client that exercises a deployment end-to-end — as a user, an admin, or a simulated device — without a phone app or real hardware. It ships as the `esp-morpheus` distribution and runs from any directory, with or without this checkout.
 
 ```shell
-python3 cli/morpheus.py --user user@example.com
+pip install -e ./cli          # from a checkout; `pip install esp-morpheus` otherwise
+morpheus user user@example.com
 ```
+
+`pip install -r requirements.txt` already does the editable install, so skip it if
+you set up the backend environment above.
+
+It needs AWS credentials for the target account and region for some commands, plus the deployment's outputs — either a local `rmng-outputs.json` or a published URL via `--client-outputs`.
 
 See the [CLI guide](cli/README.md).
 
-**Tests** — the CLI has no suite of its own. `make itest-setup` calls `morpheus.py --setup-test-data` to seed test users and nodes to get started.
+**Tests** — `pytest cli/tests` covers the command tree, the shell and the output formatter offline. `make itest-setup` calls `morpheus admin test-data setup` to seed test users and nodes.

@@ -170,6 +170,7 @@ cdk_synth:
     RMNG_REGION: ap-south-1
   before_script:
     - pip3 install -r requirements.txt
+    - pip3 install -e ./cli --no-deps
   script:
     - make go_build
     - CDK_OUTDIR=cdk.out.rmng python3 cdk/apps/rmng.py
@@ -252,6 +253,48 @@ unittest:
       - build/coverage/coverage.xml
 
 # -------------------------
+# morpheus CLI: the offline suite over the command tree, the shell and the output formatter.
+# It needs neither AWS credentials nor a deployment, so it runs on every MR that touches the CLI.
+# -------------------------
+cli_test:
+  stage: unittest
+  image: python:3.12
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - cli/**/*
+        - py_sdk/**/*
+  before_script:
+    - pip install -e "./cli[test]"
+  script:
+    - pytest cli/tests -q
+
+# -------------------------
+# Publish esp-morpheus to the project PyPI registry on a tag. The version is
+# esp_morpheus.__version__ and nothing else carries one, so a release is that bump plus the tag.
+# CI_JOB_TOKEN authenticates to the registry, so no credentials are configured here.
+# -------------------------
+publish_cli:
+  stage: deploy
+  image: python:3.12
+  rules:
+    - if: '$CI_COMMIT_TAG'
+  before_script:
+    - pip install build twine
+  script:
+    - python -m build --outdir dist ./cli
+    - >-
+      TWINE_USERNAME=gitlab-ci-token
+      TWINE_PASSWORD=$CI_JOB_TOKEN
+      twine upload
+      --repository-url ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi
+      dist/*
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 1 month
+
+# -------------------------
 # Template for AWS deploy
 # -------------------------
 .deploy_template:
@@ -269,6 +312,7 @@ unittest:
     when: always
   before_script:
     - pip3 install -r requirements.txt
+    - pip3 install -e ./cli --no-deps
     - curl -o resource-pool-cli.py ${RMNG_RESOURCE_POOL}/download-cli
     - python3 resource-pool-cli.py status
     - python3 resource-pool-cli.py grab --user-id ${CI_JOB_ID} --resource-type

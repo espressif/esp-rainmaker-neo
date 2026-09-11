@@ -3,35 +3,37 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import sys
 import threading
 import os
-from scripts.rmng_outputs import REPO_ROOT, TEST_CONFIG_PATH, RmngSettings
-from py_sdk.test_user import User
-from py_sdk.test_group import Group
-from py_sdk.test_util import shadow_to_unstructured
-from test import prov_ble
+from .. import paths
+from ..outputs import TEST_CONFIG_PATH, RmngSettings
+from ..sdk.user import User
+from ..sdk.group import Group
+from ..sdk.util import shadow_to_unstructured
+from . import prov_ble
 from queue import Queue, Empty
-from prompt_toolkit import PromptSession
-from prompt_toolkit.history import FileHistory
-from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 import pathlib
 import os
 import time
 import asyncio
 import datetime
 
-# Repo-anchored so the cache is shared no matter which directory the simulator runs from; a cache
-# that looks empty from a new CWD would re-fetch every node config the app already had.
-APP_CACHE_DIR = os.path.join(REPO_ROOT, '.sim', 'app')
+# Never CWD-anchored: a cache that looks empty from a new directory would re-fetch every node
+# config the app already had.
+APP_CACHE_DIR = str(paths.sim_cache_dir('app'))
 
 # ANSI color codes
 blue = "\033[94m"
 reset = "\033[0m"
 
 class AppSim:
-    def __init__(self, user_id, config_path=TEST_CONFIG_PATH, rmng_outputs_path=None):
-        """Initialize the app simulator"""
+    def __init__(self, user_id, config_path=TEST_CONFIG_PATH, rmng_outputs_path=None, user=None):
+        """Initialize the app simulator.
+
+        `user` is an already-resolved User. Pass it to drive any account in the deployment,
+        including one test_config.json does not carry; the file is read only to look an identity
+        up, so an injected user needs no config at all.
+        """
         self.user_id = user_id
 
         settings = RmngSettings.from_source(rmng_outputs_path)
@@ -44,14 +46,14 @@ class AppSim:
         self.user_api_gateway_url = settings.user_api_gateway_url
         self.end_user_pool_id = settings.end_user_pool_id
 
-        # Read configurations
-        with open(config_path, 'r') as f:
-            self.config = json.load(f)
-
-        # Get user configuration
-        self.user = self._get_user_config(user_id)
-        if not self.user:
-            raise ValueError(f"Failed to find user configuration for user {user_id}")
+        self.config = {}
+        self.user = user
+        if self.user is None:
+            with open(config_path, 'r') as f:
+                self.config = json.load(f)
+            self.user = self._get_user_config(user_id)
+            if not self.user:
+                raise ValueError(f"Failed to find user configuration for user {user_id}")
 
         # Initialize state
         self.message_queue = Queue()
@@ -92,8 +94,7 @@ class AppSim:
 
         username = user_config.get('name')
         password = user_config.get('password')
-        # 'super_admin' is the pre-rename key; still honoured for an existing test_config.json.
-        is_admin = user_config.get('admin', user_config.get('super_admin', False))
+        is_admin = user_config.get('admin', False)
 
         if not username or not password:
             print(f"Error: Missing required configuration for user {user_id}")
@@ -1447,106 +1448,3 @@ class AppSim:
                 return target.split('zoneinfo/')[-1]
         # Fall back to the local tzname abbreviation.
         return datetime.datetime.now().astimezone().tzname() or 'UTC'
-
-    def _print_commands(self):
-        print("  select <group_id>          - Select a group")
-        print("  list                       - List all groups")
-        print("  update <device> <payload>  - Update device with JSON payload")
-        print("  update_group <payload>     - Publish payload to group control topic")
-        print("  update_subgroup <subgroup_id> <payload> - Publish payload to subgroup control topic")
-        print("  schedule set <device> <payload> - Set schedule details for device")
-        print("  schedule get <device> - Get schedule details for device")
-        print("  schedule delete <device> - Delete schedule details for device")
-        print("  automation create <name>   - Create new automation")
-        print("  automation add-trigger <id> <node_id> <device> <param> <operator> <value>")
-        print("  automation add-action <id> <node> <path> <value>")
-        print("  automation complete <id>   - Finalize automation")
-        print("  automation list            - List all automations")
-        print("  automation get <id>        - Get automation details")
-        print("  automation delete <id>     - Delete an automation")
-        print("  prov [name_prefix]         - Provision a discovered BLE device into the selected group")
-        print("  stats                      - Display operation statistics")
-        print("  quit                       - Exit the program")
-
-    def run_interactive(self):
-        """Run the app simulator in interactive mode"""
-        print("Starting interactive mode...")
-        print("Available commands:")
-        self._print_commands()
-
-        # Display initial statistics
-        self._print_stats()
-
-        # Create a session with persistent history
-        session = PromptSession(
-            history=FileHistory(os.path.join(REPO_ROOT, 'cli', '.app_sim.command_history')),
-            auto_suggest=AutoSuggestFromHistory()
-        )
-
-        try:
-            while True:
-                command = session.prompt("> ").strip()
-                if not command:
-                    continue
-
-                # Normal command processing
-                parts = command.split()
-                main_command = parts[0].lower()
-                args = parts[1:]
-
-                if main_command == 'quit':
-                    break
-                elif main_command == 'list':
-                    self.list_groups()
-                elif main_command == 'select':
-                    group_id = args[0] if args else None
-                    self.select_home(group_id)
-                elif main_command == 'update':
-                    self.handle_device_command(main_command, args)
-                elif main_command == 'update_group':
-                    self.handle_update_group_command(args)
-                elif main_command == 'update_subgroup':
-                    self.handle_update_subgroup_command(args)
-                elif main_command == 'stats':
-                    self._print_stats()
-                elif main_command == 'automation':
-                    self.handle_automation_command(args)
-                elif main_command == 'schedule':
-                    self.handle_schedule_command(args)
-                elif main_command == 'prov':
-                    self.handle_prov_command(args)
-                else:
-                    print("Unknown command. Available commands:")
-                    self._print_commands()
-
-        except KeyboardInterrupt:
-            print("\nExiting...")
-        except Exception as e:
-            print(f"Error: {str(e)}")
-        finally:
-            self.stop()
-
-def main():
-    import argparse
-
-    parser = argparse.ArgumentParser(description="App Simulator")
-    parser.add_argument('--user', required=True, help='User ID from test_config.json')
-
-    args = parser.parse_args()
-
-    try:
-        # Create and start the app simulator
-        simulator = AppSim(args.user)
-        if simulator.start():
-            simulator.run_interactive()
-        else:
-            print("Failed to start simulator")
-            sys.exit(1)
-    except Exception as e:
-        print(f"Error running simulator: {str(e)}")
-        import traceback
-        print(traceback.format_exc())
-        sys.exit(1)
-
-if __name__ == '__main__':
-    main()

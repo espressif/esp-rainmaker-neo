@@ -104,7 +104,7 @@ elif [ "$command" == "--diff" ]; then
 elif [ "$command" == "--destroy" ]; then
     # Destroy the test resources (only for rmng stack)
     if [ "$STACK_GROUP" == "rmng" ]; then
-        python3 cli/morpheus.py --destroy-test-data || true
+        morpheus test-data destroy || true
     fi
     # Destroy the stack
     cdk destroy --all --app "python3 $APP_FILE"

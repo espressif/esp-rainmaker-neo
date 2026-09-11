@@ -13,7 +13,7 @@ out of a large repository and want it:
 
 Example
 -------
-    from sparse_dep import SparseDependency
+    from esp_morpheus.sims.sparse_dep import SparseDependency
 
     SparseDependency(
         repo="https://github.com/espressif/idf-extra-components.git",
@@ -31,6 +31,8 @@ import sys
 from pathlib import Path
 from typing import Iterable, List, Optional, Union
 
+from .. import paths
+
 
 class SparseDependency:
     """Fetch one or more subdirectories of a Git repo via sparse + shallow checkout.
@@ -47,7 +49,7 @@ class SparseDependency:
         work with a shallow (depth=1) fetch; arbitrary SHAs work only if the
         server allows fetching them directly (GitHub generally does).
     dest:
-        Where to place the checkout. Defaults to ``.vendor/<repo-name>``.
+        Where to place the checkout. Defaults to the morpheus cache, never the CWD.
     import_subdir:
         Directory (relative to the checkout root) to return / put on sys.path.
         Defaults to the first ``subdir``. Override when the importable package
@@ -80,7 +82,7 @@ class SparseDependency:
         repo_stem = repo.rstrip("/").rsplit("/", 1)[-1]
         if repo_stem.endswith(".git"):
             repo_stem = repo_stem[:-4]
-        self.dest = Path(dest) if dest else Path(".vendor") / repo_stem
+        self.dest = Path(dest) if dest else paths.vendor_dir() / repo_stem
 
         rel_import = import_subdir if import_subdir is not None else self.subdirs[0]
         self._import_dir = self.dest / rel_import

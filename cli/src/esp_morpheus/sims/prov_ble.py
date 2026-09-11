@@ -19,7 +19,8 @@ import os
 import sys
 import pathlib
 
-from test.helpers.sparse_dep import SparseDependency
+from .. import paths
+from .sparse_dep import SparseDependency
 
 # esp_prov + protobuf bindings, populated by ensure_esp_prov(). Kept at module
 # scope so the async helpers below can reference them once bootstrapped.
@@ -54,7 +55,7 @@ def ensure_esp_prov():
             "BLE provisioning requires IDF_PATH (esp_prov needs the ESP-IDF "
             "protocomm python files). Re-run with IDF_PATH pointing at your "
             "ESP-IDF checkout, e.g.:\n"
-            "  IDF_PATH=~/esp/esp-idf python3 cli/morpheus.py --app-sim <user>"
+            "  IDF_PATH=~/esp/esp-idf morpheus app-sim <user>"
         )
 
     # Locate the esp_prov tool dir: honour a pre-existing checkout via ESP_PROV_PATH,
@@ -71,6 +72,7 @@ def ensure_esp_prov():
             repo="https://github.com/espressif/idf-extra-components.git",
             subdir="network_provisioning",
             ref="master",
+            dest=paths.vendor_dir() / "idf-extra-components",
         ).ensure()
         esp_prov_path = (network_prov_dir / "tool" / "esp_prov").resolve()
     if str(esp_prov_path) not in sys.path:

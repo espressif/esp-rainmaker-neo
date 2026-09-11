@@ -46,8 +46,8 @@ manual (it is an end-user OAuth consent flow that Amazon does not expose to SMAP
      → note **Client ID** + **Client Secret**.
    - On its **Web Settings**, add Allowed Return URL exactly: `http://127.0.0.1:9090/cb`.
    - The profile must live in the **same developer account** that owns the skill/vendor.
-2. **AWS credentials — only for the standalone-script path** (the morpheus.py path posts
-   the config as the `--user` admin instead, so it needs no AWS creds):
+2. **AWS credentials — only for the standalone-script path** (the morpheus path posts
+   the config as the given admin instead, so it needs no AWS creds):
    ```bash
    aws sso login --profile <profile>
    export AWS_PROFILE=<profile>
@@ -55,7 +55,7 @@ manual (it is an end-user OAuth consent flow that Amazon does not expose to SMAP
 
 #### Run
 
-**Via morpheus.py** (recommended — the config-API POST is authenticated as the given
+**Via morpheus** (recommended — the config-API POST is authenticated as the given
 admin user, no AWS creds needed). All inputs come from a config file:
 
 ```json
@@ -68,8 +68,8 @@ admin user, no AWS creds needed). All inputs come from a config file:
 }
 ```
 ```bash
-python cli/morpheus.py --user admin@example.com
-> alexa_setup_auto          # reads alexa_skills_config.json by default
+morpheus admin integrations alexa setup-auto
+# reads alexa_skills_config.json by default
 ```
 
 **Or the script directly** (config-API POST is SigV4-signed with your AWS creds):
@@ -87,16 +87,16 @@ deployment's API Gateway URL, Lambda ARNs and pool ids.
 
 #### Helpful commands
 
-Inside the `python cli/morpheus.py --user <email>` context (config-driven, no env vars).
-The config file defaults to `alexa_skills_config.json`; pass a path only to override:
+Inside the `morpheus admin` context (config-driven, no env vars). The config file
+defaults to `alexa_skills_config.json`; pass `--config` only to override:
 ```
-alexa_setup_auto [config.json] [skill name]   # create/update + full setup
-alexa_list_skills                             # list all skills (id + name)
-alexa_delete_skill <skill_id>                 # delete a skill
+admin integrations alexa setup-auto [--config config.json] [skill name]
+admin integrations alexa list-skills            # list all skills (id + name)
+admin integrations alexa delete-skill <skill_id>
 ```
 
 The standalone script exposes the same operations plus read-only diagnostics
-(used mainly in CI / without a morpheus.py user session):
+(used mainly in CI / without a morpheus admin session):
 ```bash
 ./myenv/bin/python tools/alexa_setup.py --skill-id ... --status          # per-step report
 ./myenv/bin/python tools/alexa_setup.py --skill-id ... --status --debug  # + raw SMAPI JSON

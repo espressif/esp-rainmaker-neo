@@ -1,0 +1,68 @@
+# SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "esp-morpheus"
+description = "Console client for an ESP RainMaker Neo deployment"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+dynamic = ["version"]
+authors = [{ name = "Espressif Systems (Shanghai) CO LTD" }]
+keywords = ["espressif", "rainmaker", "iot", "matter", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Testing",
+]
+
+# The measured import closure of the CLI, not a copy of requirements.txt. Lower bounds only:
+# a console client is installed beside other tools and must not pin them to one patch release.
+dependencies = [
+    "boto3>=1.43",
+    "botocore>=1.43",
+    "requests>=2.32",
+    "cryptography>=44",
+    "PyJWT>=2.9",
+    "awscrt>=0.36",
+    "awsiotsdk>=1.31",
+    "prompt_toolkit>=3.0.50",
+    "click>=8.1",
+    "rich>=13.7",
+    "segno>=1.6",
+    "bleak>=3.0",
+    # protobuf is held on 6.x: esp_rmaker_chal_resp_pb2.py was generated with a 6.32 runtime and
+    # the IDF python env ships protobuf 6.x, so 7.x breaks the generated _pb2 modules.
+    "protobuf>=6.30,<7",
+    "ask-smapi-sdk>=1.0",
+    "ask-smapi-model>=1.36",
+    "ask-sdk-model-runtime>=1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/espressif/esp-rainmaker-neo"
+Source = "https://github.com/espressif/esp-rainmaker-neo"
+
+[project.scripts]
+morpheus = "esp_morpheus.cli.main:main"
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
+[tool.setuptools.dynamic]
+version = { attr = "esp_morpheus.__version__" }
+
+# The wheel carries esp_morpheus and nothing else. The pre-rename py_sdk path stays at the repo
+# root, where the repositories that clone this repo already import it; it binds esp_morpheus.sdk.
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+esp_morpheus = ["data/**/*.json", "sims/chal_resp_proto/*"]
