@@ -93,8 +93,12 @@ pipeline {
                     sh 'pwd'
                     archiveArtifacts artifacts: 'rmng-outputs.json'
                     if (params.RUN_TEST) {
-                        sh 'cp /root/esp-rainmaker-neo/report.html .'
+                        sh 'cp /root/esp-rainmaker-neo/build/tests/report.html .'
                         archiveArtifacts artifacts: 'report.html'
+                    }
+                    if (params.DEPLOY_MODE != "Don't deploy") {
+                        sh 'cp /root/esp-rainmaker-neo/build/cdk/cdk-outputs-test.json .'
+                        archiveArtifacts artifacts: 'cdk-outputs-test.json'
                     }
                     echo 'Artifacts archived'
                 }
