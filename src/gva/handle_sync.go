@@ -17,9 +17,29 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/config"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/parallel"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	rmngctx "github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )
+
+// syncFanout bounds the per-node workers one SYNC may run; same reasoning and same value
+// as the Alexa discovery fan-out.
+const syncFanout = 25
+
+// syncNodeRef is a node together with the group it was reached through, which is what the
+// per-node permission load needs.
+type syncNodeRef struct {
+	nodeID  string
+	groupID string
+}
+
+// syncResult carries each node's outcome so one failure stays that node's own. done
+// separates a worker that ran and produced nothing from one that never ran at all.
+type syncResult struct {
+	devices []Device
+	err     error
+	done    bool
+}
 
 func HandleSync(ctx context.Context, request GVARequest, accessToken string) (GVAResponse, error) {
 	// Add request tracking for debugging intermittent issues
@@ -44,20 +64,42 @@ func HandleSync(ctx context.Context, request GVARequest, accessToken string) (GV
 		return GVAResponse{}, rmerror.NewRMError(err, "failed to list groups")
 	}
 
-	// Collect all accessible devices
-	var devices []Device
+	// Same fan-out as Alexa discovery, and for the same reason: the per-node work is a
+	// chain of AWS round trips, so a serial walk grows the response time linearly with
+	// the account. SYNC runs in-region today, which makes each node cheaper than Alexa's
+	// cross-region hop and is the only reason this has not failed yet — it scales the
+	// same way and misses Google's budget at a larger device count.
+	var refs []syncNodeRef
 	for _, grp := range groups {
 		rlog.Debug(rmngCtx).Interface("group", grp).Send()
-		// Get nodes in group
-		for nodeID, _ := range grp.NodeGroupEntries {
-			rlog.Debug(rmngCtx).Str("nodeID", nodeID).Send()
-			nodeDevices, err := createDevicesFromNode(rmngCtx, nodeID, grp.GroupID)
-			if err != nil {
-				rlog.Error(rmngCtx).Err(err).Send()
-				continue
-			}
-			rlog.Debug(rmngCtx).Interface("nodeDevices", nodeDevices).Send()
-			devices = append(devices, nodeDevices...)
+		for nodeID := range grp.NodeGroupEntries {
+			refs = append(refs, syncNodeRef{nodeID: nodeID, groupID: grp.GroupID})
+		}
+	}
+
+	results, _, err := parallel.ProcessParallel(ctx, refs,
+		func(ref syncNodeRef) syncResult {
+			nodeDevices, err := createDevicesFromNode(rmngCtx, ref.nodeID, ref.groupID)
+			return syncResult{devices: nodeDevices, err: err, done: true}
+		},
+		parallel.ParallelOptions{MaxRoutines: syncFanout, CollectResults: true},
+	)
+	if err != nil {
+		return GVAResponse{}, rmerror.NewRMError(err, "sync fan-out did not complete")
+	}
+
+	var devices []Device
+	for i, result := range results {
+		switch {
+		case !result.done:
+			// ProcessParallel recovers panics into a zero result, which would otherwise
+			// drop the node with no trace at all.
+			rlog.Error(rmngCtx).Str("nodeID", refs[i].nodeID).Msg("sync worker did not run for node")
+		case result.err != nil:
+			rlog.Error(rmngCtx).Err(result.err).Str("nodeID", refs[i].nodeID).Send()
+		default:
+			rlog.Debug(rmngCtx).Interface("nodeDevices", result.devices).Send()
+			devices = append(devices, result.devices...)
 		}
 	}
 

@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/espressif/esp-rainmaker-neo/src/alexa"
@@ -349,6 +350,76 @@ var _ = Describe("Alexa Skill", func() {
 			Expect(err).To(BeNil())
 			Expect(alexaEn).To(Not(BeNil()))
 			Expect(*alexaEn).To(BeTrue())
+		})
+
+		// The per-node work fans out, so these two cover what that changes: every node
+		// still reaches the response, and one bad node stays its own problem. A serial
+		// walk made both trivially true; concurrency is what puts them at risk.
+		It("returns an endpoint for every node when many are discovered at once", func() {
+			// Comfortably past the fan-out bound (25), so workers are reused rather than
+			// each node getting one of its own.
+			const extraNodes = 30
+			// testNodeID2 is permitted but never added to the group by the suite setup, so
+			// it is not discoverable and is deliberately not expected here.
+			expected := []string{testNodeID1}
+			for i := 0; i < extraNodes; i++ {
+				nodeID := fmt.Sprintf("fanout-node-%d", i)
+				rmngUserContext.SetAllow(utils.NodeAll, nodeID)
+				test_utils.ManuallyAddNodeToGroup(ctx, testGroup.GroupID, nodeID)
+				db := node_details_db.NewNodeDetailsDB(rmngctx.NewRmngContext(node.NewNode(nodeID)))
+				Expect(db.UpdateServiceData("config", node_cfg_simple_switch_test_data)).To(Succeed())
+				expected = append(expected, nodeID)
+			}
+
+			request = createTestRequest("Alexa.Discovery", "Discover", discoveryRequestPayload)
+			response, err := handler(ctx, request)
+			Expect(err).To(BeNil())
+
+			payloadBytes, err := json.Marshal(response.Event.Payload)
+			Expect(err).To(BeNil())
+			var payload struct {
+				Endpoints []struct {
+					EndpointID string `json:"endpointId"`
+				} `json:"endpoints"`
+			}
+			Expect(json.Unmarshal(payloadBytes, &payload)).To(Succeed())
+
+			// Endpoint ids are "<nodeID>#<deviceID>", so match on the node half.
+			discovered := map[string]bool{}
+			for _, endpoint := range payload.Endpoints {
+				discovered[strings.SplitN(endpoint.EndpointID, "#", 2)[0]] = true
+			}
+			for _, nodeID := range expected {
+				Expect(discovered).To(HaveKeyWithValue(nodeID, true), "missing endpoint for %s", nodeID)
+			}
+		})
+
+		It("keeps the other endpoints when one node cannot be built", func() {
+			// In the group and permitted, but with no config stored: getNodeCfg fails, so
+			// this node's worker returns an error while its siblings succeed.
+			brokenNodeID := "broken-node"
+			rmngUserContext.SetAllow(utils.NodeAll, brokenNodeID)
+			test_utils.ManuallyAddNodeToGroup(ctx, testGroup.GroupID, brokenNodeID)
+
+			request = createTestRequest("Alexa.Discovery", "Discover", discoveryRequestPayload)
+			response, err := handler(ctx, request)
+			Expect(err).To(BeNil())
+
+			payloadBytes, err := json.Marshal(response.Event.Payload)
+			Expect(err).To(BeNil())
+			var payload struct {
+				Endpoints []struct {
+					EndpointID string `json:"endpointId"`
+				} `json:"endpoints"`
+			}
+			Expect(json.Unmarshal(payloadBytes, &payload)).To(Succeed())
+
+			discovered := map[string]bool{}
+			for _, endpoint := range payload.Endpoints {
+				discovered[strings.SplitN(endpoint.EndpointID, "#", 2)[0]] = true
+			}
+			Expect(discovered).To(HaveKeyWithValue(testNodeID1, true))
+			Expect(discovered).NotTo(HaveKey(brokenNodeID))
 		})
 
 		It("should handler Discover responses correctly for various larger node configurations", func() {
