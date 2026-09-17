@@ -281,6 +281,53 @@ var _ = Describe("SmartThings handlers", func() {
 			Expect(resp.RequestGrantCallbackAccess).To(BeFalse())
 		})
 
+		// The per-node work fans out, so these cover what that changes: every node still
+		// reaches the response, and one node that cannot be built stays its own problem.
+		// A serial walk made both trivially true; concurrency is what puts them at risk.
+		It("returns a device for every node when many are discovered at once", func() {
+			// Comfortably past the fan-out bound (25), so workers are reused rather than
+			// each node getting one of its own.
+			const extraNodes = 30
+			expected := []string{GetDeviceID(switchNodeID, "Switch"), GetDeviceID(lightNodeID, "Light")}
+			for i := 0; i < extraNodes; i++ {
+				nodeID := fmt.Sprintf("st-fanout-node-%d", i)
+				rmngUserCtx.SetAllow(utils.NodeAll, nodeID)
+				test_utils.ManuallyAddNodeToGroup(ctx, testGroup.GroupID, nodeID)
+				seedNodeConfig(nodeID, stSwitchCfg)
+				expected = append(expected, GetDeviceID(nodeID, "Switch"))
+			}
+
+			resp, err := HandleDiscovery(ctx, stRequest(userID, InteractionDiscoveryRequest))
+			Expect(err).To(BeNil())
+
+			ids := make([]string, 0, len(resp.Devices))
+			for _, d := range resp.Devices {
+				ids = append(ids, d.ExternalDeviceID)
+			}
+			for _, want := range expected {
+				Expect(ids).To(ContainElement(want), "missing device for %s", want)
+			}
+		})
+
+		It("keeps the other devices when one node has no config", func() {
+			// In the group and permitted, but with no config seeded: getNodeConfig fails,
+			// so this node contributes nothing while its siblings still answer.
+			brokenNodeID := "st-broken-node"
+			rmngUserCtx.SetAllow(utils.NodeAll, brokenNodeID)
+			test_utils.ManuallyAddNodeToGroup(ctx, testGroup.GroupID, brokenNodeID)
+
+			resp, err := HandleDiscovery(ctx, stRequest(userID, InteractionDiscoveryRequest))
+			Expect(err).To(BeNil())
+
+			ids := make([]string, 0, len(resp.Devices))
+			for _, d := range resp.Devices {
+				ids = append(ids, d.ExternalDeviceID)
+			}
+			Expect(ids).To(ContainElement(GetDeviceID(switchNodeID, "Switch")))
+			Expect(ids).To(ContainElement(GetDeviceID(lightNodeID, "Light")))
+			Expect(ids).NotTo(ContainElement(ContainSubstring(brokenNodeID)))
+		})
+
 		It("returns qualifying devices with mapped capabilities and external device IDs", func() {
 			resp, err := HandleDiscovery(ctx, stRequest(userID, InteractionDiscoveryRequest))
 			Expect(err).To(BeNil())

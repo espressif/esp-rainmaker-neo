@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/rs/zerolog"
 )
 
@@ -97,7 +98,12 @@ func ProcessParallel[T, R any](ctx context.Context, items []T, processFunc func(
 				func() {
 					defer func() {
 						if r := recover(); r != nil {
-							// Just recover and continue
+							// A panicking worker leaves the zero result behind, which a
+							// caller cannot tell apart from a legitimately empty one — the
+							// item would vanish from the output with no trace. Log it here
+							// so every caller gets that for free.
+							rlog.Error(ctx).Interface("panic", r).
+								Int("index", work.index).Msg("parallel worker panicked")
 						}
 					}()
 
