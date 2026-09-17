@@ -127,19 +127,25 @@ func IsEqual(av1, av2 types.AttributeValue) bool {
 	return CompareAttributeValues(av1, av2) == 0
 }
 
+// condition parses the expression once and caches it, so a Query that evaluates the same condition against every row pays for the parse only once.
+func (e *Mexpression) condition() (condNode, error) {
+	if !e.astBuilt {
+		e.ast, e.astErr = parseCondition(*e.Expr)
+		e.astBuilt = true
+	}
+	return e.ast, e.astErr
+}
+
 // Evaluate reports whether the item satisfies the condition. An expression the parser cannot handle is an error, never a silent true: a predicate that matches every row turns a filtered read into an unfiltered one that still looks successful.
 func (e *Mexpression) Evaluate(av map[string]types.AttributeValue) (bool, error) {
 	if e.Expr == nil || strings.TrimSpace(*e.Expr) == "" {
 		return true, nil
 	}
-	if !e.astBuilt {
-		e.ast, e.astErr = parseCondition(*e.Expr)
-		e.astBuilt = true
+	node, err := e.condition()
+	if err != nil {
+		return false, fmt.Errorf("ValidationException: %v in expression %q", err, *e.Expr)
 	}
-	if e.astErr != nil {
-		return false, fmt.Errorf("ValidationException: %v in expression %q", e.astErr, *e.Expr)
-	}
-	ok, err := e.ast.eval(e, av)
+	ok, err := node.eval(e, av)
 	if err != nil {
 		return false, fmt.Errorf("ValidationException: %v in expression %q", err, *e.Expr)
 	}

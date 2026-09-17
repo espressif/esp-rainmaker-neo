@@ -69,6 +69,30 @@ var _ = Describe("DynamoDB", func() {
 		dbMock.AddTable(table, "hash_key", "range_key")
 	})
 
+	// DbBatchPutItem resubmits whatever DynamoDB hands back as unprocessed. That loop only runs when a batch actually comes back short, which the mock can now simulate.
+	Describe("DbBatchPutItem under partial batch failure", func() {
+		It("resubmits the unprocessed tail until every item is written", func() {
+			items := make([]mockDBItem, 0, 4)
+			for i := 0; i < 4; i++ {
+				items = append(items, mockDBItem{
+					HashKey:  fmt.Sprintf("batch-hash-%d", i),
+					RangeKey: "r",
+					Data:     fmt.Sprintf("data-%d", i),
+				})
+			}
+
+			dbMock.NextBatchWriteUnprocessedCount = 3
+			Expect(espdynamodb.DbBatchPutItem(&db, table, items)).To(Succeed())
+
+			for _, want := range items {
+				var got mockDBItem
+				err := db.DbGetItem(table, mockDBItem{HashKey: want.HashKey, RangeKey: want.RangeKey}, &got)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(got.Data).To(Equal(want.Data))
+			}
+		})
+	})
+
 	Describe("DbCreateItem", func() {
 		Context("when creating a new item", func() {
 			It("should successfully create item when it doesn't exist", func() {
@@ -323,8 +347,8 @@ var _ = Describe("DynamoDB", func() {
 					Expect(err).NotTo(HaveOccurred())
 				}
 
-				// Query by hash key prefix
-				keyCondition := expression.KeyBeginsWith(expression.Key("hash_key"), "test-hash")
+				// A Query has to fix the partition key with "=", so on a hash-only table it addresses exactly one item. Prefix-matching the partition key is a Scan, and DynamoDB rejects it as a key condition.
+				keyCondition := expression.KeyEqual(expression.Key("hash_key"), expression.Value("test-hash-3"))
 				expr, err := expression.NewBuilder().WithKeyCondition(keyCondition).Build()
 				Expect(err).NotTo(HaveOccurred())
 
@@ -335,7 +359,7 @@ var _ = Describe("DynamoDB", func() {
 
 				count, err := db.DbQueryCountLoop(input)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(count).To(Equal(int32(5)))
+				Expect(count).To(Equal(int32(1)))
 			})
 
 			It("should handle batch get operations", func() {

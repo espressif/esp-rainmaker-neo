@@ -651,3 +651,29 @@ func parseCondition(expr string) (condNode, error) {
 	}
 	return node, nil
 }
+
+// PinsPartitionKey reports whether the key condition fixes the partition key with "=", which DynamoDB requires of every Query. Without it a Query would be a scan, and the service rejects the request rather than running it.
+func (e *Mexpression) PinsPartitionKey(partitionKey string) bool {
+	if e.Expr == nil || strings.TrimSpace(*e.Expr) == "" {
+		return false
+	}
+	node, err := e.condition()
+	if err != nil {
+		return false
+	}
+	return pinsKey(node, e, partitionKey)
+}
+
+func pinsKey(node condNode, e *Mexpression, partitionKey string) bool {
+	switch typed := node.(type) {
+	case andNode:
+		return pinsKey(typed.left, e, partitionKey) || pinsKey(typed.right, e, partitionKey)
+	case cmpNode:
+		if typed.op != "=" {
+			return false
+		}
+		path, ok := typed.lhs.(pathOperand)
+		return ok && len(path.segs) == 1 && !path.segs[0].isIndex && e.getName(path.segs[0].name) == partitionKey
+	}
+	return false
+}

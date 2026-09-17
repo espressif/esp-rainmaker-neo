@@ -140,6 +140,9 @@ type IndexDetails struct {
 	TableName  string
 	PrimaryKey string
 	SortKey    string
+	// Projection defaults to ALL; SetIndexProjection narrows it to what the real index would carry.
+	Projection       types.ProjectionType
+	NonKeyAttributes []string
 }
 
 type DBItem map[string]types.AttributeValue
@@ -197,6 +200,52 @@ func NewDynamoDBMock() *DynamoDBMock {
 		items_pskey: make(map[string]*orderedmap.OrderedMap),
 		profile:     NewProfile(),
 	}
+}
+
+// DynamoDB serialises every item over the wire, so a caller can never reach the stored row through a value it read or wrote. Handing back the live map instead lets a test corrupt data it only meant to read, and hides code that mutates a shared item.
+func copyAV(av types.AttributeValue) types.AttributeValue {
+	switch v := av.(type) {
+	case *types.AttributeValueMemberS:
+		return &types.AttributeValueMemberS{Value: v.Value}
+	case *types.AttributeValueMemberN:
+		return &types.AttributeValueMemberN{Value: v.Value}
+	case *types.AttributeValueMemberBOOL:
+		return &types.AttributeValueMemberBOOL{Value: v.Value}
+	case *types.AttributeValueMemberNULL:
+		return &types.AttributeValueMemberNULL{Value: v.Value}
+	case *types.AttributeValueMemberB:
+		return &types.AttributeValueMemberB{Value: append([]byte(nil), v.Value...)}
+	case *types.AttributeValueMemberSS:
+		return &types.AttributeValueMemberSS{Value: append([]string(nil), v.Value...)}
+	case *types.AttributeValueMemberNS:
+		return &types.AttributeValueMemberNS{Value: append([]string(nil), v.Value...)}
+	case *types.AttributeValueMemberBS:
+		out := make([][]byte, len(v.Value))
+		for i, b := range v.Value {
+			out[i] = append([]byte(nil), b...)
+		}
+		return &types.AttributeValueMemberBS{Value: out}
+	case *types.AttributeValueMemberL:
+		out := make([]types.AttributeValue, len(v.Value))
+		for i, e := range v.Value {
+			out[i] = copyAV(e)
+		}
+		return &types.AttributeValueMemberL{Value: out}
+	case *types.AttributeValueMemberM:
+		return &types.AttributeValueMemberM{Value: copyItem(v.Value)}
+	}
+	return av
+}
+
+func copyItem(item map[string]types.AttributeValue) map[string]types.AttributeValue {
+	if item == nil {
+		return nil
+	}
+	out := make(map[string]types.AttributeValue, len(item))
+	for k, v := range item {
+		out[k] = copyAV(v)
+	}
+	return out
 }
 
 func (m *DynamoDBMock) ProfileReset() {
@@ -348,7 +397,20 @@ func (m *DynamoDBMock) AddSecondaryIndex(indexName, tableName, primaryKey, sortK
 	if _, ok := m.tables[tableName]; !ok {
 		return &types.ResourceNotFoundException{Message: aws.String("Table not found")}
 	}
-	m.sec_index[indexName] = &IndexDetails{TableName: tableName, PrimaryKey: primaryKey, SortKey: sortKey}
+	m.sec_index[indexName] = &IndexDetails{TableName: tableName, PrimaryKey: primaryKey, SortKey: sortKey, Projection: types.ProjectionTypeAll}
+	return nil
+}
+
+// SetIndexProjection narrows what a query through the index returns. Indexes default to ALL, so a test only calls this when the real index is KEYS_ONLY or INCLUDE and the code under test must not see the unprojected attributes.
+func (m *DynamoDBMock) SetIndexProjection(indexName string, projection types.ProjectionType, nonKeyAttributes ...string) error {
+	m.mx.Lock()
+	defer m.mx.Unlock()
+	idx, ok := m.sec_index[indexName]
+	if !ok {
+		return &types.ResourceNotFoundException{Message: aws.String("Index not found")}
+	}
+	idx.Projection = projection
+	idx.NonKeyAttributes = nonKeyAttributes
 	return nil
 }
 
@@ -465,6 +527,7 @@ func (m *DynamoDBMock) BatchGetItem(ctx context.Context, params *dynamodb.BatchG
 			processUntil = len(keys) - unprocessedCount
 		}
 
+		projection := NewMexpression(v.ProjectionExpression, v.ExpressionAttributeNames, nil)
 		for _, key := range keys[:processUntil] {
 			if err := validateKeyOnly(key, m.tables[table]); err != nil {
 				return nil, err
@@ -473,8 +536,9 @@ func (m *DynamoDBMock) BatchGetItem(ctx context.Context, params *dynamodb.BatchG
 			if err != nil {
 				return nil, err
 			}
-			if item, err := m.getItem(table, pkey, skey); err == nil {
-				outitems = append(outitems, item)
+			// A key with no row is omitted, as the service does; appending the nil map instead unmarshals into a zero-valued struct the caller cannot tell from real data.
+			if item, err := m.getItem(table, pkey, skey); err == nil && item != nil {
+				outitems = append(outitems, getProjection(item, projection))
 			}
 		}
 		output.Responses[table] = outitems
@@ -510,15 +574,15 @@ func (m *DynamoDBMock) GetItem(ctx context.Context, params *dynamodb.GetItemInpu
 	}
 
 	m.profile.AddRead(*params.TableName, "GetItem", pkey+":"+skey, 0)
-	if v, err := m.getItem(tableName, pkey, skey); err == nil {
-		// Create a GetItemOutput with the item
-		output := &dynamodb.GetItemOutput{
-			Item: v,
-		}
-		return output, nil
-	} else {
+	v, err := m.getItem(tableName, pkey, skey)
+	if err != nil {
 		return nil, err
 	}
+	if v == nil {
+		return &dynamodb.GetItemOutput{}, nil
+	}
+	projection := NewMexpression(params.ProjectionExpression, params.ExpressionAttributeNames, nil)
+	return &dynamodb.GetItemOutput{Item: getProjection(v, projection)}, nil
 }
 
 // GetDirect returns the item from the DynamoDBMock without going through the GetItem API
@@ -552,7 +616,7 @@ func (m *DynamoDBMock) getItem(tableName, pkey, skey string) (map[string]types.A
 		item_interface, _ := m.items_pkey[tableName].Get(pkey)
 		item, _ = item_interface.(map[string]types.AttributeValue)
 	}
-	return item, nil
+	return copyItem(item), nil
 }
 
 func (m *DynamoDBMock) PutItem(ctx context.Context, params *dynamodb.PutItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error) {
@@ -598,6 +662,7 @@ func (m *DynamoDBMock) PutDirect(tableName, pkey, skey string, item interface{})
 func (m *DynamoDBMock) putItem(tableName, pkey, skey string, item map[string]types.AttributeValue) error {
 	m.mx.Lock()
 	defer m.mx.Unlock()
+	item = copyItem(item)
 	if m.tables[tableName].SortKey != "" {
 		if skey == "" {
 			return &types.ResourceNotFoundException{Message: aws.String("Index not found")}
@@ -733,14 +798,18 @@ func (m *DynamoDBMock) Query(ctx context.Context, params *dynamodb.QueryInput, o
 	for k, v := range params.ExpressionAttributeValues {
 		attr += k + ":" + *SorN(v) + " "
 	}
-	m.profile.AddRead(*params.TableName, "Query", "KeyConditionExpression: "+*params.KeyConditionExpression+" Key/Value: "+attr, 0)
+	// A Query with no key condition is a ValidationException, not a crash, so profiling must not dereference it before QueryInternal validates.
+	m.profile.AddRead(*params.TableName, "Query", "KeyConditionExpression: "+aws.ToString(params.KeyConditionExpression)+" Key/Value: "+attr, 0)
 	return m.QueryInternal(params)
 }
 
 func (m *DynamoDBMock) QueryInternal(input *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
-	tableName, schema, err := m.resolveTarget(*input.TableName, input.IndexName)
+	tableName, schema, idx, err := m.resolveTarget(*input.TableName, input.IndexName)
 	if err != nil {
 		return nil, err
+	}
+	if aws.ToBool(input.ConsistentRead) && idx != nil {
+		return nil, fmt.Errorf("ValidationException: Consistent reads are not supported on global secondary indexes")
 	}
 
 	output := &dynamodb.QueryOutput{}
@@ -748,60 +817,55 @@ func (m *DynamoDBMock) QueryInternal(input *dynamodb.QueryInput) (*dynamodb.Quer
 	filterCond := NewMexpression(input.FilterExpression, input.ExpressionAttributeNames, input.ExpressionAttributeValues)
 	projection := NewMexpression(input.ProjectionExpression, input.ExpressionAttributeNames, input.ExpressionAttributeValues)
 
-	var matchingItems []map[string]types.AttributeValue
+	if !keyCond.PinsPartitionKey(schema[0]) {
+		return nil, fmt.Errorf("ValidationException: Query key condition must fix the partition key %q with '='", schema[0])
+	}
+
+	// Rows matching the key condition. The filter is applied later because Limit caps what DynamoDB evaluates, not what survives filtering.
+	var evaluated []map[string]types.AttributeValue
 
 	if err := m.ForEachRow(tableName, func(item map[string]types.AttributeValue) error {
 		matched, err := keyCond.Evaluate(item)
 		if err != nil || !matched {
 			return err
 		}
-		kept, err := filterCond.Evaluate(item)
-		if err != nil || !kept {
-			return err
-		}
-		matchingItems = append(matchingItems, item)
+		evaluated = append(evaluated, item)
 		return nil
 	}); err != nil {
 		return nil, err
 	}
 
-	sortBySchema(matchingItems, schema, input.ScanIndexForward)
+	sortBySchema(evaluated, schema, input.ScanIndexForward)
 
 	if len(input.ExclusiveStartKey) > 0 {
-		matchingItems = itemsAfterCursor(matchingItems, input.ExclusiveStartKey, schema, input.ScanIndexForward)
+		evaluated = itemsAfterCursor(evaluated, input.ExclusiveStartKey, schema, input.ScanIndexForward)
 	}
 
-	// Apply limit and set LastEvaluatedKey if there are more results. MaxPageItems stands in
-	// for the real service's 1 MB page cap, which applies whether or not the caller sent a
-	// Limit — without it the mock can only ever return one page, so a read path that ignores
-	// LastEvaluatedKey looks correct in tests and silently truncates against AWS.
-	limit := 0
-	if input.Limit != nil && *input.Limit > 0 {
-		limit = int(*input.Limit)
+	if limit := m.pageLimit(input.Limit); limit > 0 && len(evaluated) > limit {
+		output.LastEvaluatedKey = keyFromItem(evaluated[limit-1], schema)
+		evaluated = evaluated[:limit]
 	}
-	if m.MaxPageItems > 0 && (limit == 0 || m.MaxPageItems < limit) {
-		limit = m.MaxPageItems
-	}
-	if limit > 0 && len(matchingItems) > limit {
-		lastItem := matchingItems[limit-1]
-		output.LastEvaluatedKey = make(map[string]types.AttributeValue, len(schema))
-		for _, attr := range schema {
-			output.LastEvaluatedKey[attr] = lastItem[attr]
+	output.ScannedCount = int32(len(evaluated))
+
+	var matchingItems []map[string]types.AttributeValue
+	for _, item := range evaluated {
+		kept, err := filterCond.Evaluate(item)
+		if err != nil {
+			return nil, err
 		}
-		matchingItems = matchingItems[:limit]
+		if kept {
+			matchingItems = append(matchingItems, item)
+		}
 	}
 
-	// Handle Count select or return items with projection
 	if input.Select == types.SelectCount {
 		output.Count = int32(len(matchingItems))
-	} else {
-		// Apply projection to final results
-		for _, item := range matchingItems {
-			projectedItem := getProjection(item, projection)
-			output.Items = append(output.Items, projectedItem)
-		}
-		output.Count = int32(len(output.Items))
+		return output, nil
 	}
+	for _, item := range matchingItems {
+		output.Items = append(output.Items, getProjection(applyIndexProjection(copyItem(item), idx, schema), projection))
+	}
+	output.Count = int32(len(output.Items))
 	return output, nil
 }
 
@@ -820,24 +884,46 @@ func indexKeySchema(idx *IndexDetails, base TableDetails) []string {
 }
 
 // A read names its index either in IndexName, as production code does, or in place of the table name, as the mock's own callers do. Both resolve to the backing table and the index's key schema.
-func (m *DynamoDBMock) resolveTarget(tableName string, indexName *string) (string, []string, error) {
+func (m *DynamoDBMock) resolveTarget(tableName string, indexName *string) (string, []string, *IndexDetails, error) {
 	m.mx.RLock()
 	defer m.mx.RUnlock()
 
 	if indexName != nil && *indexName != "" {
 		idx, ok := m.sec_index[*indexName]
 		if !ok {
-			return "", nil, &types.ResourceNotFoundException{Message: aws.String("Index not found")}
+			return "", nil, nil, &types.ResourceNotFoundException{Message: aws.String("Index not found")}
 		}
-		return idx.TableName, indexKeySchema(idx, m.tables[idx.TableName]), nil
+		return idx.TableName, indexKeySchema(idx, m.tables[idx.TableName]), idx, nil
 	}
 	if table, ok := m.tables[tableName]; ok {
-		return tableName, baseKeySchema(table), nil
+		return tableName, baseKeySchema(table), nil, nil
 	}
 	if idx, ok := m.sec_index[tableName]; ok {
-		return idx.TableName, indexKeySchema(idx, m.tables[idx.TableName]), nil
+		return idx.TableName, indexKeySchema(idx, m.tables[idx.TableName]), idx, nil
 	}
-	return "", nil, &types.ResourceNotFoundException{Message: aws.String("Table not found")}
+	return "", nil, nil, &types.ResourceNotFoundException{Message: aws.String("Table not found")}
+}
+
+// An index only stores what it projects, so a query through one cannot see the rest of the base-table row even though the mock keeps it all in one place.
+func applyIndexProjection(item map[string]types.AttributeValue, idx *IndexDetails, schema []string) map[string]types.AttributeValue {
+	if idx == nil || idx.Projection == "" || idx.Projection == types.ProjectionTypeAll {
+		return item
+	}
+	allowed := make(map[string]bool, len(schema)+len(idx.NonKeyAttributes))
+	for _, attr := range schema {
+		allowed[attr] = true
+	}
+	if idx.Projection == types.ProjectionTypeInclude {
+		for _, attr := range idx.NonKeyAttributes {
+			allowed[attr] = true
+		}
+	}
+	for k := range item {
+		if !allowed[k] {
+			delete(item, k)
+		}
+	}
+	return item
 }
 
 // A query's key schema is the ordered attribute list it is sorted and paginated by. It has to be unique per item: a cursor is a position in that order, so any two items comparing equal would make the resume point ambiguous and silently drop rows.
@@ -887,6 +973,26 @@ func compareToCursor(item, cursor map[string]types.AttributeValue, schema []stri
 	return 0
 }
 
+// pageLimit is the smaller of the caller's Limit and MaxPageItems, which stands in for the service's 1 MB page cap. Zero means unlimited.
+func (m *DynamoDBMock) pageLimit(limit *int32) int {
+	n := 0
+	if limit != nil && *limit > 0 {
+		n = int(*limit)
+	}
+	if m.MaxPageItems > 0 && (n == 0 || m.MaxPageItems < n) {
+		n = m.MaxPageItems
+	}
+	return n
+}
+
+func keyFromItem(item map[string]types.AttributeValue, schema []string) map[string]types.AttributeValue {
+	key := make(map[string]types.AttributeValue, len(schema))
+	for _, attr := range schema {
+		key[attr] = item[attr]
+	}
+	return key
+}
+
 // ExclusiveStartKey is a position, not an item: the row it names may have been deleted since the previous page, and DynamoDB still resumes at the next one. Items are already in query order here, so the predicate is monotonic and the first match is the resume point.
 func itemsAfterCursor(items []map[string]types.AttributeValue, cursor map[string]types.AttributeValue, schema []string, scanIndexForward *bool) []map[string]types.AttributeValue {
 	asc := ascending(scanIndexForward)
@@ -899,34 +1005,57 @@ func itemsAfterCursor(items []map[string]types.AttributeValue, cursor map[string
 	}):]
 }
 
+// The real service leaves Scan order unspecified, but a cursor needs a stable position to resume from, so the mock scans in key order. Treat that order as an implementation detail: assert on the set a Scan returns, never on its sequence.
 func (m *DynamoDBMock) ScanInternal(input *dynamodb.ScanInput) (*dynamodb.ScanOutput, error) {
+	tableName, schema, idx, err := m.resolveTarget(*input.TableName, input.IndexName)
+	if err != nil {
+		return nil, err
+	}
+
 	output := &dynamodb.ScanOutput{}
 	filterCond := NewMexpression(input.FilterExpression, input.ExpressionAttributeNames, input.ExpressionAttributeValues)
 	projection := NewMexpression(input.ProjectionExpression, input.ExpressionAttributeNames, input.ExpressionAttributeValues)
-	if err := m.ForEachRow(*input.TableName, func(item map[string]types.AttributeValue) error {
-		kept, err := filterCond.Evaluate(item)
-		if err != nil || !kept {
-			return err
-		}
-		output.Items = append(output.Items, getProjection(item, projection))
+
+	var evaluated []map[string]types.AttributeValue
+	if err := m.ForEachRow(tableName, func(item map[string]types.AttributeValue) error {
+		evaluated = append(evaluated, item)
 		return nil
 	}); err != nil {
 		return nil, err
 	}
-	// AWS sets Count to the number of items that matched, regardless of the Select mode (e.g. SELECT_COUNT returns Count without Items). Mirror that here so callers using Select=COUNT read the right value.
-	output.Count = int32(len(output.Items))
+
+	sortBySchema(evaluated, schema, nil)
+	if len(input.ExclusiveStartKey) > 0 {
+		evaluated = itemsAfterCursor(evaluated, input.ExclusiveStartKey, schema, nil)
+	}
+	if limit := m.pageLimit(input.Limit); limit > 0 && len(evaluated) > limit {
+		output.LastEvaluatedKey = keyFromItem(evaluated[limit-1], schema)
+		evaluated = evaluated[:limit]
+	}
+	output.ScannedCount = int32(len(evaluated))
+
+	matched := 0
+	for _, item := range evaluated {
+		kept, err := filterCond.Evaluate(item)
+		if err != nil {
+			return nil, err
+		}
+		if !kept {
+			continue
+		}
+		matched++
+		if input.Select != types.SelectCount {
+			output.Items = append(output.Items, getProjection(applyIndexProjection(copyItem(item), idx, schema), projection))
+		}
+	}
+	// Count is what matched whatever the Select mode; SELECT_COUNT returns it without any Items.
+	output.Count = int32(matched)
 	return output, nil
 }
 
 func (m *DynamoDBMock) Scan(ctx context.Context, params *dynamodb.ScanInput, optFns ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error) {
 	m.profile.AddRead(*params.TableName, "Scan", "", 0)
-	tableName, _, err := m.resolveTarget(*params.TableName, params.IndexName)
-	if err != nil {
-		return nil, err
-	}
-	scanInput := *params
-	scanInput.TableName = &tableName
-	return m.ScanInternal(&scanInput)
+	return m.ScanInternal(params)
 }
 
 func (m *DynamoDBMock) UpdateItem(ctx context.Context, input *dynamodb.UpdateItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error) {
@@ -993,9 +1122,6 @@ func (m *DynamoDBMock) UpdateItem(ctx context.Context, input *dynamodb.UpdateIte
 			err = setExpr.ProcessUpdate(func(op UpdateOp, name string, value types.AttributeValue) {
 				if op == Set {
 					item[name] = value
-				} else if op == SetDone {
-					// Put the updated item back in the hashmap
-					m.putItem(tableName, pkey, skey, item)
 				}
 			})
 			if err != nil {
@@ -1010,8 +1136,6 @@ func (m *DynamoDBMock) UpdateItem(ctx context.Context, input *dynamodb.UpdateIte
 					// Overwrite specific values and maintain it in item
 					item[name] = value
 				case SetDone:
-					// item is now updated, so put it back in the hashmap
-					m.putItem(tableName, pkey, skey, item)
 				case Delete:
 					delete(item, name)
 				case Add:
@@ -1073,6 +1197,11 @@ func (m *DynamoDBMock) UpdateItem(ctx context.Context, input *dynamodb.UpdateIte
 
 	} else {
 		return nil, &types.ConditionalCheckFailedException{Message: aws.String("Condition not met")}
+	}
+
+	// The item read above is a copy, so it has to be written back explicitly; a REMOVE- or ADD-only expression would otherwise be silently lost.
+	if err := m.putItem(tableName, pkey, skey, item); err != nil {
+		return nil, err
 	}
 
 	if input.ReturnValues == types.ReturnValueAllNew || input.ReturnValues == types.ReturnValueUpdatedNew {

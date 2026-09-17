@@ -472,7 +472,7 @@ var _ = Describe("Dynamodb", func() {
 			})
 			It("should return all items matching secondary index with correct projection", func() {
 				table2_index := "table2_index"
-				dbMock.AddSecondaryIndex(table2_index, table2, "count", "data")
+				dbMock.AddSecondaryIndex(table2_index, table2, "data", "count")
 				expectb1 := TestValBProjection{Count: 101, Data: "data101"}
 				keyCondition := expression.KeyEqual(expression.Key("data"), expression.Value("data101"))
 				projection := expression.NamesList(expression.Name("count"), expression.Name("data"))
@@ -1523,4 +1523,454 @@ var _ = AfterSuite(func() {
 	fmt.Fprintf(timingFile, "\n---Set the environment variable RLOG to {\"level\":\"info\"} to configure logging level (trace < debug < info < warn) ---\n")
 	fmt.Fprintf(timingFile, "-----------------------------\n\n")
 	timingFile.Close()
+})
+
+var _ = Describe("Result fidelity", func() {
+	const (
+		table     = "fidelity"
+		index     = "fidelity-by-kind"
+		partition = "p1"
+	)
+
+	var dbMock *mock.DynamoDBMock
+
+	put := func(sk, keep string) {
+		_, err := dbMock.PutItem(context.TODO(), &dynamodb.PutItemInput{
+			TableName: aws.String(table),
+			Item: map[string]types.AttributeValue{
+				"pk": avS(partition), "sk": avS(sk), "keep": avS(keep),
+				"kind": avS("alert"), "bulk": avS("payload"),
+			},
+		})
+		Expect(err).ToNot(HaveOccurred())
+	}
+
+	partitionQuery := func(in *dynamodb.QueryInput) *dynamodb.QueryOutput {
+		b := expression.NewBuilder().WithKeyCondition(expression.Key("pk").Equal(expression.Value(partition)))
+		if in.FilterExpression != nil {
+			b = b.WithFilter(expression.Equal(expression.Name("keep"), expression.Value("yes")))
+		}
+		expr, err := b.Build()
+		Expect(err).ToNot(HaveOccurred())
+		in.KeyConditionExpression = expr.KeyCondition()
+		in.FilterExpression = expr.Filter()
+		in.ExpressionAttributeNames = expr.Names()
+		in.ExpressionAttributeValues = expr.Values()
+		out, err := dbMock.Query(context.TODO(), in)
+		Expect(err).ToNot(HaveOccurred())
+		return out
+	}
+
+	BeforeEach(func() {
+		dbMock = mock.NewDynamoDBMock()
+		dbMock.AddTable(table, "pk", "sk")
+		Expect(dbMock.AddSecondaryIndex(index, table, "kind", "sk")).To(Succeed())
+		for _, sk := range []string{"s01", "s02", "s03", "s04"} {
+			put(sk, "no")
+		}
+		put("s05", "yes")
+	})
+
+	// A returned item is a copy in the real service. Handing back the stored map lets a caller's edit reach into the table, so a test can mutate data it only meant to read and code that corrupts a shared map still looks correct.
+	Describe("returned items are detached from the store", func() {
+		It("does not let a mutated GetItem result reach the store", func() {
+			key := map[string]types.AttributeValue{"pk": avS(partition), "sk": avS("s01")}
+			got, err := dbMock.GetItem(context.TODO(), &dynamodb.GetItemInput{TableName: aws.String(table), Key: key})
+			Expect(err).ToNot(HaveOccurred())
+			got.Item["injected"] = avS("x")
+			got.Item["keep"] = avS("tampered")
+
+			again, err := dbMock.GetItem(context.TODO(), &dynamodb.GetItemInput{TableName: aws.String(table), Key: key})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(again.Item).ToNot(HaveKey("injected"))
+			Expect(again.Item["keep"]).To(Equal(avS("no")))
+		})
+
+		It("does not let a mutated Query result reach the store", func() {
+			out := partitionQuery(&dynamodb.QueryInput{TableName: aws.String(table)})
+			out.Items[0]["injected"] = avS("x")
+
+			again := partitionQuery(&dynamodb.QueryInput{TableName: aws.String(table)})
+			Expect(again.Items[0]).ToNot(HaveKey("injected"))
+		})
+
+		It("does not let the item passed to PutItem be changed afterwards", func() {
+			item := map[string]types.AttributeValue{"pk": avS(partition), "sk": avS("s99"), "keep": avS("no")}
+			_, err := dbMock.PutItem(context.TODO(), &dynamodb.PutItemInput{TableName: aws.String(table), Item: item})
+			Expect(err).ToNot(HaveOccurred())
+			item["keep"] = avS("tampered")
+
+			got, err := dbMock.GetItem(context.TODO(), &dynamodb.GetItemInput{
+				TableName: aws.String(table),
+				Key:       map[string]types.AttributeValue{"pk": avS(partition), "sk": avS("s99")},
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(got.Item["keep"]).To(Equal(avS("no")))
+		})
+	})
+
+	// Limit caps the rows DynamoDB evaluates, not the rows that survive the filter, so a filtered page legitimately comes back short (even empty) while still carrying a cursor. A mock that filters first always returns a full page and hides the loop the caller needs.
+	Describe("Limit and ScannedCount", func() {
+		It("returns a short page and a cursor when the filter rejects the evaluated rows", func() {
+			out := partitionQuery(&dynamodb.QueryInput{
+				TableName: aws.String(table), Limit: aws.Int32(2), FilterExpression: aws.String("placeholder"),
+			})
+			Expect(out.Items).To(BeEmpty())
+			Expect(out.Count).To(BeEquivalentTo(0))
+			Expect(out.ScannedCount).To(BeEquivalentTo(2))
+			Expect(out.LastEvaluatedKey).ToNot(BeEmpty())
+		})
+
+		It("reaches the matching row by following the cursor", func() {
+			var seen int32
+			var startKey map[string]types.AttributeValue
+			var matched []map[string]types.AttributeValue
+			for {
+				out := partitionQuery(&dynamodb.QueryInput{
+					TableName: aws.String(table), Limit: aws.Int32(2),
+					FilterExpression: aws.String("placeholder"), ExclusiveStartKey: startKey,
+				})
+				seen += out.ScannedCount
+				matched = append(matched, out.Items...)
+				if len(out.LastEvaluatedKey) == 0 {
+					break
+				}
+				startKey = out.LastEvaluatedKey
+			}
+			Expect(seen).To(BeEquivalentTo(5))
+			Expect(matched).To(HaveLen(1))
+			Expect(matched[0]["sk"]).To(Equal(avS("s05")))
+		})
+
+		It("sets ScannedCount to the row count on an unfiltered query", func() {
+			out := partitionQuery(&dynamodb.QueryInput{TableName: aws.String(table)})
+			Expect(out.ScannedCount).To(BeEquivalentTo(5))
+			Expect(out.Count).To(BeEquivalentTo(5))
+		})
+	})
+
+	// An index only carries the attributes it projects. Returning the whole base-table row lets a test read an attribute that would come back empty in production.
+	Describe("index projections", func() {
+		It("returns only key attributes from a KEYS_ONLY index", func() {
+			Expect(dbMock.SetIndexProjection(index, types.ProjectionTypeKeysOnly)).To(Succeed())
+			expr, err := expression.NewBuilder().
+				WithKeyCondition(expression.Key("kind").Equal(expression.Value("alert"))).Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			out, err := dbMock.Query(context.TODO(), &dynamodb.QueryInput{
+				TableName: aws.String(table), IndexName: aws.String(index),
+				KeyConditionExpression:   expr.KeyCondition(),
+				ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(out.Items).ToNot(BeEmpty())
+			Expect(out.Items[0]).To(HaveKey("pk"))
+			Expect(out.Items[0]).To(HaveKey("sk"))
+			Expect(out.Items[0]).To(HaveKey("kind"))
+			Expect(out.Items[0]).ToNot(HaveKey("bulk"))
+			Expect(out.Items[0]).ToNot(HaveKey("keep"))
+		})
+
+		It("returns key attributes plus the included ones from an INCLUDE index", func() {
+			Expect(dbMock.SetIndexProjection(index, types.ProjectionTypeInclude, "keep")).To(Succeed())
+			expr, err := expression.NewBuilder().
+				WithKeyCondition(expression.Key("kind").Equal(expression.Value("alert"))).Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			out, err := dbMock.Query(context.TODO(), &dynamodb.QueryInput{
+				TableName: aws.String(table), IndexName: aws.String(index),
+				KeyConditionExpression:   expr.KeyCondition(),
+				ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(out.Items[0]).To(HaveKey("keep"))
+			Expect(out.Items[0]).ToNot(HaveKey("bulk"))
+		})
+	})
+
+	Describe("projection expressions on point reads", func() {
+		It("returns only the projected attributes from GetItem", func() {
+			out, err := dbMock.GetItem(context.TODO(), &dynamodb.GetItemInput{
+				TableName:            aws.String(table),
+				Key:                  map[string]types.AttributeValue{"pk": avS(partition), "sk": avS("s01")},
+				ProjectionExpression: aws.String("sk, keep"),
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(out.Item).To(HaveKey("sk"))
+			Expect(out.Item).To(HaveKey("keep"))
+			Expect(out.Item).ToNot(HaveKey("bulk"))
+		})
+
+		It("returns only the projected attributes from BatchGetItem", func() {
+			out, err := dbMock.BatchGetItem(context.TODO(), &dynamodb.BatchGetItemInput{
+				RequestItems: map[string]types.KeysAndAttributes{
+					table: {
+						Keys:                 []map[string]types.AttributeValue{{"pk": avS(partition), "sk": avS("s01")}},
+						ProjectionExpression: aws.String("sk, keep"),
+					},
+				},
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(out.Responses[table]).To(HaveLen(1))
+			Expect(out.Responses[table][0]).To(HaveKey("keep"))
+			Expect(out.Responses[table][0]).ToNot(HaveKey("bulk"))
+		})
+
+		It("omits a key that does not exist rather than returning a nil entry", func() {
+			out, err := dbMock.BatchGetItem(context.TODO(), &dynamodb.BatchGetItemInput{
+				RequestItems: map[string]types.KeysAndAttributes{
+					table: {Keys: []map[string]types.AttributeValue{{"pk": avS(partition), "sk": avS("nope")}}},
+				},
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(out.Responses[table]).To(BeEmpty())
+		})
+	})
+
+	Describe("request validation", func() {
+		It("rejects a consistent read on a secondary index", func() {
+			expr, err := expression.NewBuilder().
+				WithKeyCondition(expression.Key("kind").Equal(expression.Value("alert"))).Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = dbMock.Query(context.TODO(), &dynamodb.QueryInput{
+				TableName: aws.String(table), IndexName: aws.String(index), ConsistentRead: aws.Bool(true),
+				KeyConditionExpression:   expr.KeyCondition(),
+				ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("ValidationException"))
+		})
+
+		It("allows a consistent read on the base table", func() {
+			out := partitionQuery(&dynamodb.QueryInput{TableName: aws.String(table), ConsistentRead: aws.Bool(true)})
+			Expect(out.Items).To(HaveLen(5))
+		})
+
+		It("rejects a query whose key condition does not pin the partition key", func() {
+			expr, err := expression.NewBuilder().
+				WithKeyCondition(expression.Key("sk").BeginsWith("s0")).Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = dbMock.Query(context.TODO(), &dynamodb.QueryInput{
+				TableName: aws.String(table), KeyConditionExpression: expr.KeyCondition(),
+				ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("ValidationException"))
+		})
+
+		It("rejects a query with no key condition at all", func() {
+			_, err := dbMock.Query(context.TODO(), &dynamodb.QueryInput{TableName: aws.String(table)})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("ValidationException"))
+		})
+
+		// Only "=" fixes a partition. A range operator on it would span partitions, which is a Scan.
+		It("rejects a partition key compared with anything but equals", func() {
+			expr, err := expression.NewBuilder().
+				WithKeyCondition(expression.Key("pk").GreaterThan(expression.Value("p0"))).Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = dbMock.Query(context.TODO(), &dynamodb.QueryInput{
+				TableName: aws.String(table), KeyConditionExpression: expr.KeyCondition(),
+				ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("ValidationException"))
+		})
+
+		// Either branch of an OR leaves the partition unfixed, so pinning it in one is not pinning it.
+		It("rejects a partition key pinned only inside an OR", func() {
+			_, err := dbMock.Query(context.TODO(), &dynamodb.QueryInput{
+				TableName:              aws.String(table),
+				KeyConditionExpression: aws.String("pk = :a OR pk = :b"),
+				ExpressionAttributeValues: map[string]types.AttributeValue{
+					":a": avS(partition), ":b": avS("p2"),
+				},
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("ValidationException"))
+		})
+
+		// The partition that must be pinned is the index's, not the table's. Validating against the base table's key would let this through and quietly read the whole index.
+		It("rejects an index query that pins the base table's partition key", func() {
+			expr, err := expression.NewBuilder().
+				WithKeyCondition(expression.Key("pk").Equal(expression.Value(partition))).Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = dbMock.Query(context.TODO(), &dynamodb.QueryInput{
+				TableName: aws.String(table), IndexName: aws.String(index),
+				KeyConditionExpression:   expr.KeyCondition(),
+				ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("kind"))
+		})
+
+		It("accepts an index query that pins the index partition key", func() {
+			expr, err := expression.NewBuilder().
+				WithKeyCondition(expression.Key("kind").Equal(expression.Value("alert"))).Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			out, err := dbMock.Query(context.TODO(), &dynamodb.QueryInput{
+				TableName: aws.String(table), IndexName: aws.String(index),
+				KeyConditionExpression:   expr.KeyCondition(),
+				ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(out.Items).To(HaveLen(5))
+		})
+	})
+
+	It("returns a count without items for Select COUNT on a scan", func() {
+		out, err := dbMock.Scan(context.TODO(), &dynamodb.ScanInput{
+			TableName: aws.String(table), Select: types.SelectCount,
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(out.Count).To(BeEquivalentTo(5))
+		Expect(out.Items).To(BeEmpty())
+	})
+})
+
+// A Scan returns at most 1 MB per call, so a caller that ignores LastEvaluatedKey silently reads a prefix of the table. Returning everything in one page hides that, and the loops written to handle it never run.
+var _ = Describe("Scan pagination", func() {
+	const (
+		table     = "scan-paged"
+		partition = "p1"
+		total     = 5
+	)
+
+	var dbMock *mock.DynamoDBMock
+
+	sortKeys := func(items []map[string]types.AttributeValue) []string {
+		out := make([]string, 0, len(items))
+		for _, item := range items {
+			out = append(out, item["sk"].(*types.AttributeValueMemberS).Value)
+		}
+		return out
+	}
+
+	BeforeEach(func() {
+		dbMock = mock.NewDynamoDBMock()
+		dbMock.AddTable(table, "pk", "sk")
+		for i := 1; i <= total; i++ {
+			_, err := dbMock.PutItem(context.TODO(), &dynamodb.PutItemInput{
+				TableName: aws.String(table),
+				Item: map[string]types.AttributeValue{
+					"pk": avS(partition), "sk": avS(fmt.Sprintf("s%02d", i)),
+					"keep": avS(map[bool]string{true: "yes", false: "no"}[i == total]),
+				},
+			})
+			Expect(err).ToNot(HaveOccurred())
+		}
+	})
+
+	It("pages through the table without repeating or dropping a row", func() {
+		dbMock.MaxPageItems = 2
+		var seen []string
+		var startKey map[string]types.AttributeValue
+		for {
+			out, err := dbMock.Scan(context.TODO(), &dynamodb.ScanInput{
+				TableName: aws.String(table), ExclusiveStartKey: startKey,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(len(out.Items)).To(BeNumerically("<=", 2))
+			seen = append(seen, sortKeys(out.Items)...)
+			if len(out.LastEvaluatedKey) == 0 {
+				break
+			}
+			startKey = out.LastEvaluatedKey
+			Expect(len(seen)).To(BeNumerically("<=", total), "cursor is not advancing")
+		}
+		Expect(seen).To(Equal([]string{"s01", "s02", "s03", "s04", "s05"}))
+	})
+
+	It("resumes after a cursor whose row was deleted", func() {
+		page1, err := dbMock.Scan(context.TODO(), &dynamodb.ScanInput{
+			TableName: aws.String(table), Limit: aws.Int32(2),
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(sortKeys(page1.Items)).To(Equal([]string{"s01", "s02"}))
+
+		_, err = dbMock.DeleteItem(context.TODO(), &dynamodb.DeleteItemInput{
+			TableName: aws.String(table),
+			Key:       map[string]types.AttributeValue{"pk": avS(partition), "sk": avS("s02")},
+		})
+		Expect(err).ToNot(HaveOccurred())
+
+		page2, err := dbMock.Scan(context.TODO(), &dynamodb.ScanInput{
+			TableName: aws.String(table), Limit: aws.Int32(2), ExclusiveStartKey: page1.LastEvaluatedKey,
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(sortKeys(page2.Items)).To(Equal([]string{"s03", "s04"}))
+	})
+
+	It("counts rows examined rather than rows returned when a filter rejects the page", func() {
+		out, err := dbMock.Scan(context.TODO(), &dynamodb.ScanInput{
+			TableName: aws.String(table), Limit: aws.Int32(2),
+			FilterExpression:          aws.String("keep = :k"),
+			ExpressionAttributeValues: map[string]types.AttributeValue{":k": avS("yes")},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(out.Items).To(BeEmpty())
+		Expect(out.ScannedCount).To(BeEquivalentTo(2))
+		Expect(out.LastEvaluatedKey).ToNot(BeEmpty())
+	})
+})
+
+// DynamoDB sheds part of a batch under load and hands back UnprocessedItems for the caller to resubmit. A mock that always applies everything never runs the retry loop callers write for it.
+var _ = Describe("BatchWriteItem unprocessed items", func() {
+	const table = "batch-table"
+
+	var dbMock *mock.DynamoDBMock
+
+	writeRequests := func(count int) []types.WriteRequest {
+		out := make([]types.WriteRequest, 0, count)
+		for i := 0; i < count; i++ {
+			out = append(out, types.WriteRequest{PutRequest: &types.PutRequest{
+				Item: map[string]types.AttributeValue{"pk": avS(fmt.Sprintf("k%02d", i))},
+			}})
+		}
+		return out
+	}
+
+	BeforeEach(func() {
+		dbMock = mock.NewDynamoDBMock()
+		dbMock.AddTable(table, "pk", "")
+	})
+
+	It("returns the tail of the batch as unprocessed and applies the rest", func() {
+		dbMock.NextBatchWriteUnprocessedCount = 2
+
+		out, err := dbMock.BatchWriteItem(context.TODO(), &dynamodb.BatchWriteItemInput{
+			RequestItems: map[string][]types.WriteRequest{table: writeRequests(3)},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(out.UnprocessedItems[table]).To(HaveLen(2))
+
+		stored, err := dbMock.Scan(context.TODO(), &dynamodb.ScanInput{TableName: aws.String(table)})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(stored.Items).To(HaveLen(1))
+	})
+
+	// The hook decrements rather than clearing, so each retry sheds less than the last and a caller that keeps resubmitting drains. That is what separates "retries until done" from "gave up after one go".
+	It("drains once the caller keeps resubmitting what came back", func() {
+		dbMock.NextBatchWriteUnprocessedCount = 2
+
+		pending := map[string][]types.WriteRequest{table: writeRequests(3)}
+		rounds := 0
+		for len(pending) > 0 {
+			out, err := dbMock.BatchWriteItem(context.TODO(), &dynamodb.BatchWriteItemInput{RequestItems: pending})
+			Expect(err).ToNot(HaveOccurred())
+			pending = out.UnprocessedItems
+			rounds++
+			Expect(rounds).To(BeNumerically("<=", 4), "hook is not draining")
+		}
+
+		stored, err := dbMock.Scan(context.TODO(), &dynamodb.ScanInput{TableName: aws.String(table)})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(stored.Items).To(HaveLen(3))
+		Expect(rounds).To(BeNumerically(">", 1), "the first call should have held some back")
+	})
 })
