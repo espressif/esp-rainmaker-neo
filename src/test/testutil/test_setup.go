@@ -148,6 +148,7 @@ func TestSetup() {
 	dynamoDBMock.AddSecondaryIndex(user_integration_db.UserDetailsByEmailIndex, user_integration_db.UserDetailsTable, "email", "")
 	dynamoDBMock.AddSecondaryIndex("espuser-user-details-by-phone", user_integration_db.UserDetailsTable, "phone", "")
 	dynamoDBMock.AddTable(node_reg_req_db.NodeRegReqsTable, "request_id", "")
+	dynamoDBMock.AddSecondaryIndex(node_reg_req_db.NodeRegReqsListIndex, node_reg_req_db.NodeRegReqsTable, "gsi_pk", "created_at")
 	dynamoDBMock.AddTable(node_reg_failed_nodes_db.NodeRegFailedNodesTable, "request_id", "node_id")
 	dynamoDBMock.AddTable(node_id_reservation_db.NodeIDReservationsTable, "claimant_id", "mac_addr")
 	dynamoDBMock.AddTable(timeseries_db.RawTSDataTable, "node_key_dt", "ts")

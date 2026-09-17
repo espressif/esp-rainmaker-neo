@@ -199,7 +199,7 @@ var _ = Describe("Group", func() {
 			groups, err := group.ListGroupsForUser(rmng_context, true)
 			Expect(err).To(BeNil())
 			Expect(groups).To(HaveLen(2))
-			Expect(groups).To(ContainElement(expectedParentResult))
+			test_utils.AssertNormalizedEqual(expectedParentResult, groupWithID(groups, parentGroup.GroupID))
 		})
 
 		It("should not create subgroups with same subgroupIDs", func() {
@@ -804,6 +804,17 @@ var _ = Describe("Group", func() {
 
 	})
 })
+
+// ContainElement compares with DeepEqual, which the subgroup ordering defeats: a group partition comes back in sort-key order and subgroup IDs are randomly generated. Pick the group out first and let AssertNormalizedEqual handle the nested ordering.
+func groupWithID(groups []group.Group, groupID string) group.Group {
+	for _, g := range groups {
+		if g.GroupID == groupID {
+			return g
+		}
+	}
+	Fail("no group with ID " + groupID)
+	return group.Group{}
+}
 
 var _ = Describe("Group Sharing", func() {
 	var (
@@ -1555,7 +1566,7 @@ var _ = Describe("Group Sharing", func() {
 			groups, err := group.ListGroupsForUser(rmngContext2, true)
 			Expect(err).To(BeNil())
 			Expect(groups).To(HaveLen(1))
-			Expect(groups[0]).To(Equal(expectedGroup))
+			test_utils.AssertNormalizedEqual(expectedGroup, groups[0])
 
 			// The original user should have full access to the parent group
 			expectedOriginalGroup := group.Group{
@@ -1578,7 +1589,7 @@ var _ = Describe("Group Sharing", func() {
 			}
 			originalGroups, err := group.ListGroupsForUser(rmngContext1, true)
 			Expect(err).To(BeNil())
-			Expect(originalGroups).To(ContainElement(expectedOriginalGroup))
+			test_utils.AssertNormalizedEqual(expectedOriginalGroup, groupWithID(originalGroups, parentGroupID))
 
 			// Add node3 to the shared subgroup and node 4 to the non-shared subgroup
 			rmngContext1.SetAllow(utils.NodeAll, "node3")
@@ -1608,7 +1619,7 @@ var _ = Describe("Group Sharing", func() {
 			groups, err = group.ListGroupsForUser(rmngContext2, true)
 			Expect(err).To(BeNil())
 			Expect(groups).To(HaveLen(1))
-			Expect(groups[0]).To(Equal(expectedGroup))
+			test_utils.AssertNormalizedEqual(expectedGroup, groups[0])
 
 			// Verify that the original user has access to the parent group and all its nodes
 			expectedOriginalGroup = group.Group{
@@ -1633,7 +1644,7 @@ var _ = Describe("Group Sharing", func() {
 			}
 			originalGroups, err = group.ListGroupsForUser(rmngContext1, true)
 			Expect(err).To(BeNil())
-			Expect(originalGroups).To(ContainElement(expectedOriginalGroup))
+			test_utils.AssertNormalizedEqual(expectedOriginalGroup, groupWithID(originalGroups, parentGroupID))
 
 			// Delete node3 from the shared subgroup
 			_, err = group.UpdateNodeAndSubgroup(rmngContext1, parentGroupID, "node3", subGroupID, group_node_db.SubGroupOperationTypeRemove)
@@ -1656,7 +1667,7 @@ var _ = Describe("Group Sharing", func() {
 			groups, err = group.ListGroupsForUser(rmngContext2, true)
 			Expect(err).To(BeNil())
 			Expect(groups).To(HaveLen(1))
-			Expect(groups[0]).To(Equal(expectedGroup))
+			test_utils.AssertNormalizedEqual(expectedGroup, groups[0])
 		})
 
 		It("should correctly list subgroups when multiple subgroups within the same parent group are shared", func() {
@@ -1680,7 +1691,7 @@ var _ = Describe("Group Sharing", func() {
 			groups, err := group.ListGroupsForUser(rmngContext2, true)
 			Expect(err).To(BeNil())
 			Expect(groups).To(HaveLen(1))
-			Expect(groups[0]).To(Equal(expectedGroup))
+			test_utils.AssertNormalizedEqual(expectedGroup, groups[0])
 
 			// Share the second subgroup with testUser2
 			ShareAndApproveSubGroup(rmngContext1, rmngContext2, parentGroupID, subGroup2ID)
@@ -1693,7 +1704,7 @@ var _ = Describe("Group Sharing", func() {
 			groups, err = group.ListGroupsForUser(rmngContext2, true)
 			Expect(err).To(BeNil())
 			Expect(groups).To(HaveLen(1))
-			Expect(groups[0]).To(Equal(expectedGroup))
+			test_utils.AssertNormalizedEqual(expectedGroup, groups[0])
 
 			// Now share the parent group itself with secondary access
 			ShareAndApproveGroup(rmngContext1, rmngContext2, parentGroupID, utils.GroupSecondaryAccess)
@@ -1705,7 +1716,7 @@ var _ = Describe("Group Sharing", func() {
 			groups, err = group.ListGroupsForUser(rmngContext2, true)
 			Expect(err).To(BeNil())
 			Expect(groups).To(HaveLen(1))
-			Expect(groups[0]).To(Equal(expectedGroup))
+			test_utils.AssertNormalizedEqual(expectedGroup, groups[0])
 		})
 		It("should correctly return the appropriate groups and subgroups in ListUserAccessableGroups", func() {
 			// Create a group for testUser2
@@ -1727,10 +1738,10 @@ var _ = Describe("Group Sharing", func() {
 			// User1's accessable groups
 			group_access, err = group.ListUserAccessableGroups(rmngContext1)
 			Expect(err).To(BeNil())
-			Expect(group_access).To(Equal(map[string]interface{}{
+			test_utils.AssertNormalizedEqual(map[string]interface{}{
 				"groups":    []string{sharedGroupID.GroupID, parentGroupID},
 				"subgroups": map[string][]string{},
-			}))
+			}, group_access)
 		})
 
 		Context("Subgroup sharing with parent group access", func() {

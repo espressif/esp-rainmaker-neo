@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -133,14 +134,21 @@ type TableDetails struct {
 	GSIs       map[string]*types.GlobalSecondaryIndexDescription
 }
 
+// IndexDetails is the key schema of a secondary index. The sort key can differ from the base table's, so a query through the index has to order and paginate by these, not by the table's.
+type IndexDetails struct {
+	TableName  string
+	PrimaryKey string
+	SortKey    string
+}
+
 type DBItem map[string]types.AttributeValue
 
 // DynamoDBMock is a mock implementation of the DynamoDB interface
 type DynamoDBMock struct {
 	// table name to TableDetails
 	tables map[string]TableDetails
-	// secondary index just point to the original table in the tables array
-	sec_index map[string]string
+	// index name to its key schema and backing table
+	sec_index map[string]*IndexDetails
 	// this is something like { "table1": { "id1": { "id": "id1", "val": 1 }, "id2": { "id": "id2", "val": 2 } } }
 	// So the first key is the table name, the second key is the primary key, and the value is the item itself
 	items_pkey map[string]*orderedmap.OrderedMap
@@ -177,7 +185,7 @@ type DynamoDBMock struct {
 func NewDynamoDBMock() *DynamoDBMock {
 	return &DynamoDBMock{
 		tables:      make(map[string]TableDetails),
-		sec_index:   make(map[string]string),
+		sec_index:   make(map[string]*IndexDetails),
 		items_pkey:  make(map[string]*orderedmap.OrderedMap),
 		items_pskey: make(map[string]*orderedmap.OrderedMap),
 		profile:     NewProfile(),
@@ -328,11 +336,12 @@ func (m *DynamoDBMock) AddTable(name, primaryKey string, sortKey string) {
 }
 
 func (m *DynamoDBMock) AddSecondaryIndex(indexName, tableName, primaryKey, sortKey string) error {
-	// We don't do anything with the primary and sort key right now
+	m.mx.Lock()
+	defer m.mx.Unlock()
 	if _, ok := m.tables[tableName]; !ok {
 		return &types.ResourceNotFoundException{Message: aws.String("Table not found")}
 	}
-	m.sec_index[indexName] = tableName
+	m.sec_index[indexName] = &IndexDetails{TableName: tableName, PrimaryKey: primaryKey, SortKey: sortKey}
 	return nil
 }
 
@@ -640,27 +649,23 @@ func getProjection(item map[string]types.AttributeValue, projection *Mexpression
 }
 
 func (m *DynamoDBMock) Query(ctx context.Context, params *dynamodb.QueryInput, optFns ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
-	int_input := params
 	attr := ""
-	for k, v := range int_input.ExpressionAttributeNames {
+	for k, v := range params.ExpressionAttributeNames {
 		attr += k + ":" + v + " "
 	}
-	for k, v := range int_input.ExpressionAttributeValues {
+	for k, v := range params.ExpressionAttributeValues {
 		attr += k + ":" + *SorN(v) + " "
 	}
-	m.profile.AddRead(*params.TableName, "Query", "KeyConditionExpression: "+*int_input.KeyConditionExpression+" Key/Value: "+attr, 0)
-	// The query could be on a secondary index
-	if _, ok := m.tables[*params.TableName]; !ok {
-		if _, ok := m.sec_index[*params.TableName]; !ok {
-			return nil, &types.ResourceNotFoundException{Message: aws.String("Table not found")}
-		}
-		s := m.sec_index[*params.TableName]
-		int_input.TableName = &s
-	}
-	return m.QueryInternal(int_input)
+	m.profile.AddRead(*params.TableName, "Query", "KeyConditionExpression: "+*params.KeyConditionExpression+" Key/Value: "+attr, 0)
+	return m.QueryInternal(params)
 }
 
 func (m *DynamoDBMock) QueryInternal(input *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
+	tableName, schema, err := m.resolveTarget(*input.TableName, input.IndexName)
+	if err != nil {
+		return nil, err
+	}
+
 	output := &dynamodb.QueryOutput{}
 	keyCond := NewMexpression(input.KeyConditionExpression, input.ExpressionAttributeNames, input.ExpressionAttributeValues)
 	filterCond := NewMexpression(input.FilterExpression, input.ExpressionAttributeNames, input.ExpressionAttributeValues)
@@ -668,7 +673,7 @@ func (m *DynamoDBMock) QueryInternal(input *dynamodb.QueryInput) (*dynamodb.Quer
 
 	var matchingItems []map[string]types.AttributeValue
 
-	m.ForEachRow(*input.TableName, func(item map[string]types.AttributeValue) error {
+	m.ForEachRow(tableName, func(item map[string]types.AttributeValue) error {
 		if valid, _ := keyCond.Evaluate(item); valid {
 			if valid, _ := filterCond.Evaluate(item); valid {
 				matchingItems = append(matchingItems, item)
@@ -677,27 +682,10 @@ func (m *DynamoDBMock) QueryInternal(input *dynamodb.QueryInput) (*dynamodb.Quer
 		return nil
 	})
 
-	// Sort items by sort key if table has one AND ScanIndexForward is explicitly set
-	tableDetails := m.tables[*input.TableName]
-	if tableDetails.SortKey != "" && input.ScanIndexForward != nil {
-		m.sortItemsBySortKey(matchingItems, tableDetails.SortKey, input.ScanIndexForward)
-	}
+	sortBySchema(matchingItems, schema, input.ScanIndexForward)
 
-	// Handle ExclusiveStartKey for pagination
-	if input.ExclusiveStartKey != nil {
-		// Find the starting position based on ExclusiveStartKey
-		startIndex := -1
-		for i, item := range matchingItems {
-			if m.matchesKey(item, input.ExclusiveStartKey, tableDetails) {
-				startIndex = i + 1 // Start from the next item
-				break
-			}
-		}
-		if startIndex > 0 && startIndex < len(matchingItems) {
-			matchingItems = matchingItems[startIndex:]
-		} else if startIndex >= len(matchingItems) {
-			matchingItems = []map[string]types.AttributeValue{}
-		}
+	if len(input.ExclusiveStartKey) > 0 {
+		matchingItems = itemsAfterCursor(matchingItems, input.ExclusiveStartKey, schema, input.ScanIndexForward)
 	}
 
 	// Apply limit and set LastEvaluatedKey if there are more results. MaxPageItems stands in
@@ -712,12 +700,10 @@ func (m *DynamoDBMock) QueryInternal(input *dynamodb.QueryInput) (*dynamodb.Quer
 		limit = m.MaxPageItems
 	}
 	if limit > 0 && len(matchingItems) > limit {
-		// Set LastEvaluatedKey to the last item we're returning
 		lastItem := matchingItems[limit-1]
-		output.LastEvaluatedKey = make(map[string]types.AttributeValue)
-		output.LastEvaluatedKey[tableDetails.PrimaryKey] = lastItem[tableDetails.PrimaryKey]
-		if tableDetails.SortKey != "" {
-			output.LastEvaluatedKey[tableDetails.SortKey] = lastItem[tableDetails.SortKey]
+		output.LastEvaluatedKey = make(map[string]types.AttributeValue, len(schema))
+		for _, attr := range schema {
+			output.LastEvaluatedKey[attr] = lastItem[attr]
 		}
 		matchingItems = matchingItems[:limit]
 	}
@@ -736,46 +722,98 @@ func (m *DynamoDBMock) QueryInternal(input *dynamodb.QueryInput) (*dynamodb.Quer
 	return output, nil
 }
 
-// matchesKey checks if an item's key matches the provided key map
-func (m *DynamoDBMock) matchesKey(item map[string]types.AttributeValue, key map[string]types.AttributeValue, tableDetails TableDetails) bool {
-	// Compare primary key
-	if !IsEqual(item[tableDetails.PrimaryKey], key[tableDetails.PrimaryKey]) {
-		return false
+// An index entry is keyed by the index's own key followed by the base table's. That tail is what makes a hash-only index paginable: it breaks the ties the index key alone leaves.
+func indexKeySchema(idx *IndexDetails, base TableDetails) []string {
+	schema := []string{idx.PrimaryKey}
+	if idx.SortKey != "" {
+		schema = append(schema, idx.SortKey)
 	}
-
-	// Compare sort key if table has one
-	if tableDetails.SortKey != "" {
-		if !IsEqual(item[tableDetails.SortKey], key[tableDetails.SortKey]) {
-			return false
+	for _, attr := range baseKeySchema(base) {
+		if !slices.Contains(schema, attr) {
+			schema = append(schema, attr)
 		}
 	}
-
-	return true
+	return schema
 }
 
-// sortItemsBySortKey sorts items by their sort key value
-// scanIndexForward: true = ascending, false = descending, nil = ascending (default)
-func (m *DynamoDBMock) sortItemsBySortKey(items []map[string]types.AttributeValue, sortKeyName string, scanIndexForward *bool) {
-	// Default to ascending if not specified
-	ascending := true
-	if scanIndexForward != nil {
-		ascending = *scanIndexForward
-	}
+// A read names its index either in IndexName, as production code does, or in place of the table name, as the mock's own callers do. Both resolve to the backing table and the index's key schema.
+func (m *DynamoDBMock) resolveTarget(tableName string, indexName *string) (string, []string, error) {
+	m.mx.RLock()
+	defer m.mx.RUnlock()
 
-	sort.Slice(items, func(i, j int) bool {
-		// Get sort key values
-		val1 := items[i][sortKeyName]
-		val2 := items[j][sortKeyName]
-
-		// Compare using the common comparison function
-		compare := CompareAttributeValues(val1, val2)
-
-		if ascending {
-			return compare < 0
-		} else {
-			return compare > 0
+	if indexName != nil && *indexName != "" {
+		idx, ok := m.sec_index[*indexName]
+		if !ok {
+			return "", nil, &types.ResourceNotFoundException{Message: aws.String("Index not found")}
 		}
+		return idx.TableName, indexKeySchema(idx, m.tables[idx.TableName]), nil
+	}
+	if table, ok := m.tables[tableName]; ok {
+		return tableName, baseKeySchema(table), nil
+	}
+	if idx, ok := m.sec_index[tableName]; ok {
+		return idx.TableName, indexKeySchema(idx, m.tables[idx.TableName]), nil
+	}
+	return "", nil, &types.ResourceNotFoundException{Message: aws.String("Table not found")}
+}
+
+// A query's key schema is the ordered attribute list it is sorted and paginated by. It has to be unique per item: a cursor is a position in that order, so any two items comparing equal would make the resume point ambiguous and silently drop rows.
+func baseKeySchema(t TableDetails) []string {
+	if t.SortKey == "" {
+		return []string{t.PrimaryKey}
+	}
+	return []string{t.PrimaryKey, t.SortKey}
+}
+
+func ascending(scanIndexForward *bool) bool {
+	return scanIndexForward == nil || *scanIndexForward
+}
+
+func compareBySchema(a, b map[string]types.AttributeValue, schema []string) int {
+	for _, attr := range schema {
+		if c := CompareAttributeValues(a[attr], b[attr]); c != 0 {
+			return c
+		}
+	}
+	return 0
+}
+
+// DynamoDB always returns a Query in key order, whatever ScanIndexForward says; only the direction is the caller's to choose.
+func sortBySchema(items []map[string]types.AttributeValue, schema []string, scanIndexForward *bool) {
+	asc := ascending(scanIndexForward)
+	sort.SliceStable(items, func(i, j int) bool {
+		c := compareBySchema(items[i], items[j], schema)
+		if asc {
+			return c < 0
+		}
+		return c > 0
 	})
+}
+
+// Attributes the cursor does not carry are skipped rather than compared against nil, so a cursor built by hand from an item still resolves: every row a single-partition query can return shares the value anyway.
+func compareToCursor(item, cursor map[string]types.AttributeValue, schema []string) int {
+	for _, attr := range schema {
+		want, ok := cursor[attr]
+		if !ok {
+			continue
+		}
+		if c := CompareAttributeValues(item[attr], want); c != 0 {
+			return c
+		}
+	}
+	return 0
+}
+
+// ExclusiveStartKey is a position, not an item: the row it names may have been deleted since the previous page, and DynamoDB still resumes at the next one. Items are already in query order here, so the predicate is monotonic and the first match is the resume point.
+func itemsAfterCursor(items []map[string]types.AttributeValue, cursor map[string]types.AttributeValue, schema []string, scanIndexForward *bool) []map[string]types.AttributeValue {
+	asc := ascending(scanIndexForward)
+	return items[sort.Search(len(items), func(i int) bool {
+		c := compareToCursor(items[i], cursor, schema)
+		if asc {
+			return c > 0
+		}
+		return c < 0
+	}):]
 }
 
 func (m *DynamoDBMock) ScanInternal(input *dynamodb.ScanInput) (*dynamodb.ScanOutput, error) {
@@ -798,16 +836,13 @@ func (m *DynamoDBMock) ScanInternal(input *dynamodb.ScanInput) (*dynamodb.ScanOu
 
 func (m *DynamoDBMock) Scan(ctx context.Context, params *dynamodb.ScanInput, optFns ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error) {
 	m.profile.AddRead(*params.TableName, "Scan", "", 0)
-	int_input := params
-	// The scan could be on a secondary index
-	if _, ok := m.tables[*int_input.TableName]; !ok {
-		if _, ok := m.sec_index[*int_input.TableName]; !ok {
-			return nil, &types.ResourceNotFoundException{Message: aws.String("Table not found")}
-		}
-		s := m.sec_index[*int_input.TableName]
-		int_input.TableName = &s
+	tableName, _, err := m.resolveTarget(*params.TableName, params.IndexName)
+	if err != nil {
+		return nil, err
 	}
-	return m.ScanInternal(int_input)
+	scanInput := *params
+	scanInput.TableName = &tableName
+	return m.ScanInternal(&scanInput)
 }
 
 func (m *DynamoDBMock) UpdateItem(ctx context.Context, input *dynamodb.UpdateItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error) {
