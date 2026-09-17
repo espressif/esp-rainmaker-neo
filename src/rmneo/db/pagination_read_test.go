@@ -5,6 +5,7 @@
 package db_test
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -14,6 +15,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/automation_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_reg_req_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/sharing_request_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_group_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
@@ -186,5 +188,59 @@ var _ = Describe("List reads spanning more than one DynamoDB page", func() {
 		entries, err := sharingDB.GetMySharingRequests()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(entries).To(HaveLen(totalItems))
+	})
+})
+
+// The case a user hits in production: they page through a listing while rows are being removed. DynamoDB resumes from the cursor's position whether or not the row it names still exists, so a page must never restart at the top and re-serve rows already shown. Every request here is created in the same second, so created_at is identical across rows and the resume point rests entirely on the base-table key the index schema carries as a tie-break.
+var _ = Describe("Cursor pagination while rows are deleted", func() {
+	const (
+		pageSize   = 3
+		totalItems = 10
+	)
+
+	It("resumes at the next request after the one the cursor names is deleted", func() {
+		test_utils.TestSetup()
+		mockDB := awscommon.GetDynamoDBClient().(*mock.DynamoDBMock)
+		sysCtx := rmngctx.NewRmngContext(utils.NewSystemActor())
+		reqDB := node_reg_req_db.NewNodeRegRequestsDB(sysCtx)
+
+		for i := range totalItems {
+			Expect(reqDB.CreateNodeRegRequest(node_reg_req_db.NodeRegRequestsEntry{
+				RequestID: fmt.Sprintf("request-%02d", i),
+				UserID:    "admin",
+				Status:    node_reg_req_db.NODE_REG_STATUS_STARTED,
+			})).To(Succeed())
+		}
+
+		page1, err := reqDB.ListNodeRegRequests(pageSize, "", "")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(page1.Entries).To(HaveLen(pageSize))
+		Expect(page1.NextKey).ToNot(BeEmpty())
+
+		cursorRequestID := page1.Entries[len(page1.Entries)-1].RequestID
+		_, err = mockDB.DeleteItem(context.Background(), &dynamodb.DeleteItemInput{
+			TableName: aws.String(node_reg_req_db.NodeRegReqsTable),
+			Key: map[string]types.AttributeValue{
+				"request_id": &types.AttributeValueMemberS{Value: cursorRequestID},
+			},
+		})
+		Expect(err).ToNot(HaveOccurred())
+
+		seen := make([]string, 0, totalItems)
+		for _, entry := range page1.Entries {
+			seen = append(seen, entry.RequestID)
+		}
+		for startKey := page1.NextKey; startKey != ""; {
+			page, err := reqDB.ListNodeRegRequests(pageSize, startKey, "")
+			Expect(err).ToNot(HaveOccurred())
+			for _, entry := range page.Entries {
+				Expect(seen).ToNot(ContainElement(entry.RequestID), "page restarted and re-served a request already returned")
+				seen = append(seen, entry.RequestID)
+			}
+			startKey = page.NextKey
+		}
+
+		Expect(seen).To(HaveLen(totalItems))
+		Expect(seen).To(ContainElement(cursorRequestID), "the deleted row was already returned on page 1")
 	})
 })

@@ -131,7 +131,7 @@ var _ = Describe("Assume Role Main", func() {
 
 			for _, pair := range expectedPairs {
 				resources := GetResourceForAction(policy, pair.Action)
-				Expect(resources).To(Equal(pair.Resource), "For action: "+pair.Action)
+				Expect(resources).To(ConsistOf(pair.Resource), "For action: "+pair.Action)
 			}
 		})
 
@@ -167,7 +167,8 @@ var _ = Describe("Assume Role Main", func() {
 
 			for _, pair := range expectedPairs {
 				resources := GetResourceForAction(policy, pair.Action)
-				Expect(resources).To(Equal(pair.Resource), "For action: "+pair.Action)
+				// A policy's resource list is a set: the groups it is built from come back in group-id order, and those IDs are random per run.
+				Expect(resources).To(ConsistOf(pair.Resource), "For action: "+pair.Action)
 			}
 		})
 
@@ -223,7 +224,7 @@ var _ = Describe("Assume Role Main", func() {
 
 			for _, pair := range expectedPairs {
 				resources := GetResourceForAction(policy, pair.Action)
-				Expect(resources).To(Equal(pair.Resource), "For action: "+pair.Action)
+				Expect(resources).To(ConsistOf(pair.Resource), "For action: "+pair.Action)
 			}
 		})
 
@@ -512,7 +513,7 @@ var _ = Describe("Assume Role Main", func() {
 
 			for _, pair := range expectedPairs {
 				resources := GetResourceForAction(policy, pair.Action)
-				Expect(resources).To(Equal(pair.Resource), "For action: "+pair.Action)
+				Expect(resources).To(ConsistOf(pair.Resource), "For action: "+pair.Action)
 			}
 		})
 
@@ -540,7 +541,7 @@ var _ = Describe("Assume Role Main", func() {
 
 			for _, pair := range expectedPairs {
 				resources := GetResourceForAction(policy, pair.Action)
-				Expect(resources).To(Equal(pair.Resource), "For action: "+pair.Action)
+				Expect(resources).To(ConsistOf(pair.Resource), "For action: "+pair.Action)
 			}
 		})
 
