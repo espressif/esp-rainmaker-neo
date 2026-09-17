@@ -222,13 +222,9 @@ type ListNodeRegRequestsOutput struct {
 	NextKey string // Opaque token for pagination (base64-encoded last evaluated key)
 }
 
-// ListNodeRegRequests lists bulk-job requests ordered by created_at descending,
-// optionally filtered by status. Note: the list returns BOTH register and
-// update jobs interleaved; callers can disambiguate via the job_type field
-// on each entry, or call the type-specific Lambda. A server-side job_type
-// filter on this query is tracked as future work — it requires either an
-// OR expression (rejected by the in-tree mock) or a strict equals (which
-// would silently exclude legacy rows lacking job_type).
+// ListNodeRegRequests lists bulk-job requests ordered by created_at descending, optionally filtered by status. The list returns BOTH register and update jobs interleaved; callers disambiguate via the job_type field on each entry, or call the type-specific Lambda.
+//
+// A server-side job_type filter is still future work, but no longer for a tooling reason: the mock evaluates OR correctly now, so "job_type = :t OR attribute_not_exists(job_type)" is now testable and is the shape that keeps legacy rows lacking job_type. What remains is the product decision about which jobs an unfiltered caller should see.
 func (db *NodeRegRequestsDB) ListNodeRegRequests(limit int64, startKey string, statusFilter string) (*ListNodeRegRequestsOutput, error) {
 	if err := db.DB.IsAuthorized(utils.NodeAdminRegisterStatus, "*"); err != nil {
 		return nil, err

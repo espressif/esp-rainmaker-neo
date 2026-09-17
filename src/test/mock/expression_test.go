@@ -5,12 +5,14 @@
 package mock_test
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -453,5 +455,175 @@ var _ = Describe("Expression", func() {
 
 			Expect(foundListAppend).To(BeTrue(), "ListAppend with if_not_exists not found")
 		})
+	})
+})
+
+func avS(v string) types.AttributeValue { return &types.AttributeValueMemberS{Value: v} }
+func avN(v string) types.AttributeValue { return &types.AttributeValueMemberN{Value: v} }
+
+// An unsupported clause must never evaluate as true. A predicate the evaluator cannot parse has to fail the read, because a filter that silently matches every row returns wrong data from a query that looks like it succeeded.
+var _ = Describe("Expression evaluation", func() {
+	eval := func(expr string, names map[string]string, values map[string]types.AttributeValue, item map[string]types.AttributeValue) (bool, error) {
+		return mock.NewMexpression(aws.String(expr), names, values).Evaluate(item)
+	}
+
+	// row is the single item every table-free spec below evaluates against.
+	row := map[string]types.AttributeValue{
+		"sk":    avS("aaa#1"),
+		"state": avS("NONE"),
+		"count": avN("5"),
+		"tags":  &types.AttributeValueMemberSS{Value: []string{"red", "blue"}},
+		"meta":  &types.AttributeValueMemberM{Value: map[string]types.AttributeValue{"owner": avS("alice")}},
+	}
+
+	DescribeTable("evaluates the predicate rather than passing everything",
+		func(expr string, values map[string]types.AttributeValue, want bool) {
+			got, err := eval(expr, nil, values, row)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(got).To(Equal(want))
+		},
+		Entry("begins_with matching", "begins_with (sk, :p)", map[string]types.AttributeValue{":p": avS("aaa")}, true),
+		Entry("begins_with not matching", "begins_with (sk, :p)", map[string]types.AttributeValue{":p": avS("bbb")}, false),
+		Entry("not-equals excluding", "state <> :v", map[string]types.AttributeValue{":v": avS("NONE")}, false),
+		Entry("not-equals including", "state <> :v", map[string]types.AttributeValue{":v": avS("OTHER")}, true),
+		Entry("or with neither side true", "(state = :a) OR (state = :b)", map[string]types.AttributeValue{":a": avS("ZZZ"), ":b": avS("YYY")}, false),
+		Entry("or with one side true", "(state = :a) OR (state = :b)", map[string]types.AttributeValue{":a": avS("ZZZ"), ":b": avS("NONE")}, true),
+		Entry("in excluding", "state IN (:a, :b)", map[string]types.AttributeValue{":a": avS("ZZZ"), ":b": avS("YYY")}, false),
+		Entry("in including", "state IN (:a, :b)", map[string]types.AttributeValue{":a": avS("ZZZ"), ":b": avS("NONE")}, true),
+		Entry("attribute_type matching", "attribute_type (count, :t)", map[string]types.AttributeValue{":t": avS("N")}, true),
+		Entry("attribute_type not matching", "attribute_type (count, :t)", map[string]types.AttributeValue{":t": avS("S")}, false),
+		Entry("size over a set", "size (tags) = :c", map[string]types.AttributeValue{":c": avN("2")}, true),
+		Entry("size over a string", "size (state) = :c", map[string]types.AttributeValue{":c": avN("4")}, true),
+		Entry("contains matching", "contains (tags, :v)", map[string]types.AttributeValue{":v": avS("red")}, true),
+		Entry("contains not matching", "contains (tags, :v)", map[string]types.AttributeValue{":v": avS("green")}, false),
+		Entry("nested document path", "meta.owner = :v", map[string]types.AttributeValue{":v": avS("alice")}, true),
+		Entry("nested document path not matching", "meta.owner = :v", map[string]types.AttributeValue{":v": avS("bob")}, false),
+		Entry("not over a multi-clause expression", "NOT (state = :a AND count = :c)", map[string]types.AttributeValue{":a": avS("NONE"), ":c": avN("5")}, false),
+		Entry("not over a disjunction", "NOT (state = :a OR state = :b)", map[string]types.AttributeValue{":a": avS("ZZZ"), ":b": avS("YYY")}, true),
+		Entry("ordering on a missing attribute is false", "absent > :c", map[string]types.AttributeValue{":c": avN("1")}, false),
+		Entry("equality across types is false", "count = :v", map[string]types.AttributeValue{":v": avS("5")}, false),
+	)
+
+	// AND binds tighter than OR. Evaluating left to right instead would make this true, since the leading disjunct holds.
+	It("binds AND tighter than OR", func() {
+		values := map[string]types.AttributeValue{":a": avS("NONE"), ":b": avS("ZZZ"), ":c": avN("99")}
+		got, err := eval("state = :a OR state = :b AND count = :c", nil, values, row)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got).To(BeTrue())
+
+		got, err = eval("(state = :a OR state = :b) AND count = :c", nil, values, row)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got).To(BeFalse())
+	})
+
+	DescribeTable("fails loudly rather than matching everything",
+		func(expr string) {
+			_, err := eval(expr, nil, map[string]types.AttributeValue{":v": avS("x")}, row)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("ValidationException"))
+		},
+		Entry("unknown function", "no_such_function (state, :v)"),
+		Entry("unknown operator", "state ~= :v"),
+		Entry("dangling operator", "state ="),
+		Entry("unbalanced parenthesis", "(state = :v"),
+		Entry("undefined value placeholder", "state = :missing"),
+		Entry("bare garbage", "this is not an expression"),
+	)
+})
+
+// begins_with as a key condition is the whole query, not a refinement of it. If it matches everything, a prefix read silently returns the entire partition.
+var _ = Describe("begins_with as a key condition", func() {
+	const (
+		table     = "prefix-table"
+		index     = "prefix-index"
+		partition = "p1"
+	)
+
+	var dbMock *mock.DynamoDBMock
+
+	sortKeys := func(items []map[string]types.AttributeValue) []string {
+		out := make([]string, 0, len(items))
+		for _, item := range items {
+			out = append(out, item["sk"].(*types.AttributeValueMemberS).Value)
+		}
+		return out
+	}
+
+	BeforeEach(func() {
+		dbMock = mock.NewDynamoDBMock()
+		dbMock.AddTable(table, "pk", "sk")
+		Expect(dbMock.AddSecondaryIndex(index, table, "gsi_pk", "gsi_sk")).To(Succeed())
+		for i, sk := range []string{"aaa#1", "aaa#2", "bbb#1"} {
+			_, err := dbMock.PutItem(context.TODO(), &dynamodb.PutItemInput{
+				TableName: aws.String(table),
+				Item: map[string]types.AttributeValue{
+					"pk":     avS(partition),
+					"sk":     avS(sk),
+					"gsi_pk": avS("all"),
+					"gsi_sk": avS(fmt.Sprintf("%s#%d", sk, i)),
+				},
+			})
+			Expect(err).ToNot(HaveOccurred())
+		}
+	})
+
+	It("returns only prefix matches on a base table", func() {
+		expr, err := expression.NewBuilder().WithKeyCondition(
+			expression.Key("pk").Equal(expression.Value(partition)).
+				And(expression.Key("sk").BeginsWith("aaa"))).Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		out, err := dbMock.Query(context.TODO(), &dynamodb.QueryInput{
+			TableName: aws.String(table), KeyConditionExpression: expr.KeyCondition(),
+			ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(sortKeys(out.Items)).To(Equal([]string{"aaa#1", "aaa#2"}))
+	})
+
+	It("returns only prefix matches through a secondary index", func() {
+		expr, err := expression.NewBuilder().WithKeyCondition(
+			expression.Key("gsi_pk").Equal(expression.Value("all")).
+				And(expression.Key("gsi_sk").BeginsWith("aaa"))).Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		out, err := dbMock.Query(context.TODO(), &dynamodb.QueryInput{
+			TableName: aws.String(table), IndexName: aws.String(index),
+			KeyConditionExpression:   expr.KeyCondition(),
+			ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(sortKeys(out.Items)).To(Equal([]string{"aaa#1", "aaa#2"}))
+	})
+
+	It("excludes every row when a filter matches none of them", func() {
+		expr, err := expression.NewBuilder().
+			WithKeyCondition(expression.Key("pk").Equal(expression.Value(partition))).
+			WithFilter(expression.Or(
+				expression.Equal(expression.Name("sk"), expression.Value("zzz")),
+				expression.NotEqual(expression.Name("gsi_pk"), expression.Value("all")))).Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		out, err := dbMock.Query(context.TODO(), &dynamodb.QueryInput{
+			TableName: aws.String(table), KeyConditionExpression: expr.KeyCondition(),
+			FilterExpression:         expr.Filter(),
+			ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(out.Items).To(BeEmpty())
+	})
+
+	It("fails the query rather than returning unfiltered rows when the filter cannot be parsed", func() {
+		expr, err := expression.NewBuilder().
+			WithKeyCondition(expression.Key("pk").Equal(expression.Value(partition))).Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = dbMock.Query(context.TODO(), &dynamodb.QueryInput{
+			TableName: aws.String(table), KeyConditionExpression: expr.KeyCondition(),
+			FilterExpression:         aws.String("no_such_function (sk, :zzz)"),
+			ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
+		})
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("ValidationException"))
 	})
 })

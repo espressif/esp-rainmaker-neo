@@ -20,13 +20,17 @@ type Mexpression struct {
 	Expr   *string
 	Names  map[string]string
 	Values map[string]types.AttributeValue
+
+	ast      condNode
+	astErr   error
+	astBuilt bool
 }
 
 // NewMexpression creates a new mock expression
 func NewMexpression(Expr *string,
 	Names map[string]string,
 	Values map[string]types.AttributeValue) *Mexpression {
-	return &Mexpression{Expr, Names, Values}
+	return &Mexpression{Expr: Expr, Names: Names, Values: Values}
 }
 
 // getName returns the name of the given expression name from AttributeNames
@@ -123,207 +127,23 @@ func IsEqual(av1, av2 types.AttributeValue) bool {
 	return CompareAttributeValues(av1, av2) == 0
 }
 
-// parseExpressionClauses intelligently parses expression clauses, handling BETWEEN...AND properly
-func (e *Mexpression) parseExpressionClauses(expr string) []string {
-	var clauses []string
-
-	// Handle expressions wrapped in parentheses
-	expr = strings.Trim(expr, " ()")
-
-	// Check if this is a BETWEEN expression
-	if strings.Contains(expr, "BETWEEN") && strings.Contains(expr, "AND") {
-		// Split by top-level AND, but not the AND within BETWEEN
-		parts := strings.Split(expr, ") AND (")
-		if len(parts) > 1 {
-			// We have multiple clauses separated by ") AND ("
-			for _, part := range parts {
-				part = strings.Trim(part, " ()")
-				clauses = append(clauses, part)
-			}
-		} else {
-			// Single clause or simple AND split
-			// Use a more sophisticated approach to find non-BETWEEN ANDs
-			clauses = e.splitRespectingBetween(expr)
-		}
-	} else {
-		// Simple case - split by AND
-		for _, clause := range strings.Split(expr, " AND ") {
-			clause = strings.Trim(clause, " ()")
-			if clause != "" {
-				clauses = append(clauses, clause)
-			}
-		}
-	}
-
-	return clauses
-}
-
-// splitRespectingBetween splits by AND but respects BETWEEN...AND constructs
-func (e *Mexpression) splitRespectingBetween(expr string) []string {
-	var clauses []string
-	var currentClause strings.Builder
-	words := strings.Fields(expr)
-
-	inBetween := false
-	i := 0
-
-	for i < len(words) {
-		word := words[i]
-
-		if word == "BETWEEN" {
-			inBetween = true
-			currentClause.WriteString(word + " ")
-		} else if inBetween && word == "AND" {
-			// This is the AND within BETWEEN, not a clause separator
-			inBetween = false
-			currentClause.WriteString(word + " ")
-		} else if !inBetween && word == "AND" {
-			// This is a clause separator
-			clause := strings.TrimSpace(currentClause.String())
-			if clause != "" {
-				clauses = append(clauses, clause)
-			}
-			currentClause.Reset()
-		} else {
-			currentClause.WriteString(word + " ")
-		}
-		i++
-	}
-
-	// Add the final clause
-	clause := strings.TrimSpace(currentClause.String())
-	if clause != "" {
-		clauses = append(clauses, clause)
-	}
-
-	return clauses
-}
-
-// Evaluate evluates whether the given AttributeValue matches the expression, if the expression is a KeyCondition/Filter
+// Evaluate reports whether the item satisfies the condition. An expression the parser cannot handle is an error, never a silent true: a predicate that matches every row turns a filtered read into an unfiltered one that still looks successful.
 func (e *Mexpression) Evaluate(av map[string]types.AttributeValue) (bool, error) {
-	if e.Expr == nil {
+	if e.Expr == nil || strings.TrimSpace(*e.Expr) == "" {
 		return true, nil
 	}
-
-	// Handle a leading NOT applied to the whole expression — e.g.
-	// "NOT (contains (#0, :0))", as emitted by expression.Not(...). Only a
-	// single negated clause is supported: the AWS expression builder never
-	// produces a multi-clause NOT in this codebase, and De Morgan expansion
-	// of "NOT (a AND b)" is out of scope for the mock.
-	exprStr := strings.TrimSpace(*e.Expr)
-	negate := false
-	if rest, ok := strings.CutPrefix(exprStr, "NOT "); ok {
-		negate = true
-		exprStr = rest
+	if !e.astBuilt {
+		e.ast, e.astErr = parseCondition(*e.Expr)
+		e.astBuilt = true
 	}
-
-	var result = true
-	clauses := e.parseExpressionClauses(exprStr)
-
-	for _, clause := range clauses {
-
-		// Check for function-like expressions
-		if strings.Contains(clause, "(") {
-			// We stripped the trailing closing bracket, so we need to add it back
-			clause = clause + ")"
-			funcName := strings.Trim(strings.Split(clause, "(")[0], " ")
-			// Extract argument from between parentheses
-			arg := strings.Trim(strings.Split(strings.Split(clause, "(")[1], ")")[0], " ")
-			//fmt.Printf("funcName is :%v: and arg is %v\n", funcName, arg)
-			attrName := e.getName(arg)
-			switch funcName {
-			case "attribute_exists":
-				result = result && (av[attrName] != nil)
-			case "attribute_not_exists":
-				result = result && (av[attrName] == nil)
-			case "attribute_type":
-				// TODO: Implement attribute_type function
-				continue
-			case "begins_with":
-				// TODO: Implement begins_with function
-				continue
-			case "contains":
-				// contains(path, operand): substring match for a string
-				// attribute, or membership for a string/number set. The arg
-				// captured above is the two-operand list "path, operand".
-				cParts := strings.SplitN(arg, ",", 2)
-				if len(cParts) != 2 {
-					continue
-				}
-				pathVal := av[e.getName(strings.TrimSpace(cParts[0]))]
-				operand, err := e.getValue(strings.TrimSpace(cParts[1]))
-				if err != nil {
-					return false, err
-				}
-				result = result && attrContains(pathVal, operand)
-				continue
-			case "size":
-				// TODO: Implement size function
-				continue
-			}
-			continue
-		}
-
-		terms := strings.Fields(clause)
-
-		// Handle BETWEEN operation: attr BETWEEN :start AND :end
-		if len(terms) == 5 && terms[1] == "BETWEEN" && terms[3] == "AND" {
-			currentValue, err := extractCurrentValue(av, e, terms[0])
-			if err != nil {
-				return false, err
-			}
-
-			startValue, err := e.getValue(terms[2])
-			if err != nil {
-				return false, err
-			}
-
-			endValue, err := e.getValue(terms[4])
-			if err != nil {
-				return false, err
-			}
-
-			// Check if currentValue is between startValue and endValue (inclusive)
-			startCompare := CompareAttributeValues(currentValue, startValue)
-			endCompare := CompareAttributeValues(currentValue, endValue)
-			result = result && (startCompare >= 0 && endCompare <= 0)
-			continue
-		}
-
-		// Handle binary operations: a operator b
-		if len(terms) == 3 {
-			currentValue, err := extractCurrentValue(av, e, terms[0])
-			if err != nil {
-				return false, err
-			}
-
-			expectedValue, err := e.getValue(terms[2])
-			if err != nil {
-				return false, err
-			}
-
-			switch terms[1] {
-			case "=":
-				result = result && IsEqual(currentValue, expectedValue)
-			case ">=":
-				compare := CompareAttributeValues(currentValue, expectedValue)
-				result = result && (compare >= 0)
-			case "<=":
-				compare := CompareAttributeValues(currentValue, expectedValue)
-				result = result && (compare <= 0)
-			case ">":
-				compare := CompareAttributeValues(currentValue, expectedValue)
-				result = result && (compare > 0)
-			case "<":
-				compare := CompareAttributeValues(currentValue, expectedValue)
-				result = result && (compare < 0)
-			}
-		}
+	if e.astErr != nil {
+		return false, fmt.Errorf("ValidationException: %v in expression %q", e.astErr, *e.Expr)
 	}
-	if negate {
-		return !result, nil
+	ok, err := e.ast.eval(e, av)
+	if err != nil {
+		return false, fmt.Errorf("ValidationException: %v in expression %q", err, *e.Expr)
 	}
-	return result, nil
+	return ok, nil
 }
 
 // attrContains mirrors DynamoDB's contains() function: substring containment

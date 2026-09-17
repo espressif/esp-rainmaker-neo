@@ -574,7 +574,11 @@ func (m *DynamoDBMock) PutItem(ctx context.Context, params *dynamodb.PutItemInpu
 
 		condition := NewMexpression(params.ConditionExpression, params.ExpressionAttributeNames, params.ExpressionAttributeValues)
 		item, _ := m.getItem(tableName, pkey, skey)
-		if valid, _ := condition.Evaluate(item); !valid {
+		valid, err := condition.Evaluate(item)
+		if err != nil {
+			return nil, err
+		}
+		if !valid {
 			return nil, &types.ConditionalCheckFailedException{Message: aws.String("Condition not met")}
 		}
 	}
@@ -644,7 +648,11 @@ func (m *DynamoDBMock) DeleteItem(ctx context.Context, params *dynamodb.DeleteIt
 			return nil, &types.ConditionalCheckFailedException{Message: aws.String("The conditional request failed")}
 		}
 		condition := NewMexpression(params.ConditionExpression, params.ExpressionAttributeNames, params.ExpressionAttributeValues)
-		if valid, _ := condition.Evaluate(item); !valid {
+		valid, err := condition.Evaluate(item)
+		if err != nil {
+			return nil, err
+		}
+		if !valid {
 			return nil, &types.ConditionalCheckFailedException{Message: aws.String("The conditional request failed")}
 		}
 	}
@@ -742,14 +750,20 @@ func (m *DynamoDBMock) QueryInternal(input *dynamodb.QueryInput) (*dynamodb.Quer
 
 	var matchingItems []map[string]types.AttributeValue
 
-	m.ForEachRow(tableName, func(item map[string]types.AttributeValue) error {
-		if valid, _ := keyCond.Evaluate(item); valid {
-			if valid, _ := filterCond.Evaluate(item); valid {
-				matchingItems = append(matchingItems, item)
-			}
+	if err := m.ForEachRow(tableName, func(item map[string]types.AttributeValue) error {
+		matched, err := keyCond.Evaluate(item)
+		if err != nil || !matched {
+			return err
 		}
+		kept, err := filterCond.Evaluate(item)
+		if err != nil || !kept {
+			return err
+		}
+		matchingItems = append(matchingItems, item)
 		return nil
-	})
+	}); err != nil {
+		return nil, err
+	}
 
 	sortBySchema(matchingItems, schema, input.ScanIndexForward)
 
@@ -889,15 +903,16 @@ func (m *DynamoDBMock) ScanInternal(input *dynamodb.ScanInput) (*dynamodb.ScanOu
 	output := &dynamodb.ScanOutput{}
 	filterCond := NewMexpression(input.FilterExpression, input.ExpressionAttributeNames, input.ExpressionAttributeValues)
 	projection := NewMexpression(input.ProjectionExpression, input.ExpressionAttributeNames, input.ExpressionAttributeValues)
-	_ = m.ForEachRow(*input.TableName, func(item map[string]types.AttributeValue) error {
-		//              fmt.Printf("evaluating item %v\n", item)
-		if valid, _ := filterCond.Evaluate(item); valid {
-			//                              fmt.Printf("adding item  %v\n", item)
-			item = getProjection(item, projection)
-			output.Items = append(output.Items, item)
+	if err := m.ForEachRow(*input.TableName, func(item map[string]types.AttributeValue) error {
+		kept, err := filterCond.Evaluate(item)
+		if err != nil || !kept {
+			return err
 		}
+		output.Items = append(output.Items, getProjection(item, projection))
 		return nil
-	})
+	}); err != nil {
+		return nil, err
+	}
 	// AWS sets Count to the number of items that matched, regardless of the Select mode (e.g. SELECT_COUNT returns Count without Items). Mirror that here so callers using Select=COUNT read the right value.
 	output.Count = int32(len(output.Items))
 	return output, nil
@@ -930,7 +945,11 @@ func (m *DynamoDBMock) UpdateItem(ctx context.Context, input *dynamodb.UpdateIte
 	// we should return a ConditionalCheckFailedException
 	if item == nil && input.ConditionExpression != nil {
 		condition := NewMexpression(input.ConditionExpression, input.ExpressionAttributeNames, input.ExpressionAttributeValues)
-		if valid, _ := condition.Evaluate(make(map[string]types.AttributeValue)); !valid {
+		valid, err := condition.Evaluate(make(map[string]types.AttributeValue))
+		if err != nil {
+			return nil, err
+		}
+		if !valid {
 			return nil, &types.ConditionalCheckFailedException{Message: aws.String("Condition not met")}
 		}
 	}
@@ -945,7 +964,11 @@ func (m *DynamoDBMock) UpdateItem(ctx context.Context, input *dynamodb.UpdateIte
 	}
 
 	condition := NewMexpression(input.ConditionExpression, input.ExpressionAttributeNames, input.ExpressionAttributeValues)
-	if valid, _ := condition.Evaluate(item); valid {
+	valid, err := condition.Evaluate(item)
+	if err != nil {
+		return nil, err
+	}
+	if valid {
 		// Split the update expression into REMOVE and SET parts
 		updateExpr := *input.UpdateExpression
 		parts := strings.Split(updateExpr, " SET ")
