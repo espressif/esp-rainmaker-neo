@@ -14,6 +14,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification/integrationauth"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/config"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/parallel"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	rmngctx "github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
@@ -51,6 +52,18 @@ func modelName(nodeCfg config.NodeCfg) string {
 
 // HandleDiscovery processes a SmartThings discoveryRequest and returns all qualifying
 // devices belonging to the authenticated user that have SmartThings enabled.
+// stDiscoveryFanout bounds the per-node workers one discovery may run. Same value and same
+// reasoning as Alexa's vaDiscoveryFanout: high enough that a large account answers in time,
+// low enough that one discovery does not push DynamoDB or IoT into throttling.
+const stDiscoveryFanout = 25
+
+// nodeRef is a node together with the group it was reached through, which is what the
+// per-node permission load needs.
+type nodeRef struct {
+	nodeID  string
+	groupID string
+}
+
 func HandleDiscovery(ctx context.Context, request STRequest) (STResponse, error) {
 	userID, err := GetUserIDFromToken(ctx, request.Authentication.Token)
 	if err != nil {
@@ -66,13 +79,37 @@ func HandleDiscovery(ctx context.Context, request STRequest) (STResponse, error)
 		return STResponse{}, rmerror.NewRMError(err, "failed to list groups")
 	}
 
-	// Collect all qualifying devices
-	var devices []STDiscoveryDevice
+	// Flatten the group walk to one node list, then build the devices concurrently. Each
+	// node costs a chain of sequential round trips — node config, the st_en write and its
+	// MQTT notify, the permission load, the shadow read — so a serial walk grows the
+	// response time linearly with the account, and the Schema App Lambda runs in the
+	// SmartThings region rather than the backend's, making every one of them a
+	// cross-region hop on most deployments.
+	var refs []nodeRef
 	for _, grp := range groups {
 		for nodeID := range grp.NodeGroupEntries {
-			nodeDevices := discoverDevicesFromNode(rmngCtx, nodeID, grp.GroupID)
-			devices = append(devices, nodeDevices...)
+			refs = append(refs, nodeRef{nodeID: nodeID, groupID: grp.GroupID})
 		}
+	}
+
+	// The fan-out inherits the caller's deadline, so dispatch stops once the Lambda's
+	// budget is gone rather than building devices nobody will read.
+	results, _, err := parallel.ProcessParallel(ctx, refs,
+		func(ref nodeRef) []STDiscoveryDevice {
+			return discoverDevicesFromNode(rmngCtx, ref.nodeID, ref.groupID)
+		},
+		parallel.ParallelOptions{MaxRoutines: stDiscoveryFanout, CollectResults: true},
+	)
+	if err != nil {
+		return STResponse{}, rmerror.NewRMError(err, "discovery fan-out did not complete")
+	}
+
+	// One node must not cost the account its other devices, and nothing needs collecting
+	// per node: discoverDevicesFromNode already logs its own failures and returns an empty
+	// slice, and ProcessParallel logs a worker that panicked.
+	var devices []STDiscoveryDevice
+	for _, nodeDevices := range results {
+		devices = append(devices, nodeDevices...)
 	}
 
 	rlog.Trace(ctx).Int("deviceCount", len(devices)).Msg("SmartThings discovery complete")
