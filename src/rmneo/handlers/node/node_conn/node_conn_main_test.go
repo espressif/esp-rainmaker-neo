@@ -21,9 +21,14 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/espressif/esp-rainmaker-neo/src/bridge/db/bridge_children_db"
+	bridgeutil "github.com/espressif/esp-rainmaker-neo/src/bridge/testutil"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_details_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )
 
 var (
@@ -137,10 +142,13 @@ var _ = Describe("Presence Event Handler", func() {
 			profile = &p
 
 			// 1 GetNodeSessionInfo (after the wait), 1 group lookup for the first
-			// shadow write (cached for the second). The node-left-group/offline
-			// lifecycle hook is a fire-and-forget Lambda invoke with no DB read.
+			// shadow write (cached for the second), and 1 node_details read for the
+			// bridge presence cascade, which asks whether this node is a bridge and
+			// returns immediately when it is not. That third read is the price of
+			// running the cascade here instead of in a Lambda of its own on a second
+			// copy of the same IoT rule.
 			readCount, writeCount := profile.TotalCounts()
-			Expect(readCount).To(Equal(2))
+			Expect(readCount).To(Equal(3))
 			Expect(writeCount).To(Equal(0))
 
 			iotMock := awscommon.GetIoTDataPlaneClient().(*mock.IoTDataPlaneMock)
@@ -287,6 +295,38 @@ var _ = Describe("Presence Event Handler", func() {
 
 			err := handlePresenceEvent(ctx, event)
 			Expect(err).To(BeNil())
+
+			iotMock := awscommon.GetIoTDataPlaneClient().(*mock.IoTDataPlaneMock)
+			Expect(iotMock.Shadows).To(BeEmpty())
+		})
+
+		It("should not cascade to a bridge's children on a stale disconnect", func() {
+			// The cascade trusts this handler's staleness guard instead of
+			// re-reading nodes_online itself, so the guard has to stay ahead of
+			// the hook call. Seeding a bridge with a child makes that ordering
+			// observable: a cascade would write the child's shadows.
+			bridgeutil.RegisterTestTables()
+			bridgeCtx := rmngctx.NewRmngContextWithCtx(ctx, utils.NewSystemActor())
+			const bridgeID = "test-bridge-id"
+			child := bridgeID + "--c1"
+
+			Expect(node_details_db.NewNodeDetailsDB(bridgeCtx).AddNode(node_details_db.NodeDetailsEntry{
+				NodeID:   bridgeID,
+				NodeType: "bridge",
+			})).To(Succeed())
+			Expect(bridge_children_db.NewBridgeChildrenDB(bridgeCtx).AddChild(bridgeID, child, "loc-c1")).To(Succeed())
+			test_utils.ManuallyAddNodeToGroup(ctx, groupID, child)
+			AddNodeSessionToDB(ctx, bridgeID, "current-session-id")
+
+			event := node.PresenceEvent{
+				ClientID:    bridgeID,
+				EventType:   "disconnected",
+				IPAddress:   "192.168.1.1",
+				PrincipalID: "test-principal-id",
+				SessionID:   "stale-session-id",
+			}
+
+			Expect(handlePresenceEvent(ctx, event)).To(BeNil())
 
 			iotMock := awscommon.GetIoTDataPlaneClient().(*mock.IoTDataPlaneMock)
 			Expect(iotMock.Shadows).To(BeEmpty())

@@ -1,0 +1,36 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["iot:Subscribe"],
+      "Resource": [
+        "arn:aws:iot:__REGION__:__ACCOUNT__:topicfilter/rainmaker/bridges/${iot:Connection.Thing.ThingName}/children/+/from_cloud",
+        "arn:aws:iot:__REGION__:__ACCOUNT__:topicfilter/rainmaker/bridges/${iot:Connection.Thing.ThingName}/children/+/user/+/params"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["iot:Receive"],
+      "Resource": [
+        "arn:aws:iot:__REGION__:__ACCOUNT__:topic/rainmaker/bridges/${iot:Connection.Thing.ThingName}/children/*/from_cloud",
+        "arn:aws:iot:__REGION__:__ACCOUNT__:topic/rainmaker/bridges/${iot:Connection.Thing.ThingName}/children/*/user/*/params"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["iot:Publish"],
+      "Resource": [
+        "arn:aws:iot:__REGION__:__ACCOUNT__:topic/rainmaker/bridges/${iot:Connection.Thing.ThingName}/to_cloud",
+        "arn:aws:iot:__REGION__:__ACCOUNT__:topic/$aws/rules/*/rainmaker/bridges/${iot:Connection.Thing.ThingName}/to_cloud",
+        "arn:aws:iot:__REGION__:__ACCOUNT__:topic/$aws/things/${iot:Connection.Thing.ThingName}--*/shadow/name/*/*",
+        "arn:aws:iot:__REGION__:__ACCOUNT__:topic/rainmaker/nodes/${iot:Connection.Thing.ThingName}--*/ts/*",
+        "arn:aws:iot:__REGION__:__ACCOUNT__:topic/$aws/rules/*/rainmaker/nodes/${iot:Connection.Thing.ThingName}--*/ts/*",
+        "arn:aws:iot:__REGION__:__ACCOUNT__:topic/rainmaker/nodes/${iot:Connection.Thing.ThingName}--*/to_cloud",
+        "arn:aws:iot:__REGION__:__ACCOUNT__:topic/$aws/rules/*/rainmaker/nodes/${iot:Connection.Thing.ThingName}--*/to_cloud",
+        "arn:aws:iot:__REGION__:__ACCOUNT__:topic/rainmaker/nodes/${iot:Connection.Thing.ThingName}--*/notify/*",
+        "arn:aws:iot:__REGION__:__ACCOUNT__:topic/$aws/rules/*/rainmaker/nodes/${iot:Connection.Thing.ThingName}--*/notify/*"
+      ]
+    }
+  ]
+}

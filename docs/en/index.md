@@ -54,6 +54,7 @@ specs/group
 :maxdepth: 1
 
 specs/node_params_messaging
+specs/bridge
 specs/schedules
 specs/automations
 specs/group-control-feature
@@ -203,6 +204,9 @@ behind that overview:
 
 - [Node Parameters & Messaging](specs/node_params_messaging.md) — device↔cloud
   messaging: shadow vs. `to_cloud`/`from_cloud` vs. indexed params.
+- [Bridge](specs/bridge.md) — bridged children behind a bridge node: the topic
+  rewrites that let a child speak through its parent, and the lifecycle that
+  keeps the two in step.
 - [Schedules](specs/schedules.md) — the schedule data model and payload shape,
   its access control, and the `schedules` (API) ↔ `Schedules` (firmware) key
   translation.

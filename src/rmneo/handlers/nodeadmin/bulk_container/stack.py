@@ -83,15 +83,6 @@ class CreateNodeRegisterPolicy(Construct):
                     ],
                     resources=[get_kvs_channel_arn("rmng-v1-*", region)]
                 ),
-                # Node-register lifecycle hook: the bulk container's registration
-                # path synchronously invokes the optional node-register hook by
-                # convention name (no-op if not deployed).
-                iam.PolicyStatement(
-                    actions=["lambda:InvokeFunction"],
-                    resources=[
-                        f"arn:aws:lambda:{region}:{Stack.of(self).account}:function:rmng-node-register-hook",
-                    ]
-                ),
             ]
         )
 

@@ -17,6 +17,7 @@ from app_common import (
     create_iot_rule_role,
     create_iot_topic_rule,
 )
+from src.bridge.stacks.base_res_constants import BRIDGE_RESOURCES
 from src.rmneo.stacks.base_res_constants import TABLE_NAMES
 from arn_utils import get_table_arn, get_index_arn, get_iot_thing_arn, get_table_index_arn
 
@@ -41,6 +42,18 @@ class PresenceEventHandlerAPI(Construct):
                 get_table_index_arn(TABLE_NAMES['NODES_ONLINE'], "*", region),
                 get_table_arn(TABLE_NAMES['GROUP_DEVICE_MAPPING'], region),
                 get_index_arn('GROUP_DEVICE_MAPPING_NODE_ID', region)
+            ]
+        ))
+
+        # The bridge presence cascade runs in this handler (src/bridge/hooks):
+        # node_details tells it whether the disconnecting node is a bridge, and
+        # bridge-children lists the children to mark offline. Shadow writes reuse
+        # the iot:UpdateThingShadow grant below, which is already thing/*.
+        presence_event_lambda_role.add_to_policy(iam.PolicyStatement(
+            actions=["dynamodb:GetItem", "dynamodb:Query"],
+            resources=[
+                get_table_arn(TABLE_NAMES['NODE_DETAILS'], region),
+                get_table_arn(BRIDGE_RESOURCES['BRIDGE_CHILDREN_TABLE'], region),
             ]
         ))
 

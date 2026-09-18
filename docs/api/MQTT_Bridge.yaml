@@ -1,0 +1,752 @@
+# SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+#
+# SPDX-License-Identifier: Apache-2.0
+
+asyncapi: 3.1.0
+info:
+  title: RainMakerNG Bridge MQTT API
+  version: "1.0.0"
+  description: |
+    MQTT API definitions for the **Bridge** add-on of the ESP RainMaker Neo
+    platform.
+
+    A bridge is a RainMaker node that fronts one or more non-IP child devices
+    (Zigbee, Matter-bridge, etc.). Children are represented as their own AWS IoT
+    Things named `<parent>--<suffix>`; the bridge publishes and subscribes on
+    their behalf. This spec documents the MQTT surface that is **specific to the
+    bridge feature**:
+
+    - the bridge-only control-plane channel for child-Thing lifecycle
+      (`addChild` / `removeChild`) and its `bridgeAck` reply;
+    - the rewritten bridge-namespace channels that let a bridge cover all of its
+      children with a single wildcard subscription (IoT Rules A / B);
+    - how a bridge rides the **core** node topics (shadow / timeseries /
+      notification / config) on behalf of its children.
+
+    The bridge is a fully optional add-on: core (`MQTT_Node.yaml`) documents the
+    canonical node topics with no bridge references. This spec depends one-way on
+    those core definitions and references them by name where payloads are shared.
+    Section references (§) point at `bridge.md` in this same directory.
+
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+  contact:
+    email: esp-rainmaker-support@espressif.com
+    url: https://rainmaker.espressif.com
+
+servers:
+  production:
+    host: "{iot-endpoint}-ats.iot.{region}.amazonaws.com"
+    protocol: mqtt
+    description: AWS IoT Core endpoint (region-specific, TLS mutual auth)
+    security:
+      - $ref: "#/components/securitySchemes/X509"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# OPERATIONS
+# ──────────────────────────────────────────────────────────────────────────────
+operations:
+  # ── Bridge control plane (bridge-only) ────────────────────────────────────
+  publishBridgeToCloud:
+    action: send
+    channel:
+      $ref: "#/channels/bridgeToCloud"
+    summary: Bridge publishes child-lifecycle control events (addChild / removeChild)
+    description: |
+      Dedicated control-plane channel for child-Thing lifecycle. See
+      bridge.md §3.4 / §4. Replies arrive on the bridge's own `fromCloud`
+      channel as a `bridgeAck` event (`subscribeBridgeAck`).
+
+  subscribeBridgeAck:
+    action: receive
+    channel:
+      $ref: "#/channels/bridgeFromCloud"
+    summary: Bridge receives the bridgeAck reply to addChild / removeChild
+    description: |
+      The cloud Lambda replies to a control-plane request as a `bridgeAck`
+      event on the bridge's **own** `fromCloud` topic
+      (`rainmaker/nodes/{parentNodeId}/from_cloud`) — the same core channel a
+      node uses for cloud responses. See bridge.md §4.1.
+
+  subscribeBridgeChildFromCloud:
+    action: receive
+    channel:
+      $ref: "#/channels/bridgeChildFromCloud"
+    summary: Bridge receives a child's cloud→device traffic (rewritten by Rule A)
+    description: |
+      IoT Rule A rewrites every publish to
+      `rainmaker/nodes/{child}/from_cloud` onto the bridge namespace so a
+      single wildcard subscription on the bridge covers all of its
+      children. Payload shape is identical to the core `fromCloud` channel
+      (`fromCloudMessage` in MQTT_Node.yaml).
+
+  subscribeBridgeChildUserParams:
+    action: receive
+    channel:
+      $ref: "#/channels/bridgeChildUserParams"
+    summary: Bridge receives a child's unicast parameter control (rewritten by Rule B)
+    description: |
+      IoT Rule B rewrites every publish to
+      `rainmaker/nodes/{child}/user/{groupInfoStr}/params` onto the bridge
+      namespace. Payload shape is identical to the core `userParams`
+      channel (`paramControlMessage` in MQTT_Node.yaml).
+
+  # ── Bridge riding core node topics on behalf of children ───────────────────
+  publishBridgeConfig:
+    action: send
+    channel:
+      $ref: "#/channels/toCloud"
+    summary: Bridge publishes its own and its children's setNodeConfig on the core to_cloud
+    description: |
+      A bridge publishes `setNodeConfig` for itself and for each child on the
+      **core** `rainmaker/nodes/{nodeId}/to_cloud` channel. For a child,
+      `{nodeId}` is the child Thing (`<parent>--<suffix>`) and the publish is
+      authorized by the bridge IoT policy's `ChildrenPublish` statement
+      (bridge.md §3.5). The payload schema is identical to a direct device's —
+      bridge-ness is carried only in Thing attributes, never in the config.
+
+  publishChildShadowUpdate:
+    action: send
+    channel:
+      $ref: "#/channels/childNamedShadowUpdate"
+    summary: Bridge publishes a child's named shadow on the core canonical topic
+    description: |
+      A bridge publishes its children's shadow updates directly on the core
+      canonical topic with `{nodeId}` set to the child Thing. Authorization is
+      via the bridge IoT policy substitution
+      `$aws/things/{self}--*/shadow/name/*/update` (bridge.md §3.5). The model
+      is **fire-and-forget at QoS 1**: bridges do **not** subscribe to
+      `/update/accepted` or `/update/rejected` for children, to keep the
+      per-bridge subscription count bounded (§9.3).
+
+  publishChildTimeseries:
+    action: send
+    channel:
+      $ref: "#/channels/childTimeseries"
+    summary: Bridge publishes a child's timeseries on the core canonical topic
+    description: |
+      A bridge publishes its children's timeseries directly on the core
+      canonical topic with `{nodeId}` set to the child Thing. Authorization is
+      via the bridge IoT policy's `ChildrenPublish` statement (bridge.md §3.5).
+      Server-side ingestion is identical to a direct device's — `node_ts_rule`
+      extracts the child from `topic(3)`.
+
+  publishChildNotification:
+    action: send
+    channel:
+      $ref: "#/channels/childNotification"
+    summary: Bridge publishes a child's notification on the core canonical topic
+    description: |
+      A bridge publishes its children's notifications directly on the core
+      canonical topic with `{nodeId}` set to the child Thing. Authorization is
+      via the bridge IoT policy's `ChildrenPublish` statement (bridge.md §3.5).
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CHANNELS
+# ──────────────────────────────────────────────────────────────────────────────
+channels:
+  # ── Bridge namespace (bridge-only) ────────────────────────────────────────
+  bridgeToCloud:
+    address: "rainmaker/bridges/{parentNodeId}/to_cloud"
+    description: |
+      **[Bridge → Cloud]** Dedicated control-plane channel for child-Thing
+      lifecycle (`addChild`, `removeChild`). See bridge.md §3.4 and §4.
+
+      Routed by `bridge_to_cloud_rule` which gates with
+      `WHERE clientid() = topic(3)`, so a bridge can only publish on its
+      own control plane. Basic-ingest variant
+      `$aws/rules/bridge_to_cloud_rule/rainmaker/bridges/{parentNodeId}/to_cloud`
+      is also accepted.
+
+      Replies are published by the cloud Lambda back on the bridge's own
+      `fromCloud` channel (`rainmaker/nodes/{parentNodeId}/from_cloud`)
+      as a `bridgeAck` event.
+    parameters:
+      parentNodeId:
+        $ref: "#/components/parameters/parentNodeId"
+    messages:
+      bridgeControl:
+        $ref: "#/components/messages/bridgeToCloudMessage"
+
+  bridgeFromCloud:
+    address: "rainmaker/nodes/{parentNodeId}/from_cloud"
+    description: |
+      **[Cloud → Bridge]** The bridge's own core `fromCloud` channel. In
+      addition to the standard cloud responses (see MQTT_Node.yaml
+      `fromCloudMessage`), this is where the `bridgeAck` reply to an
+      `addChild` / `removeChild` request arrives. See bridge.md §4.1.
+    parameters:
+      parentNodeId:
+        $ref: "#/components/parameters/parentNodeId"
+    messages:
+      bridgeAck:
+        $ref: "#/components/messages/bridgeAckMessage"
+
+  bridgeChildFromCloud:
+    address: "rainmaker/bridges/{parentNodeId}/children/{childNodeId}/from_cloud"
+    description: |
+      **[Cloud → Bridge]** A child's `from_cloud` traffic, rewritten by
+      AWS IoT Rule A onto the bridge namespace so the bridge can pick up
+      every child's cloud→device messages with one wildcard subscription:
+      `rainmaker/bridges/{self}/children/+/from_cloud`. See
+      bridge.md §3.3 / §3.4.
+
+      Payload shape is identical to the core `fromCloud` channel
+      (`fromCloudMessage` in MQTT_Node.yaml) — Rule A is a pure-SQL Republish,
+      no payload transform.
+    parameters:
+      parentNodeId:
+        $ref: "#/components/parameters/parentNodeId"
+      childNodeId:
+        $ref: "#/components/parameters/childNodeId"
+
+  bridgeChildUserParams:
+    address: "rainmaker/bridges/{parentNodeId}/children/{childNodeId}/user/{groupInfoStr}/params"
+    description: |
+      **[Cloud → Bridge]** A child's unicast parameter-control traffic,
+      rewritten by AWS IoT Rule B onto the bridge namespace. Bridge picks
+      every child's commands up with one wildcard subscription:
+      `rainmaker/bridges/{self}/children/+/user/+/params`. See
+      bridge.md §3.3 / §3.4.
+
+      Payload shape is identical to the core `userParams` channel
+      (`paramControlMessage` in MQTT_Node.yaml) — Rule B is a pure-SQL
+      Republish, no payload transform.
+    parameters:
+      parentNodeId:
+        $ref: "#/components/parameters/parentNodeId"
+      childNodeId:
+        $ref: "#/components/parameters/childNodeId"
+      groupInfoStr:
+        $ref: "#/components/parameters/groupInfoStr"
+
+  # ── Core node topics ridden by the bridge (canonical addresses) ────────────
+  # These are core-owned topics (defined in MQTT_Node.yaml). They are restated
+  # here only to document the bridge-specific publisher/authorization; the
+  # payload schemas are the core ones and are not redefined.
+  toCloud:
+    address: "rainmaker/nodes/{nodeId}/to_cloud"
+    description: |
+      **[Bridge → Cloud]** Core node→cloud channel. A bridge publishes its own
+      and its children's `setNodeConfig` here; `{nodeId}` is the bridge or a
+      child Thing. Child publishes are authorized by the bridge IoT policy's
+      `ChildrenPublish` statement (bridge.md §3.5). Payload schema is the core
+      `toCloudMessage` (MQTT_Node.yaml). Child-Thing lifecycle
+      (`addChild` / `removeChild`) is **not** carried here — it has its own
+      `bridgeToCloud` control plane.
+    parameters:
+      nodeId:
+        $ref: "#/components/parameters/nodeId"
+    messages:
+      bridgeConfig:
+        $ref: "#/components/messages/bridgeConfigExamples"
+
+  childNamedShadowUpdate:
+    address: "$aws/things/{nodeId}/shadow/name/params-{groupInfoStr}/update"
+    description: |
+      **[Bridge → AWS IoT Shadow]** Core named shadow update, published by the
+      bridge on behalf of a child with `{nodeId}` set to the child Thing.
+      Authorization is via the bridge IoT policy substitution
+      `$aws/things/{self}--*/shadow/name/*/update` (bridge.md §3.5).
+      Fire-and-forget at QoS 1 — the bridge does NOT subscribe to
+      `/update/accepted` or `/update/rejected` for children (§9.3). The child's
+      `online` flag is set by the bridge from protocol-side reachability.
+      Payload schema is the core `namedShadowUpdateMessage` (MQTT_Node.yaml).
+    parameters:
+      nodeId:
+        $ref: "#/components/parameters/nodeId"
+      groupInfoStr:
+        $ref: "#/components/parameters/groupInfoStr"
+    messages:
+      childShadow:
+        $ref: "#/components/messages/bridgeShadowExamples"
+
+  childTimeseries:
+    address: "rainmaker/nodes/{nodeId}/ts/{groupInfoStr}"
+    description: |
+      **[Bridge → Cloud]** Core timeseries channel, published by the bridge on
+      behalf of a child with `{nodeId}` set to the child Thing. Authorized by
+      the bridge IoT policy's `ChildrenPublish` statement (bridge.md §3.5).
+      Server-side ingestion is identical to a direct device's. Payload schema
+      is the core `timeseriesMessage` (MQTT_Node.yaml).
+    parameters:
+      nodeId:
+        $ref: "#/components/parameters/nodeId"
+      groupInfoStr:
+        $ref: "#/components/parameters/groupInfoStr"
+
+  childNotification:
+    address: "rainmaker/nodes/{nodeId}/notify/{groupInfoStr}"
+    description: |
+      **[Bridge → Cloud]** Core notification channel, published by the bridge
+      on behalf of a child with `{nodeId}` set to the child Thing. Authorized
+      by the bridge IoT policy's `ChildrenPublish` statement (bridge.md §3.5).
+      Payload schema is the core `notificationMessage` (MQTT_Node.yaml).
+    parameters:
+      nodeId:
+        $ref: "#/components/parameters/nodeId"
+      groupInfoStr:
+        $ref: "#/components/parameters/groupInfoStr"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# COMPONENTS
+# ──────────────────────────────────────────────────────────────────────────────
+components:
+  messages:
+    # ── bridge to_cloud (bridge-only control plane) ─────────────────────────
+    bridgeToCloudMessage:
+      name: BridgeToCloud
+      summary: Bridge-only child-Thing lifecycle control event
+      description: |
+        Bridges publish child-lifecycle requests on
+        `rainmaker/bridges/{parentNodeId}/to_cloud`. The cloud Lambda
+        dispatches on the `event` array (one or more of `addChild`,
+        `removeChild`) and replies as a `bridgeAck` event on the bridge's
+        own `fromCloud` channel (`rainmaker/nodes/{parentNodeId}/from_cloud`).
+
+        Authorization is enforced by `bridge_to_cloud_rule`'s WHERE clause
+        (`clientid() = topic(3)`); a bridge can only publish on its own
+        control plane. See bridge.md §3.4 / §4.
+      payload:
+        type: object
+        required:
+          - event
+        properties:
+          event:
+            type: array
+            description: Array of event names to request
+            items:
+              type: string
+              enum:
+                - addChild
+                - removeChild
+          addChild:
+            type: object
+            description: |
+              Request server-side creation of a bridged child Thing.
+              See bridge.md §4.2.
+            required:
+              - request_id
+              - child_suffix
+              - bridge_local_id
+            properties:
+              request_id:
+                type: string
+                description: Client-chosen correlation ID; echoed in bridgeAck.
+                example: "8b51c2a4"
+              child_suffix:
+                type: string
+                description: |
+                  Suffix appended after `--` to form the child thing name.
+                  Must match `^[a-zA-Z0-9_]{1,32}$` (no hyphens — bridge.md §4.2).
+                example: "child_A"
+              bridge_local_id:
+                type: string
+                description: |
+                  Bridge-side protocol identifier (Zigbee EUI-64, etc.)
+                  used for idempotent re-add after bridge restart.
+                example: "0x00158D00012345AB"
+          removeChild:
+            type: object
+            description: |
+              Request server-side removal of a bridged child. See
+              bridge.md §4.3.
+            required:
+              - request_id
+              - child_node_id
+            properties:
+              request_id:
+                type: string
+                example: "9c52d3b5"
+              child_node_id:
+                type: string
+                description: |
+                  Full child `node_id` (`<parent>--<suffix>`). Must be
+                  prefixed with the publisher's own `node_id`; foreign
+                  children are rejected with `child_not_owned`.
+                example: "node-001--child_A"
+      examples:
+        - name: Add child
+          summary: Bridge requests creation of a new child Thing
+          payload:
+            event:
+              - addChild
+            addChild:
+              request_id: "8b51c2a4"
+              child_suffix: "child_A"
+              bridge_local_id: "0x00158D00012345AB"
+        - name: Remove child
+          summary: Bridge requests removal of an existing child Thing
+          payload:
+            event:
+              - removeChild
+            removeChild:
+              request_id: "9c52d3b5"
+              child_node_id: "node-001--child_A"
+
+    # ── bridgeAck (reply on the bridge's own from_cloud) ─────────────────────
+    bridgeAckMessage:
+      name: BridgeAck
+      summary: Response to an addChild / removeChild request
+      description: |
+        Response to an `addChild` or `removeChild` request published on the
+        bridge control-plane channel (`bridgeToCloud`). Arrives on the bridge's
+        own `fromCloud` (`rainmaker/nodes/{parentNodeId}/from_cloud`) as a
+        `bridgeAck` event, alongside the standard core `fromCloud` events. See
+        bridge.md §4.1. Errors use codes from §4.2 / §4.3 (e.g.
+        `invalid_suffix`, `bridge_not_associated`, `child_suffix_in_use`,
+        `child_not_owned`).
+      payload:
+        type: object
+        required:
+          - event
+        properties:
+          event:
+            type: array
+            items:
+              type: string
+              enum:
+                - bridgeAck
+          bridgeAck:
+            type: object
+            required:
+              - request_id
+              - status
+            properties:
+              request_id:
+                type: string
+                description: Correlation ID echoed from the request.
+                example: "8b51c2a4"
+              status:
+                type: string
+                enum: ["success", "error"]
+              error:
+                type: string
+                description: Error code (only when status is "error").
+                example: "child_suffix_in_use"
+              child_node_id:
+                type: string
+                description: |
+                  Assigned/affected child `node_id` (`<parent>--<suffix>`).
+                  Returned for both addChild and removeChild on success.
+                example: "node-001--child_A"
+              idempotent:
+                type: boolean
+                description: |
+                  Present on addChild successes that match an existing row
+                  by `bridge_local_id` (bridge.md §5.7). Indicates no new Thing
+                  or DDB row was created.
+                example: true
+      examples:
+        - name: Add child ack
+          summary: Cloud confirms child creation on the bridge's from_cloud
+          payload:
+            event:
+              - bridgeAck
+            bridgeAck:
+              request_id: "8b51c2a4"
+              status: "success"
+              child_node_id: "node-001--child_A"
+
+    # ── setNodeConfig examples (bridge & matter-bridge, on core to_cloud) ────
+    bridgeConfigExamples:
+      name: BridgeSetNodeConfig
+      summary: setNodeConfig payloads published by a bridge for itself and its children
+      description: |
+        These ride the core `toCloud` channel with the core `toCloudMessage`
+        schema; they are collected here to show the bridge-specific publisher
+        and topic. Bridge-ness is recorded in the `node_type=bridge` Thing
+        attribute at registration, never in the config payload.
+      payload:
+        $ref: "#/components/schemas/passthroughPayload"
+      examples:
+        - name: Bridge node config — Zigbee hub
+          summary: |
+            Standard setNodeConfig from a bridge. Bridge-ness is recorded
+            in the `node_type=bridge` Thing attribute set at registration,
+            not in the config payload itself — the schema is identical to
+            a direct device's. Shown here with a status indicator and a
+            pairing button. Published on the bridge's own `to_cloud`
+            (`rainmaker/nodes/bridge-hub-001/to_cloud`).
+          payload:
+            event:
+              - setNodeConfig
+            setNodeConfig:
+              node_id: "bridge-hub-001"
+              config:
+                data_model: "default"
+                devices:
+                  - id: "Status"
+                    type: "esp.device.indicator"
+                    params:
+                      - id: "Health"
+                        type: "esp.param.health"
+                        data_type: "string"
+                        properties: ["read"]
+                      - id: "ChildCount"
+                        type: "esp.param.children"
+                        data_type: "int"
+                        properties: ["read", "indexed"]
+                  - id: "Pairing"
+                    type: "esp.device.button"
+                    params:
+                      - id: "Open"
+                        type: "esp.param.pairing-open"
+                        data_type: "bool"
+                        ui_type: "esp.ui.toggle"
+                        properties: ["read", "write"]
+                services: []
+                info:
+                  name: "Home Hub"
+                  type: "esp.node.bridge"
+                  fw_version: "1.4.2"
+                  model: "ZB-HUB-v3"
+        - name: Bridged child config — Zigbee light
+          summary: |
+            setNodeConfig for a child Thing, published by the bridge on
+            `rainmaker/nodes/bridge-hub-001--child_A/to_cloud` (authorized
+            by the bridge IoT policy's `ChildrenPublish` statement —
+            bridge.md §3.5). Payload schema is identical to a direct device;
+            the child's bridged-ness is recorded only in its Thing
+            attributes (`parent_node_id`, `bridge_local_id`), never
+            in the config.
+          payload:
+            event:
+              - setNodeConfig
+            setNodeConfig:
+              node_id: "bridge-hub-001--child_A"
+              config:
+                data_model: "default"
+                devices:
+                  - id: "Light"
+                    type: "esp.device.lightbulb"
+                    primary: "Power"
+                    params:
+                      - id: "Power"
+                        type: "esp.param.power"
+                        data_type: "bool"
+                        ui_type: "esp.ui.toggle"
+                        properties: ["read", "write"]
+                      - id: "Brightness"
+                        type: "esp.param.brightness"
+                        data_type: "int"
+                        ui_type: "esp.ui.slider"
+                        properties: ["read", "write", "time_series", "indexed"]
+                        bounds:
+                          min: 0
+                          max: 100
+                          step: 1
+                services: []
+                info:
+                  name: "Living Room Light"
+                  type: "esp.node.light"
+                  fw_version: "2.0.1"
+                  model: "ZB-Bulb-A19"
+        - name: Matter bridge node config — aggregator
+          summary: |
+            setNodeConfig from a Matter bridge for its OWN config
+            (`data_model: "matter"`), published on the bridge's own
+            `to_cloud` (`rainmaker/nodes/mtr-bridge-001/to_cloud`).
+            Bridge-ness is recorded in the `node_type=bridge` Thing
+            attribute at registration, not in the payload — schema is
+            identical to a direct Matter device. Endpoint 0x1 carries the
+            Aggregator device type (0xe) with only a Descriptor cluster
+            (0x1d) exposing config-only attrs under `v`.
+          payload:
+            event:
+              - setNodeConfig
+            setNodeConfig:
+              node_id: "mtr-bridge-001"
+              config:
+                data_model: "matter"
+                endpoints:
+                  "0x1":
+                    dt: "000e"
+                    c:
+                      s:
+                        "0x1d":
+                          v:
+                            "0x3": 2
+                info:
+                  type: "matter-bridge-app"
+                  fw_version: "1.0.0"
+        - name: Matter bridged child config — light
+          summary: |
+            setNodeConfig for a Matter child Thing (`data_model: "matter"`),
+            published by the bridge on
+            `rainmaker/nodes/mtr-bridge-001--child_A/to_cloud` (authorized by
+            the bridge IoT policy's `ChildrenPublish` statement — bridge.md §3.5).
+            Schema is identical to a direct Matter device; the child's
+            bridged-ness lives only in its Thing attributes
+            (`parent_node_id`, `bridge_local_id`), never in the config.
+            Endpoint 0x1 is usually reserved for the bridge itself.
+            Endpoint 0x2: OnOff server (0x6) and LevelControl server (0x8).
+          payload:
+            event:
+              - setNodeConfig
+            setNodeConfig:
+              node_id: "mtr-bridge-001--child_A"
+              config:
+                data_model: "matter"
+                endpoints:
+                  "0x2":
+                    dt: "0101"
+                    c:
+                      s:
+                        "0x6":
+                          a: ["0x0"]
+                          i: ["0x0"]
+                        "0x8":
+                          a: ["0x0"]
+                          ts: ["0x0"]
+                        "0x1d":
+                          v:
+                            "0x0": 7
+                info:
+                  type: "matter-light-app"
+                  fw_version: "1.0.0"
+
+    # ── shadow examples (bridge & child, on core named-shadow topic) ─────────
+    bridgeShadowExamples:
+      name: BridgeShadowUpdate
+      summary: Named shadow updates published by a bridge for itself and its children
+      description: |
+        These ride the core named-shadow channel with the core
+        `namedShadowUpdateMessage` schema; collected here to show the
+        bridge-specific publisher, topic and authorization.
+      payload:
+        $ref: "#/components/schemas/passthroughPayload"
+      examples:
+        - name: Bridge node params — own state
+          summary: |
+            Standard shadow update published by the bridge for its OWN
+            params, on `$aws/things/bridge-hub-001/shadow/name/params-<groupID>/update`.
+            Payload schema is identical to any direct device's.
+          payload:
+            state:
+              reported:
+                params:
+                  Status:
+                    Health: "ok"
+                    ChildCount: 12
+                  Pairing:
+                    Open: false
+                online: true
+                ncfg_ver: 1743656583
+        - name: Bridged child params — published by bridge on behalf of child
+          summary: |
+            Bridge publishes the child's shadow directly to
+            `$aws/things/bridge-hub-001--child_A/shadow/name/params-<groupID>/update`.
+            Authorization is via the bridge IoT policy substitution
+            `$aws/things/{self}--*/shadow/name/*/update` (bridge.md §3.5).
+            Fire-and-forget at QoS 1 — the bridge does NOT subscribe to
+            `/update/accepted` or `/update/rejected` to keep its
+            subscription count bounded (§9.3). The child's `online` flag
+            is set by the bridge based on protocol-side reachability.
+          payload:
+            state:
+              reported:
+                params:
+                  Light:
+                    Power: true
+                    Brightness: 75
+                online: true
+        - name: Matter bridge params — own state
+          summary: |
+            Matter shadow update published by the bridge for its OWN params,
+            on `$aws/things/mtr-bridge-001/shadow/name/params-<groupID>/update`.
+            Same nested `<endpoint>.c.s.<cluster>.a.<attr>` shape as any direct
+            Matter device. Config-only attrs (declared under a cluster's `v`)
+            are never reported here.
+          payload:
+            state:
+              reported:
+                params:
+                  "0x1":
+                    c:
+                      s:
+                        "0x1d":
+                          a: {}
+                online: true
+                ncfg_ver: 1743656583
+        - name: Matter bridged child params — published by bridge on behalf of child
+          summary: |
+            Bridge publishes the Matter child's shadow directly to
+            `$aws/things/mtr-bridge-001--child_A/shadow/name/params-<groupID>/update`.
+            Authorization is via the bridge IoT policy substitution
+            `$aws/things/{self}--*/shadow/name/*/update` (bridge.md §3.5).
+            Fire-and-forget at QoS 1 — the bridge does NOT subscribe to
+            `/update/accepted` or `/update/rejected` to keep its subscription
+            count bounded (§9.3). The child's `online` flag is set by the
+            bridge from protocol-side reachability. Attribute values nest as
+            `<endpoint>.c.s.<cluster>.a.<attr>`.
+            Endpoint 0x1 is usually reserved for the bridge itself.
+          payload:
+            state:
+              reported:
+                params:
+                  "0x2":
+                    c:
+                      s:
+                        "0x6":
+                          a:
+                            "0x0": true
+                        "0x8":
+                          a:
+                            "0x0": 254
+                online: true
+
+  schemas:
+    # Passthrough payload for example-only messages whose real schema lives in
+    # the core spec (toCloudMessage / namedShadowUpdateMessage in MQTT_Node.yaml).
+    passthroughPayload:
+      type: object
+      description: |
+        See the referenced core message schema in MQTT_Node.yaml for the
+        authoritative payload definition; the examples below are the
+        bridge-specific instances.
+      additionalProperties: true
+
+  parameters:
+    nodeId:
+      description:
+        Node identifier (Thing Name / MQTT Client ID). For bridge-ridden
+        core topics this is the bridge or a child Thing.
+      examples:
+        - "bridge-hub-001"
+        - "bridge-hub-001--child_A"
+
+    parentNodeId:
+      description: |
+        Bridge thing name (the parent in a `<parent>--<suffix>` child
+        relationship). Bridge thing names are guaranteed by registration
+        not to contain `--`. See bridge.md §3.1.
+      examples:
+        - "bridge-hub-001"
+
+    childNodeId:
+      description: |
+        Bridged child thing name, of the form `<parent>--<suffix>`.
+        `<suffix>` matches `^[a-zA-Z0-9_]{1,32}$` (no hyphens). See
+        bridge.md §3.2.
+      examples:
+        - "bridge-hub-001--child_A"
+
+    groupInfoStr:
+      description: |
+        Group info string: `<group_id>[-<sub1>-<sub2>-…]` with subgroups sorted
+        alphabetically. Empty string if unassociated. See MQTT_Node.yaml.
+      examples:
+        - "a1bc2d"
+        - "a1bc2d-sg1-sg2"
+        - ""
+
+  securitySchemes:
+    X509:
+      type: X509
+      description: |
+        X.509 certificate-based mutual TLS authentication with AWS IoT Core.
+        A bridge authenticates with its own certificate; the bridge IoT policy
+        grants the child-scoped `--*` publish substitutions described in
+        bridge.md §3.5.

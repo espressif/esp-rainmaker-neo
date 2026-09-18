@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from aws_cdk import (
+    Aws,
     aws_lambda as lambda_,
     aws_apigateway as apigateway,
     aws_iam as iam,
@@ -17,6 +18,7 @@ from app_common import (
     get_or_create_api_resource,
     add_cors_options
 )
+from src.bridge.stacks.base_res_constants import BRIDGE_RESOURCES
 from src.rmneo.stacks.base_res_constants import TABLE_NAMES, INDEX_NAMES, IOT_RESOURCES
 from arn_utils import get_table_arn, get_table_index_arn, get_kvs_channel_arn
 from src.espuser.stacks.base_res_constants import USER_TABLE_NAMES
@@ -49,17 +51,6 @@ class RegisterAPI(Construct):
                 "ecs:RunTask",
             ],
             resources=[container_params["task_definition_arn"]]
-        ))
-
-        # Node-register lifecycle hook (nodelifecycle.OnNodeRegister): the register
-        # flow synchronously invokes this optional hook by convention name so a
-        # separately-deployed stack can attach capability-specific IoT policies.
-        # No-op if the function is not deployed; the grant is harmless when absent.
-        admin_nodes_reg_lambda_role.add_to_policy(iam.PolicyStatement(
-            actions=["lambda:InvokeFunction"],
-            resources=[
-                f"arn:aws:lambda:{region}:{Stack.of(self).account}:function:rmng-node-register-hook",
-            ]
         ))
 
         # PassRole scoped to exactly the two roles ecs:RunTask passes (the task
@@ -97,6 +88,18 @@ class RegisterAPI(Construct):
         ))
 
         # Create Lambda function
+                # Registration fires the bridge node-register hook in-process
+        # (src/bridge/hooks): a node registering with the "bridge" capability
+        # gets the bridge IoT policy attached to its cert. iot:AttachPolicy
+        # authorizes against the attach target, so the cert ARN is in scope too.
+        admin_nodes_reg_lambda_role.add_to_policy(iam.PolicyStatement(
+            actions=["iot:AttachPolicy"],
+            resources=[
+                f"arn:aws:iot:{region}:{Aws.ACCOUNT_ID}:policy/{BRIDGE_RESOURCES['BRIDGE_POLICY_NAME']}",
+                f"arn:aws:iot:{region}:{Aws.ACCOUNT_ID}:cert/*",
+            ],
+        ))
+
         self.admin_nodes_reg_function = create_lambda_function(
             self, function_name,
             common_resources,

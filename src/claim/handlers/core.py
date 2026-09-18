@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from aws_cdk import (
+    Aws,
     aws_iam as iam,
     aws_ssm as ssm,
     Stack,
@@ -16,6 +17,7 @@ from app_common import (
     get_or_create_api_resource,
     add_cors_options,
 )
+from src.bridge.stacks.base_res_constants import BRIDGE_RESOURCES
 from src.rmneo.stacks.base_res_constants import TABLE_NAMES, SSM_PARAMETERS, IOT_RESOURCES
 from src.espuser.stacks.base_res_constants import USER_TABLE_NAMES
 from arn_utils import get_table_arn, get_ssm_parameter_arn
@@ -113,6 +115,18 @@ class ClaimCore(Construct):
             "DEVICE_FILE_POLICY_NAME": IOT_RESOURCES['DEVICE_FILE_POLICY_NAME'],
             "DEVICE_VIDEO_POLICY_NAME": IOT_RESOURCES['DEVICE_VIDEO_POLICY_NAME'],
         }
+
+        # Registration fires the bridge node-register hook in-process
+        # (src/bridge/hooks): a node registering with the "bridge" capability
+        # gets the bridge IoT policy attached to its cert. iot:AttachPolicy
+        # authorizes against the attach target, so the cert ARN is in scope too.
+        lambda_role.add_to_policy(iam.PolicyStatement(
+            actions=["iot:AttachPolicy"],
+            resources=[
+                f"arn:aws:iot:{region}:{Aws.ACCOUNT_ID}:policy/{BRIDGE_RESOURCES['BRIDGE_POLICY_NAME']}",
+                f"arn:aws:iot:{region}:{Aws.ACCOUNT_ID}:cert/*",
+            ],
+        ))
 
         self.claim_function = create_lambda_function(
             self, function_name,

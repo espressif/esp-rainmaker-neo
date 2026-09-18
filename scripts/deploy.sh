@@ -172,6 +172,7 @@ elif [ "$command" == "--destroy" ]; then
     exit 0
 elif [ "$command" == "--synth" ]; then
     export CDK_PUBLISH=true
+    rm -rf "cdk/cdk.out.$STACK_GROUP"
     cdk synth --all --app "python3 $APP_FILE" --output "$(cdk_out_dir "$STACK_GROUP")" > build/cdk/cdk-output-$STACK_GROUP.yaml
     exit 0
 elif [ "$command" == "--fetch-and-upload" ]; then

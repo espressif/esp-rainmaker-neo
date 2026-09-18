@@ -2066,3 +2066,272 @@ def webhook_mock():
         yield base_url, api_key
     finally:
         _set_notifications_env(webhook_mock_base_url="")
+
+
+# ---------------------------------------------------------------------------
+# Bridge fixtures. A bridge is a node that fronts non-IP children (see
+# docs/en/specs/bridge.md); these build one, park it in a group, and seed
+# children against it. The pool mirrors the device pool above: acquired
+# bridges are reset between tests and drained at session end.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def _bridge_stack_deployed():
+    """Skip this directory when the bridge stacks are not deployed.
+
+    `bridge` is an optional stack group, so a deployment may not have it. The
+    bridge fixtures depend on this, which skips those tests instead of failing
+    them on a missing rmng-bridge-children table. Tests needing no bridge
+    resources (the pure dispatch-rule test) do not depend on it and still run.
+    """
+    if "rmng-bridge-core" not in rmng_outputs:
+        pytest.skip("bridge stacks not deployed (optional stack group 'bridge')")
+
+
+@pytest.fixture
+def drain():
+    """Return the queue-drain helper for use in test bodies."""
+    def _do(q):
+        while True:
+            try:
+                q.get_nowait()
+            except Empty:
+                break
+    return _do
+
+
+def _cleanup_bridge_children(bridge_thing_name):
+    ddb = boto3.client("dynamodb")
+    iot = boto3.client("iot", region_name=REGION)
+    try:
+        resp = ddb.query(
+            TableName="rmng-bridge-children",
+            KeyConditionExpression="parent_node_id = :p",
+            ExpressionAttributeValues={":p": {"S": bridge_thing_name}},
+        )
+    except Exception:
+        return
+    for item in resp.get("Items", []):
+        child = item.get("child_node_id", {}).get("S", "")
+        if not child:
+            continue
+        try:
+            iot.delete_thing(thingName=child)
+        except Exception:
+            pass
+        try:
+            ddb.delete_item(
+                TableName="rmng-bridge-children",
+                Key={"parent_node_id": {"S": bridge_thing_name}, "child_node_id": {"S": child}},
+            )
+        except Exception:
+            pass
+
+
+def _bridge_associate_and_ready(bridge, user, group_api):
+    assert connect_device_with_retry(bridge, max_retries=3, base_delay=2), \
+        f"Failed to connect bridge {bridge.node_thing_name}"
+    group_id = group_api.create_group("Bridge Test Group")
+    assoc_err = user.do_user_node_assoc(bridge, group_id)
+    assert assoc_err is None, f"Bridge association failed: {assoc_err}"
+    assert bridge.wait_for_group_info(), \
+        f"Bridge {bridge.node_thing_name} did not receive group info"
+    # Reconnect so IoT policy re-evaluates with the new group_id Thing attribute
+    bridge.disconnect()
+    bridge.clear_queues()
+    assert bridge.connect(), f"Failed to reconnect bridge {bridge.node_thing_name}"
+    return group_id
+
+
+def _init_bridge_in_group():
+    user = user_pool.acquire()
+    group_api = Group(user)
+    thing_name = f"test-bridge-{uuid.uuid4()}"
+    private_key_pem, cert_pem = generate_key_and_cert(thing_name, 'rsa')
+    bridge = Device(thing_name, private_key_pem, cert_pem, CA_CERT, IOT_ENDPOINT, REGION, DEBUG)
+    bridge.register_test_node(capabilities=['bridge'], caller_identity=node_registrar_identity())
+    group_id = _bridge_associate_and_ready(bridge, user, group_api)
+    return [bridge, group_id, user, group_api]
+
+
+def _reset_bridge_in_group(resource):
+    try:
+        bridge, group_id, user, group_api = resource
+    except Exception:
+        return
+    try:
+        bridge.disconnect()
+    except Exception:
+        pass
+    _cleanup_bridge_children(bridge.node_thing_name)
+    try:
+        group_api.delete_group(group_id, warn_error=True)
+    except Exception as e:
+        print(f"Warning: failed to delete bridge group {group_id}: {e}")
+    try:
+        new_group_id = _bridge_associate_and_ready(bridge, user, group_api)
+        resource[1] = new_group_id
+    except Exception as e:
+        raise RuntimeError(f"Reset failed: could not rebuild bridge environment: {e}")
+
+
+def _destroy_bridge_in_group(resource):
+    try:
+        bridge, group_id, user, group_api = resource
+    except Exception:
+        return
+    try:
+        bridge.disconnect()
+    except Exception:
+        pass
+    _cleanup_bridge_children(bridge.node_thing_name)
+    try:
+        bridge.destroy_test_node()
+    except Exception:
+        pass
+    try:
+        group_api.delete_group(group_id, warn_error=True)
+    except Exception:
+        pass
+    try:
+        _reset_user(user)
+    except Exception:
+        pass
+
+
+bridge_in_group_pool = ResourcePool(_init_bridge_in_group, _reset_bridge_in_group, _destroy_bridge_in_group)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _drain_bridge_pool_at_session_end():
+    """Session-end destructor that drains the bridge ResourcePool's free list.
+
+    Mirrors core's _drain_pools_at_session_end, but for the bridge pool that
+    now lives in the enterprise module. Runs the strong deinitializer for each
+    pooled bridge (disconnect, clean up children, destroy the IoT thing/certs,
+    delete the group, reset the user).
+    """
+    yield
+
+    try:
+        bridge_in_group_pool.drain_free()
+    except Exception:
+        pass
+
+
+@pytest.fixture
+def bridge_in_group(_bridge_stack_deployed):
+    """Function-scoped: a bridge node associated to a group, MQTT connected,
+    and subscribed to the three spec §3.3.1 inbound filters tested here
+    (own from_cloud + children-namespace from_cloud + children-namespace unicast).
+
+    Backed by bridge_in_group_pool — the bridge IoT Thing is reused across
+    tests; only the group is recreated on each reset. Children seeded during a
+    test are cleaned up by _reset_bridge_in_group before the next acquire.
+
+    Yields a dict:
+        {
+          "bridge":       Device,            # the bridge cert MQTT client
+          "group_id":     str,
+          "user":         User,
+          "group_api":    Group(user),
+          "bridges_fc":   queue.Queue,       # inbound msgs on children/+/from_cloud
+          "bridges_uc":   queue.Queue,       # inbound msgs on children/+/user/+/params
+          "from_cloud":   queue.Queue,       # inbound msgs on bridge's own from_cloud
+        }
+    """
+    from queue import Queue
+    from awscrt import mqtt as awscrt_mqtt
+
+    resource = bridge_in_group_pool.acquire()
+    bridge, group_id, user, group_api = resource
+    assert bridge.connect(), f"Failed to connect bridge {bridge.node_thing_name}"
+
+    from_cloud = Queue()
+    bridges_fc = Queue()
+    bridges_uc = Queue()
+
+    def _enq(q):
+        def cb(topic, payload, **_):
+            try:
+                msg = json.loads(payload.decode())
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                msg = {"_raw": payload.decode(errors="replace")}
+            q.put({"topic": topic, "payload": msg})
+        return cb
+
+    thing_name = bridge.node_thing_name
+    bridge.mqtt_connection.subscribe(
+        topic=f"rainmaker/nodes/{thing_name}/from_cloud",
+        qos=awscrt_mqtt.QoS.AT_LEAST_ONCE, callback=_enq(from_cloud),
+    )[0].result(timeout=10)
+    bridge.mqtt_connection.subscribe(
+        topic=f"rainmaker/bridges/{thing_name}/children/+/from_cloud",
+        qos=awscrt_mqtt.QoS.AT_LEAST_ONCE, callback=_enq(bridges_fc),
+    )[0].result(timeout=10)
+    bridge.mqtt_connection.subscribe(
+        topic=f"rainmaker/bridges/{thing_name}/children/+/user/+/params",
+        qos=awscrt_mqtt.QoS.AT_LEAST_ONCE, callback=_enq(bridges_uc),
+    )[0].result(timeout=10)
+
+    try:
+        yield {
+            "bridge": bridge,
+            "group_id": group_id,
+            "user": user,
+            "group_api": group_api,
+            "from_cloud": from_cloud,
+            "bridges_fc": bridges_fc,
+            "bridges_uc": bridges_uc,
+        }
+    finally:
+        bridge_in_group_pool.release(resource)
+
+
+@pytest.fixture
+def seed_child(bridge_in_group):
+    """Factory fixture: returns a callable(suffix, local_id) -> child_node_id.
+
+    Sends an addChild event via MQTT on the bridge-to-cloud rule topic and
+    waits for the bridgeAck. Callers should drain bridges_fc after calling
+    because the addChild handler pushes a proactive getGroupInfo into the
+    bridge namespace which would otherwise be mistaken for the test sentinel.
+    """
+    from queue import Empty
+
+    bridge = bridge_in_group["bridge"]
+    from_cloud_q = bridge_in_group["from_cloud"]
+
+    def _do(suffix, local_id):
+        req_id = str(uuid.uuid4())[:8]
+        while True:
+            try:
+                from_cloud_q.get_nowait()
+            except Empty:
+                break
+        topic = (
+            f"$aws/rules/bridge_to_cloud_rule/"
+            f"rainmaker/bridges/{bridge.node_thing_name}/to_cloud"
+        )
+        bridge._publish_to_topic(topic, {
+            "event": ["addChild"],
+            "addChild": {
+                "request_id": req_id, "child_suffix": suffix,
+                "child_local_id": local_id,
+            },
+        }, "bridge_to_cloud")
+        deadline = time.time() + 8.0
+        while time.time() < deadline:
+            try:
+                msg = from_cloud_q.get(timeout=max(0.05, deadline - time.time()))
+            except Empty:
+                return None
+            events = msg["payload"].get("event") or []
+            if isinstance(events, list) and "bridgeAck" in events:
+                ack = msg["payload"].get("bridgeAck", {})
+                if ack.get("request_id") == req_id and ack.get("status") == "success":
+                    return ack.get("child_node_id")
+        return None
+
+    return _do
