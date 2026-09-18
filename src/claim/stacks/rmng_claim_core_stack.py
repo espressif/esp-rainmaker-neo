@@ -2,17 +2,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from datetime import datetime
 
 from aws_cdk import (
     Stack,
     CfnOutput,
     aws_ssm as ssm,
-    aws_iam as iam,
-    custom_resources as cr,
 )
 from constructs import Construct
-from app_common import CommonResources, stable_logical_id
+from app_common import CommonResources, create_api_deployment
 from src.rmneo.stacks.base_res_constants import SSM_PARAMETERS
 from src.claim.handlers.core import ClaimCore
 from src.rmneo.handlers.nodeadmin.bulk_container.stack import CreateNodeRegisterPolicy
@@ -82,47 +79,14 @@ class RMNGClaimCoreStack(Stack):
             v1_resource_id=v1_resource_id,
         )
 
-        # Publish the claim methods to the shared API's prod stage. RestApi(
-        # deploy=True) in rmng-base snapshots its deployment before these
-        # methods exist and owns the stage, so — exactly as rmng-core does for
-        # its own methods — force a fresh deployment via the SDK. The timestamp
-        # makes it re-run on every deploy.
-        deployment_timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-        api_deploy = cr.AwsCustomResource(
+        # Publish the claim methods to the shared API's prod stage — rmng-base owns that
+        # stage and snapshotted it before these methods existed. See create_api_deployment.
+        api_deploy = create_api_deployment(
             self, "ClaimApiGatewayDeploy",
-            on_create=cr.AwsSdkCall(
-                service="APIGateway",
-                action="createDeployment",
-                parameters={
-                    "restApiId": common_resources.api_gateway_id,
-                    "stageName": "prod",
-                    "description": f"Auto-deploy claim routes via CDK: {deployment_timestamp}",
-                },
-                physical_resource_id=cr.PhysicalResourceId.of(f"claim-api-deploy-{deployment_timestamp}"),
-            ),
-            on_update=cr.AwsSdkCall(
-                service="APIGateway",
-                action="createDeployment",
-                parameters={
-                    "restApiId": common_resources.api_gateway_id,
-                    "stageName": "prod",
-                    "description": f"Auto-deploy claim routes via CDK: {deployment_timestamp}",
-                },
-                physical_resource_id=cr.PhysicalResourceId.of(f"claim-api-deploy-{deployment_timestamp}"),
-            ),
-            policy=cr.AwsCustomResourcePolicy.from_statements([
-                iam.PolicyStatement(
-                    actions=["apigateway:POST"],
-                    resources=["arn:aws:apigateway:*::/restapis/*/deployments"],
-                ),
-                iam.PolicyStatement(
-                    actions=["apigateway:PATCH"],
-                    resources=["arn:aws:apigateway:*::/restapis/*/stages/prod"],
-                ),
-            ]),
+            api_id=common_resources.api_gateway_id,
+            description="Auto-deploy claim routes via CDK",
+            logical_name="claim-api-gateway-deploy",
         )
-        api_deploy.node.default_child.node.default_child.override_logical_id(
-            stable_logical_id("CustomAwsSdk", "claim-api-gateway-deploy"))
         api_deploy.node.add_dependency(self.claim_core)
 
         # Availability flag for clients: present ⇒ assisted claiming is deployed.

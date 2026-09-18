@@ -39,6 +39,17 @@ The Makefile already resolves the target:
 Deploys are long-running: run them with a generous timeout (or in the background)
 and stream/report progress rather than letting the command time out silently.
 
+## Parallelism
+
+Groups that share a dependency wave deploy concurrently, so their output goes to
+`build/cdk/logs/<group>.log` rather than the terminal — read those for per-group progress,
+not the top-level stream. A failed group's log is dumped in full before the sweep stops.
+
+- `DEPLOY_JOBS=1 make deploy` is the serial escape hatch. Reach for it when a deploy fails in
+  a way that concurrent logs make hard to attribute, then report which group actually broke.
+- `CDK_CONCURRENCY` (default 4) controls stacks-at-once inside one group; `BUILD_JOBS`
+  controls the lambda build fan-out. Neither normally needs changing.
+
 ## After
 
 - Report which stack groups deployed, into which account/region/profile, and surface

@@ -48,10 +48,15 @@ esp_user_base = rmng_outputs.get('espuser-base', {})
 rmng_base = rmng_outputs.get('rmng-base', {})
 
 # CDK bootstrap qualifiers are capped at 10 characters, hence "sthing".
-custom_synthesizer = cdk.DefaultStackSynthesizer(
-    qualifier="sthing",
-    file_assets_bucket_name="cdk-${Qualifier}-assets-${AWS::AccountId}-${AWS::Region}",
-)
+# A fresh synthesizer per stack, never one shared instance: DefaultStackSynthesizer keeps its
+# asset manifest on the instance and reusableBind() inherits that same object through the
+# prototype chain, so one shared synthesizer makes every stack publish every *other* stack's
+# assets too. rmng-base was shipping a 41-asset, 429 MB manifest for the 7 assets it references.
+def custom_synthesizer() -> cdk.DefaultStackSynthesizer:
+    return cdk.DefaultStackSynthesizer(
+        qualifier="sthing",
+        file_assets_bucket_name="cdk-${Qualifier}-assets-${AWS::AccountId}-${AWS::Region}",
+    )
 
 common_resources = CommonResources(
     api_gateway_id="",
@@ -99,7 +104,7 @@ STStack(
     "rmng-st-core",
     common_resources,
     st_params=st_params,
-    synthesizer=custom_synthesizer,
+    synthesizer=custom_synthesizer(),
     stack_name=f"rmng-st-core-{rmng_region}",
     description=f"RMNG SmartThings Core Stack - Schema App Lambda Stack ({rmng_region})",
 )
@@ -116,7 +121,7 @@ if is_publish or not deploy_region or deploy_region == rmng_region:
         app,
         "rmng-st-cfg-core",
         _cfg_common_resources(),
-        synthesizer=custom_synthesizer,
+        synthesizer=custom_synthesizer(),
         description="RMNG SmartThings Cfg Core Stack - SmartThings configuration API",
     )
 

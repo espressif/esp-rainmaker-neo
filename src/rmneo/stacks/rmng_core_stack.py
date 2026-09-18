@@ -15,11 +15,10 @@ from aws_cdk import (
     custom_resources as cr,
 )
 from constructs import Construct
-from app_common import CommonResources, stable_logical_id, get_or_create_api_resource, create_ssm_string_parameter
+from app_common import CommonResources, stable_logical_id, get_or_create_api_resource, create_ssm_string_parameter, create_api_deployment
 from src.rmneo.stacks.base_res_constants import IOT_RESOURCES, SSM_PARAMETERS, TABLE_NAMES
 from src.espuser.stacks.base_res_constants import USER_SSM_PARAMETERS, USER_TABLE_NAMES
 from arn_utils import get_table_arn, get_index_arn, get_ssm_parameter_arn
-from datetime import datetime
 from src.rmneo.handlers.hello_world.core import HelloWorldCore
 from src.rmneo.handlers.user.core import UserCore
 from src.rmneo.handlers.group.core import GroupCore
@@ -266,47 +265,15 @@ class RMNGCoreStack(Stack):
         # Hello World service (simple example)
         self.hello_world_core = HelloWorldCore(self, "HelloWorldCore", common_resources)
 
-        # Use AwsCustomResource to deploy the API Gateway after all resources are created.
-        # CfnDeployment with stage_name is unreliable because it conflicts with the stage
-        # created by RestApi(deploy=True) in the base stack — CloudFormation can silently
-        # fail to reassociate the stage, requiring manual "Deploy API" in the console.
-        # AwsCustomResource calls the SDK directly, which always works.
-        deployment_timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-        api_deploy = cr.AwsCustomResource(
+        # Publish this stack's methods to the shared API's prod stage, once every one of
+        # them exists. See create_api_deployment for why this is an SDK call and not a
+        # CfnDeployment.
+        api_deploy = create_api_deployment(
             self, "ApiGatewayDeploy",
-            on_create=cr.AwsSdkCall(
-                service="APIGateway",
-                action="createDeployment",
-                parameters={
-                    "restApiId": common_resources.api_gateway_id,
-                    "stageName": "prod",
-                    "description": f"Auto-deploy via CDK: {deployment_timestamp}",
-                },
-                physical_resource_id=cr.PhysicalResourceId.of(f"api-deploy-{deployment_timestamp}"),
-            ),
-            on_update=cr.AwsSdkCall(
-                service="APIGateway",
-                action="createDeployment",
-                parameters={
-                    "restApiId": common_resources.api_gateway_id,
-                    "stageName": "prod",
-                    "description": f"Auto-deploy via CDK: {deployment_timestamp}",
-                },
-                physical_resource_id=cr.PhysicalResourceId.of(f"api-deploy-{deployment_timestamp}"),
-            ),
-            policy=cr.AwsCustomResourcePolicy.from_statements([
-                iam.PolicyStatement(
-                    actions=["apigateway:POST"],
-                    resources=["arn:aws:apigateway:*::/restapis/*/deployments"],
-                ),
-                iam.PolicyStatement(
-                    actions=["apigateway:PATCH"],
-                    resources=["arn:aws:apigateway:*::/restapis/*/stages/prod"],
-                ),
-            ]),
+            api_id=common_resources.api_gateway_id,
+            description="Auto-deploy via CDK",
+            logical_name="api-gateway-deploy",
         )
-        api_deploy.node.default_child.node.default_child.override_logical_id(
-            stable_logical_id("CustomAwsSdk", "api-gateway-deploy"))
         # Ensure deployment happens after all API methods are created
         api_deploy.node.add_dependency(self.file_core)
         api_deploy.node.add_dependency(self.user_core)

@@ -20,16 +20,21 @@ OPTIONAL_MODULES_DIR = "addon_modules"
 @dataclass
 class EspUserModuleContext:
     """Seam handed to each enterprise add-on's register_espuser(). Mirrors rmng.py's
-    ModuleContext but for the espuser (identity) app: the add-on gets the app, the shared
+    ModuleContext but for the espuser (identity) app: the add-on gets the app, a per-stack
     synthesizer, the base/core stacks to depend on, inputs, and a per-prefix CommonResources
     factory. A single deploy_timestamp is shared so every add-on re-snapshots the same API build."""
     app: cdk.App
-    synthesizer: cdk.IStackSynthesizer
+    synthesizer_factory: Callable[[], cdk.IStackSynthesizer]
     base_stack: cdk.Stack
     core_stack: cdk.Stack
     inputs: dict
     deploy_timestamp: str
     common_resources: Callable[[str], CommonResources]
+
+    @property
+    def synthesizer(self) -> cdk.IStackSynthesizer:
+        """A *fresh* synthesizer on every access -- see custom_synthesizer()."""
+        return self.synthesizer_factory()
 
 def discover_espuser_modules():
     """Yield (name, register_espuser) for each add-on package exposing that entrypoint.
@@ -61,23 +66,28 @@ def make_common_resources(prefix: str) -> CommonResources:
 app = cdk.App()
 apply_common_tags(app)
 
-custom_synthesizer = cdk.DefaultStackSynthesizer(
-    qualifier="espuser",
-    file_assets_bucket_name="cdk-${Qualifier}-assets-${AWS::AccountId}-${AWS::Region}",
-)
+# A fresh synthesizer per stack, never one shared instance: DefaultStackSynthesizer keeps its
+# asset manifest on the instance and reusableBind() inherits that same object through the
+# prototype chain, so one shared synthesizer makes every stack publish every *other* stack's
+# assets too. rmng-base was shipping a 41-asset, 429 MB manifest for the 7 assets it references.
+def custom_synthesizer() -> cdk.DefaultStackSynthesizer:
+    return cdk.DefaultStackSynthesizer(
+        qualifier="espuser",
+        file_assets_bucket_name="cdk-${Qualifier}-assets-${AWS::AccountId}-${AWS::Region}",
+    )
 
 rmng_inputs = {} if os.environ.get('CDK_PUBLISH') == 'true' else get_rmng_inputs()
 admin_emails = rmng_inputs.get('espuser-core', {}).get('admin_emails', '')
 if isinstance(admin_emails, str):
     admin_emails = [e.strip() for e in admin_emails.split(',') if e.strip()]
 
-esp_user_base_stack = EspUserBaseStack(app, "espuser-base", synthesizer=custom_synthesizer)
-esp_user_core_stack = EspUserCoreStack(app, "espuser-core", admin_emails=admin_emails, synthesizer=custom_synthesizer)
+esp_user_base_stack = EspUserBaseStack(app, "espuser-base", synthesizer=custom_synthesizer())
+esp_user_core_stack = EspUserCoreStack(app, "espuser-core", admin_emails=admin_emails, synthesizer=custom_synthesizer())
 esp_user_core_stack.add_stack_dependency(esp_user_base_stack)
 
 module_ctx = EspUserModuleContext(
     app=app,
-    synthesizer=custom_synthesizer,
+    synthesizer_factory=custom_synthesizer,
     base_stack=esp_user_base_stack,
     core_stack=esp_user_core_stack,
     inputs=rmng_inputs,

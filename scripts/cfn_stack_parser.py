@@ -68,11 +68,13 @@ class StackfileError(ValueError):
 class CyclicDependencyError(StackfileError):
     """Raised when a dependency cycle is detected among stacks."""
 
-    def __init__(self, nodes: List[str]) -> None:
+    def __init__(self, nodes: List[str], message: Optional[str] = None) -> None:
         self.nodes = nodes
+        # The default message describes a cycle *path* through stacks. group_waves detects a
+        # cycle in the group projection instead, where the nodes are an unordered set of
+        # groups, so it supplies its own wording rather than rendering them as a path.
         super().__init__(
-            "Cyclic dependency detected among stacks: "
-            + " -> ".join(nodes)
+            message or "Cyclic dependency detected among stacks: " + " -> ".join(nodes)
         )
 
 
@@ -518,6 +520,41 @@ def resolve_stacks(
 # Deployment Plan
 # ---------------------------------------------------------------------------
 
+def _longest_path_depths(prerequisites: Dict[str, List[str]]) -> Dict[str, int]:
+    """Longest-path depth per node (Kahn), given node -> list of prerequisite nodes.
+
+    Nodes sharing a depth have no path between them, so they can run concurrently.
+    Shared by deployment_plan (stack granularity) and group_waves (group granularity)
+    so the two can never disagree about what is independent. Callers are expected to
+    have run detect_cycles first; a node left without a depth means the graph handed
+    in still had a cycle, and the caller decides how to report that.
+    """
+    adjacency: Dict[str, List[str]] = {node: [] for node in prerequisites}
+    in_degree: Dict[str, int] = {node: 0 for node in prerequisites}
+
+    for node, prereqs in prerequisites.items():
+        for prereq in prereqs:
+            adjacency[prereq].append(node)
+            in_degree[node] += 1
+
+    depth: Dict[str, int] = {}
+    queue: deque[str] = deque()
+    for node, deg in in_degree.items():
+        if deg == 0:
+            depth[node] = 0
+            queue.append(node)
+
+    while queue:
+        node = queue.popleft()
+        for neighbour in adjacency[node]:
+            depth[neighbour] = max(depth.get(neighbour, 0), depth[node] + 1)
+            in_degree[neighbour] -= 1
+            if in_degree[neighbour] == 0:
+                queue.append(neighbour)
+
+    return depth
+
+
 def deployment_plan(stacks: List[StackDef]) -> List[DeploymentStage]:
     """
     Group stacks by dependency depth into DeploymentStage objects.
@@ -530,30 +567,7 @@ def deployment_plan(stacks: List[StackDef]) -> List[DeploymentStage]:
 
     id_to_stack: Dict[str, StackDef] = {s.stack_id: s for s in stacks}
 
-    # Compute depth for each stack via BFS from roots
-    depth: Dict[str, int] = {}
-    in_degree: Dict[str, int] = {s.stack_id: 0 for s in stacks}
-    adjacency: Dict[str, List[str]] = {s.stack_id: [] for s in stacks}
-
-    for stack in stacks:
-        for dep in stack.depends_on:
-            adjacency[dep].append(stack.stack_id)
-            in_degree[stack.stack_id] += 1
-
-    queue: deque[str] = deque()
-    for sid, deg in in_degree.items():
-        if deg == 0:
-            depth[sid] = 0
-            queue.append(sid)
-
-    while queue:
-        node = queue.popleft()
-        for neighbour in adjacency[node]:
-            candidate_depth = depth[node] + 1
-            depth[neighbour] = max(depth.get(neighbour, 0), candidate_depth)
-            in_degree[neighbour] -= 1
-            if in_degree[neighbour] == 0:
-                queue.append(neighbour)
+    depth = _longest_path_depths({s.stack_id: s.depends_on for s in stacks})
 
     # Group by depth
     max_depth = max(depth.values()) if depth else 0
@@ -569,6 +583,57 @@ def deployment_plan(stacks: List[StackDef]) -> List[DeploymentStage]:
             stages.append(DeploymentStage(stage=d, stacks=stage_stacks))
 
     return stages
+
+
+def group_waves(stacks: List[StackDef]) -> List[List[str]]:
+    """Bucket CDK groups into waves; every group in a wave can deploy concurrently.
+
+    deployment_plan() works at stack granularity, but the Makefile's unit of work is a
+    *group* (one CDK app, one `cdk deploy --all`). Projecting the stack edges onto groups
+    -- group A precedes group B when any stack in B depends on a stack in A -- gives the
+    coarser graph the sweep actually executes. It is strictly more conservative than the
+    stack-level plan: a group only starts once every group it draws from has fully landed.
+
+    Groups within a wave keep the flat --format groups ordering, so the two outputs stay
+    readable side by side.
+    """
+    validate_references(stacks)
+    detect_cycles(stacks)
+
+    id_to_group: Dict[str, str] = {s.stack_id: s.group for s in stacks if s.group}
+
+    # A group with no stacks (presentation-only entries such as `support`) never reaches
+    # the deploy engine, so it is not a node here -- matching _print_groups.
+    prerequisites: Dict[str, Set[str]] = {}
+    for stack in stacks:
+        if not stack.group:
+            continue
+        prereqs = prerequisites.setdefault(stack.group, set())
+        for dep in stack.depends_on:
+            dep_group = id_to_group.get(dep)
+            if dep_group and dep_group != stack.group:
+                prereqs.add(dep_group)
+                prerequisites.setdefault(dep_group, set())
+
+    depth = _longest_path_depths({g: sorted(p) for g, p in prerequisites.items()})
+
+    # The stack graph being acyclic does not make its group projection acyclic: two groups
+    # that each depend on one of the other's stacks collapse into a cycle here. Kahn simply
+    # leaves those nodes undepthed, which would silently drop them from the sweep.
+    if len(depth) != len(prerequisites):
+        stranded = sorted(set(prerequisites) - set(depth))
+        raise CyclicDependencyError(
+            stranded,
+            "Group-level dependency cycle between: " + ", ".join(stranded)
+            + ". Stacks are acyclic, but their groups depend on each other both ways.",
+        )
+
+    order = {g: i for i, g in enumerate(_ordered_groups(deployment_plan(stacks)))}
+    max_depth = max(depth.values()) if depth else 0
+    return [
+        sorted((g for g, d in depth.items() if d == wave), key=lambda g: order.get(g, 0))
+        for wave in range(max_depth + 1)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -613,7 +678,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--format",
-        choices=["json", "text", "groups"],
+        choices=["json", "text", "groups", "waves"],
         default="json",
         help=(
             "Output format (default: json). "
@@ -640,11 +705,8 @@ def _print_text_plan(stages: List[DeploymentStage]) -> None:
     print()
 
 
-def _print_groups(stages: List[DeploymentStage]) -> None:
-    """Print unique CDK group names in deployment order (space-separated).
-
-    Feeds the Makefile's default all-groups sweep.
-    """
+def _ordered_groups(stages: List[DeploymentStage]) -> List[str]:
+    """Unique CDK group names in deployment order."""
     seen: Set[str] = set()
     ordered: List[str] = []
     for stage in stages:
@@ -652,7 +714,25 @@ def _print_groups(stages: List[DeploymentStage]) -> None:
             if stack.group and stack.group not in seen:
                 seen.add(stack.group)
                 ordered.append(stack.group)
-    print(" ".join(ordered))
+    return ordered
+
+
+def _print_groups(stages: List[DeploymentStage]) -> None:
+    """Print unique CDK group names in deployment order (space-separated).
+
+    Feeds the Makefile's serial sweeps (destroy, and the up-front input gathering).
+    """
+    print(" ".join(_ordered_groups(stages)))
+
+
+def _print_waves(stacks: List[StackDef]) -> None:
+    """Print one wave per line, groups space-separated.
+
+    Feeds the Makefile's parallel deploy sweep: every group on a line can run at once,
+    and a line only starts once the previous line has fully landed.
+    """
+    for wave in group_waves(stacks):
+        print(" ".join(wave))
 
 
 def main() -> None:
@@ -681,6 +761,8 @@ def main() -> None:
             _print_text_plan(stages)
         elif args.format == "groups":
             _print_groups(stages)
+        elif args.format == "waves":
+            _print_waves(stacks)
 
     except CyclicDependencyError as exc:
         log.error("Cycle detected: %s", exc)

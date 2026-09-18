@@ -30,10 +30,15 @@ from src.gva.stacks.rmng_gva_core_stack import RMNGGVACoreStack
 app = cdk.App()
 apply_common_tags(app)
 
-custom_synthesizer = cdk.DefaultStackSynthesizer(
-    qualifier="rmng",
-    file_assets_bucket_name="cdk-${Qualifier}-assets-${AWS::AccountId}-${AWS::Region}",
-)
+# A fresh synthesizer per stack, never one shared instance: DefaultStackSynthesizer keeps its
+# asset manifest on the instance and reusableBind() inherits that same object through the
+# prototype chain, so one shared synthesizer makes every stack publish every *other* stack's
+# assets too. rmng-base was shipping a 41-asset, 429 MB manifest for the 7 assets it references.
+def custom_synthesizer() -> cdk.DefaultStackSynthesizer:
+    return cdk.DefaultStackSynthesizer(
+        qualifier="rmng",
+        file_assets_bucket_name="cdk-${Qualifier}-assets-${AWS::AccountId}-${AWS::Region}",
+    )
 
 
 def _common():
@@ -48,7 +53,7 @@ def _common():
 
 RMNGGVACoreStack(
     app, "rmng-gva-core", _common(),
-    synthesizer=custom_synthesizer,
+    synthesizer=custom_synthesizer(),
     description="RMNG GVA Core Stack - Google Home fulfillment Lambda + endpoint",
 )
 

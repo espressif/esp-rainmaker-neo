@@ -47,10 +47,15 @@ rmng_outputs = {} if is_publish else get_rmng_outputs()
 esp_user_base = rmng_outputs.get('espuser-base', {})
 rmng_base = rmng_outputs.get('rmng-base', {})
 
-custom_synthesizer = cdk.DefaultStackSynthesizer(
-    qualifier="alexa",
-    file_assets_bucket_name="cdk-${Qualifier}-assets-${AWS::AccountId}-${AWS::Region}",
-)
+# A fresh synthesizer per stack, never one shared instance: DefaultStackSynthesizer keeps its
+# asset manifest on the instance and reusableBind() inherits that same object through the
+# prototype chain, so one shared synthesizer makes every stack publish every *other* stack's
+# assets too. rmng-base was shipping a 41-asset, 429 MB manifest for the 7 assets it references.
+def custom_synthesizer() -> cdk.DefaultStackSynthesizer:
+    return cdk.DefaultStackSynthesizer(
+        qualifier="alexa",
+        file_assets_bucket_name="cdk-${Qualifier}-assets-${AWS::AccountId}-${AWS::Region}",
+    )
 
 common_resources = CommonResources(
     api_gateway_id="",
@@ -98,7 +103,7 @@ AlexaStack(
     "rmng-alexa-core",
     common_resources,
     alexa_params=alexa_params,
-    synthesizer=custom_synthesizer,
+    synthesizer=custom_synthesizer(),
     stack_name=f"rmng-alexa-core-{rmng_region}",
     description=f"RMNG Alexa Core Stack - Alexa Skill Lambda Stack ({rmng_region})",
 )
@@ -115,7 +120,7 @@ if is_publish or not deploy_region or deploy_region == rmng_region:
         app,
         "rmng-alexa-cfg-core",
         _cfg_common_resources(),
-        synthesizer=custom_synthesizer,
+        synthesizer=custom_synthesizer(),
         description="RMNG Alexa Cfg Core Stack - Alexa configuration API",
     )
 
