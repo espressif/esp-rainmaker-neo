@@ -804,12 +804,12 @@ var _ = Describe("Node", func() {
 
 		Context("Node-register hook (OnNodeRegister)", func() {
 			It("invokes the node-register hook with the node's capabilities", func() {
-				lambdaMock := awscommon.GetLambdaClient().(*mock.LambdaMock)
+				calls := installHook("", nil)
 
 				_, err := node.RegisterNodeInRmng(testUserContext, nodeCert, "", nil, nil, "test-user-id", []string{"camera"})
 				Expect(err).To(BeNil())
 
-				events := hookInvocations(lambdaMock)
+				events := *calls
 				Expect(events).To(HaveLen(1))
 				Expect(events[0].NodeID).To(Equal(testNode.GetID()))
 				Expect(events[0].Capabilities).To(Equal([]string{"camera"}))
@@ -817,19 +817,17 @@ var _ = Describe("Node", func() {
 			})
 
 			It("does not invoke the hook when no capabilities are requested", func() {
-				lambdaMock := awscommon.GetLambdaClient().(*mock.LambdaMock)
+				calls := installHook("", nil)
 
 				_, err := node.RegisterNodeInRmng(testUserContext, nodeCert, "", nil, nil, "test-user-id", nil)
 				Expect(err).To(BeNil())
-				Expect(hookInvocations(lambdaMock)).To(BeEmpty())
+				Expect(*calls).To(BeEmpty())
 			})
 
 			It("fails registration and rolls back when the hook errors", func() {
-				lambdaMock := awscommon.GetLambdaClient().(*mock.LambdaMock)
-				// A non-not-found error from the hook Lambda must abort registration
-				// (a not-found is the "hook not deployed" no-op and is handled
-				// separately by lambdautil.InvokeSync).
-				lambdaMock.InvokeError = rmerror.NewRMError(nil, "hook unavailable")
+				// A hook that cannot complete must abort registration: the node would
+				// otherwise be provisioned without the policies its capability needs.
+				installHook("", rmerror.NewRMError(nil, "hook unavailable"))
 
 				_, err := node.RegisterNodeInRmng(testUserContext, nodeCert, "", nil, nil, "test-user-id", []string{"camera"})
 				Expect(err).To(HaveOccurred())
@@ -1148,12 +1146,12 @@ var _ = Describe("Node", func() {
 			})
 
 			It("fires the node-register hook with capabilities on a cert update (re-claim)", func() {
-				lambdaMock := awscommon.GetLambdaClient().(*mock.LambdaMock)
+				calls := installHook("", nil)
 
 				// Plain registration (no capabilities) must not fire the hook.
 				nodeID, err := node.RegisterNodeInRmng(testCtx, nodeCert, "", nil, nil, "test-admin", nil)
 				Expect(err).To(BeNil())
-				Expect(hookInvocations(lambdaMock)).To(BeEmpty())
+				Expect(*calls).To(BeEmpty())
 
 				// A re-claim replaces the cert and re-supplies the claim's
 				// capabilities, so the hook must fire again with the NEW cert ARN —
@@ -1162,7 +1160,7 @@ var _ = Describe("Node", func() {
 				err = node.UpdateNodeInRmng(testCtx, nodeID, replacementCert, nil, nil, []string{"camera"})
 				Expect(err).To(BeNil())
 
-				events := hookInvocations(lambdaMock)
+				events := *calls
 				Expect(events).To(HaveLen(1))
 				Expect(events[0].NodeID).To(Equal(nodeID))
 				Expect(events[0].Capabilities).To(Equal([]string{"camera"}))
@@ -1172,20 +1170,23 @@ var _ = Describe("Node", func() {
 	})
 })
 
-// hookInvocations returns the decoded payloads of every node-register hook
-// (OnNodeRegister) invocation the Lambda mock recorded, so a test can assert
-// the hook fired with the expected node, capabilities, and cert.
-func hookInvocations(lm *mock.LambdaMock) []nodelifecycle.NodeRegisterEvent {
-	var events []nodelifecycle.NodeRegisterEvent
-	for _, call := range lm.InvokeCalls {
-		if call.FunctionName == nil || *call.FunctionName != nodelifecycle.OnNodeRegisterFunctionName {
-			continue
-		}
-		var e nodelifecycle.NodeRegisterEvent
-		Expect(json.Unmarshal(call.Payload, &e)).To(Succeed())
-		events = append(events, e)
-	}
-	return events
+// hookCall is one node-register hook invocation, recorded by installHook.
+type hookCall struct {
+	NodeID       string
+	Capabilities []string
+	CertArn      string
+}
+
+// installHook registers a node-register hook that records its calls and returns
+// the given result, and returns the slice those calls land in. Registration is
+// undone by the next TestSetup-driven install, so each spec sees its own.
+func installHook(nodeType string, hookErr error) *[]hookCall {
+	calls := &[]hookCall{}
+	nodelifecycle.RegisterNodeRegisterHook(func(_ *rmngctx.RmngContext, nodeID string, capabilities []string, certArn string) (string, error) {
+		*calls = append(*calls, hookCall{NodeID: nodeID, Capabilities: capabilities, CertArn: certArn})
+		return nodeType, hookErr
+	})
+	return calls
 }
 
 func AssertShadowIsDeleted(testNode *node.Node, groups group_node_db.NodesGroups) {

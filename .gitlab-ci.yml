@@ -63,6 +63,7 @@ validate_mqtt:
     - npm install --no-save @asyncapi/cli@6.0.0
     - npx @asyncapi/cli validate docs/api/MQTT_Node.yaml
     - npx @asyncapi/cli validate docs/api/MQTT_User.yaml
+    - npx @asyncapi/cli validate docs/api/MQTT_Bridge.yaml
     - npx @asyncapi/cli validate docs/api/Push_User.yaml
 
 go_lint:
@@ -535,20 +536,26 @@ sync_mqtt:
       @asyncapi/html-template@2.3.0 -o dist/node --force-write"
     - "asyncapi generate fromTemplate docs/api/MQTT_User.yaml
       @asyncapi/html-template@2.3.0 -o dist/user --force-write"
+    - "asyncapi generate fromTemplate docs/api/MQTT_Bridge.yaml
+      @asyncapi/html-template@2.3.0 -o dist/bridge --force-write"
     - export HOME_HREF="../../" INJECT_DIR="dist"
     - *inject_home_link
     - aws s3 sync dist/node/ s3://esp-rainmaker-neo-api/mqtt/node/ --delete
     - aws s3 sync dist/user/ s3://esp-rainmaker-neo-api/mqtt/user/ --delete
+    - aws s3 sync dist/bridge/ s3://esp-rainmaker-neo-api/mqtt/bridge/ --delete
     # Raw specs alongside their renderings, for codegen and diffing. Safe at the
     # mqtt/ prefix root: the --delete syncs above are scoped to node/ and user/.
     - aws s3 cp docs/api/MQTT_Node.yaml
       s3://esp-rainmaker-neo-api/mqtt/MQTT_Node.yaml
     - aws s3 cp docs/api/MQTT_User.yaml
       s3://esp-rainmaker-neo-api/mqtt/MQTT_User.yaml
+    - aws s3 cp docs/api/MQTT_Bridge.yaml
+      s3://esp-rainmaker-neo-api/mqtt/MQTT_Bridge.yaml
     - aws cloudfront create-invalidation --distribution-id E3F6AIL6K7W45G
       --paths "/mqtt/*"
     - 'echo "MQTT Node: https://api.docs.neo.rainmaker.espressif.com/mqtt/node/"'
     - 'echo "MQTT User: https://api.docs.neo.rainmaker.espressif.com/mqtt/user/"'
+    - 'echo "MQTT Bridge: https://api.docs.neo.rainmaker.espressif.com/mqtt/bridge/"'
 
 # -------------------------
 # Notification/event payloads (AsyncAPI) sync to S3

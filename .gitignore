@@ -52,3 +52,7 @@ dashboard/.env.development.local
 
 # Generated at build time by docs/conf_common.py.
 docs/en/specs/espuser/
+
+# Bridge simulator working directory: device certs and private keys for locally
+# registered bridges, written by tools/bridge_register.py.
+.bridges/

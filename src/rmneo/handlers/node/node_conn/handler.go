@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/espressif/esp-rainmaker-neo/src/bridge/hooks"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/nodes_online_db"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
@@ -45,6 +46,15 @@ func handlePresenceEvent(ctx context.Context, event node.PresenceEvent) error {
 		}
 		if err := n.WriteToIndexedReportedShadow(rmngContext, shadowData); err != nil {
 			rlog.Error(rmngContext).Err(err).Send()
+		}
+
+		// A bridge going offline takes its children with it. Runs here rather
+		// than in a Lambda of its own on a second copy of this IoT rule: this
+		// handler already holds the event and has established the session is
+		// current. The call re-checks node_type itself, so a non-bridge costs
+		// one lookup and returns.
+		if err := hooks.OnBridgeDisconnect(ctx, event); err != nil {
+			rlog.Error(rmngContext).Err(err).Msg("bridge presence cascade failed")
 		}
 	} else if event.EventType == "connected" {
 		// This event will never come from the aws topic: $aws/events/presence/connected/+
