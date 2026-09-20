@@ -79,9 +79,11 @@ WORKDIR ${REPOS_PATH}
 COPY requirements*.txt ./
 
 # Install Python requirements
-RUN if [ -f requirements.txt ]; then pip3 install -r requirements.txt; fi && \
-    if [ -f requirements-dev.txt ]; then pip3 install -r requirements-dev.txt; fi && \
-    if [ -f requirements-test.txt ]; then pip3 install -r requirements-test.txt; fi
+# Editable entries are stripped: requirements.txt carries `-e ./cli`, whose source is not
+# in the image, and every job that needs it installs it from its own checkout anyway.
+RUN for f in requirements.txt requirements-dev.txt requirements-test.txt; do \
+        if [ -f "$f" ]; then grep -v '^[[:space:]]*-e[[:space:]]' "$f" > /tmp/req.txt && pip3 install -r /tmp/req.txt; fi; \
+    done && rm -f /tmp/req.txt
 
 # Install common Go tools
 # ginkgo/gomega are pinned to the versions in go.mod — a newer CLI than the
@@ -93,11 +95,44 @@ RUN go install github.com/onsi/ginkgo/v2/ginkgo@${GINKGO_VERSION} && \
     go install github.com/onsi/gomega/...@${GOMEGA_VERSION} && \
     go install github.com/boumenot/gocover-cobertura@${GOCOVER_COBERTURA_VERSION}
 
+ARG GOVULNCHECK_VERSION=latest
+RUN go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
+
+COPY go.work go.work.sum go.mod go.sum ./
+COPY src/esp-cloud-common/go.mod src/esp-cloud-common/go.sum ./src/esp-cloud-common/
+COPY src/mcp/proxy/go.mod src/mcp/proxy/go.sum ./src/mcp/proxy/
+RUN go mod download && rm -rf go.work go.work.sum go.mod go.sum src
+
+RUN GITLEAKS_VERSION=$(curl -sSfL https://api.github.com/repos/gitleaks/gitleaks/releases/latest \
+      | python3 -c "import sys,json;print(json.load(sys.stdin)['tag_name'].lstrip('v'))") && \
+    curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+      | tar -xz -C /usr/local/bin gitleaks && \
+    gitleaks version
+
+ARG SWAGGER_CLI_VERSION=4.0.4
+RUN npm install -g @apidevtools/swagger-cli@${SWAGGER_CLI_VERSION}
+
+ARG ASYNCAPI_CLI_VERSION=6.0.0
+RUN mkdir -p /opt/asyncapi && cd /opt/asyncapi && \
+    npm init --yes >/dev/null && \
+    npm pkg set overrides.@asyncapi/generator-hooks=0.1.0 && \
+    npm install --no-save @asyncapi/cli@${ASYNCAPI_CLI_VERSION}
+ENV PATH="/opt/asyncapi/node_modules/.bin:${PATH}"
+
+RUN pip3 install pip-audit build twine
+
+COPY docs/requirements.txt ./docs/
+RUN pip3 install -r docs/requirements.txt && rm -rf docs
+
+
 # Install CDK
 # Must match aws-cdk-cli in requirements.txt: pip installs a `cdk` binary too,
 # and whichever lands earlier on PATH wins. Bump both together or they diverge.
 ARG AWS_CDK_VERSION=2.1133.0
 RUN npm install -g aws-cdk@${AWS_CDK_VERSION}
+
+COPY dashboard/package.json dashboard/package-lock.json ./dashboard/
+RUN cd dashboard && npm ci --no-audit --no-fund && cd .. && rm -rf dashboard
 
 # Set default command
 CMD ["/bin/bash"] 

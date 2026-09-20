@@ -1,6 +1,4 @@
 build/
-# CI keeps the pip and npm caches here because GitLab can only cache paths inside the project dir.
-.cache/
 cdk/cdk.out*
 docs/_build/
 __pycache__/
