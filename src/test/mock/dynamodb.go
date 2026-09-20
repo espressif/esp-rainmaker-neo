@@ -20,6 +20,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/aws/smithy-go"
 	orderedmap "github.com/wk8/go-ordered-map"
 )
 
@@ -363,16 +364,45 @@ func SorN(av types.AttributeValue) *string {
 }
 
 func ExtractKeys(key map[string]types.AttributeValue, primaryKey, sortKey string) (string, string, error) {
-	pkey := key[primaryKey].(*types.AttributeValueMemberS).Value
+	pkeyAttr, ok := key[primaryKey].(*types.AttributeValueMemberS)
+	if !ok {
+		return "", "", &smithy.GenericAPIError{
+			Code:    "ValidationException",
+			Message: "The provided key element does not match the schema",
+		}
+	}
+	pkey := pkeyAttr.Value
 	skey := ""
 	if sortKey != "" {
 		skey_name, ok := key[sortKey]
 		if !ok {
 			return "", "", &types.ResourceNotFoundException{Message: aws.String("Sort Key not found")}
 		}
-		skey = *SorN(skey_name)
+		skeyValue := SorN(skey_name)
+		if skeyValue == nil {
+			return "", "", &smithy.GenericAPIError{
+				Code:    "ValidationException",
+				Message: "The provided key element does not match the schema",
+			}
+		}
+		skey = *skeyValue
 	}
 	return pkey, skey, nil
+}
+
+// validateKeyOnly rejects a Key carrying non-key attributes, as the service does.
+// Tolerating them let requests DynamoDB always refuses pass the unit suite.
+func validateKeyOnly(key map[string]types.AttributeValue, table TableDetails) error {
+	for name := range key {
+		if name == table.PrimaryKey || (table.SortKey != "" && name == table.SortKey) {
+			continue
+		}
+		return &smithy.GenericAPIError{
+			Code:    "ValidationException",
+			Message: "The provided key element does not match the schema",
+		}
+	}
+	return nil
 }
 
 func (m *DynamoDBMock) GetKeys(item interface{}) (string, string, string, error) {
@@ -381,6 +411,9 @@ func (m *DynamoDBMock) GetKeys(item interface{}) (string, string, string, error)
 		table, ok := m.tables[*item.TableName]
 		if !ok {
 			return "", "", "", &types.ResourceNotFoundException{Message: aws.String("Table not found")}
+		}
+		if err := validateKeyOnly(item.Key, table); err != nil {
+			return "", "", "", err
 		}
 		pkey, skey, err := ExtractKeys(item.Key, table.PrimaryKey, table.SortKey)
 		return *item.TableName, pkey, skey, err
@@ -396,12 +429,18 @@ func (m *DynamoDBMock) GetKeys(item interface{}) (string, string, string, error)
 		if !ok {
 			return "", "", "", &types.ResourceNotFoundException{Message: aws.String("Table not found")}
 		}
+		if err := validateKeyOnly(item.Key, table); err != nil {
+			return "", "", "", err
+		}
 		pkey, skey, err := ExtractKeys(item.Key, table.PrimaryKey, table.SortKey)
 		return *item.TableName, pkey, skey, err
 	case *dynamodb.UpdateItemInput:
 		table, ok := m.tables[*item.TableName]
 		if !ok {
 			return "", "", "", &types.ResourceNotFoundException{Message: aws.String("Table not found")}
+		}
+		if err := validateKeyOnly(item.Key, table); err != nil {
+			return "", "", "", err
 		}
 		pkey, skey, err := ExtractKeys(item.Key, table.PrimaryKey, table.SortKey)
 		return *item.TableName, pkey, skey, err
@@ -427,6 +466,9 @@ func (m *DynamoDBMock) BatchGetItem(ctx context.Context, params *dynamodb.BatchG
 		}
 
 		for _, key := range keys[:processUntil] {
+			if err := validateKeyOnly(key, m.tables[table]); err != nil {
+				return nil, err
+			}
 			pkey, skey, err := ExtractKeys(key, m.tables[table].PrimaryKey, m.tables[table].SortKey)
 			if err != nil {
 				return nil, err

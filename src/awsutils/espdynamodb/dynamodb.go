@@ -6,10 +6,11 @@ package espdynamodb
 
 import (
 	"errors"
+	"sort"
+	"strconv"
+
 	"github.com/espressif/esp-cloud-common/go/rbac/constants"
 	"github.com/espressif/esp-cloud-common/go/rbac/pkg/logger"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/convert"
-	"strconv"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 
@@ -21,11 +22,19 @@ import (
 	"github.com/luraim/fun"
 )
 
-func GetItemExistsCondition(query DBItem) expression.ConditionBuilder {
-	hashKey := query.GetHKey()
-	condition := expression.Name(hashKey).AttributeExists()
-	if rangeKey := query.GetRKey(); rangeKey != "" {
-		condition = condition.And(expression.Name(rangeKey).AttributeExists())
+func GetItemExistsCondition(keys map[string]types.AttributeValue) expression.ConditionBuilder {
+	names := make([]string, 0, len(keys))
+	for name := range keys {
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return expression.ConditionBuilder{}
+	}
+	sort.Strings(names)
+
+	condition := expression.Name(names[0]).AttributeExists()
+	for _, name := range names[1:] {
+		condition = condition.And(expression.Name(name).AttributeExists())
 	}
 	return condition
 }
@@ -62,6 +71,32 @@ func (d *EspDB) DbCreateItem(tableName string, v DBItem) error {
 	return err
 }
 
+// itemKey builds the Key for query. Only key attributes: DynamoDB rejects a Key
+// carrying anything else. An empty sort-key value is dropped, since GetRKey
+// describes the struct rather than the table and a struct naming a range key may
+// be used against a hash-only table.
+func itemKey(query DBItem, av map[string]types.AttributeValue) map[string]types.AttributeValue {
+	keys := make(map[string]types.AttributeValue, 2)
+	if hashKey := query.GetHKey(); av[hashKey] != nil {
+		keys[hashKey] = av[hashKey]
+	}
+
+	rangeKey := query.GetRKey()
+	if rangeKey == "" {
+		return keys
+	}
+	switch v := av[rangeKey].(type) {
+	case nil:
+		return keys
+	case *types.AttributeValueMemberS:
+		if v.Value == "" {
+			return keys
+		}
+	}
+	keys[rangeKey] = av[rangeKey]
+	return keys
+}
+
 // DbGetItem gets a single item from the database
 func (d *EspDB) DbGetItem(tableName string, query DBItem, out interface{}) error {
 	av, err := attributevalue.MarshalMap(query)
@@ -71,7 +106,7 @@ func (d *EspDB) DbGetItem(tableName string, query DBItem, out interface{}) error
 
 	result, err := d.DB.GetItem(d.Ctx.Context, &dynamodb.GetItemInput{
 		TableName: aws.String(tableName),
-		Key:       av,
+		Key:       itemKey(query, av),
 	})
 	if err != nil {
 		return err
@@ -140,15 +175,11 @@ func (d *EspDB) DbUpdateItem(input DbUpdateItemInput) (*dynamodb.UpdateItemOutpu
 		return nil, err
 	}
 
-	keys := make(map[string]types.AttributeValue)
-	keys[input.Query.GetHKey()] = av[input.Query.GetHKey()]
-	if rangeKey := input.Query.GetRKey(); rangeKey != "" {
-		keys[rangeKey] = av[rangeKey]
-	}
+	keys := itemKey(input.Query, av)
 
-	var conditionUpdate = GetItemExistsCondition(input.Query)
+	var conditionUpdate = GetItemExistsCondition(keys)
 	if !utils.IsEmpty(input.Condition) {
-		conditionUpdate = input.Condition.And(GetItemExistsCondition(input.Query))
+		conditionUpdate = input.Condition.And(GetItemExistsCondition(keys))
 	}
 
 	expr, err := expression.NewBuilder().
@@ -177,13 +208,15 @@ func (d *EspDB) DbDeleteItem(tableName string, query DBItem) error {
 		return err
 	}
 
-	expr, err := expression.NewBuilder().WithCondition(GetItemExistsCondition(query)).Build()
+	keys := itemKey(query, av)
+
+	expr, err := expression.NewBuilder().WithCondition(GetItemExistsCondition(keys)).Build()
 	if err != nil {
 		return err
 	}
 	_, err = d.DB.DeleteItem(d.Ctx.Context, &dynamodb.DeleteItemInput{
 		TableName:                 aws.String(tableName),
-		Key:                       av,
+		Key:                       keys,
 		ConditionExpression:       expr.Condition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
@@ -301,34 +334,28 @@ func DbBatchPutItem[T any](d *EspDB, tableName string, v []T) error {
 	return nil
 }
 
-// DbBatchDeleteItem deletes maximum 25 items in DB table
-// It takes list of items with maximum length 25 as an interface v
-func (d *EspDB) DbBatchDeleteItem(tableName string, v interface{}) error {
-	// Converting interface to slice of go structs
-	vSlice, errInterfaceToSlice := convert.InterfaceToSlice(v)
-	if errInterfaceToSlice != nil {
-		return errInterfaceToSlice
-	}
-	// Creating batch write input
-	var writeRequests []types.WriteRequest
-	batchCount := 0
-	writeRequests = make([]types.WriteRequest, len(vSlice))
-	for _, item := range vSlice {
+func DbBatchDeleteItem[T DBItem](d *EspDB, tableName string, v []T) error {
+	writeRequests := make([]types.WriteRequest, 0, len(v))
+	for _, item := range v {
 		av, errMarshal := attributevalue.MarshalMap(item)
 		if errMarshal != nil {
 			return errMarshal
 		}
-		batchDeleteRequest := types.DeleteRequest{
-			Key: av,
-		}
-		writeRequestInput := types.WriteRequest{DeleteRequest: &batchDeleteRequest}
-		writeRequests[batchCount] = writeRequestInput
-		batchCount++
-		if batchCount == 25 {
-			break
+		writeRequests = append(writeRequests, types.WriteRequest{
+			DeleteRequest: &types.DeleteRequest{Key: itemKey(item, av)},
+		})
+	}
+
+	for _, batch := range fun.Chunked(writeRequests, DYNAMODB_BATCH_WRITE_LIMIT) {
+		if err := d.batchDeleteWriteRequests(tableName, batch); err != nil {
+			return err
 		}
 	}
-	// Writing batches to the DB table
+
+	return nil
+}
+
+func (d *EspDB) batchDeleteWriteRequests(tableName string, writeRequests []types.WriteRequest) error {
 	result, errBatchWrite := d.DB.BatchWriteItem(d.Ctx.Context, &dynamodb.BatchWriteItemInput{
 		RequestItems: map[string][]types.WriteRequest{
 			tableName: writeRequests,
@@ -339,23 +366,18 @@ func (d *EspDB) DbBatchDeleteItem(tableName string, v interface{}) error {
 	}
 
 	// process left items to batch write
-	unprocessedItmes := result.UnprocessedItems[tableName]
-	for {
-		if len(unprocessedItmes) > 0 {
-			logger.LogDebug("Getting unprocessed items " + strconv.Itoa(len(unprocessedItmes)))
-			unprocessedResult, errUnprocess := d.DB.BatchWriteItem(d.Ctx.Context, &dynamodb.BatchWriteItemInput{
-				RequestItems: map[string][]types.WriteRequest{
-					tableName: unprocessedItmes,
-				},
-			})
-			if errUnprocess != nil {
-				return errUnprocess
-			}
-			unprocessedItmes = unprocessedResult.UnprocessedItems[tableName]
+	unprocessedItems := result.UnprocessedItems[tableName]
+	for len(unprocessedItems) > 0 {
+		logger.LogDebug("Getting unprocessed items " + strconv.Itoa(len(unprocessedItems)))
+		unprocessedResult, errUnprocess := d.DB.BatchWriteItem(d.Ctx.Context, &dynamodb.BatchWriteItemInput{
+			RequestItems: map[string][]types.WriteRequest{
+				tableName: unprocessedItems,
+			},
+		})
+		if errUnprocess != nil {
+			return errUnprocess
 		}
-		if len(unprocessedItmes) == 0 {
-			break
-		}
+		unprocessedItems = unprocessedResult.UnprocessedItems[tableName]
 	}
 
 	return nil
