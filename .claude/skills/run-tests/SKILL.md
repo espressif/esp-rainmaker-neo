@@ -45,7 +45,7 @@ For each failing test, one at a time:
    (a) product bug, (b) stale/wrong test, (c) environment/infra issue (missing deploy,
    throttling, eventual consistency). State which one and why, citing the evidence.
 3. **Fix** when the cause is unambiguous:
-   - Product bug → fix the code, honouring `.claude/rules/go-rules.mdc` / `backend.mdc`.
+   - Product bug → fix the code, honouring `.claude/rules/go-rules.md` / `backend.md`.
    - Stale test → update the test to the intended behaviour (never weaken an assertion
      just to make it pass — if intended behaviour is unclear, ask instead).
    - Environment issue → don't "fix" code; report what the environment needs.

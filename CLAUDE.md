@@ -1,16 +1,11 @@
 # ESP RainMaker Neo — Claude Instructions
 
-This repository's working rules live in [.claude/rules/](.claude/rules/). Read and follow them all — they apply to every task in this repo.
+This repository's working rules live in [.claude/rules/](.claude/rules/) and load automatically — no need to open them.
 
-## Rule files
+`code-quality.md`, `assistant-behaviour.md` and `git-flow.md` load every session. `api-rules.md`, `backend.md`, `go-rules.md` and `aws-rules.md` carry `paths:` frontmatter, so they load when a task touches the files they cover.
 
-- [.claude/rules/code-quality.mdc](.claude/rules/code-quality.mdc) — code standards (maintainability, DRY, parallelisation, mentor mode, commenting, guidelines folder)
-- [.claude/rules/assistant-behaviour.mdc](.claude/rules/assistant-behaviour.mdc) — how Claude/Cursor should communicate (no apologies, no summaries, single-chunk edits, no recap of current code)
-- [.claude/rules/backend.mdc](.claude/rules/backend.mdc) — backend architecture, testing, API handler conventions (`ExtractRequestStruct`, single `rmlog` + single `APIGwRespJSON`, swagger, `test_api.py`; DB-vs-handler boundary, paired side-effect calls)
-- [.claude/rules/go-rules.mdc](.claude/rules/go-rules.mdc) — Go standards (Uber style guide, Ginkgo unit tests with negative cases, AWS SDK interface/mock layout in `utils`/`awsutils` and `test/mock`; RBAC checks in the DB layer, least-privilege grants, no `*All` wildcards)
-- [.claude/rules/aws-rules.mdc](.claude/rules/aws-rules.mdc) — CDK conventions (`cdk/apps` + `cdk/utils` layout, `app_common.py` reuse, per-lambda `stack.py`, IAM-with-every-AWS-SDK-call, DynamoDB patterns)
-- [.claude/rules/git-flow.mdc](.claude/rules/git-flow.mdc) — branch names, commit format, PR rules
+The dashboard has its own rules at [dashboard/.claude/rules/](dashboard/.claude/rules/), which load when work touches that directory. Cursor reads the same file through a symlink at `dashboard/.cursor/rules/admin-dashboard.mdc` — edit the real file under `.claude/`.
 
 ## Conflict resolution
 
-If a rule in one file conflicts with another, the more specific rule wins (`go-rules.mdc` over `backend.mdc` for `.go` files; `aws-rules.mdc` over `backend.mdc` for CDK code).
+If a rule in one file conflicts with another, the more specific rule wins (`go-rules.md` over `backend.md` for `.go` files; `aws-rules.md` over `backend.md` for CDK code).

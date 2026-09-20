@@ -1,7 +1,5 @@
 ---
 description: Gitflow Workflow Rules
-globs: 
-alwaysApply: false
 ---
 
 # Git Workflow

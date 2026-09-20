@@ -100,4 +100,4 @@ Re-read the draft and revise until clean:
 
 ## Output
 
-Print the final MR description in a fenced code block, ready to paste. Do not create commits or open an MR unless the user explicitly asks. Even then, per `.claude/rules/git-flow.mdc`, all changes land via MRs off `main`. Never commit directly to `main`.
+Print the final MR description in a fenced code block, ready to paste. Do not create commits or open an MR unless the user explicitly asks. Even then, per `.claude/rules/git-flow.md`, all changes land via MRs off `main`. Never commit directly to `main`.

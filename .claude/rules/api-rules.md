@@ -1,12 +1,11 @@
 ---
 description: REST API conventions — public contract (wire format, HTTP status codes, OpenAPI)
-globs:
-  - docs/api/**/*.yaml
-alwaysApply: true
+paths:
+  - "docs/api/**/*.yaml"
 ---
 
 ## Scope
-Conventions visible to API clients and integrators. Everything here is part of the public contract: wire-format casing, HTTP status codes, OpenAPI shape. Implementation conventions (handler structure, error wrapping, language-specific patterns) live in `backend.mdc` and `go-rules.mdc`. Must be  'REST compliant'.
+Conventions visible to API clients and integrators. Everything here is part of the public contract: wire-format casing, HTTP status codes, OpenAPI shape. Implementation conventions (handler structure, error wrapping, language-specific patterns) live in `backend.md` and `go-rules.md`. Must be  'REST compliant'.
 
 ## Wire-format casing (public contract)
 
@@ -82,6 +81,6 @@ External-contract surfaces (Alexa Smart Home, Google Smart Home, AWS IoT Lifecyc
 
 ## Related rules
 
-- `aws-rules.mdc` — naming for AWS resources and the broader wire-format casing source-of-truth.
-- `backend.mdc` — implementation conventions: how handlers parse requests, log, respond.
-- `go-rules.mdc` — Go-specific patterns (Ginkgo, struct tags, AWS SDK mocking).
+- `aws-rules.md` — naming for AWS resources and the broader wire-format casing source-of-truth.
+- `backend.md` — implementation conventions: how handlers parse requests, log, respond.
+- `go-rules.md` — Go-specific patterns (Ginkgo, struct tags, AWS SDK mocking).

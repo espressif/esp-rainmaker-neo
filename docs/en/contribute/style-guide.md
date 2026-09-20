@@ -6,11 +6,11 @@ They apply to human and AI-assisted contributions alike:
 
 | File | Covers |
 |---|---|
-| `code-quality.mdc` | maintainability, DRY, commenting |
-| `go-rules.mdc` | Go standards, test layout, AWS SDK mocking |
-| `backend.mdc` | API handler conventions, DB-vs-handler boundary |
-| `aws-rules.mdc` | CDK layout, IAM, DynamoDB patterns |
-| `git-flow.mdc` | branches, commits, PRs |
+| `code-quality.md` | maintainability, DRY, commenting |
+| `go-rules.md` | Go standards, test layout, AWS SDK mocking |
+| `backend.md` | API handler conventions, DB-vs-handler boundary |
+| `aws-rules.md` | CDK layout, IAM, DynamoDB patterns |
+| `git-flow.md` | branches, commits, PRs |
 
 ## Go
 

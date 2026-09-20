@@ -33,7 +33,7 @@ Then obey the format and rules below.
 
 `type(scope): description`
 
-- **type** — one of: `feat`, `fix`, `docs`, `refactor`, `test`, `chore` (per `.claude/rules/git-flow.mdc`).
+- **type** — one of: `feat`, `fix`, `docs`, `refactor`, `test`, `chore` (per `.claude/rules/git-flow.md`).
 - **scope** — the primary package/area touched (e.g. `group`, `node`, `db`). Pick the dominant one from the staged paths.
 - **description** — imperative mood, lowercase start, no trailing period.
 
@@ -62,5 +62,5 @@ Re-read the draft against the Rules and the latest commit, and revise until flaw
 
 ## Output
 
-Print the final commit message in a fenced code block, ready to paste. Do not create the commit unless the user explicitly asks; if they do, branch off `main` first per `.claude/rules/git-flow.mdc` (no direct commits to `main`).
+Print the final commit message in a fenced code block, ready to paste. Do not create the commit unless the user explicitly asks; if they do, branch off `main` first per `.claude/rules/git-flow.md` (no direct commits to `main`).
 
