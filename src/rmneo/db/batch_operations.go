@@ -7,6 +7,8 @@ package db
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -97,24 +99,58 @@ func (db *DBUtil) BatchPutItems(ctx context.Context, items []map[string]types.At
 	return nil
 }
 
+const (
+	// DynamoDB's hard cap on requests per BatchWriteItem call.
+	batchWriteChunkSize = 25
+	// A throttled batch comes back as UnprocessedItems rather than an error, so retries are the
+	// normal path, not an exception. Bounded so a persistently throttled table surfaces a failure
+	// instead of spinning until the Lambda times out.
+	batchWriteMaxAttempts = 5
+	batchWriteBaseBackoff = 50 * time.Millisecond
+)
+
 // batchDeleteItems deletes items in batches of up to 25 items
 func (db *DBUtil) batchDeleteItems(ctx context.Context, deleteRequests []types.WriteRequest, tableName string) error {
-	for i := 0; i < len(deleteRequests); i += 25 {
-		end := i + 25
+	for i := 0; i < len(deleteRequests); i += batchWriteChunkSize {
+		end := i + batchWriteChunkSize
 		if end > len(deleteRequests) {
 			end = len(deleteRequests)
 		}
-
-		batchInput := &dynamodb.BatchWriteItemInput{
-			RequestItems: map[string][]types.WriteRequest{
-				tableName: deleteRequests[i:end],
-			},
-		}
-
-		_, err := db.BatchWriteItem(ctx, batchInput)
-		if err != nil {
-			return rmerror.NewRMError(err, "failed to delete items from DynamoDB")
+		if err := db.batchDeleteChunk(ctx, deleteRequests[i:end], tableName); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// batchDeleteChunk drains one chunk, re-submitting whatever DynamoDB hands back as unprocessed.
+// BatchWriteItem answers 200 with an UnprocessedItems list when it throttles part of a batch, so
+// discarding the response reports a successful delete while leaving rows in place.
+func (db *DBUtil) batchDeleteChunk(ctx context.Context, requests []types.WriteRequest, tableName string) error {
+	pending := requests
+	for attempt := 0; attempt < batchWriteMaxAttempts; attempt++ {
+		if attempt > 0 {
+			// Items come back unprocessed because the table is being throttled, so wait before
+			// asking again rather than adding to the pressure.
+			select {
+			case <-ctx.Done():
+				return rmerror.NewRMError(ctx.Err(), "cancelled while re-submitting unprocessed deletes")
+			case <-time.After(batchWriteBaseBackoff << (attempt - 1)):
+			}
+		}
+
+		out, err := db.BatchWriteItem(ctx, &dynamodb.BatchWriteItemInput{
+			RequestItems: map[string][]types.WriteRequest{tableName: pending},
+		})
+		if err != nil {
+			return rmerror.NewRMError(err, "failed to delete items from DynamoDB")
+		}
+
+		pending = out.UnprocessedItems[tableName]
+		if len(pending) == 0 {
+			return nil
+		}
+	}
+
+	return rmerror.NewRMError(nil, fmt.Sprintf("%d of %d items in %s were not deleted: DynamoDB kept returning them as unprocessed across %d attempts", len(pending), len(requests), tableName, batchWriteMaxAttempts))
 }
