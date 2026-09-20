@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"github.com/espressif/esp-cloud-common/go/rbac/rbac"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/assoc_request_db"
@@ -440,11 +441,23 @@ func verifyMatterAttestation(ctx context.Context, input *MatterAttestationInput)
 func handleMatterVerifyWithCSR(ctx context.Context, rmngCtx *rmngctx.RmngContext, assocDB *assoc_request_db.AssocRequestDB,
 	requestID, nodeID, csrPEM, groupID string) (events.APIGatewayProxyResponse, error) {
 
-	// Load the Matter group
+	// Load first: this both rejects sub-group-level access and populates the caller's
+	// permissions, which is what makes IsAuthorized below meaningful.
 	matterGroup, err := group.LoadMatterGroupFromGrpID(rmngCtx, groupID)
 	if err != nil {
 		rlog.Error(rmngCtx).Err(err).Send()
+		if errors.Is(err, group.ErrGroupAccessDenied) {
+			return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("Insufficient permissions for this group")), nil
+		}
 		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Failed to load Matter group")), nil
+	}
+
+	// A device NOC puts a new identity into the group's Matter fabric, so it needs the same
+	// permission as adding a node. Confirm enforces this via AddNode, but the NOC is issued
+	// here, at verify, so it must be gated here too.
+	if err := rmngCtx.IsAuthorized(utils.GroupEditNodes, groupID); err != nil {
+		rlog.Error(rmngCtx).Err(err).Send()
+		return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("Insufficient permissions to add a node to this group")), nil
 	}
 
 	// Generate Device NOC

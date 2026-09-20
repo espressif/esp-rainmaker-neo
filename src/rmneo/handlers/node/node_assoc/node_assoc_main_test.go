@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node/node_reset_handler"
@@ -1545,6 +1546,165 @@ var _ = Describe("Matter Attestation Verification", func() {
 			storedNodeID := nodeIDAttr.(*types.AttributeValueMemberS).Value
 			Expect(len(storedNodeID)).To(Equal(16), "Generated node_id should be 16 hex characters")
 		})
+
+		// The device NOC is handed out at verify, while the permission to add a node to the
+		// group was only ever checked at confirm. Each spec drives the real handler with a
+		// fully valid Matter payload and varies only the caller's standing in the group.
+		Context("device NOC permission", func() {
+			joinAsSubgroupMember := func(memberID string) {
+				subGroup, err := group.CreateSubGroup(rmng_context, matterGroupID, "Kitchen")
+				Expect(err).To(BeNil())
+				_, err = group.ShareSubGroup(rmng_context, matterGroupID, subGroup.SubGroupID, memberID, auth.UserInfo{})
+				Expect(err).To(BeNil())
+				u, _ := test_utils.SetupTestUser(ctx, memberID, memberID+"@example.com")
+				uCtx := rmngctx.NewRmngContext(u)
+				reqs, err := group.GetMySharingRequests(uCtx)
+				Expect(err).To(BeNil())
+				Expect(reqs).To(HaveLen(1))
+				Expect(group.ApproveSharingRequest(uCtx, reqs[0].SharingRequestID)).To(BeNil())
+			}
+
+			joinAsSecondary := func(memberID string) {
+				_, err := group.ShareGroup(rmng_context, matterGroupID, memberID, utils.GroupSecondaryAccess, auth.UserInfo{})
+				Expect(err).To(BeNil())
+				u, _ := test_utils.SetupTestUser(ctx, memberID, memberID+"@example.com")
+				uCtx := rmngctx.NewRmngContext(u)
+				reqs, err := group.GetMySharingRequests(uCtx)
+				Expect(err).To(BeNil())
+				Expect(reqs).To(HaveLen(1))
+				Expect(group.ApproveSharingRequest(uCtx, reqs[0].SharingRequestID)).To(BeNil())
+			}
+
+			// A complete, valid device-NOC verify: real CSR, nonce matching the stored challenge, well-formed attestation. Only the caller changes.
+			verifyAs := func(callerID, requestID string) events.APIGatewayProxyResponse {
+				const matterChallenge = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+				storeInDynamoDBMatter(ctx, requestID, matterChallenge, callerID, matterGroupID)
+
+				csrDER, _, err := generateTestCSR()
+				Expect(err).To(BeNil())
+				csrNonce, err := hex.DecodeString(matterChallenge)
+				Expect(err).To(BeNil())
+				nocsrElements := buildTestNOCSRElementsTLV(csrDER, csrNonce, nil)
+
+				attestationChallenge := make([]byte, 16)
+				_, err = rand.Read(attestationChallenge)
+				Expect(err).To(BeNil())
+				anyKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				Expect(err).To(BeNil())
+				attestationSignature, err := signAttestationData(nocsrElements, attestationChallenge, anyKey)
+				Expect(err).To(BeNil())
+
+				body, err := json.Marshal(map[string]string{
+					"nocsr_elements":        hex.EncodeToString(nocsrElements),
+					"attestation_challenge": hex.EncodeToString(attestationChallenge),
+					"attestation_signature": hex.EncodeToString(attestationSignature),
+				})
+				Expect(err).To(BeNil())
+
+				resp, err := handleVerify(ctx, events.APIGatewayProxyRequest{
+					PathParameters: map[string]string{"groupId": matterGroupID, "requestId": requestID},
+					Resource:       "/v1/groups/{groupId}/node-assoc-requests/{requestId}/verify",
+					RequestContext: events.APIGatewayProxyRequestContext{
+						Identity: events.APIGatewayRequestIdentity{
+							CognitoIdentityID:             callerID,
+							CognitoAuthenticationProvider: "https://issuer.example:" + callerID,
+						},
+					},
+					Body: string(body),
+				})
+				Expect(err).To(BeNil())
+				return resp
+			}
+
+			It("should refuse a device NOC to a subgroup-scoped member", func() {
+				joinAsSubgroupMember("noc-sub-member")
+				resp := verifyAs("noc-sub-member", "noc-req-sub")
+				Expect(resp.StatusCode).To(Equal(http.StatusForbidden))
+				Expect(resp.Body).ToNot(ContainSubstring("BEGIN CERTIFICATE"))
+			})
+
+			It("should refuse a device NOC to a non-member", func() {
+				test_utils.SetupTestUser(ctx, "noc-stranger", "noc-stranger@example.com")
+				resp := verifyAs("noc-stranger", "noc-req-stranger")
+				Expect(resp.StatusCode).To(Equal(http.StatusForbidden))
+				Expect(resp.Body).ToNot(ContainSubstring("BEGIN CERTIFICATE"))
+			})
+
+			// Deliberate: adding a node needs GroupEditNodes, which secondary access does not carry, so confirm would already have rejected this. Verify now fails at the same boundary instead of handing out a certificate that cannot be used.
+			It("should refuse a device NOC to a secondary member, matching confirm", func() {
+				joinAsSecondary("noc-secondary")
+				resp := verifyAs("noc-secondary", "noc-req-secondary")
+				Expect(resp.StatusCode).To(Equal(http.StatusForbidden))
+				Expect(resp.Body).ToNot(ContainSubstring("BEGIN CERTIFICATE"))
+			})
+
+			// The specs above seed the association request directly. This one drives both calls, so
+			// the guard is exercised through the real entry point rather than a pre-seeded row.
+			It("should refuse a device NOC to a stranger walking the full initiate and verify flow", func() {
+				test_utils.SetupTestUser(ctx, "noc-walkin", "noc-walkin@example.com")
+				identity := events.APIGatewayProxyRequestContext{
+					Identity: events.APIGatewayRequestIdentity{
+						CognitoIdentityID:             "noc-walkin",
+						CognitoAuthenticationProvider: "https://issuer.example:noc-walkin",
+					},
+				}
+
+				initResp, err := handleInitiate(ctx, events.APIGatewayProxyRequest{
+					PathParameters: map[string]string{"groupId": matterGroupID},
+					Resource:       "/v1/groups/{groupId}/node-assoc-requests",
+					RequestContext: identity,
+				})
+				Expect(err).To(BeNil())
+				// initiate only records the request; the standing check under test is on verify.
+				Expect(initResp.StatusCode).To(Equal(http.StatusCreated), initResp.Body)
+
+				var initBody map[string]string
+				Expect(json.Unmarshal([]byte(initResp.Body), &initBody)).To(BeNil())
+				Expect(initBody["challenge"]).ToNot(BeEmpty())
+
+				csrDER, _, err := generateTestCSR()
+				Expect(err).To(BeNil())
+				csrNonce, err := hex.DecodeString(initBody["challenge"])
+				Expect(err).To(BeNil())
+				nocsrElements := buildTestNOCSRElementsTLV(csrDER, csrNonce, nil)
+
+				attestationChallenge := make([]byte, 16)
+				_, err = rand.Read(attestationChallenge)
+				Expect(err).To(BeNil())
+				anyKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				Expect(err).To(BeNil())
+				attestationSignature, err := signAttestationData(nocsrElements, attestationChallenge, anyKey)
+				Expect(err).To(BeNil())
+
+				body, err := json.Marshal(map[string]string{
+					"nocsr_elements":        hex.EncodeToString(nocsrElements),
+					"attestation_challenge": hex.EncodeToString(attestationChallenge),
+					"attestation_signature": hex.EncodeToString(attestationSignature),
+				})
+				Expect(err).To(BeNil())
+
+				verifyResp, err := handleVerify(ctx, events.APIGatewayProxyRequest{
+					PathParameters: map[string]string{"groupId": matterGroupID, "requestId": initBody["request_id"]},
+					Resource:       "/v1/groups/{groupId}/node-assoc-requests/{requestId}/verify",
+					RequestContext: identity,
+					Body:           string(body),
+				})
+				Expect(err).To(BeNil())
+				Expect(verifyResp.StatusCode).To(Equal(http.StatusForbidden), verifyResp.Body)
+				Expect(verifyResp.Body).ToNot(ContainSubstring("BEGIN CERTIFICATE"))
+			})
+
+			It("should still issue a device NOC to the primary owner", func() {
+				resp := verifyAs(userID, "noc-req-owner")
+				Expect(resp.StatusCode).To(Equal(http.StatusOK), resp.Body)
+
+				var body map[string]string
+				Expect(json.Unmarshal([]byte(resp.Body), &body)).To(BeNil())
+				Expect(body["noc"]).To(ContainSubstring("-----BEGIN CERTIFICATE-----"))
+				Expect(body["matter_node_id"]).ToNot(BeEmpty())
+			})
+		})
+
 	})
 })
 

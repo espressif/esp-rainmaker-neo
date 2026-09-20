@@ -328,20 +328,22 @@ func MatterNodeIDFromThingName(thingName string) string {
 }
 
 // LoadMatterGroupFromGrpID loads a group by ID and returns a MatterGroup.
-// It verifies the user has access to the group and that the group has Matter capability.
+// It verifies the user has group-level (primary/secondary) access to the group and that the group has Matter capability.
 // Returns an error if the group doesn't exist, user doesn't have access, or group lacks Matter capability.
+//
+// The returned MatterGroup carries the fabric's Root CA private key, so the gate must be group-level. GetUserGroupAccess rejects a subgroup-scoped row, because GetUserGroup treats a row carrying sub_entity_ids as "not found" — without it a member scoped to one subgroup would receive fabric-signing material.
 func LoadMatterGroupFromGrpID(ctx *rmngctx.RmngContext, groupID string) (*MatterGroup, error) {
-	// Load the group with capability data
-	userGroups, err := ListGroupForUser(ctx, groupID, false)
+	accessType, err := GetUserGroupAccess(ctx, groupID)
+	if err != nil {
+		return nil, rmerror.NewRMError(ErrGroupAccessDenied, "group does not exist or access denied")
+	}
+
+	// The check above already resolved the caller's membership, so load the group directly rather than re-deriving it through the user's group list.
+	loadedGroup, err := LoadGroup(ctx, groupID)
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to load group")
 	}
-
-	if len(userGroups) == 0 {
-		return nil, rmerror.NewRMError(nil, "group not found")
-	}
-
-	loadedGroup := userGroups[0]
+	loadedGroup.AccessType = accessType
 
 	// Verify the group has Matter capability
 	if !ContainsMatterCapability(loadedGroup.Capabilities) {
@@ -349,7 +351,7 @@ func LoadMatterGroupFromGrpID(ctx *rmngctx.RmngContext, groupID string) (*Matter
 	}
 
 	// Create MatterGroup wrapper
-	return NewMatterGroup(&loadedGroup)
+	return NewMatterGroup(loadedGroup)
 }
 
 // NOCResult holds the result of NOC generation

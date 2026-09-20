@@ -941,3 +941,71 @@ def test_denied_unshare_does_not_rotate_the_fabric_cat(test_user1, test_user2, t
     finally:
         if group_id:
             owner_api.delete_group(group_id, warn_error=True)
+
+
+def _attempt_device_noc(caller, group_id, device):
+    """Run a fully valid initiate+verify as `caller`. Returns the raw verify response."""
+    request_id, challenge = do_initiate(caller, group_id)
+    # initiate only records the request; the standing check under test is on verify.
+    assert request_id is not None, f"initiate failed before the check under test: {challenge}"
+
+    csr_nonce = bytes.fromhex(challenge)
+    _, csr_der = device.generate_csr()
+    nocsr_elements = build_nocsr_elements_tlv(csr_der, csr_nonce, None)
+
+    attestation_challenge = os.urandom(16)
+    attestation_signature = sign_attestation_data(
+        nocsr_elements, attestation_challenge, ec.generate_private_key(ec.SECP256R1())
+    )
+
+    return caller.make_api_request(
+        'POST',
+        f'/v1/groups/{group_id}/node-assoc-requests/{request_id}/verify',
+        data=json.dumps({
+            "nocsr_elements": nocsr_elements.hex(),
+            "attestation_challenge": attestation_challenge.hex(),
+            "attestation_signature": attestation_signature.hex(),
+        }),
+    )
+
+
+def test_nonmember_cannot_obtain_device_noc(test_user1, test_user2, unregistered_device_ec):
+    """A user with no membership in the group must not receive a fabric-signed device NOC.
+
+    The certificate is handed out at verify, so verify is where the permission has to be checked.
+    """
+    owner_groups = Group(test_user1)
+    group_id = None
+    try:
+        group_id = owner_groups.create_matter_group("NOC permission probe")["group_id"]
+
+        response = _attempt_device_noc(test_user2, group_id, unregistered_device_ec)
+
+        assert response.status_code == 403, (
+            f"a non-member got {response.status_code} from verify, expected 403. "
+            f"body={response.text[:400]}"
+        )
+        assert "BEGIN CERTIFICATE" not in response.text, \
+            "verify returned a certificate to a caller with no standing in the group"
+    finally:
+        if group_id:
+            owner_groups.delete_group(group_id)
+
+
+def test_owner_still_obtains_device_noc(test_user1, unregistered_device_ec):
+    """The primary owner must still get a NOC — the guard must not break the real flow."""
+    owner_groups = Group(test_user1)
+    group_id = None
+    try:
+        group_id = owner_groups.create_matter_group("NOC permission probe owner")["group_id"]
+
+        response = _attempt_device_noc(test_user1, group_id, unregistered_device_ec)
+
+        assert response.status_code == 200, \
+            f"owner got {response.status_code} from verify, expected 200. body={response.text[:400]}"
+        body = json.loads(response.text)
+        assert "BEGIN CERTIFICATE" in body.get("noc", ""), "owner did not receive a NOC"
+        assert body.get("matter_node_id"), "owner NOC carried no matter_node_id"
+    finally:
+        if group_id:
+            owner_groups.delete_group(group_id)

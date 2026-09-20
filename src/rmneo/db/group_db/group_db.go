@@ -193,6 +193,10 @@ func (gdb *GroupDB) ListRowsWithGroupID(parentGroupID string) ([]GroupInDB, erro
 
 	// Paginated: the parent row sorts under "NONE", so a truncated page can drop the group
 	// itself as easily as its subgroups.
+
+	// A caller that can list sub-entities but cannot GroupGet the parent is subgroup-scoped. It still receives the parent row, so the cap_* secrets have to be withheld from it explicitly.
+	limitedAccess := gdb.IsAuthorized(utils.GroupGet, parentGroupID) != nil
+
 	var groups []GroupInDB
 	err := gdb.QueryPaginated(gdb.Ctx.Context, queryInput, func(item map[string]types.AttributeValue) error {
 		addToGroups := false
@@ -221,7 +225,12 @@ func (gdb *GroupDB) ListRowsWithGroupID(parentGroupID string) ([]GroupInDB, erro
 			}
 			// Only parse capability data for the main group entry (not subgroups)
 			if subGroupID == "NONE" {
-				groupEntry.Capabilities, groupEntry.CapabilityData = parseCapabilitiesFromItem(item)
+				caps, capData := parseCapabilitiesFromItem(item)
+				groupEntry.Capabilities = caps
+				// The cap_* columns hold a capability's secrets — for Matter that is the fabric identity-protection key, the root CA and both CAT ids. A subgroup-scoped caller may know the group is Matter-enabled, but must not receive the fabric material: get-groups feeds this straight into the response via the capability's GetResponseData.
+				if !limitedAccess {
+					groupEntry.CapabilityData = capData
+				}
 			}
 			groups = append(groups, groupEntry)
 		}
