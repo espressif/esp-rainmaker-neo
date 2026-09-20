@@ -7,7 +7,7 @@
 
 The tool catalogue is not an OpenAPI or AsyncAPI document, so neither Swagger UI
 nor the AsyncAPI html-template can render it -- hence this generator. It is the
-MCP equivalent of the `asyncapi generate fromTemplate` calls in sync_mqtt: one
+MCP equivalent of the `asyncapi generate fromTemplate` calls in sync_asyncapi: one
 static page per surface, published beside its raw spec.
 
 The catalogue is generated from the Go tool registry and pinned by
@@ -313,7 +313,7 @@ def render(catalog: dict) -> str:
         margin: 0 auto;
       }}
 
-      /* Matches the banner sync_mqtt injects into the AsyncAPI renderings, so
+      /* Matches the banner sync_asyncapi injects into the AsyncAPI renderings, so
          every reference page has the same way back to the index. */
       .rmng-home {{
         font: 14px/1.4 var(--font-sans);

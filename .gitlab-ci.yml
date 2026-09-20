@@ -24,6 +24,11 @@ default:
   image: golang:1.26.6
   tags:
     - rmng
+  # A newer push to the same ref cancels superseded unfinished jobs, freeing the
+  # shared project runner. Jobs that must never be killed mid-flight — AWS deploys,
+  # S3 syncs, the docs-server push and the PyPI publish — opt out below with
+  # interruptible: false.
+  interruptible: true
 
 stages:
   - lint
@@ -34,9 +39,17 @@ stages:
   - swagger
   - docs
 
-validate_swagger:
+# One container validates both spec families
+validate_api_docs:
   stage: lint
   image: node:22-alpine
+  variables:
+    GIT_SUBMODULE_STRATEGY: none
+    npm_config_cache: $CI_PROJECT_DIR/.cache/npm
+  cache:
+    key: api-docs-npm
+    paths:
+      - .cache/npm
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
@@ -47,16 +60,6 @@ validate_swagger:
       docs/api/User_Api_Swagger.yaml"
     - "npx --yes @apidevtools/swagger-cli validate
       docs/api/MCP_Api_Swagger.yaml"
-
-validate_mqtt:
-  stage: lint
-  image: node:22-alpine
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - docs/api/MQTT_*.yaml
-        - docs/api/Push_*.yaml
-  script:
     # npx --yes @asyncapi/cli pulls in @asyncapi/generator@3.4.0, which pins its own dependency @asyncapi/generator-hooks to version 0.1.1 — a version that was never published to npm — so the install fails with ETARGET
     - npm init --yes >/dev/null
     - npm pkg set overrides.@asyncapi/generator-hooks=0.1.0
@@ -72,8 +75,12 @@ go_lint:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
         - "**/*.go"
-        - go.mod
-        - go.sum
+        - "**/go.mod"
+        - "**/go.sum"
+        - go.work
+        - go.work.sum
+        - Makefile
+        - src/esp-cloud-common
   script:
     - make lint
   allow_failure: true
@@ -102,13 +109,15 @@ npm_audit:
   # do with the lockfile, which audits clean on npm 11. npm 11 uses the bulk
   # advisory endpoint instead.
   image: node:24-alpine
+  variables:
+    GIT_SUBMODULE_STRATEGY: none
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
   script:
     # Production dependencies only
     - cd dashboard && npm audit --omit=dev --audit-level=high
 
-# Deliberately a separate job from npm_audit rather than sharing one node:22-alpine
+# Deliberately a separate job from npm_audit rather than sharing one Alpine node
 # container: pip-audit resolves requirements.txt in a throwaway venv, and playwright
 # ships no musllinux wheel and no sdist, so on Alpine that resolution dies with
 # "No matching distribution found" before anything is audited. python:3.12 is glibc,
@@ -116,6 +125,11 @@ npm_audit:
 pip_audit:
   stage: lint
   image: python:3.12
+  variables:
+    GIT_SUBMODULE_STRATEGY: none
+  # No pip cache here deliberately. This job installs a single package, so there is next to
+  # nothing to save, and pip does not verify what it restores from PIP_CACHE_DIR — caching
+  # would mean a vulnerability scanner resolved out of an archive this job also writes.
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
   before_script:
@@ -169,6 +183,16 @@ cdk_synth:
     AWS_REGION: ap-south-1
     CDK_DEFAULT_REGION: ap-south-1
     RMNG_REGION: ap-south-1
+    PIP_CACHE_DIR: $CI_PROJECT_DIR/.cache/pip
+  cache:
+    key:
+      # Prefixed with the job name so this archive stays this job's own, whatever other
+      # pip-using jobs are added against the same requirements.txt later.
+      prefix: $CI_JOB_NAME
+      files:
+        - requirements.txt
+    paths:
+      - .cache/pip
   before_script:
     - pip3 install -r requirements.txt
     - pip3 install -e ./cli --no-deps
@@ -200,6 +224,9 @@ cdk_synth:
 dashboard_check:
   stage: lint
   image: node:22-alpine
+  # npm-only build (see DASHBOARD_STAMP in the Makefile) — no submodule needed.
+  variables:
+    GIT_SUBMODULE_STRATEGY: none
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
@@ -219,6 +246,8 @@ dashboard_check:
 # -------------------------
 go_vulncheck:
   stage: security
+  # Depends on nothing the lint stage produces
+  needs: []
   # Pinned to the exact go.mod toolchain, matching GitHub's vulncheck job
   image: golang:1.26.6
   rules:
@@ -229,25 +258,32 @@ go_vulncheck:
         - "**/go.sum"
         - go.work
         - go.work.sum
+        - Makefile
         - src/esp-cloud-common
   script:
     - make vulncheck
 
 unittest:
   stage: unittest
+  # Carries the pinned ginkgo/gomega/gocover-cobertura, so they are not installed per run.
+  # A ginkgo CLI newer than the library it drives produces confusing failures, so the three
+  # versions must be bumped together in deployment/docker/Dockerfile — which is why that file
+  # is in the changes: list below. Only build_docker (schedule/web pipelines) rebuilds this
+  # image, so without that trigger a bump would silently keep running the stale CLI.
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
+  # The longest job in the pipeline (~10 min)
+  needs: []
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
         - "**/*.go"
-        - go.mod
-        - go.sum
+        - "**/go.mod"
+        - "**/go.sum"
+        - go.work
+        - go.work.sum
         - Makefile
-  before_script:
-    # Pinned to the versions in go.mod and deployment/docker/Dockerfile — a ginkgo CLI newer
-    # than the library it drives produces confusing failures. Bump all three together.
-    - go install github.com/onsi/ginkgo/v2/ginkgo@v2.28.3
-    - go install github.com/onsi/gomega/...@v1.40.0
-    - go install github.com/boumenot/gocover-cobertura@v1.5.0
+        - src/esp-cloud-common
+        - deployment/docker/Dockerfile
   script:
     - make test
   artifacts:
@@ -282,6 +318,9 @@ cli_test:
 # -------------------------
 publish_cli:
   stage: deploy
+  # A cancelled twine upload half-publishes the release, and the retry fails with
+  # "File name has already been taken" — the version has to be bumped to recover.
+  interruptible: false
   image: python:3.12
   rules:
     - if: '$CI_COMMIT_TAG'
@@ -305,6 +344,9 @@ publish_cli:
 # -------------------------
 .deploy_template:
   stage: deploy
+  # Never auto-cancel a live CDK deploy: killing it mid-run leaves half-updated
+  # stacks and a leaked resource-pool lease.
+  interruptible: false
   # Registry path from the predefined project variable; only the tag is pinned here.
   image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
   rules:
@@ -420,6 +462,8 @@ build_docker:
 # -------------------------
 sync_swagger:
   stage: swagger
+  # A cancelled --delete sync leaves the published site half-updated.
+  interruptible: false
   # Publishing docs consumes nothing the earlier stages produce. Without needs: []
   # the job waits out the whole pipeline and gets skipped when an unrelated docker
   # or deploy job fails, so a swagger change silently never reaches S3.
@@ -467,6 +511,8 @@ sync_swagger:
 # -------------------------
 sync_mcp:
   stage: swagger
+  # Publishes to the prod bucket: a cancelled run leaves the mcp/ prefix half-synced.
+  interruptible: false
   # Same reasoning as sync_swagger -- no dependency on the build or deploy stages.
   needs: []
   image: python:3.12-alpine
@@ -505,10 +551,11 @@ sync_mcp:
     - 'echo "MCP tools: https://api.docs.neo.rainmaker.espressif.com/mcp/"'
 
 # -------------------------
-# MQTT AsyncAPI sync to S3
+# AsyncAPI sync to S3 — MQTT (node/user/bridge) and notification/event payloads.
 # -------------------------
-sync_mqtt:
+sync_asyncapi:
   stage: swagger
+  interruptible: false
   # Same reasoning as sync_swagger — no dependency on the build or deploy stages.
   needs: []
   image:
@@ -533,68 +580,46 @@ sync_mqtt:
     - export AWS_ACCESS_KEY_ID=${RMNG_PROD_ACCESS_KEY}
     - export AWS_SECRET_ACCESS_KEY=${RMNG_PROD_SECRET_ACCESS_KEY}
     - "asyncapi generate fromTemplate docs/api/MQTT_Node.yaml
-      @asyncapi/html-template@2.3.0 -o dist/node --force-write"
+      @asyncapi/html-template@2.3.0 -o dist-mqtt/node --force-write"
     - "asyncapi generate fromTemplate docs/api/MQTT_User.yaml
-      @asyncapi/html-template@2.3.0 -o dist/user --force-write"
+      @asyncapi/html-template@2.3.0 -o dist-mqtt/user --force-write"
     - "asyncapi generate fromTemplate docs/api/MQTT_Bridge.yaml
-      @asyncapi/html-template@2.3.0 -o dist/bridge --force-write"
-    - export HOME_HREF="../../" INJECT_DIR="dist"
+      @asyncapi/html-template@2.3.0 -o dist-mqtt/bridge --force-write"
+    - "asyncapi generate fromTemplate docs/api/Push_User.yaml
+      @asyncapi/html-template@2.3.0 -o dist-events/events --force-write"
+    - export HOME_HREF="../../" INJECT_DIR="dist-mqtt"
     - *inject_home_link
-    - aws s3 sync dist/node/ s3://esp-rainmaker-neo-api/mqtt/node/ --delete
-    - aws s3 sync dist/user/ s3://esp-rainmaker-neo-api/mqtt/user/ --delete
-    - aws s3 sync dist/bridge/ s3://esp-rainmaker-neo-api/mqtt/bridge/ --delete
+    - export HOME_HREF="../" INJECT_DIR="dist-events"
+    - *inject_home_link
+    - aws s3 sync dist-mqtt/node/ s3://esp-rainmaker-neo-api/mqtt/node/ --delete
+    - aws s3 sync dist-mqtt/user/ s3://esp-rainmaker-neo-api/mqtt/user/ --delete
+    - aws s3 sync dist-mqtt/bridge/ s3://esp-rainmaker-neo-api/mqtt/bridge/
+      --delete
     # Raw specs alongside their renderings, for codegen and diffing. Safe at the
-    # mqtt/ prefix root: the --delete syncs above are scoped to node/ and user/.
+    # mqtt/ prefix root: the --delete syncs above are scoped to node/, user/ and bridge/.
     - aws s3 cp docs/api/MQTT_Node.yaml
       s3://esp-rainmaker-neo-api/mqtt/MQTT_Node.yaml
     - aws s3 cp docs/api/MQTT_User.yaml
       s3://esp-rainmaker-neo-api/mqtt/MQTT_User.yaml
     - aws s3 cp docs/api/MQTT_Bridge.yaml
       s3://esp-rainmaker-neo-api/mqtt/MQTT_Bridge.yaml
+    # Invalidated here rather than once at the end of the job: the --delete syncs above have
+    # already published, so a failure in the events half below must not leave mqtt/ stale.
     - aws cloudfront create-invalidation --distribution-id E3F6AIL6K7W45G
       --paths "/mqtt/*"
-    - 'echo "MQTT Node: https://api.docs.neo.rainmaker.espressif.com/mqtt/node/"'
-    - 'echo "MQTT User: https://api.docs.neo.rainmaker.espressif.com/mqtt/user/"'
-    - 'echo "MQTT Bridge: https://api.docs.neo.rainmaker.espressif.com/mqtt/bridge/"'
-
-# -------------------------
-# Notification/event payloads (AsyncAPI) sync to S3
-# -------------------------
-sync_events:
-  stage: swagger
-  # Same reasoning as sync_swagger — no dependency on the build or deploy stages.
-  needs: []
-  image:
-    name: node:22-alpine
-    entrypoint: [""]
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      when: never
-    - if: '$CI_COMMIT_BRANCH == "main"'
-      changes:
-        - docs/api/**/*
-  variables:
-    AWS_DEFAULT_REGION: us-east-1
-  before_script:
-    - apk add --no-cache aws-cli
-    # Same pinned CLI/template pair as sync_mqtt — see the comment there.
-    - npm install -g @asyncapi/cli@4.1.1
-  script:
-    - export AWS_ACCESS_KEY_ID=${RMNG_PROD_ACCESS_KEY}
-    - export AWS_SECRET_ACCESS_KEY=${RMNG_PROD_SECRET_ACCESS_KEY}
-    - "asyncapi generate fromTemplate docs/api/Push_User.yaml
-      @asyncapi/html-template@2.3.0 -o dist/events --force-write"
-    - export HOME_HREF="../" INJECT_DIR="dist"
-    - *inject_home_link
     # This sync targets the events/ prefix root, so --delete would remove the raw
     # spec copied below on every run; --exclude keeps it out of scope.
-    - aws s3 sync dist/events/ s3://esp-rainmaker-neo-api/events/ --delete
-      --exclude "Push_User.yaml"
+    - aws s3 sync dist-events/events/ s3://esp-rainmaker-neo-api/events/
+      --delete --exclude "Push_User.yaml"
     # Raw spec alongside its rendering, for codegen and diffing.
     - aws s3 cp docs/api/Push_User.yaml
       s3://esp-rainmaker-neo-api/events/Push_User.yaml
     - aws cloudfront create-invalidation --distribution-id E3F6AIL6K7W45G
       --paths "/events/*"
+    - 'echo "MQTT Node: https://api.docs.neo.rainmaker.espressif.com/mqtt/node/"'
+    - 'echo "MQTT User: https://api.docs.neo.rainmaker.espressif.com/mqtt/user/"'
+    - 'echo "MQTT Bridge:
+      https://api.docs.neo.rainmaker.espressif.com/mqtt/bridge/"'
     - 'echo "Events payloads site:
       https://api.docs.neo.rainmaker.espressif.com/events/"'
 
@@ -663,12 +688,15 @@ deploy_docs_preview:
     DOCS_DEPLOY_SERVER_USER: "$DOCS_PREVIEW_SERVER_USER"
     DOCS_DEPLOY_PATH: "$DOCS_PREVIEW_PATH"
     DOCS_DEPLOY_URL_BASE: "$DOCS_PREVIEW_URL_BASE"
+  # Narrower than build_docs on purpose
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes: *docs_changes
+      changes:
+        - docs/**/*
 
 deploy_docs_production:
   extends: .deploy_docs_template
+  interruptible: false
   variables:
     TYPE: "production"
     DOCS_DEPLOY_PRIVATEKEY: "$DOCS_PROD_PRIVATEKEY"
