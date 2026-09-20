@@ -538,24 +538,26 @@ sync_asyncapi:
   variables:
     AWS_DEFAULT_REGION: us-east-1
   before_script:
-    # Pin CLI + template to a verified-compatible pair.
-    # CLI 4.1.1 bundles @asyncapi/generator 1.17.25; html-template@2.3.0 is the last
-    # template release compatible with generator 1.x (declares generator >=1.15.0 <2.0.0).
-    # Newer template majors (3.x) need generator 2.x, which no published CLI bundles.
-    - npm install --no-save @asyncapi/cli@4.1.1
-    # Local install, and its .bin first on PATH: the image carries 6.x, which pairs with
-    # html-template 3.x, not the 2.3.0 pinned below.
+    # The generator, not @asyncapi/cli: the CLI additionally pulls @asyncapi/studio
+    # (next.js), modelina-cli and spectral-cli, none of which this job uses, and that
+    # download never completes on the runners (npm EIDLETIMEOUT). `ag` is the same
+    # renderer the CLI bundles, so the output is identical.
+    # html-template@2.3.0 is the last template release compatible with generator 1.x
+    # (it declares generator >=1.15.0 <2.0.0); template 3.x needs generator 2.x.
+    - npm install --no-save @asyncapi/generator@1.17.25
+    # Local install, and its .bin first on PATH: the image carries its own asyncapi
+    # tooling at a major that pairs with html-template 3.x, not the 2.3.0 pinned below.
     - export PATH="$PWD/node_modules/.bin:$PATH"
   script:
     - export AWS_ACCESS_KEY_ID=${RMNG_PROD_ACCESS_KEY}
     - export AWS_SECRET_ACCESS_KEY=${RMNG_PROD_SECRET_ACCESS_KEY}
-    - "asyncapi generate fromTemplate docs/api/MQTT_Node.yaml
+    - "ag docs/api/MQTT_Node.yaml
       @asyncapi/html-template@2.3.0 -o dist-mqtt/node --force-write"
-    - "asyncapi generate fromTemplate docs/api/MQTT_User.yaml
+    - "ag docs/api/MQTT_User.yaml
       @asyncapi/html-template@2.3.0 -o dist-mqtt/user --force-write"
-    - "asyncapi generate fromTemplate docs/api/MQTT_Bridge.yaml
+    - "ag docs/api/MQTT_Bridge.yaml
       @asyncapi/html-template@2.3.0 -o dist-mqtt/bridge --force-write"
-    - "asyncapi generate fromTemplate docs/api/Push_User.yaml
+    - "ag docs/api/Push_User.yaml
       @asyncapi/html-template@2.3.0 -o dist-events/events --force-write"
     - export HOME_HREF="../../" INJECT_DIR="dist-mqtt"
     - *inject_home_link
