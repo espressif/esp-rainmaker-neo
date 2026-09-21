@@ -1050,7 +1050,7 @@ class RMNGBaseStack(Stack):
         # Service Type"), so the credential provider always uses its AWS-assigned host.
         CfnOutput(
             self, "CredentialProviderEndpoint",
-            description="AWS IoT Credential Provider endpoint for device certificate-based auth",
+            description="AWS IoT Credential Provider endpoint for device certificate-based auth [visibility:public]",
             value=iot_credential_provider_endpoint.get_response_field("endpointAddress")
         )
 

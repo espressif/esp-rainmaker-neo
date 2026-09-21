@@ -29,11 +29,8 @@ SWAGGER_DIR          = "docs/api"
 PUBLIC_BUCKET_NAME_PREFIX = "rmng-public-assets"
 PUBLIC_BUCKET_REGION  = "us-east-1"
 
-SENSITIVE_PATHS = [
-    ["espuser-base", "EspVaClientSecret"],             # espuser-base > EspVaClientSecret
-    ["rmng-base", "VAClientSecret"],                   # rmng-base > VAClientSecret
-    ["espuser-core", "AdminUserRegistrationResults"]   # names the registered admin emails (operator-only)
-]
+# Redaction is driven entirely by the [visibility:private] marker generate_stack_outputs.py records under PRIVATE_PATHS_KEY; no list of secrets here to fall out of sync with it, which is how EspMcpClientSecret stayed tagged-but-published.
+from generate_stack_outputs import PRIVATE_MARKER, PRIVATE_PATHS_KEY  # noqa: E402
 
 def get_user_account_id(session):
     sts = session.client('sts')
@@ -153,6 +150,29 @@ def ensure_bucket_exists(session, bucket_name):
             print(f"[ERROR] Error checking bucket: {e}")
         return False
 
+def private_paths(data):
+    """Paths recorded by generate_stack_outputs.py for outputs marked PRIVATE_MARKER.
+
+    Exits rather than publishing a document whose redaction cannot be verified; a failed upload is visible and retryable, a leaked secret is neither.
+    """
+    if PRIVATE_PATHS_KEY not in data:
+        print(f"[ERROR] {RMNG_OUTPUTS} has no {PRIVATE_PATHS_KEY} key, so no output can be")
+        print(f"[ERROR] confirmed safe to publish. Regenerate it first:")
+        print(f"[ERROR]     python3 scripts/generate_stack_outputs.py")
+        sys.exit(1)
+
+    paths = data[PRIVATE_PATHS_KEY]
+    if not isinstance(paths, list) or not all(
+        isinstance(p, list) and all(isinstance(part, str) for part in p) for p in paths
+    ):
+        print(f"[ERROR] {PRIVATE_PATHS_KEY} in {RMNG_OUTPUTS} is malformed; expected a list of")
+        print(f"[ERROR] string paths. Refusing to publish. Regenerate it first:")
+        print(f"[ERROR]     python3 scripts/generate_stack_outputs.py")
+        sys.exit(1)
+
+    return paths
+
+
 def filter_sensitive_data(data, paths_to_remove):
     """
     Middleware function that traverses the JSON data and redacts/removes
@@ -186,7 +206,11 @@ def upload_to_s3(session, rmng_outputs_path, bucket_name, region):
         with open(rmng_outputs_path, 'r') as f:
             raw_data = json.load(f)
 
-        sanitized_data = filter_sensitive_data(raw_data, SENSITIVE_PATHS)
+        paths_to_remove = private_paths(raw_data)
+        for path in paths_to_remove:
+            print(f"[INFO] Redacting {' > '.join(path)} ({PRIVATE_MARKER})")
+        # Bookkeeping, never published.
+        sanitized_data = filter_sensitive_data(raw_data, paths_to_remove + [[PRIVATE_PATHS_KEY]])
 
         if not ensure_bucket_exists(session, bucket_name):
             sys.exit(1)

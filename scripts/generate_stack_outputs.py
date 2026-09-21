@@ -9,6 +9,8 @@ generate_stack_outputs.py
 Reads cdk/Stackfile.yaml to determine stacks and their regions, queries CloudFormation
 for outputs of deployed stacks, and writes rmng-outputs.json.
 
+Descriptions come back with the values, so outputs marked [visibility:private] are recorded under PRIVATE_PATHS_KEY here rather than costing upload_rmng_outputs.py a second describe of every stack.
+
 For rmng-alexa-core (deployed in multiple regions), stack_name is rmng-alexa-core-${APP_REGION}
 (resolved with --region). CloudFormation stack rmng-alexa-core-<app-region> is queried in each
 explicit region; the JSON key is the resolved name (e.g. rmng-alexa-core-ap-south-1) and each region
@@ -28,6 +30,15 @@ from botocore.exceptions import ClientError
 # so the whole thing is latency. Mirrors the pool in scripts/publish_cdk_assets.py.
 MAX_WORKERS = 8
 
+# Marks an output that must never reach the public rmng-public-assets bucket. Imported by everything that acts on it, so the annotation has one spelling.
+PRIVATE_MARKER = "[visibility:private]"
+
+# Acknowledges that an output whose name reads like a secret (token, credential, ...) really is safe to publish. Carries no behaviour; scripts/check_output_markers.py requires one marker or the other so the call is always deliberate.
+PUBLIC_MARKER = "[visibility:public]"
+
+# Underscore keeps it clear of the stack-name namespace; upload_rmng_outputs.py strips it from the published copy.
+PRIVATE_PATHS_KEY = "_private_output_paths"
+
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _SCRIPT_DIR.parent
 if str(_SCRIPT_DIR) not in sys.path:
@@ -37,7 +48,7 @@ from cfn_stack_parser import load_stackfile, resolve_stack_name
 
 
 def get_stack_outputs(cf_client, stack_name):
-    """Return output key/value map, or None when the stack is missing in that region."""
+    """Return (output key/value map, keys marked private), or None when the stack is missing."""
     try:
         response = cf_client.describe_stacks(StackName=stack_name)
         stacks = response.get("Stacks", [])
@@ -46,7 +57,12 @@ def get_stack_outputs(cf_client, stack_name):
             return None
 
         outputs = stacks[0].get("Outputs", [])
-        return {output["OutputKey"]: output["OutputValue"] for output in outputs}
+        values = {output["OutputKey"]: output["OutputValue"] for output in outputs}
+        private = sorted(
+            output["OutputKey"] for output in outputs
+            if PRIVATE_MARKER in (output.get("Description") or "")
+        )
+        return values, private
     except ClientError as e:
         if "does not exist" in str(e):
             print(f"Warning: Stack '{stack_name}' does not exist in this region.")
@@ -125,15 +141,20 @@ def main():
 
     # Merge single-threaded, so the output file's shape stays exactly as it was.
     regions_by_name: dict = {}
-    for (name, stack_region), outputs in zip(queries, fetched):
+    # Path into output_data per private output, e.g. ["espuser-base", "EspMcpClientSecret"]. Rebuilt every run so an output that stops being private cannot linger.
+    private_paths: list = []
+    for (name, stack_region), result in zip(queries, fetched):
+        outputs, private_keys = result if result is not None else (None, [])
         if name in multi_region_names:
             if outputs is not None:
                 regions_by_name.setdefault(name, {})[stack_region] = outputs
+                private_paths.extend([name, "regions", stack_region, k] for k in private_keys)
                 print(f"    -> Found {len(outputs)} outputs for {name} in {stack_region}")
             continue
 
         if outputs is not None:
             output_data[name] = outputs
+            private_paths.extend([name, k] for k in private_keys)
             updated_count += 1
             print(f"    -> Found {len(outputs)} outputs for {name}")
         elif output_data.pop(name, None) is not None:
@@ -146,6 +167,16 @@ def main():
     for name, regions_dict in regions_by_name.items():
         output_data[name] = {"regions": regions_dict}
         updated_count += 1
+
+    # A run that only flips a marker changes nothing else, so count it as an update or it never reaches disk.
+    private_paths = sorted(private_paths)
+    if output_data.get(PRIVATE_PATHS_KEY) != private_paths:
+        updated_count += 1
+    output_data[PRIVATE_PATHS_KEY] = private_paths
+    if private_paths:
+        print(f"\n{len(private_paths)} output(s) marked {PRIVATE_MARKER}, recorded for redaction:")
+        for path in sorted(private_paths):
+            print(f"  {' > '.join(path)}")
 
     if updated_count > 0:
         with open(output_path, "w") as f:

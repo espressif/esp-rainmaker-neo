@@ -112,6 +112,7 @@ class TestInfraBaseStack(Stack):
             self,
             "MockApiKeySecretArn",
             value=mock_api_key_secret.secret_arn,
+            description="ARN of the mock API key secret, not the key itself [visibility:public]",
         )
 
         self.gsi_readiness = GsiReadinessGate(
