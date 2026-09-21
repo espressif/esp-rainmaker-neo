@@ -448,14 +448,3 @@ stacks:
         value: ${rmng-base.outputs.IdentityPoolId}
         prompt: false
         description: "Cognito Identity Pool ID"
-
-  rmng-support:
-    friendly_name: "Support SLA"
-    stack_name: rmng-support
-    template: rmng-support.template.json
-    depends_on:
-      - rmng-base
-    regions:
-      mode: all
-      explicit: []
-    parameters: {}
