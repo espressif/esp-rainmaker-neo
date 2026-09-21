@@ -1388,7 +1388,7 @@ var _ = Describe("Notifications Handler", func() {
 			// Capture profile data
 			profile := dbMock.ProfileGet()
 			readCount, writeCount := profile.TotalCounts()
-			Expect(readCount).To(BeEquivalentTo(6)) // Multi-endpoint: Alexa send path does 1 Query (list endpoints for integration) + 1 GetItem per endpoint (token refresh read-modify-write), so 2 reads here vs the previous single Query.
+			Expect(readCount).To(BeEquivalentTo(5)) // Alexa send path: 1 Query listing this integration's endpoints + 1 GetItem per endpoint for the token refresh read-modify-write. The user's unrelated "test" endpoint is no longer counted, since begins_with now narrows to the alexa# prefix instead of matching every row in the partition.
 			Expect(writeCount).To(BeEquivalentTo(1))
 			profiles["Alexa Notification (Device Param Change)"] = &profile
 
