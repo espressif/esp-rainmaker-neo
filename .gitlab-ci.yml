@@ -5,6 +5,9 @@
 workflow:
   rules:
     - if: '$CI_PIPELINE_SOURCE == "web"'
+    # Same as web, so build_docker can be triggered without the UI. Must sit above the
+    # open-MR rule below, which would otherwise drop it.
+    - if: '$CI_PIPELINE_SOURCE == "api"'
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH == "main"'
@@ -19,11 +22,17 @@ variables:
   ESP_DOCS_ENV_IMAGE: "$CI_DOCKER_REGISTRY/esp-idf-doc-env-v5.4:1-1"
 
 default:
-  # Pinned to the go.mod toolchain. :latest silently follows new Go releases, so a
-  # jump to the next minor would land in CI before the codebase is ready for it.
-  image: golang:1.26.6
+  # Built from deployment/docker/Dockerfile with GO_VERSION pinned to go.mod's toolchain,
+  # and carrying the toolchains every job here needs. :latest on a stock image silently
+  # follows new Go releases, so a jump to the next minor would land in CI unannounced.
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
   tags:
     - rmng
+  # A newer push to the same ref cancels superseded unfinished jobs, freeing the
+  # shared project runner. Jobs that must never be killed mid-flight — AWS deploys,
+  # S3 syncs, the docs-server push and the PyPI publish — opt out below with
+  # interruptible: false.
+  interruptible: true
 
 stages:
   - lint
@@ -34,37 +43,26 @@ stages:
   - swagger
   - docs
 
-validate_swagger:
+# One container validates both spec families. swagger-cli and the asyncapi CLI are baked
+# into the image -- see SWAGGER_CLI_VERSION and ASYNCAPI_CLI_VERSION in the Dockerfile --
+# so nothing is resolved from npm at job time and neither validator floats with upstream.
+validate_api_docs:
   stage: lint
-  image: node:22-alpine
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
+  variables:
+    GIT_SUBMODULE_STRATEGY: none
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
         - docs/api/**/*
   script:
-    - npx --yes @apidevtools/swagger-cli validate docs/api/Api_Swagger.yaml
-    - "npx --yes @apidevtools/swagger-cli validate
-      docs/api/User_Api_Swagger.yaml"
-    - "npx --yes @apidevtools/swagger-cli validate
-      docs/api/MCP_Api_Swagger.yaml"
-
-validate_mqtt:
-  stage: lint
-  image: node:22-alpine
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - docs/api/MQTT_*.yaml
-        - docs/api/Push_*.yaml
-  script:
-    # npx --yes @asyncapi/cli pulls in @asyncapi/generator@3.4.0, which pins its own dependency @asyncapi/generator-hooks to version 0.1.1 — a version that was never published to npm — so the install fails with ETARGET
-    - npm init --yes >/dev/null
-    - npm pkg set overrides.@asyncapi/generator-hooks=0.1.0
-    - npm install --no-save @asyncapi/cli@6.0.0
-    - npx @asyncapi/cli validate docs/api/MQTT_Node.yaml
-    - npx @asyncapi/cli validate docs/api/MQTT_User.yaml
-    - npx @asyncapi/cli validate docs/api/MQTT_Bridge.yaml
-    - npx @asyncapi/cli validate docs/api/Push_User.yaml
+    - swagger-cli validate docs/api/Api_Swagger.yaml
+    - swagger-cli validate docs/api/User_Api_Swagger.yaml
+    - swagger-cli validate docs/api/MCP_Api_Swagger.yaml
+    - asyncapi validate docs/api/MQTT_Node.yaml
+    - asyncapi validate docs/api/MQTT_User.yaml
+    - asyncapi validate docs/api/MQTT_Bridge.yaml
+    - asyncapi validate docs/api/Push_User.yaml
 
 go_lint:
   stage: lint
@@ -72,54 +70,54 @@ go_lint:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
         - "**/*.go"
-        - go.mod
-        - go.sum
+        - "**/go.mod"
+        - "**/go.sum"
+        - go.work
+        - go.work.sum
+        - Makefile
+        - src/esp-cloud-common
   script:
     - make lint
   allow_failure: true
 
 secrets:
   stage: lint
-  image: alpine:3.20
-  variables:
-    GITLEAKS_VERSION: 8.28.0
+  # gitleaks is baked into this image -- see GITLEAKS_VERSION in deployment/docker/Dockerfile.
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-  before_script:
-    - apk add --no-cache curl
-    - curl -sSfL
-      "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-      | tar -xz -C /usr/local/bin gitleaks
-    - gitleaks version
   script:
     - gitleaks dir . --no-banner --redact
 
 npm_audit:
   stage: lint
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
   # node 24 for npm 11: npm 10 (node 22) audits through
   # /-/npm/v1/security/audits/quick, which the registry is retiring and now answers
   # with a 400 whose body reads "Invalid package tree, run npm install" — nothing to
   # do with the lockfile, which audits clean on npm 11. npm 11 uses the bulk
-  # advisory endpoint instead.
-  image: node:24-alpine
+  # advisory endpoint instead. The rmng image is node 24 for the same reason.
+  variables:
+    GIT_SUBMODULE_STRATEGY: none
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
   script:
     # Production dependencies only
     - cd dashboard && npm audit --omit=dev --audit-level=high
 
-# Deliberately a separate job from npm_audit rather than sharing one node:22-alpine
+# Deliberately a separate job from npm_audit rather than sharing one Alpine node
 # container: pip-audit resolves requirements.txt in a throwaway venv, and playwright
 # ships no musllinux wheel and no sdist, so on Alpine that resolution dies with
 # "No matching distribution found" before anything is audited. python:3.12 is glibc,
 # matching the "Python 3.12.3 compatible versions" contract atop requirements.txt.
 pip_audit:
   stage: lint
-  image: python:3.12
+  # pip-audit is baked into this image, so the scanner is not resolved from PyPI per run.
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
+  variables:
+    GIT_SUBMODULE_STRATEGY: none
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-  before_script:
-    - pip install pip-audit
   script:
     - pip-audit -r requirements.txt
 
@@ -130,9 +128,7 @@ pip_audit:
 # -------------------------
 license_headers:
   stage: lint
-  # Full python image, not -slim: the script shells out to git for the added-file list
-  # and -slim ships no git.
-  image: python:3.12
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
   variables:
     GIT_SUBMODULE_STRATEGY: none
     GIT_DEPTH: 0
@@ -170,6 +166,8 @@ cdk_synth:
     CDK_DEFAULT_REGION: ap-south-1
     RMNG_REGION: ap-south-1
   before_script:
+    # requirements.txt is installed in the image, so this is a no-op unless the branch
+    # changes it, in which case only the delta is fetched.
     - pip3 install -r requirements.txt
     - pip3 install -e ./cli --no-deps
   script:
@@ -199,13 +197,14 @@ cdk_synth:
 # -------------------------
 dashboard_check:
   stage: lint
-  image: node:22-alpine
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
+  # npm-only build (see DASHBOARD_STAMP in the Makefile) — no submodule needed.
+  variables:
+    GIT_SUBMODULE_STRATEGY: none
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
         - dashboard/**/*
-  before_script:
-    - apk add --no-cache make
   script:
     - make admin-dashboard-build
     - cd dashboard
@@ -219,8 +218,10 @@ dashboard_check:
 # -------------------------
 go_vulncheck:
   stage: security
-  # Pinned to the exact go.mod toolchain, matching GitHub's vulncheck job
-  image: golang:1.26.6
+  # Depends on nothing the lint stage produces
+  needs: []
+  # Same Go 1.26.6 as the stock image, with govulncheck and the module cache already in it.
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
@@ -229,25 +230,32 @@ go_vulncheck:
         - "**/go.sum"
         - go.work
         - go.work.sum
+        - Makefile
         - src/esp-cloud-common
   script:
     - make vulncheck
 
 unittest:
   stage: unittest
+  # Carries the pinned ginkgo/gomega/gocover-cobertura, so they are not installed per run.
+  # A ginkgo CLI newer than the library it drives produces confusing failures, so the three
+  # versions must be bumped together in deployment/docker/Dockerfile — which is why that file
+  # is in the changes: list below. Only build_docker (schedule/web pipelines) rebuilds this
+  # image, so without that trigger a bump would silently keep running the stale CLI.
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
+  # The longest job in the pipeline (~10 min)
+  needs: []
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
         - "**/*.go"
-        - go.mod
-        - go.sum
+        - "**/go.mod"
+        - "**/go.sum"
+        - go.work
+        - go.work.sum
         - Makefile
-  before_script:
-    # Pinned to the versions in go.mod and deployment/docker/Dockerfile — a ginkgo CLI newer
-    # than the library it drives produces confusing failures. Bump all three together.
-    - go install github.com/onsi/ginkgo/v2/ginkgo@v2.28.3
-    - go install github.com/onsi/gomega/...@v1.40.0
-    - go install github.com/boumenot/gocover-cobertura@v1.5.0
+        - src/esp-cloud-common
+        - deployment/docker/Dockerfile
   script:
     - make test
   artifacts:
@@ -264,14 +272,15 @@ unittest:
 # -------------------------
 cli_test:
   stage: unittest
-  image: python:3.12
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
         - cli/**/*
         - py_sdk/**/*
   before_script:
-    - pip install -e "./cli[test]"
+    # ./cli itself is installed in the image via requirements.txt; this adds the test extra.
+    - pip3 install -e "./cli[test]"
   script:
     - pytest cli/tests -q
 
@@ -282,11 +291,12 @@ cli_test:
 # -------------------------
 publish_cli:
   stage: deploy
-  image: python:3.12
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
+  # A cancelled twine upload half-publishes the release, and the retry fails with
+  # "File name has already been taken" — the version has to be bumped to recover.
+  interruptible: false
   rules:
     - if: '$CI_COMMIT_TAG'
-  before_script:
-    - pip install build twine
   script:
     - python -m build --outdir dist ./cli
     - >-
@@ -305,6 +315,9 @@ publish_cli:
 # -------------------------
 .deploy_template:
   stage: deploy
+  # Never auto-cancel a live CDK deploy: killing it mid-run leaves half-updated
+  # stacks and a leaked resource-pool lease.
+  interruptible: false
   # Registry path from the predefined project variable; only the tag is pinned here.
   image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
   rules:
@@ -381,6 +394,7 @@ deploy_eu-west-1:
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
     - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_PIPELINE_SOURCE == "api"
   variables:
     NODE_VERSION: "24"
     GO_VERSION: "1.26.6"
@@ -420,13 +434,13 @@ build_docker:
 # -------------------------
 sync_swagger:
   stage: swagger
+  # A cancelled --delete sync leaves the published site half-updated.
+  interruptible: false
   # Publishing docs consumes nothing the earlier stages produce. Without needs: []
   # the job waits out the whole pipeline and gets skipped when an unrelated docker
   # or deploy job fails, so a swagger change silently never reaches S3.
   needs: []
-  image:
-    name: amazon/aws-cli:latest
-    entrypoint: [""]
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       when: never
@@ -467,9 +481,11 @@ sync_swagger:
 # -------------------------
 sync_mcp:
   stage: swagger
+  # Publishes to the prod bucket: a cancelled run leaves the mcp/ prefix half-synced.
+  interruptible: false
   # Same reasoning as sync_swagger -- no dependency on the build or deploy stages.
   needs: []
-  image: python:3.12-alpine
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       when: never
@@ -483,8 +499,6 @@ sync_mcp:
         - scripts/generate_mcp_reference.py
   variables:
     AWS_DEFAULT_REGION: us-east-1
-  before_script:
-    - apk add --no-cache aws-cli
   script:
     - export AWS_ACCESS_KEY_ID=${RMNG_PROD_ACCESS_KEY}
     - export AWS_SECRET_ACCESS_KEY=${RMNG_PROD_SECRET_ACCESS_KEY}
@@ -505,15 +519,14 @@ sync_mcp:
     - 'echo "MCP tools: https://api.docs.neo.rainmaker.espressif.com/mcp/"'
 
 # -------------------------
-# MQTT AsyncAPI sync to S3
+# AsyncAPI sync to S3 — MQTT (node/user/bridge) and notification/event payloads.
 # -------------------------
-sync_mqtt:
+sync_asyncapi:
   stage: swagger
+  interruptible: false
   # Same reasoning as sync_swagger — no dependency on the build or deploy stages.
   needs: []
-  image:
-    name: node:22-alpine
-    entrypoint: [""]
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       when: never
@@ -523,78 +536,58 @@ sync_mqtt:
   variables:
     AWS_DEFAULT_REGION: us-east-1
   before_script:
-    - apk add --no-cache aws-cli
     # Pin CLI + template to a verified-compatible pair.
     # CLI 4.1.1 bundles @asyncapi/generator 1.17.25; html-template@2.3.0 is the last
     # template release compatible with generator 1.x (declares generator >=1.15.0 <2.0.0).
     # Newer template majors (3.x) need generator 2.x, which no published CLI bundles.
-    - npm install -g @asyncapi/cli@4.1.1
+    - npm install --no-save @asyncapi/cli@4.1.1
+    # Local install, and its .bin first on PATH: the image carries 6.x, which pairs with
+    # html-template 3.x, not the 2.3.0 pinned below.
+    - export PATH="$PWD/node_modules/.bin:$PATH"
   script:
     - export AWS_ACCESS_KEY_ID=${RMNG_PROD_ACCESS_KEY}
     - export AWS_SECRET_ACCESS_KEY=${RMNG_PROD_SECRET_ACCESS_KEY}
     - "asyncapi generate fromTemplate docs/api/MQTT_Node.yaml
-      @asyncapi/html-template@2.3.0 -o dist/node --force-write"
+      @asyncapi/html-template@2.3.0 -o dist-mqtt/node --force-write"
     - "asyncapi generate fromTemplate docs/api/MQTT_User.yaml
-      @asyncapi/html-template@2.3.0 -o dist/user --force-write"
+      @asyncapi/html-template@2.3.0 -o dist-mqtt/user --force-write"
     - "asyncapi generate fromTemplate docs/api/MQTT_Bridge.yaml
-      @asyncapi/html-template@2.3.0 -o dist/bridge --force-write"
-    - export HOME_HREF="../../" INJECT_DIR="dist"
+      @asyncapi/html-template@2.3.0 -o dist-mqtt/bridge --force-write"
+    - "asyncapi generate fromTemplate docs/api/Push_User.yaml
+      @asyncapi/html-template@2.3.0 -o dist-events/events --force-write"
+    - export HOME_HREF="../../" INJECT_DIR="dist-mqtt"
     - *inject_home_link
-    - aws s3 sync dist/node/ s3://esp-rainmaker-neo-api/mqtt/node/ --delete
-    - aws s3 sync dist/user/ s3://esp-rainmaker-neo-api/mqtt/user/ --delete
-    - aws s3 sync dist/bridge/ s3://esp-rainmaker-neo-api/mqtt/bridge/ --delete
+    - export HOME_HREF="../" INJECT_DIR="dist-events"
+    - *inject_home_link
+    - aws s3 sync dist-mqtt/node/ s3://esp-rainmaker-neo-api/mqtt/node/ --delete
+    - aws s3 sync dist-mqtt/user/ s3://esp-rainmaker-neo-api/mqtt/user/ --delete
+    - aws s3 sync dist-mqtt/bridge/ s3://esp-rainmaker-neo-api/mqtt/bridge/
+      --delete
     # Raw specs alongside their renderings, for codegen and diffing. Safe at the
-    # mqtt/ prefix root: the --delete syncs above are scoped to node/ and user/.
+    # mqtt/ prefix root: the --delete syncs above are scoped to node/, user/ and bridge/.
     - aws s3 cp docs/api/MQTT_Node.yaml
       s3://esp-rainmaker-neo-api/mqtt/MQTT_Node.yaml
     - aws s3 cp docs/api/MQTT_User.yaml
       s3://esp-rainmaker-neo-api/mqtt/MQTT_User.yaml
     - aws s3 cp docs/api/MQTT_Bridge.yaml
       s3://esp-rainmaker-neo-api/mqtt/MQTT_Bridge.yaml
+    # Invalidated here rather than once at the end of the job: the --delete syncs above have
+    # already published, so a failure in the events half below must not leave mqtt/ stale.
     - aws cloudfront create-invalidation --distribution-id E3F6AIL6K7W45G
       --paths "/mqtt/*"
-    - 'echo "MQTT Node: https://api.docs.neo.rainmaker.espressif.com/mqtt/node/"'
-    - 'echo "MQTT User: https://api.docs.neo.rainmaker.espressif.com/mqtt/user/"'
-    - 'echo "MQTT Bridge: https://api.docs.neo.rainmaker.espressif.com/mqtt/bridge/"'
-
-# -------------------------
-# Notification/event payloads (AsyncAPI) sync to S3
-# -------------------------
-sync_events:
-  stage: swagger
-  # Same reasoning as sync_swagger — no dependency on the build or deploy stages.
-  needs: []
-  image:
-    name: node:22-alpine
-    entrypoint: [""]
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      when: never
-    - if: '$CI_COMMIT_BRANCH == "main"'
-      changes:
-        - docs/api/**/*
-  variables:
-    AWS_DEFAULT_REGION: us-east-1
-  before_script:
-    - apk add --no-cache aws-cli
-    # Same pinned CLI/template pair as sync_mqtt — see the comment there.
-    - npm install -g @asyncapi/cli@4.1.1
-  script:
-    - export AWS_ACCESS_KEY_ID=${RMNG_PROD_ACCESS_KEY}
-    - export AWS_SECRET_ACCESS_KEY=${RMNG_PROD_SECRET_ACCESS_KEY}
-    - "asyncapi generate fromTemplate docs/api/Push_User.yaml
-      @asyncapi/html-template@2.3.0 -o dist/events --force-write"
-    - export HOME_HREF="../" INJECT_DIR="dist"
-    - *inject_home_link
     # This sync targets the events/ prefix root, so --delete would remove the raw
     # spec copied below on every run; --exclude keeps it out of scope.
-    - aws s3 sync dist/events/ s3://esp-rainmaker-neo-api/events/ --delete
-      --exclude "Push_User.yaml"
+    - aws s3 sync dist-events/events/ s3://esp-rainmaker-neo-api/events/
+      --delete --exclude "Push_User.yaml"
     # Raw spec alongside its rendering, for codegen and diffing.
     - aws s3 cp docs/api/Push_User.yaml
       s3://esp-rainmaker-neo-api/events/Push_User.yaml
     - aws cloudfront create-invalidation --distribution-id E3F6AIL6K7W45G
       --paths "/events/*"
+    - 'echo "MQTT Node: https://api.docs.neo.rainmaker.espressif.com/mqtt/node/"'
+    - 'echo "MQTT User: https://api.docs.neo.rainmaker.espressif.com/mqtt/user/"'
+    - 'echo "MQTT Bridge:
+      https://api.docs.neo.rainmaker.espressif.com/mqtt/bridge/"'
     - 'echo "Events payloads site:
       https://api.docs.neo.rainmaker.espressif.com/events/"'
 
@@ -618,7 +611,8 @@ sync_events:
 
 build_docs:
   extends: .docs_template
-  image: python:3.12
+  # docs/requirements.txt is installed in the image; the job's own pip install is the delta.
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
   interruptible: true
   needs: []
   rules:
@@ -634,7 +628,7 @@ build_docs:
     expire_in: 1 week
   script:
     - cd docs
-    - pip install -r requirements.txt
+    - pip3 install -r requirements.txt
     - build-docs -l en -pp $CI_PROJECT_DIR
 
 # deploy-docs ships build_docs' artifacts over ssh/scp, which python:3.12 lacks.
@@ -663,12 +657,15 @@ deploy_docs_preview:
     DOCS_DEPLOY_SERVER_USER: "$DOCS_PREVIEW_SERVER_USER"
     DOCS_DEPLOY_PATH: "$DOCS_PREVIEW_PATH"
     DOCS_DEPLOY_URL_BASE: "$DOCS_PREVIEW_URL_BASE"
+  # Narrower than build_docs on purpose
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes: *docs_changes
+      changes:
+        - docs/**/*
 
 deploy_docs_production:
   extends: .deploy_docs_template
+  interruptible: false
   variables:
     TYPE: "production"
     DOCS_DEPLOY_PRIVATEKEY: "$DOCS_PROD_PRIVATEKEY"
