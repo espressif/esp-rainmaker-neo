@@ -185,6 +185,9 @@ jobs:
           CDK_OUTDIR=cdk.out.rmng    python3 cdk/apps/rmng.py
           CDK_OUTDIR=cdk.out.espuser python3 cdk/apps/espuser.py
           CDK_OUTDIR=cdk.out.alexa   python3 cdk/apps/alexa.py
+      # Public-bucket redaction hinges on one exact string in an output's description, and a typo in it fails silently.
+      - name: Check output redaction markers are spelled correctly
+        run: python3 scripts/check_output_markers.py
       - name: Upload cloud assemblies
         if: failure()
         uses: actions/upload-artifact@v4

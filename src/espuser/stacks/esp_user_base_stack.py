@@ -240,7 +240,10 @@ def handler(event, context):
 
         self.seed_oauth_clients_cr = CustomResource(
             self, "SeedOAuthClients", service_token=seed_fn.function_arn,
-            properties={"ClientsHash": seeded_clients_hash},
+            properties={
+                "ClientsHash": seeded_clients_hash,
+                "SeedVersion": 1,
+            },
         )
         self.seed_oauth_clients_cr.node.add_dependency(self.oauth_clients_table)
 
@@ -591,7 +594,7 @@ class EspUserBaseStack(Stack):
         )
         CfnOutput(self, "EspUserTokenUrl",
             value=f"{oauth2_base}/token",
-            description="User OAuth2 Token URL"
+            description="User OAuth2 Token URL [visibility:public]"
         )
         CfnOutput(self, "EspUserUserInfoUrl",
             value=f"{oauth2_base}/userinfo",
@@ -652,7 +655,7 @@ class EspUserBaseStack(Stack):
         )
         CfnOutput(self, "EspAdminTokenUrl",
             value=f"https://{admin_oauth_host}/oauth2/token",
-            description="Admin OAuth2 Token URL"
+            description="Admin OAuth2 Token URL [visibility:public]"
         )
         CfnOutput(self, "EspAdminUserInfoUrl",
             value=f"https://{admin_oauth_host}/oauth2/userInfo",
