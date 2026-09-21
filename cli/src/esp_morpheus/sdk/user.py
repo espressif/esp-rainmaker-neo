@@ -1653,6 +1653,50 @@ class User:
         except queue.Empty:
             return None
 
+    @requires('mqtt', blocked=None)
+    def get_named_shadow(self, thing_name, shadow_name, timeout=5):
+        """Fetch a named shadow document once and return it (None on timeout/rejection).
+
+        read_shadow only publishes the get request: the reply lands on get/accepted, which
+        subscribe_to_named_shadows does not cover (it listens on update/accepted), so a caller
+        that wants the current document rather than the next change has to subscribe here.
+        """
+        base_topic = f"$aws/things/{thing_name}/shadow/name/{shadow_name}/get"
+        replies = queue.Queue()
+
+        try:
+            for suffix in ("accepted", "rejected"):
+                subscribe_future, _ = self.mqtt_connection.subscribe(
+                    topic=f"{base_topic}/{suffix}",
+                    qos=mqtt.QoS.AT_LEAST_ONCE,
+                    callback=lambda topic, payload, **kwargs: replies.put((topic, json.loads(payload)))
+                )
+                subscribe_future.result()
+
+            publish_future, _ = self.mqtt_connection.publish(
+                topic=base_topic, payload="{}", qos=mqtt.QoS.AT_LEAST_ONCE)
+            publish_future.result()
+
+            topic, reply = replies.get(timeout=timeout)
+        except queue.Empty:
+            user_log(f"No reply for shadow '{shadow_name}' on '{thing_name}' within {timeout}s")
+            return None
+        except Exception as e:
+            user_log(f"Error getting shadow '{shadow_name}' on '{thing_name}': {str(e)}")
+            return None
+        finally:
+            for suffix in ("accepted", "rejected"):
+                try:
+                    self.mqtt_connection.unsubscribe(f"{base_topic}/{suffix}")
+                except Exception:
+                    pass
+
+        if topic.endswith("/rejected"):
+            user_log(f"Shadow get rejected for '{shadow_name}' on '{thing_name}': {reply}")
+            return None
+
+        return reply
+
     def read_connection_queue(self, timeout=5):
         """Get connection status from queue with timeout"""
         try:
