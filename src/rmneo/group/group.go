@@ -6,13 +6,16 @@ package group
 
 import (
 	"errors"
+	"os"
+	"strings"
+
+	"github.com/espressif/esp-rainmaker-neo/src/awsutils/lambdautil"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/sharing_request_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_group_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/ids"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"strings"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/user_details_db"
@@ -28,13 +31,15 @@ import (
 // (IDs containing "--", see IsChildNode) are excluded from the count — they're
 // managed by their parent and swept after the parent node is removed.
 // ErrGroupAccessDenied/ErrSubGroupAccessDenied is mapped to a 4xx by handlers.
-// ErrSubGroupDeleteForbidden is mapped to 403: the caller can see the subgroup but
-// lacks delete permission (e.g. subentity access), distinct from "not found/no access".
+// ErrGroupDeleteForbidden/ErrSubGroupDeleteForbidden are mapped to 403: the caller can see the
+// group/subgroup but lacks delete permission (e.g. secondary or subentity access), distinct
+// from "not found/no access".
 var (
 	ErrGroupNotEmpty           = errors.New("group not empty")
 	ErrSubGroupNotEmpty        = errors.New("subgroup not empty")
 	ErrGroupAccessDenied       = errors.New("group does not exist or access denied")
 	ErrSubGroupAccessDenied    = errors.New("subgroup does not exist or access denied")
+	ErrGroupDeleteForbidden    = errors.New("insufficient permissions to delete group")
 	ErrSubGroupDeleteForbidden = errors.New("insufficient permissions to delete subgroup")
 	ErrNotMatterCapable        = errors.New("group does not have Matter capability")
 	ErrCapabilityAlreadyExists = errors.New("group already has capability")
@@ -484,7 +489,6 @@ func UpdateGroup(ctx *rmngctx.RmngContext, groupID string, groupName string) err
 func UpdateSubGroup(ctx *rmngctx.RmngContext, groupID string, subGroupID string, subGroupName string) error {
 	// Check that we have access to the parent group OR the specific subgroup
 	_, err := GetUserSubGroupAccess(ctx, groupID, subGroupID)
-
 	if err != nil {
 		return rmerror.NewRMError(errors.Join(ErrSubGroupAccessDenied, err), "subgroup does not exist or access denied")
 	}
@@ -507,6 +511,11 @@ func DeleteGroup(ctx *rmngctx.RmngContext, groupID string) error {
 	_, err := GetUserGroupAccess(ctx, groupID)
 	if err != nil {
 		return rmerror.NewRMError(err, "parent group does not exist")
+	}
+
+	// Load-bearing for the wipe dispatched at the end: that runs under the system actor, which authorizes nothing, so this is the only check between a caller holding GroupDeleteAutomation but not GroupDelete and the loss of a group's automations.
+	if err := ctx.IsAuthorized(utils.GroupDelete, groupID); err != nil {
+		return rmerror.NewRMError(errors.Join(ErrGroupDeleteForbidden, err), "insufficient permissions to delete group")
 	}
 
 	// Reject if any subgroup exists (LoadGroup surfaces empty ones too,
@@ -537,7 +546,22 @@ func DeleteGroup(ctx *rmngctx.RmngContext, groupID string) error {
 		return rmerror.NewRMError(err, "failed to delete user-group mappings")
 	}
 
+	CleanupGroupAsync(ctx, groupID)
+
 	return nil
+}
+
+type nodeDataResetEvent struct {
+	NodeIDs     []string `json:"node_ids"`
+	OldGroupID  string   `json:"old_group_id"`
+	GroupDelete bool     `json:"group_delete"`
+}
+
+func CleanupGroupAsync(ctx *rmngctx.RmngContext, groupID string) {
+	event := nodeDataResetEvent{OldGroupID: groupID, GroupDelete: true}
+	if err := lambdautil.InvokeAsync(ctx.Context, os.Getenv("NODE_DATA_RESET_FUNCTION_NAME"), event); err != nil {
+		rlog.Error(ctx).Err(err).Str("groupID", groupID).Msg("failed to invoke automation cleanup for deleted group")
+	}
 }
 
 // DeleteSubGroup deletes an empty subgroup. Returns ErrSubGroupNotEmpty

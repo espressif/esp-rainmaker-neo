@@ -6,6 +6,7 @@ package automation
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/automation_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
@@ -632,7 +633,7 @@ var _ = Describe("AutomationService", func() {
 		})
 
 		// Remove automations referencing the node via service
-		err := automationService.DeleteNodeFromAutomations(rmngCtx, testGroupID, nodeID)
+		err := automationService.DeleteNodesFromAutomations(rmngCtx, testGroupID, []string{nodeID})
 		Expect(err).To(BeNil())
 
 		// auto1 should be deleted (has removed node in trigger)
@@ -646,6 +647,46 @@ var _ = Describe("AutomationService", func() {
 		err = mockDB.GetDirect(automation_db.AutomationsTable, testGroupID, "auto2", &result2)
 		Expect(err).To(BeNil())
 		Expect(result2.GroupID).To(Equal(testGroupID))
+	})
+
+	// Two removed nodes sharing one automation used to lose a removal: each read the original
+	// target list and the second write restored the target the first had just stripped. The
+	// cleanup therefore takes the whole batch and writes each automation once.
+	It("should remove every batched node's targets from a shared automation", func() {
+		nodeA := "batch-node-a"
+		nodeB := "batch-node-b"
+		keeper := "batch-node-keeper"
+
+		shared := automation_db.AutomationItem{
+			GroupID:      testGroupID,
+			AutomationID: "auto-shared",
+			Payload: map[string]interface{}{
+				"name":       "Automation targeting both removed nodes and one survivor",
+				"conditions": map[string]interface{}{"and": []interface{}{keeper + "~auto-shared~0"}},
+				"actions": map[string]interface{}{"targets": []interface{}{
+					map[string]interface{}{"node": nodeA, "path": "Light.Power", "value": true},
+					map[string]interface{}{"node": nodeB, "path": "Light.Power", "value": true},
+					map[string]interface{}{"node": keeper, "path": "Light.Power", "value": true},
+				}},
+			},
+		}
+		item, _ := attributevalue.MarshalMap(shared)
+		mockDB.PutItem(context.TODO(), &dynamodb.PutItemInput{
+			TableName: aws.String(automation_db.AutomationsTable),
+			Item:      item,
+		})
+
+		Expect(automationService.DeleteNodesFromAutomations(rmngCtx, testGroupID, []string{nodeA, nodeB})).To(BeNil())
+
+		var result automation_db.AutomationItem
+		Expect(mockDB.GetDirect(automation_db.AutomationsTable, testGroupID, "auto-shared", &result)).To(BeNil())
+		Expect(result.GroupID).To(Equal(testGroupID), "the automation still has a live target, so it must survive")
+
+		payload, err := json.Marshal(result.Payload)
+		Expect(err).To(BeNil())
+		Expect(string(payload)).ToNot(ContainSubstring(nodeA), "node A's target survived the batch removal")
+		Expect(string(payload)).ToNot(ContainSubstring(nodeB), "node B's target survived the batch removal")
+		Expect(string(payload)).To(ContainSubstring(keeper), "the surviving node's target must be left alone")
 	})
 
 	It("should update automation actions when node is only in actions (not triggers)", func() {
@@ -714,7 +755,7 @@ var _ = Describe("AutomationService", func() {
 		}
 
 		// Remove node from automations
-		err := automationService.DeleteNodeFromAutomations(rmngCtx, testGroupID, nodeID)
+		err := automationService.DeleteNodesFromAutomations(rmngCtx, testGroupID, []string{nodeID})
 		Expect(err).To(BeNil())
 
 		// auto-act should still exist (node removed from actions, other target remains)

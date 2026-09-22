@@ -246,6 +246,37 @@ func AssertNoAutomationsForGroup(groupID string) {
 	Expect(count).To(Equal(0), fmt.Sprintf("No automations should exist for group '%s', but found %d", groupID, count))
 }
 
+// AssertNoAutomationsForNodes checks that no automation in the group still references any of
+// nodeIDs, either as a trigger (trigger IDs lead with "nodeID~") or as an action target.
+// Automations naming none of them are expected to survive.
+func AssertNoAutomationsForNodes(groupID string, nodeIDs ...string) {
+	dbMock := awscommon.GetDynamoDBClient().(*mock.DynamoDBMock)
+	for _, nodeID := range nodeIDs {
+		offenders := []string{}
+		dbMock.ForEachRow(automation_db.AutomationsTable, func(item map[string]types.AttributeValue) error {
+			gid, ok := item["group_id"].(*types.AttributeValueMemberS)
+			if !ok || gid.Value != groupID {
+				return nil
+			}
+			raw, err := json.Marshal(item)
+			if err != nil {
+				return nil
+			}
+			if strings.Contains(string(raw), nodeID) {
+				aid, _ := item["automation_id"].(*types.AttributeValueMemberS)
+				id := ""
+				if aid != nil {
+					id = aid.Value
+				}
+				offenders = append(offenders, id)
+			}
+			return nil
+		})
+		Expect(offenders).To(BeEmpty(), fmt.Sprintf(
+			"no automation in group '%s' should still reference node '%s', but these do: %v", groupID, nodeID, offenders))
+	}
+}
+
 // AssertNodeDataResetInvoked checks that the node_data_reset Lambda was invoked
 // with a payload whose node_ids list contains nodeID and whose old_group_id matches.
 func AssertNodeDataResetInvoked(functionName, nodeID, oldGroupID string) {
@@ -266,34 +297,42 @@ func AssertNodeDataResetInvoked(functionName, nodeID, oldGroupID string) {
 		"node_data_reset Lambda should have been invoked for node '%s' with old_group_id '%s'", nodeID, oldGroupID))
 }
 
-// AssertNodeDataResetInvokedWithGroupDelete is like AssertNodeDataResetInvoked but also
-// verifies the group_delete flag is true.
-func AssertNodeDataResetInvokedWithGroupDelete(functionName, oldGroupID string, expectedNodeIDs []string) {
+// AssertGroupAutomationWipeInvoked checks that the node_data_reset Lambda was invoked with the
+// group-wide wipe payload for oldGroupID: group_delete set and no nodes named.
+func AssertGroupAutomationWipeInvoked(functionName, oldGroupID string) {
 	lambdaMock := awscommon.GetLambdaClient().(*mock.LambdaMock)
 	found := false
 	for _, call := range lambdaMock.InvokeCalls {
-		if call.FunctionName != nil && *call.FunctionName == functionName {
-			var p node.NodeDataResetEvent
-			if err := json.Unmarshal(call.Payload, &p); err == nil {
-				if p.OldGroupID == oldGroupID && p.GroupDelete {
-					// Check all expected node IDs are present
-					allFound := true
-					for _, nid := range expectedNodeIDs {
-						if !sliceContains(p.NodeIDs, nid) {
-							allFound = false
-							break
-						}
-					}
-					if allFound {
-						found = true
-						break
-					}
-				}
-			}
+		if call.FunctionName == nil || *call.FunctionName != functionName {
+			continue
+		}
+		var p node.NodeDataResetEvent
+		if err := json.Unmarshal(call.Payload, &p); err != nil {
+			continue
+		}
+		if p.OldGroupID == oldGroupID && p.GroupDelete && len(p.NodeIDs) == 0 {
+			found = true
+			break
 		}
 	}
 	Expect(found).To(BeTrue(), fmt.Sprintf(
-		"node_data_reset Lambda should have been invoked with group_delete=true for group '%s' with nodes %v", oldGroupID, expectedNodeIDs))
+		"node_data_reset Lambda should have been invoked with group_delete=true for group '%s'", oldGroupID))
+}
+
+// AssertNoGroupAutomationWipeInvoked is the negative of AssertGroupAutomationWipeInvoked.
+func AssertNoGroupAutomationWipeInvoked(functionName, oldGroupID string) {
+	lambdaMock := awscommon.GetLambdaClient().(*mock.LambdaMock)
+	for _, call := range lambdaMock.InvokeCalls {
+		if call.FunctionName == nil || *call.FunctionName != functionName {
+			continue
+		}
+		var p node.NodeDataResetEvent
+		if err := json.Unmarshal(call.Payload, &p); err != nil {
+			continue
+		}
+		Expect(p.OldGroupID == oldGroupID && p.GroupDelete).To(BeFalse(), fmt.Sprintf(
+			"node_data_reset Lambda should not have been invoked with group_delete=true for group '%s'", oldGroupID))
+	}
 }
 
 func sliceContains(slice []string, val string) bool {

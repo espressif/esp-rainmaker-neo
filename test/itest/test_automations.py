@@ -1203,3 +1203,4 @@ def test_delete_all_automations_on_foreign_group_denied(two_tenants):
 
     assert user_b.get_automation(tenant_b["group_id"], b_auto["automation_id"]) is not None, \
         "Foreign automation was destroyed by a non-member"
+

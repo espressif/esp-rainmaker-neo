@@ -164,7 +164,7 @@ func (s *AutomationService) PutWithResourceID(rmngCtx *rmngctx.RmngContext, grou
 // putWithResourceID is the shared write path. targetCheck gates the
 // action-target group-membership validation: user-facing writes pass true so
 // a foreign target is rejected up front, while internal cleanup
-// (DeleteNodeFromAutomations) passes false because it only ever shrinks the
+// (DeleteNodesFromAutomations) passes false because it only ever shrinks the
 // target list and a sibling target may already have left the group. Stale
 // targets that slip through are still blocked at execution time by
 // executeActionTarget. RBAC (GroupEditAutomation) is enforced by the DB layer.
@@ -355,46 +355,41 @@ type AutomationActions struct {
 	Targets []ActionTarget `json:"targets,omitempty"`
 }
 
-// ContainsNode checks whether any trigger ID starts with the given prefix (nodeID~).
-func (c *AutomationConditions) ContainsNode(triggerPrefix string) bool {
-	for _, id := range c.And {
-		if strings.HasPrefix(id, triggerPrefix) {
-			return true
-		}
-	}
-	for _, id := range c.Or {
-		if strings.HasPrefix(id, triggerPrefix) {
+// ContainsAnyNode checks whether any trigger ID names one of nodeIDs. Trigger IDs are "nodeID~automationID~triggerIndex", so only the leading segment is compared.
+func (c *AutomationConditions) ContainsAnyNode(nodeIDs map[string]bool) bool {
+	for _, id := range append(append([]string{}, c.And...), c.Or...) {
+		if nodeID, _, found := strings.Cut(id, "~"); found && nodeIDs[nodeID] {
 			return true
 		}
 	}
 	return false
 }
 
-// ContainsNode checks whether any action target references the given nodeID.
-func (a *AutomationActions) ContainsNode(nodeID string) bool {
-	for _, t := range a.Targets {
-		if t.Node == nodeID {
-			return true
-		}
-	}
-	return false
-}
-
-// RemoveNode returns a copy of actions with targets referencing nodeID removed.
-func (a *AutomationActions) RemoveNode(nodeID string) AutomationActions {
+// RemoveNodes returns a copy of actions with every target referencing one of nodeIDs removed.
+func (a *AutomationActions) RemoveNodes(nodeIDs map[string]bool) AutomationActions {
 	var remaining []ActionTarget
 	for _, t := range a.Targets {
-		if t.Node != nodeID {
+		if !nodeIDs[t.Node] {
 			remaining = append(remaining, t)
 		}
 	}
 	return AutomationActions{Targets: remaining}
 }
 
-// DeleteNodeFromAutomations cleans up automations in the group that reference the given nodeID.
-// - If the node is in trigger conditions → delete the entire automation
-// - If the node is only in action targets → remove those targets; if no targets remain, delete the automation
-func (s *AutomationService) DeleteNodeFromAutomations(rmngCtx *rmngctx.RmngContext, groupID, nodeID string) error {
+// DeleteNodesFromAutomations cleans up automations in the group that reference any of nodeIDs.
+// - If a node is in trigger conditions → delete the entire automation
+// - If a node is only in action targets → remove those targets; if no targets remain, delete the automation
+//
+// Takes the whole batch so each automation is read-modify-written once. A per-node fan-out loses removals: two nodes sharing one automation both read the original target list, and the second write restores the target the first had just stripped.
+func (s *AutomationService) DeleteNodesFromAutomations(rmngCtx *rmngctx.RmngContext, groupID string, nodeIDs []string) error {
+	if len(nodeIDs) == 0 {
+		return nil
+	}
+	removed := make(map[string]bool, len(nodeIDs))
+	for _, nodeID := range nodeIDs {
+		removed[nodeID] = true
+	}
+
 	data, err := s.Get(rmngCtx, groupID)
 	if err != nil {
 		return err
@@ -410,9 +405,8 @@ func (s *AutomationService) DeleteNodeFromAutomations(rmngCtx *rmngctx.RmngConte
 		return rmerror.NewRMError(err, "failed to convert automations to typed structs")
 	}
 
-	triggerPrefix := nodeID + "~"
 	for _, entry := range entries {
-		if entry.Conditions.ContainsNode(triggerPrefix) {
+		if entry.Conditions.ContainsAnyNode(removed) {
 			// Node in triggers → delete entire automation
 			if err := s.DeleteWithResourceID(rmngCtx, groupID, entry.ID); err != nil {
 				rlog.Error(rmngCtx).Err(err).Str("automationID", entry.ID).Msg("failed to delete automation with node in triggers")
@@ -420,13 +414,13 @@ func (s *AutomationService) DeleteNodeFromAutomations(rmngCtx *rmngctx.RmngConte
 			continue
 		}
 
-		if !entry.Actions.ContainsNode(nodeID) {
+		// Nodes only in actions → drop all their targets in one write
+		cleaned := entry.AutomationPayload
+		cleaned.Actions = cleaned.Actions.RemoveNodes(removed)
+		if len(cleaned.Actions.Targets) == len(entry.Actions.Targets) {
 			continue
 		}
 
-		// Node only in actions → remove those targets
-		cleaned := entry.AutomationPayload
-		cleaned.Actions = cleaned.Actions.RemoveNode(nodeID)
 		if len(cleaned.Actions.Targets) == 0 {
 			// No actions left → delete the automation
 			if err := s.DeleteWithResourceID(rmngCtx, groupID, entry.ID); err != nil {

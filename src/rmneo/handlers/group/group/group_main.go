@@ -565,6 +565,9 @@ func handleDeleteGroup(context context.Context, request events.APIGatewayProxyRe
 		if errors.Is(err, group.ErrGroupNotEmpty) {
 			return utils.APIGwRespJSON(http.StatusConflict, utils.NewAPIStatus("group not empty")), nil
 		}
+		if errors.Is(err, group.ErrGroupDeleteForbidden) {
+			return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("insufficient permissions to delete group")), nil
+		}
 		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Failed to delete group")), nil
 	}
 
