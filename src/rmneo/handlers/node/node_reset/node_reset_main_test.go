@@ -293,7 +293,44 @@ var _ = Describe("handleRequest", func() {
 		test_utils.AssertNodeServiceDataExists(otherNodeID, "schedule")
 	})
 
-	It("should delete all automations for the group when group_delete is true", func() {
+	It("should wipe every automation of the group when group_delete is set", func() {
+		groupID := "gd-wipe-grp"
+		nodeAuto := automation_db.AutomationItem{
+			GroupID: groupID, AutomationID: "w1",
+			Payload: map[string]interface{}{
+				"name":       "Node automation",
+				"conditions": map[string]interface{}{"and": []interface{}{"gd-wipe-node~w1~0"}},
+			},
+		}
+		nodelessAuto := automation_db.AutomationItem{
+			GroupID: groupID, AutomationID: "w2",
+			Payload: map[string]interface{}{
+				"name":       "Time-based automation (no node ref)",
+				"conditions": map[string]interface{}{"and": []interface{}{"time~w2~0"}},
+			},
+		}
+		for _, a := range []automation_db.AutomationItem{nodeAuto, nodelessAuto} {
+			item, _ := attributevalue.MarshalMap(a)
+			mockDB.PutItem(context.TODO(), &dynamodb.PutItemInput{
+				TableName: aws.String(automation_db.AutomationsTable),
+				Item:      item,
+			})
+		}
+
+		err := handleRequest(context.Background(), node.NodeDataResetEvent{
+			OldGroupID:  groupID,
+			GroupDelete: true,
+		})
+		Expect(err).To(BeNil())
+
+		test_utils.AssertNoAutomationsForGroup(groupID)
+	})
+
+	It("should reject an event that names neither nodes nor a group delete", func() {
+		Expect(handleRequest(context.Background(), node.NodeDataResetEvent{OldGroupID: "gd-empty"})).To(HaveOccurred())
+	})
+
+	It("should clean the whole batch out of the group's automations in one pass", func() {
 		nodeID1 := "gd-node1"
 		nodeID2 := "gd-node2"
 		otherNodeID := "gd-other"
@@ -348,9 +385,8 @@ var _ = Describe("handleRequest", func() {
 		iotDataClient.PublishCalls = nil
 
 		err := handleRequest(context.Background(), node.NodeDataResetEvent{
-			NodeIDs:     []string{nodeID1, nodeID2},
-			OldGroupID:  groupID,
-			GroupDelete: true,
+			NodeIDs:    []string{nodeID1, nodeID2},
+			OldGroupID: groupID,
 		})
 		Expect(err).To(BeNil())
 
@@ -404,8 +440,8 @@ var _ = Describe("handleRequest", func() {
 		Expect(node2ScheduleNotificationFound).To(BeTrue(), "Schedule notification should have been sent for node2")
 		Expect(node2TriggerNotificationFound).To(BeTrue(), "Trigger notification should have been sent for node2")
 
-		// ALL automations for the group wiped (not just ones referencing the nodes)
-		test_utils.AssertNoAutomationsForGroup(groupID)
+		// Automations referencing either removed node are gone; one naming no node survives, since a node removal is not a group deletion. Cleaning the batch in one pass is what stops two nodes sharing an automation from overwriting each other's target removal.
+		test_utils.AssertNoAutomationsForNodes(groupID, nodeID1, nodeID2)
 
 		// Other node's data in a different context must survive
 		test_utils.AssertNodeServiceDataExists(otherNodeID, "schedule")

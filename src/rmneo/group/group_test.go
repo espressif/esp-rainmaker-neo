@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/automation_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/sharing_request_db"
@@ -2158,6 +2160,22 @@ var _ = Describe("ListUsersForGroupOrSubGroup", func() {
 	})
 })
 
+// seedAutomationForGroup writes a minimal automation row straight to the table, so a spec can
+// assert on cleanup without going through the automation API.
+func seedAutomationForGroup(groupID, automationID string) {
+	item, err := attributevalue.MarshalMap(automation_db.AutomationItem{
+		GroupID:      groupID,
+		AutomationID: automationID,
+		Payload:      map[string]interface{}{"name": automationID},
+	})
+	Expect(err).To(BeNil())
+	_, err = awscommon.GetDynamoDBClient().PutItem(context.Background(), &dynamodb.PutItemInput{
+		TableName: aws.String(automation_db.AutomationsTable),
+		Item:      item,
+	})
+	Expect(err).To(BeNil())
+}
+
 func getGroupDeviceMappingItem(groupID, nodeID string) map[string]types.AttributeValue {
 	dbMock := awscommon.GetDynamoDBClient().(*mock.DynamoDBMock)
 
@@ -2266,6 +2284,34 @@ var _ = Describe("DeleteGroup", func() {
 		err := group.DeleteGroup(rmng_context2, testGroup.GroupID)
 		Expect(err).To(HaveOccurred())
 	})
+
+	// Automations are keyed only by group_id, so once the group and its access rows are gone no
+	// API can reach them — and group IDs are short and freed for reuse, so a new group could
+	// inherit them.
+	It("should dispatch the automation wipe when the group is deleted", func() {
+		os.Setenv("NODE_DATA_RESET_FUNCTION_NAME", "test-node-data-reset")
+		defer os.Unsetenv("NODE_DATA_RESET_FUNCTION_NAME")
+		seedAutomationForGroup(testGroup.GroupID, "auto-del-1")
+
+		Expect(group.DeleteGroup(rmng_context1, testGroup.GroupID)).To(Succeed())
+		test_utils.AssertGroupAutomationWipeInvoked("test-node-data-reset", testGroup.GroupID)
+	})
+
+	// A secondary user holds GroupDeleteAutomation but not GroupDelete, and the DB-layer delete
+	// check fires after the wipe — so without an explicit guard their rejected delete would
+	// still have destroyed the group's automations.
+	It("should not dispatch the wipe when the caller may not delete the group", func() {
+		os.Setenv("NODE_DATA_RESET_FUNCTION_NAME", "test-node-data-reset")
+		defer os.Unsetenv("NODE_DATA_RESET_FUNCTION_NAME")
+		ShareAndApproveGroup(rmng_context1, rmng_context2, testGroup.GroupID, utils.GroupSecondaryAccess)
+		seedAutomationForGroup(testGroup.GroupID, "auto-del-2")
+
+		err := group.DeleteGroup(rmngctx.NewRmngContext(user.NewUser("user-2")), testGroup.GroupID)
+		Expect(errors.Is(err, group.ErrGroupDeleteForbidden)).To(BeTrue(), "got %v", err)
+		test_utils.AssertNoGroupAutomationWipeInvoked("test-node-data-reset", testGroup.GroupID)
+		test_utils.AssertAutomationExists(testGroup.GroupID, "auto-del-2")
+	})
+
 })
 
 func ShareAndApproveGroup(SharingUser *rmngctx.RmngContext, TobeSharedUser *rmngctx.RmngContext, groupID string, accessType utils.GroupAccessType) {

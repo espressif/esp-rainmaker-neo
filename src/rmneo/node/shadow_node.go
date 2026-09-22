@@ -23,9 +23,10 @@ import (
 // NodeDataResetEvent is the payload for the async per-user data reset
 // Lambda (triggers, schedules, timeseries, automations).
 type NodeDataResetEvent struct {
-	NodeIDs     []string `json:"node_ids"`
-	OldGroupID  string   `json:"old_group_id"`
-	GroupDelete bool     `json:"group_delete"`
+	NodeIDs    []string `json:"node_ids"`
+	OldGroupID string   `json:"old_group_id"`
+	// GroupDelete marks the group-wide wipe fired by group
+	GroupDelete bool `json:"group_delete"`
 }
 
 // groupMembershipEvent mirrors the JSON contract of the notifications Lambda's
@@ -55,14 +56,13 @@ const (
 // CleanupNodeFromGroupAsync invokes the node_data_reset Lambda for the
 // given nodes' prior group. No-op when the input is empty or there is
 // no prior group (fresh association).
-func CleanupNodeFromGroupAsync(ctx *rmngctx.RmngContext, nodeIDs []string, oldGroupID string, groupDelete bool) {
+func CleanupNodeFromGroupAsync(ctx *rmngctx.RmngContext, nodeIDs []string, oldGroupID string) {
 	if len(nodeIDs) == 0 || oldGroupID == "" {
 		return
 	}
 	if err := lambdautil.InvokeAsync(ctx.Context, os.Getenv("NODE_DATA_RESET_FUNCTION_NAME"), NodeDataResetEvent{
-		NodeIDs:     nodeIDs,
-		OldGroupID:  oldGroupID,
-		GroupDelete: groupDelete,
+		NodeIDs:    nodeIDs,
+		OldGroupID: oldGroupID,
 	}); err != nil {
 		rlog.Error(ctx).Err(err).Send()
 	}
@@ -169,7 +169,7 @@ func ShadowNodeAddToGroupAuthorized(ctx *rmngctx.RmngContext, nodeID, groupID st
 	if err := NewNode(nodeID).NotifyCleanupGroupAddSync(ctx, oldGroup, groupID); err != nil {
 		rlog.Error(ctx).Err(err).Send()
 	}
-	CleanupNodeFromGroupAsync(ctx, []string{nodeID}, oldGroup.Group, false)
+	CleanupNodeFromGroupAsync(ctx, []string{nodeID}, oldGroup.Group)
 
 	// Notify Alexa/GVA: the node is now discoverable in the new group. A fresh
 	// association has no subgroups yet (those are assigned via UpdateSubGroup).
@@ -190,7 +190,7 @@ func ShadowNodeRemoveFromGroupAuthorized(ctx *rmngctx.RmngContext, nodeID, group
 	if err != nil {
 		return err
 	}
-	CleanupNodeFromGroupAsync(ctx, []string{nodeID}, groupID, false)
+	CleanupNodeFromGroupAsync(ctx, []string{nodeID}, groupID)
 	// Notify Alexa/GVA to drop the node from their device registries.
 	onGroupMembershipChanged(ctx, nodeID, groupID, oldGroup.SubGroups, groupMembershipActionRemoved)
 	return nil
@@ -258,7 +258,7 @@ func ShadowNodeRemoveFromGroupAuthorizedBulk(
 			cleaned = append(cleaned, n)
 		}
 	}
-	CleanupNodeFromGroupAsync(ctx, cleaned, groupID, false)
+	CleanupNodeFromGroupAsync(ctx, cleaned, groupID)
 }
 
 // -----------------------------------------------------------------------------

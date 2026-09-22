@@ -23,7 +23,7 @@ import (
 // HandleNodeDataReset processes a node data reset event.
 func HandleNodeDataReset(ctx context.Context, event node.NodeDataResetEvent) error {
 
-	if len(event.NodeIDs) == 0 || event.OldGroupID == "" {
+	if event.OldGroupID == "" || (len(event.NodeIDs) == 0 && !event.GroupDelete) {
 		return rmerror.NewRMError(nil, "node_ids is required") // Don't retry on bad input
 	}
 
@@ -40,7 +40,15 @@ func HandleNodeDataReset(ctx context.Context, event node.NodeDataResetEvent) err
 
 	automationSvc := automation.NewAutomationService()
 
-	// Delete node services (triggers, schedules, timeseries) and automations for each node in parallel.
+	if event.GroupDelete {
+		if err := automationSvc.Delete(rmngCtx, event.OldGroupID); err != nil {
+			return rmerror.NewRMError(err, "failed to delete all automations for group")
+		}
+		rlog.Info(rmngCtx).Str("oldGroupID", event.OldGroupID).Msg("group automation wipe completed")
+		return nil
+	}
+
+	// Delete node services (triggers, schedules, timeseries) for each node in parallel.
 	_, _, err := parallel.ProcessParallel(rmngCtx, event.NodeIDs, func(nodeID string) error {
 		for name, svc := range service.Registry().GetAllNodeServices() {
 			if name == "config" {
@@ -51,24 +59,15 @@ func HandleNodeDataReset(ctx context.Context, event node.NodeDataResetEvent) err
 			}
 		}
 
-		// Clean up automations referencing this node (single-node removal)
-		if !event.GroupDelete {
-			if err := automationSvc.DeleteNodeFromAutomations(rmngCtx, event.OldGroupID, nodeID); err != nil {
-				rlog.Error(rmngCtx).Err(err).Str("nodeID", nodeID).Str("oldGroupID", event.OldGroupID).Msg("failed to clean up automations")
-			}
-		}
-
 		return nil
 	})
 	if err != nil {
 		return err
 	}
 
-	// Group deletion — wipe all automations for the group in one shot (outside the per-node loop)
-	if event.GroupDelete {
-		if err := automationSvc.Delete(rmngCtx, event.OldGroupID); err != nil {
-			return rmerror.NewRMError(err, "failed to delete all automations for group")
-		}
+	// Automations are group-scoped, so the whole batch is cleaned in one pass rather than inside the fan-out above — concurrent per-node writes to one shared automation would overwrite each other's target removal. Group deletion is not handled here either: group.DeleteGroup wipes the group's automations synchronously, since a deletable group may have no node removals to ride along with.
+	if err := automationSvc.DeleteNodesFromAutomations(rmngCtx, event.OldGroupID, event.NodeIDs); err != nil {
+		rlog.Error(rmngCtx).Err(err).Strs("nodeIDs", event.NodeIDs).Str("oldGroupID", event.OldGroupID).Msg("failed to clean up automations")
 	}
 
 	rlog.Info(rmngCtx).Strs("nodeIDs", event.NodeIDs).Msg("node data reset completed")

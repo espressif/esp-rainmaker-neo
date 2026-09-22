@@ -5,6 +5,7 @@
 import json
 import time
 import uuid
+import boto3
 from py_sdk.test_group import Group
 from py_sdk.test_device import Device, generate_key_and_cert
 from test.itest.conftest import (
@@ -303,36 +304,26 @@ def test_group_id_attribute_set_on_node_association(associated_device):
 
 
 def test_delete_group_full_cleanup(test_user1, valid_device):
-    """Delete group with the empty-check contract.
+    """A populated group delete is rejected with 409; the group goes only once it is emptied.
 
-    A populated group delete is rejected with 409; the group is removed only
-    after it is emptied. Node-level cleanup (shadow params, thing attributes,
-    schedules, triggers, automations) happens during the per-node remove that
-    empty_and_delete_group performs, so those are verified afterwards.
+    Node-level cleanup runs during the per-node remove, which this test performs explicitly so the cleanup can be asserted while the group is still reachable. An automation referencing no node survives that remove and is the group delete's own responsibility.
     """
     node_id = valid_device.node_thing_name
     user1_group_api = Group(test_user1)
     group_id = user1_group_api.create_group("Delete Group Full Cleanup")
 
-    # --- Setup: associate and seed data ---
     result = test_user1.do_user_node_assoc(valid_device, group_id)
     assert result is None, f"Association failed: {result}"
 
-    # Seed schedule (API contract is snake_case "schedules")
     assert test_user1.set_node_schedule(group_id, "", node_id, {
         "schedules": [{"id": "s1", "name": "Morning", "enabled": True}],
     }), "Failed to set schedule"
 
-    # Seed trigger
     assert test_user1.set_node_trigger(group_id, node_id,
         json.dumps({"triggers": [{"id": "t1", "name": "TempHigh"}]}),
     ), "Failed to set trigger"
 
-    # Seed two automations that exercise both node-cleanup paths on removal:
-    #  - condition automation: node is in the trigger condition (whole automation deleted)
-    #  - action-only automation: node is only in the action target (target removed)
-    # Condition trigger IDs are always "nodeID~automationID~triggerIndex", so the
-    # only valid in-group node here is node_id.
+    # Covers both node-cleanup paths: node in the trigger condition, and node as sole action target.
     condition_auto = test_user1.create_automation(group_id, {
         "name": "Condition automation",
         "conditions": {"and": [f"{node_id}~placeholder~0"]},
@@ -346,54 +337,65 @@ def test_delete_group_full_cleanup(test_user1, valid_device):
     })
     assert action_only_auto is not None
 
-    # Pre-condition: verify data exists
+    # References no node, so only the group delete can clean it up.
+    time_auto = test_user1.create_automation(group_id, {
+        "status": "enabled",
+        "automation": {
+            "name": "Time-triggered automation",
+            "triggers": {"time": "08:00"},
+            "actions": {"switch": "on"},
+        },
+    })
+    assert time_auto is not None
+    time_auto_id = time_auto["automation_id"]
+
     attrs_before = describe_thing_attributes(node_id, REGION)
     assert attrs_before.get('group_id') == group_id, "Pre-condition: group_id attribute should be set"
 
-    # --- Act: a populated group delete is rejected (no cascade) ---
     delete_resp = test_user1.make_api_request('DELETE', f'/v1/groups/{group_id}')
     assert delete_resp.status_code == 409, \
         f"Populated group delete should be rejected with 409, got {delete_resp.status_code}"
 
-    # Emptying removes the node (and its data), then deletes the group.
-    user1_group_api.empty_and_delete_group(group_id)
+    # The checks below go through the group's own APIs, so they have to run before the delete: afterwards the group is unreachable and every read fails regardless of what was cleaned up.
+    user1_group_api.remove_node_from_group(group_id, node_id)
 
-    # --- Assert: group is gone ---
-    groups = user1_group_api.list_groups()
-    assert all(g["group_id"] != group_id for g in groups.get("groups", [])), \
-        "Group should not appear in list after deletion"
+    wait_until(
+        lambda: [a["id"] for a in (test_user1.get_automations(group_id) or [])] == [time_auto_id],
+        f"Only the node-less automation {time_auto_id} should survive the node removal",
+    )
 
-    # --- Assert: node-level cleanup done during the per-node remove ---
-
-    # Shadow Params: deleted for node
-    assert valid_device.get_shadow(f"params-{group_id}") is None, \
-        "Group shadow should be deleted after the node is removed"
-
-    # User Tags: iparams shadow still exists
-    iparams = valid_device.get_shadow("iparams")
-    assert iparams is not None, "iparams shadow should still exist"
-
-    # Thing Attributes: group_id cleared
-    attrs = describe_thing_attributes(node_id, REGION)
-    assert attrs.get('group_id', '') == '', \
-        f"group_id attribute should be cleared, got {attrs.get('group_id')!r}"
-
-    # Schedules: deleted for node (async)
     wait_until(
         lambda: test_user1.get_node_schedule(group_id, "", node_id) is None,
         "Schedule should be deleted",
     )
 
-    # Triggers: deleted for node (async)
     wait_until(
         lambda: test_user1.get_node_trigger(group_id, node_id) is None,
         "Trigger should be deleted",
     )
 
-    # Automations for group deleted (async)
-    wait_until(
-        lambda: (test_user1.get_automations(group_id) or []) == [],
-        "All automations should be deleted",
+    assert valid_device.get_shadow(f"params-{group_id}") is None, \
+        "Group shadow should be deleted after the node is removed"
+
+    assert valid_device.get_shadow("iparams") is not None, "iparams shadow should still exist"
+
+    attrs = describe_thing_attributes(node_id, REGION)
+    assert attrs.get('group_id', '') == '', \
+        f"group_id attribute should be cleared, got {attrs.get('group_id')!r}"
+
+    user1_group_api.delete_group(group_id)
+
+    groups = user1_group_api.list_groups()
+    assert all(g["group_id"] != group_id for g in groups.get("groups", [])), \
+        "Group should not appear in list after deletion"
+
+    # Read the table directly: automation rows are keyed only by group_id, so once the group and its access rows are gone no API can reach them, and group ids are short and reused, so a later group would inherit them.
+    leftover = boto3.resource("dynamodb", region_name=REGION).Table("rmng-automations").query(
+        KeyConditionExpression=boto3.dynamodb.conditions.Key("group_id").eq(group_id)
+    ).get("Items", [])
+    assert not leftover, (
+        f"deleting the group left {len(leftover)} automation row(s) orphaned under group_id "
+        f"{group_id}: {[i.get('automation_id') for i in leftover]}"
     )
 
 
