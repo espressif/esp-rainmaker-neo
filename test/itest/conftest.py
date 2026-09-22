@@ -45,6 +45,7 @@ import time
 from queue import Empty
 
 import boto3
+from botocore.exceptions import ClientError
 import subprocess
 import sys
 import os
@@ -403,11 +404,23 @@ def _reset_user(user):
         delete_user_groups(user)
     except Exception as e:
         print(f"Warning cleaning user groups: {e}")
-    # Best-effort disconnect MQTT if connected
+    # These users come from a pool, so anything left set here lands on whichever test borrows next.
     try:
+        # First: a set flag makes the interrupt callback tear down mid-disconnect.
+        user.disable_reconnect = False
         user.mqtt_disconnect_and_wait()
     except Exception:
         pass
+    finally:
+        # After the disconnect, not before: mqtt_disconnect() re-arms this, and the SDK clears it
+        # only when .result() returns, so a failed disconnect leaves the next borrower unable to connect.
+        user.disconnect_future = None
+        # Nothing else drains this one -- mqtt_connect() drains shadow_queue but not connection_queue.
+        while not user.connection_queue.empty():
+            try:
+                user.connection_queue.get_nowait()
+            except Exception:
+                break
 
     # Delete Mailosaur messages for this user
     try:
@@ -488,12 +501,50 @@ def node_registrar_identity():
     # nodes registered by earlier runs keep resolving to the same caller.
     provisioner = User(email, "", REGION, IDENTITY_POOL_ID, API_GATEWAY_URL, USER_API_GATEWAY_URL,
                        IOT_ENDPOINT, admin_user_pool_id=ADMIN_USER_POOL_ID, admin_client_id=ADMIN_CLIENT_ID)
-    assert provisioner.create_admin_via_cognito(
-        email=email, password=False, user_id="node-registrar-itest",
-    ), "failed to provision the node-registrar identity"
-
     cognito = boto3.client("cognito-idp", region_name=REGION)
-    username = cognito.admin_get_user(UserPoolId=ADMIN_USER_POOL_ID, Username=email)["Username"]
+
+    def _registrar_already_provisioned():
+        """True when the pinned registrar admin already carries the attribute the admin gate reads.
+
+        Every xdist worker initialises its own device pool, so without this read-first check all of
+        them re-stamp the same fixed Cognito user at once and Cognito throttles the write
+        (TooManyRequestsException is per-user, and the retry below alone is not enough at 10+ workers).
+
+        custom:user_id is the whole condition: it is the tenant key the admin gate resolves on
+        """
+        try:
+            attrs = {a["Name"]: a["Value"] for a in cognito.admin_get_user(
+                UserPoolId=ADMIN_USER_POOL_ID, Username=email)["UserAttributes"]}
+        except Exception:  # noqa: BLE001 - absent user, or a throttled read: fall through and provision
+            return False
+        return attrs.get("custom:user_id") == "node-registrar-itest"
+
+    if not _registrar_already_provisioned():
+        # Cognito throttles writes to a single user hard, and every worker races here on a cold
+        # account, so back off and re-check rather than failing the whole worker's device pool.
+        for attempt in range(5):
+            if provisioner.create_admin_via_cognito(
+                    email=email, password=False, user_id="node-registrar-itest"):
+                break
+            if _registrar_already_provisioned():
+                break
+            time.sleep(2 ** attempt)
+        else:
+            assert _registrar_already_provisioned(), "failed to provision the node-registrar identity"
+
+    # Retried for the same reason as the write above: this read hits the same pinned user that
+    # every worker is reading at once, and an unguarded throttle here kills the whole worker's
+    # device pool -- the failure this function exists to prevent.
+    username = None
+    for attempt in range(5):
+        try:
+            username = cognito.admin_get_user(
+                UserPoolId=ADMIN_USER_POOL_ID, Username=email)["Username"]
+            break
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") != "TooManyRequestsException" or attempt == 4:
+                raise
+            time.sleep(2 ** attempt)
     pool = f"cognito-idp.{REGION}.amazonaws.com/{ADMIN_USER_POOL_ID}"
     _node_registrar_provider = f"{pool},{pool}:CognitoSignIn:{username}"
     return _node_registrar_provider
@@ -578,7 +629,7 @@ def associate_device_with_group(device, user, user1_group_api,
     """
 
     # Use retry mechanism to handle policy propagation delays after device registration
-    assert connect_device_with_retry(device, max_retries=3, base_delay=2), "Failed to connect the device after retries"
+    assert connect_device_with_retry(device), "Failed to connect the device after retries"
 
     # Clear queues and callbacks (to ensure clear state)
     device.clear_queues()
@@ -1032,7 +1083,7 @@ def two_devices_same_group(test_user1, session_valid_device_rsa, session_valid_d
     devices = [session_valid_device_rsa, session_valid_device_rsa_2]
     try:
         for device in devices:
-            assert connect_device_with_retry(device, max_retries=3, base_delay=2), \
+            assert connect_device_with_retry(device), \
                 f"Failed to connect device {device.node_thing_name}"
             result = user.do_user_node_assoc(device, group_id)
             assert result is None, f"Association failed for {device.node_thing_name}: {result}"
@@ -1615,19 +1666,89 @@ def validate_user_group_dynamodb_entry(user_id, group_id, expected_item):
     assert response['Item'] == expected_item
 
 
-def connect_device_with_retry(device, max_retries=2, base_delay=1):
-    """Helper function to connect device with retry mechanism"""
+def connect_device_with_retry(device, max_retries=5, base_delay=2):
+    """Connect a device over MQTT, retrying past transient IoT Core contention.
+
+    Defaults are deliberately patient (5 attempts, 2s base -> 2/4/8/16s backoff, ~30s total).
+    Under `--dist=loadgroup` every worker holds its own MQTT connections, and the TLS handshake
+    to IoT Core gets starved: runs showed AWS_IO_TLS_NEGOTIATION_TIMEOUT followed by socket
+    timeouts, exhausting the previous 3-attempt/2s budget (~6s) and failing fixture setup for
+    tests that were otherwise fine. Connecting is setup, not the assertion under test, so it is
+    worth waiting out rather than turning into a spurious error.
+    """
     for attempt in range(max_retries):
         try:
             if device.connect():
                 return True
+            _drop_stale_mqtt_connection(device)
             if attempt < max_retries - 1:
                 time.sleep(base_delay * (2 ** attempt))  # Exponential backoff
         except Exception as e:
             print(f"Connection attempt {attempt + 1} failed: {str(e)}")
+            _drop_stale_mqtt_connection(device)
             if attempt < max_retries - 1:
                 time.sleep(base_delay * (2 ** attempt))
     return False
+
+
+def _drop_stale_mqtt_connection(device):
+    """Tear down a half-open connection so the next attempt is a real one.
+
+    Device.connect() returns True whenever mqtt_connection is set, but it sets that before
+    subscribing and returns False if the subscribe fails -- so without this the next attempt
+    short-circuits to success and the caller gets a device that never subscribed to from_cloud.
+    Raising the retry count makes that false success more reachable, not less.
+    """
+    try:
+        device.disconnect()
+    except Exception:
+        pass
+    device.mqtt_connection = None
+
+
+def device_s3_client_with_retry(device, role_alias=None, max_retries=5, base_delay=2):
+    """S3 client from the IoT Credential Provider, retried past registry propagation.
+
+    Pooled test devices are registered with no capabilities (see `_init_device`), so
+    `rmng-node-file-policy` is not on their certificate; `Device.get_s3_client` attaches it
+    just-in-time and immediately asks the credential provider for credentials. Both
+    `ListThingPrincipals` and `AttachPolicy` are eventually consistent, so that first call can
+    see an empty principal list (nothing gets attached) or hit a provider that has not yet seen
+    the attachment — either way the mTLS request comes back 403. Serially the window is short
+    enough to miss; under `--dist=loadgroup` the extra registry load widens it and the test
+    flakes. Retrying the whole attach+fetch closes it.
+    """
+    alias = role_alias or DEVICE_FILE_ROLE_ALIAS
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            return device.get_s3_client(CREDENTIAL_PROVIDER_ENDPOINT, alias, REGION)
+        except requests.exceptions.HTTPError as e:
+            status = e.response.status_code if e.response is not None else None
+            if status not in (403, 400):
+                raise
+            last_error = e
+            print(f"[S3 Cred Provider] attempt {attempt + 1}/{max_retries} got {status}; "
+                  f"retrying after IoT policy propagation")
+            if attempt < max_retries - 1:
+                time.sleep(base_delay * (2 ** attempt))
+        except ClientError as e:
+            # get_s3_client calls list_thing_principals and attach_policy before the mTLS fetch,
+            # and those throttle under loadgroup contention -- the very contention this retries
+            # for. Catching only HTTPError let that escape and fail the test outright.
+            code = e.response.get("Error", {}).get("Code", "")
+            if code not in ("ThrottlingException", "TooManyRequestsException",
+                            "LimitExceededException", "InternalFailure", "ServiceUnavailable"):
+                raise
+            last_error = e
+            print(f"[S3 Cred Provider] attempt {attempt + 1}/{max_retries} got {code} from the IoT "
+                  f"registry; retrying")
+            if attempt < max_retries - 1:
+                time.sleep(base_delay * (2 ** attempt))
+    raise AssertionError(
+        f"credential provider kept denying {device.node_thing_name} after {max_retries} "
+        f"attempts: {last_error}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1774,9 +1895,10 @@ def generate_and_upload_node_csv(user, nodes, return_certs=False):
 
         print(f"Certificate generated for {node['node_id']} ({len(cert_pem)} characters)")
 
-    # Create CSV file in test/test_data directory
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    csv_filename = os.path.join(test_data_dir, f"node_registration_upload_{timestamp}.csv")
+    # Unique because the API derives the S3 key from this basename alone, so concurrent workers
+    # otherwise overwrite each other's upload; <=50 chars or file_name validation 500s the request.
+    timestamp = datetime.datetime.now().strftime("%H%M%S")
+    csv_filename = os.path.join(test_data_dir, f"node_registration_upload_{timestamp}_{os.urandom(4).hex()}.csv")
     try:
         # Write to CSV file
         with open(csv_filename, 'w', newline='', encoding='utf-8') as csvfile:
@@ -2130,7 +2252,7 @@ def _cleanup_bridge_children(bridge_thing_name):
 
 
 def _bridge_associate_and_ready(bridge, user, group_api):
-    assert connect_device_with_retry(bridge, max_retries=3, base_delay=2), \
+    assert connect_device_with_retry(bridge), \
         f"Failed to connect bridge {bridge.node_thing_name}"
     group_id = group_api.create_group("Bridge Test Group")
     assoc_err = user.do_user_node_assoc(bridge, group_id)
