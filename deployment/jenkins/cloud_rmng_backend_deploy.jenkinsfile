@@ -30,6 +30,7 @@ pipeline {
         text(name: 'RMNG_OUTPUTS_JSON', description: '(Optional) rmng-outputs.json content - use when Don\'t deploy is selected')
         string(name: 'RMNG_ADMIN_EMAILS', defaultValue: '', description: '(Optional) Comma-separated admin emails to register on deploy')
         booleanParam(name: 'RUN_TEST', defaultValue: false, description: 'Run Pytest post deployment if checked')
+        booleanParam(name: 'DEPLOY_CLAIM', defaultValue: false, description: 'Also deploy the Assisted Claiming group (rmng-claim-base/core). Creates a billable KMS CA key, so it is excluded from the normal deploy')
     }
     stages {
         stage('Initialization') {
@@ -38,7 +39,7 @@ pipeline {
                     cloud_utils = load "${WORKSPACE}/deployment/jenkins/utils.groovy"
                     cloud_utils.setup_aws_credentials()
                     currentBuild.displayName = "${BUILD_NUMBER} - ${env.ACCOUNT_ID} - ${params.AWS_REGION}"
-                    currentBuild.description = "Branch: ${params.BRANCH ?: 'main'} | Mode: ${params.DEPLOY_MODE}"
+                    currentBuild.description = "Branch: ${params.BRANCH ?: 'main'} | Mode: ${params.DEPLOY_MODE}${params.DEPLOY_CLAIM ? ' | +claim' : ''}"
                     sh '''
                     echo "Workspace is ${WORKSPACE}"
                     echo "Deploy Mode: ${DEPLOY_MODE}"

@@ -268,6 +268,17 @@ def build_and_deploy() {
         } else {
             println("Skipping deployment as per DEPLOY_MODE: ${env.DEPLOY_MODE}")
         }
+
+        if (env.DEPLOY_MODE != "Don't deploy" && params.DEPLOY_CLAIM) {
+            println('Deploying the claim group (DEPLOY_CLAIM checked)')
+            sh '''
+            . ./aws_creds
+            cd /root/esp-rainmaker-neo
+            make deploy-claim
+            '''
+        } else {
+            println('Skipping the claim group')
+        }
     }
 
     deploy_test_infra()
