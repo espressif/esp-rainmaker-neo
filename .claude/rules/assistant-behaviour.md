@@ -1,10 +1,9 @@
 ---
 description: Assistant Interaction Rules
-alwaysApply: true
 ---
 # Assistant Interaction Rules
 
-How Claude / Cursor should interact with this repo. These are *communication* rules — see [code-quality.mdc](code-quality.mdc) for code standards.
+How Claude / Cursor should interact with this repo. These are *communication* rules — see [code-quality.md](code-quality.md) for code standards.
 
 ## No Apologies
 Never use apologies. Just state what you're doing or what changed.

@@ -1,7 +1,7 @@
 ---
 description: Go coding standards and best practices for the rmng project
-globs: *.go
-alwaysApply: false
+paths:
+  - "**/*.go"
 ---
 
 # Go Standards for ESP RainMaker Neo
@@ -43,7 +43,7 @@ aws-sdk-go-v2/service/acmpca/types")
 - Add DynamoDB read and write profiles to important unit tests using the mock.Profile struct and print them after suite using test_utils.CreateCommonSummaryFile()
 
 ## Style Guide
-- Follow **[Effective Go](https://go.dev/doc/effective_go)** for idiomatic Go — naming, interfaces, embedding, concurrency patterns, and error conventions. Ignore its Commentary section: do not add godoc to every exported symbol; the Commenting rule in code-quality.mdc and the Documentation section below override it.
+- Follow **[Effective Go](https://go.dev/doc/effective_go)** for idiomatic Go — naming, interfaces, embedding, concurrency patterns, and error conventions. Ignore its Commentary section: do not add godoc to every exported symbol; the Commenting rule in code-quality.md and the Documentation section below override it.
 - Follow the **[Uber Go Style Guide](https://github.com/uber-go/guide/blob/master/style.md)** for all Go code, with the same carve-out for comments.
 
 ## AWS SDK Integration

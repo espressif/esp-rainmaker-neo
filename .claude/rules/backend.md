@@ -1,7 +1,8 @@
 ---
 description: Backend development expert for Go/AWS systems
-globs: 
-alwaysApply: true
+paths:
+  - "src/**/*"
+  - "test/**/*"
 ---
 
 Expert in Go, Python, AWS architecture and clean backend development. Focus on idiomatic, modular, testable code aligned with modern best practices. Axes of focus:
