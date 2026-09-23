@@ -26,6 +26,7 @@ from test.itest.conftest import (
     IOT_ENDPOINT,
     DEBUG,
     connect_device_with_retry,
+    device_s3_client_with_retry,
 )
 
 
@@ -53,7 +54,7 @@ def _cleanup_s3_objects(s3_client, keys):
 def test_device_upload_file(associated_device):
     """Upload a file using device credentials, verify it exists via ListObjectsV2."""
     device, group_id, user, user_group_api = associated_device
-    s3 = device.get_s3_client(CREDENTIAL_PROVIDER_ENDPOINT, DEVICE_FILE_ROLE_ALIAS, REGION)
+    s3 = device_s3_client_with_retry(device)
     file_name = f"test-upload-{uuid.uuid4().hex[:8]}.txt"
     key = _s3_key(device.node_thing_name, file_name)
 
@@ -81,7 +82,7 @@ def test_device_upload_file(associated_device):
 def test_device_download_file(associated_device):
     """Upload then download a file, verify content matches (round-trip)."""
     device, group_id, user, user_group_api = associated_device
-    s3 = device.get_s3_client(CREDENTIAL_PROVIDER_ENDPOINT, DEVICE_FILE_ROLE_ALIAS, REGION)
+    s3 = device_s3_client_with_retry(device)
     file_name = f"test-download-{uuid.uuid4().hex[:8]}.bin"
     key = _s3_key(device.node_thing_name, file_name)
     content = f"round-trip-{uuid.uuid4()}".encode()
@@ -99,7 +100,7 @@ def test_device_download_file(associated_device):
 def test_device_list_files(associated_device):
     """Upload multiple files, list them, verify all appear."""
     device, group_id, user, user_group_api = associated_device
-    s3 = device.get_s3_client(CREDENTIAL_PROVIDER_ENDPOINT, DEVICE_FILE_ROLE_ALIAS, REGION)
+    s3 = device_s3_client_with_retry(device)
     file_names = [f"test-list-{i}-{uuid.uuid4().hex[:8]}.txt" for i in range(3)]
     keys = [_s3_key(device.node_thing_name, fn) for fn in file_names]
 
@@ -121,7 +122,7 @@ def test_device_list_files(associated_device):
 def test_device_delete_file(associated_device):
     """Upload then delete a file, verify it no longer appears in listing."""
     device, group_id, user, user_group_api = associated_device
-    s3 = device.get_s3_client(CREDENTIAL_PROVIDER_ENDPOINT, DEVICE_FILE_ROLE_ALIAS, REGION)
+    s3 = device_s3_client_with_retry(device)
     file_name = f"test-delete-{uuid.uuid4().hex[:8]}.txt"
     key = _s3_key(device.node_thing_name, file_name)
 
@@ -143,7 +144,7 @@ def test_device_delete_file(associated_device):
 def test_device_nested_keys(associated_device):
     """Upload with nested path keys (e.g., logs/2024/data.txt)."""
     device, group_id, user, user_group_api = associated_device
-    s3 = device.get_s3_client(CREDENTIAL_PROVIDER_ENDPOINT, DEVICE_FILE_ROLE_ALIAS, REGION)
+    s3 = device_s3_client_with_retry(device)
     nested_name = f"logs/2024/data-{uuid.uuid4().hex[:8]}.txt"
     key = _s3_key(device.node_thing_name, nested_name)
 
@@ -161,8 +162,8 @@ def test_device_cross_device_isolation(associated_device, session_valid_device_r
     device_a, group_id, user, user_group_api = associated_device
     device_b = session_valid_device_rsa
 
-    s3_a = device_a.get_s3_client(CREDENTIAL_PROVIDER_ENDPOINT, DEVICE_FILE_ROLE_ALIAS, REGION)
-    s3_b = device_b.get_s3_client(CREDENTIAL_PROVIDER_ENDPOINT, DEVICE_FILE_ROLE_ALIAS, REGION)
+    s3_a = device_s3_client_with_retry(device_a)
+    s3_b = device_s3_client_with_retry(device_b)
 
     file_name = f"isolation-{uuid.uuid4().hex[:8]}.txt"
     key_b = _s3_key(device_b.node_thing_name, file_name)
@@ -202,7 +203,7 @@ def test_device_cross_device_isolation(associated_device, session_valid_device_r
 def test_user_list_device_files(associated_device):
     """User with mapping lists files in device's prefix."""
     device, group_id, user, user_group_api = associated_device
-    s3_device = device.get_s3_client(CREDENTIAL_PROVIDER_ENDPOINT, DEVICE_FILE_ROLE_ALIAS, REGION)
+    s3_device = device_s3_client_with_retry(device)
     file_name = f"user-list-{uuid.uuid4().hex[:8]}.txt"
     key = _s3_key(device.node_thing_name, file_name)
 
@@ -223,7 +224,7 @@ def test_user_list_device_files(associated_device):
 def test_user_download_device_file(associated_device):
     """User with mapping downloads a file from device's prefix."""
     device, group_id, user, user_group_api = associated_device
-    s3_device = device.get_s3_client(CREDENTIAL_PROVIDER_ENDPOINT, DEVICE_FILE_ROLE_ALIAS, REGION)
+    s3_device = device_s3_client_with_retry(device)
     file_name = f"user-download-{uuid.uuid4().hex[:8]}.txt"
     key = _s3_key(device.node_thing_name, file_name)
     content = f"user-download-content-{uuid.uuid4()}".encode()
@@ -242,7 +243,7 @@ def test_user_download_device_file(associated_device):
 def test_user_delete_device_file(associated_device):
     """User with mapping deletes a file from device's prefix."""
     device, group_id, user, user_group_api = associated_device
-    s3_device = device.get_s3_client(CREDENTIAL_PROVIDER_ENDPOINT, DEVICE_FILE_ROLE_ALIAS, REGION)
+    s3_device = device_s3_client_with_retry(device)
     file_name = f"user-delete-{uuid.uuid4().hex[:8]}.txt"
     key = _s3_key(device.node_thing_name, file_name)
 
@@ -322,7 +323,7 @@ def test_user_multiple_devices(test_user1):
         # Upload a file from each device
         s3_clients = []
         for device in devices:
-            s3_dev = device.get_s3_client(CREDENTIAL_PROVIDER_ENDPOINT, DEVICE_FILE_ROLE_ALIAS, REGION)
+            s3_dev = device_s3_client_with_retry(device)
             s3_clients.append(s3_dev)
             file_name = f"multi-{uuid.uuid4().hex[:8]}.txt"
             key = _s3_key(device.node_thing_name, file_name)

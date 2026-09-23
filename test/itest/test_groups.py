@@ -390,12 +390,20 @@ def test_delete_group_full_cleanup(test_user1, valid_device):
         "Group should not appear in list after deletion"
 
     # Read the table directly: automation rows are keyed only by group_id, so once the group and its access rows are gone no API can reach them, and group ids are short and reused, so a later group would inherit them.
-    leftover = boto3.resource("dynamodb", region_name=REGION).Table("rmng-automations").query(
-        KeyConditionExpression=boto3.dynamodb.conditions.Key("group_id").eq(group_id)
-    ).get("Items", [])
-    assert not leftover, (
-        f"deleting the group left {len(leftover)} automation row(s) orphaned under group_id "
-        f"{group_id}: {[i.get('automation_id') for i in leftover]}"
+    # DeleteGroup dispatches the wipe to the node-data-reset lambda (CleanupGroupAsync) and
+    # returns without waiting, so the rows outlive the call -- poll instead of asserting once.
+    automations_table = boto3.resource("dynamodb", region_name=REGION).Table("rmng-automations")
+
+    def group_automation_ids():
+        rows = automations_table.query(
+            KeyConditionExpression=boto3.dynamodb.conditions.Key("group_id").eq(group_id)
+        ).get("Items", [])
+        return [r.get("automation_id") for r in rows]
+
+    wait_until(
+        lambda: not group_automation_ids(),
+        f"the async cleanup to leave no automation rows orphaned under group_id {group_id} "
+        f"(query rmng-automations on that key to see which survived)",
     )
 
 

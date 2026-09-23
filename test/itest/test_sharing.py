@@ -111,6 +111,15 @@ def test_share_group_with_secondary_access(test_user1, test_user2, test_user3):
     assert user2_group['access_type'] == 'primary', f"Expected 'primary' after upgrade, got '{user2_group.get('access_type')}'"
     user1_group_api.delete_group(group_id)
 
+def _drain_connection_queue(user):
+    """Drop any connection events left over from an earlier stage or an earlier test.
+
+    The queue is never drained on connect (unlike the shadow queue) and pooled users are reused, so
+    without this a read_connection_queue() can return an event that belongs to a different stage.
+    """
+    while user.read_connection_queue(timeout=0) is not None:
+        pass
+
 def _test_shadow_access_after_sharing(sharing_details):
     device = sharing_details["device"]
     group_id = sharing_details["group_id"]
@@ -133,6 +142,7 @@ def _test_shadow_access_after_sharing(sharing_details):
 
         # First verify that user2 cannot access the shadow
         # mqtt connect is going to assume_role everytime
+        _drain_connection_queue(test_user2)
         test_user2.mqtt_connect()
         test_user2.disable_reconnect = True
         try:
@@ -146,6 +156,10 @@ def _test_shadow_access_after_sharing(sharing_details):
     elif sharing_details['state'] == "shared":
         # Try reading the shadow again after sharing
         # mqtt connect is going to assume_role again, thus getting the new policy
+        # The previous stage left reconnection disabled; this stage expects a working connection, so
+        # a stray hangup must be recovered from rather than tearing the connection down.
+        test_user2.disable_reconnect = False
+        _drain_connection_queue(test_user2)
         test_user2.mqtt_connect()
         test_user2.subscribe_to_named_shadows(device.node_thing_name, [shadow_name])
         test_user2.read_shadow(device.node_thing_name, shadow_name)
@@ -157,6 +171,7 @@ def _test_shadow_access_after_sharing(sharing_details):
         test_user2.mqtt_disconnect_and_wait()
     elif sharing_details['state'] == "unshared":
         # Verify that user2 cannot access the shadow
+        _drain_connection_queue(test_user2)
         test_user2.mqtt_connect()
         test_user2.disable_reconnect = True
         try:
@@ -167,15 +182,30 @@ def _test_shadow_access_after_sharing(sharing_details):
         # Wait for connection interrupted event, incorrect subscription causes connection to be destroyed
         connection_status = test_user2.read_connection_queue()
         assert connection_status == "interrupted", "User2 should get disconnected when trying to subscribe to unauthorized shadow"
-        test_user2.mqtt_disconnect_and_wait()
+        try:
+            # The interrupt callback already tore this connection down, so waiting on its disconnect
+            # future can re-raise that same teardown error. The stage's assertion is already done.
+            test_user2.mqtt_disconnect_and_wait()
+        except Exception as exc:
+            print(f"[User] disconnect after the denied subscribe: {exc}")
+        finally:
+            # The SDK clears this only after .result() succeeds, so a swallowed failure above would
+            # leave the pooled user unable to reconnect for the next stage and the next test.
+            test_user2.disconnect_future = None
+        test_user2.disable_reconnect = False
         device.disconnect()
 
+# Both shadow-access tests churn user MQTT connect/disconnect against the shared IoT endpoint and
+# assert on connection-teardown timing, so they are pinned to one worker rather than racing each
+# other (and the admin MQTT tests) for connections across the xdist pool.
+@pytest.mark.xdist_group("mqtt_shadow_authz")
 def test_shadow_access_after_sharing_with_group(shared_group, subtests):
     def body(stage, data):
         _test_shadow_access_after_sharing(data)
 
     run_shared_group_stages(shared_group, subtests, body)
 
+@pytest.mark.xdist_group("mqtt_shadow_authz")
 def test_shadow_access_after_sharing_with_subgroup(shared_subgroup, subtests):
     def body(stage, data):
         _test_shadow_access_after_sharing(data)
