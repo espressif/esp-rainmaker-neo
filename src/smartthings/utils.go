@@ -107,6 +107,11 @@ func ParseDeviceID(externalDeviceID string) (nodeID string, deviceName string, e
 // SmartThings hue is a percentage 0-100 while esp.param.hue is degrees 0-360; saturation is 0-100 on both sides.
 const stHueScale = 3.6
 
+// minColorTemperatureK is the floor st.colorTemperature declares for its value.
+// A device that reports CCT 0 (the RainMaker default before a light is configured)
+// is otherwise passed straight through and fails the whole response.
+const minColorTemperatureK = 1
+
 func HueToDevice(hue float64) int {
 	return int(math.Round(math.Min(math.Max(hue, 0), 100) * stHueScale))
 }

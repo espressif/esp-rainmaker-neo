@@ -7,6 +7,8 @@ package smartthings
 import (
 	"context"
 	"encoding/json"
+	"sync"
+	"time"
 
 	"github.com/espressif/esp-rainmaker-neo/src/alexa"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
@@ -126,17 +128,53 @@ func HandleDiscovery(ctx context.Context, request STRequest) (STResponse, error)
 	}, nil
 }
 
+// grantRequestInterval bounds how often a discoveryResponse asks SmartThings to
+// re-authorize the same user. Every such request makes SmartThings re-run the grant
+// flow and re-provision the user's devices, which leaves a duplicate tile behind
+// whenever the grant then fails — so an unconditional ask turns a broken credential
+// into a device list that grows by one copy per refresh.
+const grantRequestInterval = 15 * time.Minute
+
+// ponytail: process-local, so the window resets on a cold start and is not shared
+// across the four regional copies. That is enough for the case that actually hurts —
+// a user refreshing repeatedly in one sitting hits one warm container — and costs no
+// schema change. Persist it per user alongside the integration row if duplicates
+// still appear across cold starts.
+var (
+	grantAskedMu sync.Mutex
+	grantAskedAt = map[string]time.Time{}
+)
+
+// markGrantAsked reports whether this user may be asked for a grant now, recording
+// the ask when it returns true.
+func markGrantAsked(userID string) bool {
+	grantAskedMu.Lock()
+	defer grantAskedMu.Unlock()
+	if last, ok := grantAskedAt[userID]; ok && time.Since(last) < grantRequestInterval {
+		return false
+	}
+	grantAskedAt[userID] = time.Now()
+	return true
+}
+
 // needsCallbackGrant reports whether this user has no callback tokens to send proactive
 // callbacks with. SmartThings grants them once at link time, so a user whose grant failed
 // (wrong client credentials, say) would otherwise stay stuck until they unlink and link
-// again; asking on the discovery response is the documented way back.
+// again; asking on the discovery response is the documented way back. The ask is rate
+// limited because a grant that keeps failing would otherwise be retried on every
+// discovery, duplicating the user's devices each time.
 func needsCallbackGrant(ctx context.Context, userID string) bool {
 	endpoints, err := integrationauth.GetAllOAuthEndpoints(userID, stPlatform)
 	if err != nil {
-		rlog.Debug(ctx).Err(err).Str("userID", userID).Msg("could not read callback endpoints, requesting a grant")
-		return true
+		rlog.Debug(ctx).Err(err).Str("userID", userID).Msg("could not read callback endpoints, considering a grant request")
+	} else if len(endpoints) > 0 {
+		return false
 	}
-	return len(endpoints) == 0
+	if !markGrantAsked(userID) {
+		rlog.Debug(ctx).Str("userID", userID).Msg("grant already requested recently, not asking again")
+		return false
+	}
+	return true
 }
 
 // discoverDevicesFromNode fetches config for a node and returns SmartThings discovery
