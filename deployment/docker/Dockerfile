@@ -85,6 +85,14 @@ RUN for f in requirements.txt requirements-dev.txt requirements-test.txt; do \
         if [ -f "$f" ]; then grep -v '^[[:space:]]*-e[[:space:]]' "$f" > /tmp/req.txt && pip3 install -r /tmp/req.txt; fi; \
     done && rm -f /tmp/req.txt
 
+# Chromium for the browser-level itests. Baked in rather than fetched on first use because `make itest` fans out to a dozen xdist workers that would otherwise race on the same download, and the shared libraries come from yum because playwright's own `--with-deps` only knows Debian/Ubuntu.
+RUN yum install -y --allowerasing \
+        alsa-lib atk at-spi2-atk at-spi2-core cairo cups-libs libdrm libX11 \
+        libXcomposite libXdamage libXext libXfixes libXrandr libxcb libxkbcommon \
+        mesa-libgbm nspr nss pango && \
+    yum clean all && \
+    python3 -m playwright install chromium
+
 # Install common Go tools
 # ginkgo/gomega are pinned to the versions in go.mod — a newer CLI than the
 # library it drives produces confusing failures, so bump these together.

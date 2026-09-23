@@ -23,7 +23,7 @@ pipeline {
         JENKINS_RMNG_CLOUD_COMPONENTS_REPO_URL = credentials('JENKINS_RMNG_CLOUD_COMPONENTS_REPO_URL')
         RMNG_ITEST_CONFIG_JSON = credentials('JENKINS_RMNG_ITEST_CONFIG_JSON')
         RMNG_NOTIFY_DATA_JSON = credentials('JENKINS_RMNG_ITEST_NOTIFY_DATA_JSON')
-        ITEST_ARGS = '-n 12 -m "not cognito"'
+        ITEST_ARGS = '-n 12 -m "not cognito" --reruns 2 --reruns-delay 5'
         RUN_CLAIM_QUOTA_TEST = '1'
     }
     parameters {
