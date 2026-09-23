@@ -123,9 +123,16 @@ func (r *ContextPropertyList) AddPropPowerState(powerState string) {
 }
 
 func (h *PowerControllerHandler) HandleReport(deviceParams map[string]interface{}, paramName string, cookie map[string]interface{}, properties *ContextPropertyList) error {
+	// Shadow params are device-controlled input: a node reporting {"Power":"True"}
+	// would panic a bare assertion and take down the whole notification fan-out,
+	// Alexa, GVA and SmartThings alike, since they share one Lambda invocation.
 	if value, exists := deviceParams[paramName]; exists {
+		on, ok := value.(bool)
+		if !ok {
+			return nil
+		}
 		powerState := "OFF"
-		if value.(bool) {
+		if on {
 			powerState = "ON"
 		}
 		properties.AddPropPowerState(powerState)
