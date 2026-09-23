@@ -474,9 +474,6 @@ channels:
       <div class="success" style="background-color: #d1e7dd; padding: 10px; border-left: 4px solid #198754; margin: 10px 0;">
       <strong>Note:</strong> Use Basic Ingest topic <code>$aws/rules/node_ts_batch_rule/rainmaker/nodes/&lt;node_id&gt;/ts/&lt;group_info_str&gt;/batch</code> to save costs.
       </div>
-
-      A bridge may publish a child's batch with `{nodeId}` set to the child
-      Thing. The existing `ChildrenPublish` `ts/*` permission covers this topic.
     parameters:
       nodeId:
         $ref: "#/components/parameters/nodeId"

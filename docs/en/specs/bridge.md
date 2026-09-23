@@ -33,9 +33,9 @@ additional statements on a bridge-specific IoT policy; and a
   authenticates the node's MQTT connection.
 - A node belongs to exactly one group. See [node_assoc.md](node_assoc.md).
 - A node may belong to up to 3 subgroups within its group. See [group.md](group.md).
-- Per-device unicast topic: `rainmaker/things/<thingID>/user/params-<groupID>[-<sg1>-<sg2>-<sg3>]/params`.
-- Cloud→device notification topic: `rainmaker/things/<thingID>/from_cloud`.
-- Group/subgroup control topics: `rainmaker/things/g/<groupID>/user/params-<groupID>[-<sgID>]/params`. See [group-control-feature.md](group-control-feature.md).
+- Per-device unicast topic: `rainmaker/nodes/<thingID>/user/params-<groupID>[-<sg1>-<sg2>-<sg3>]/params`.
+- Cloud→device notification topic: `rainmaker/nodes/<thingID>/from_cloud`.
+- Group/subgroup control topics: `rainmaker/nodes/groups/<groupID>/control` and `rainmaker/nodes/groups/<groupID>/subgroups/<sgID>/control`. See [group-control-feature.md](group-control-feature.md).
 
 ### 2.2 Default Device IoT Policy
 
@@ -49,7 +49,7 @@ under the existing policy.
 ### 2.3 Why Not Just Subscribe Per-Child?
 
 MQTT topic filters support only `+` (single level) and `#` (multi level)
-wildcards. A pattern like `rainmaker/things/brdge--*/...` is not a valid
+wildcards. A pattern like `rainmaker/nodes/brdge--*/...` is not a valid
 topic filter. A bridge would therefore have to issue one explicit subscribe
 per child topic. AWS IoT enforces a default subscription cap of 50 per MQTT
 connection (soft-raisable), which is incompatible with the design goal of
@@ -139,7 +139,6 @@ AWS IoT shadow topics (no bridge-namespace topic, no rewrite rule — see
 
 ```
 $aws/things/<child>/shadow/name/<shadow_name>/update   # param write
-$aws/things/<child>/shadow/name/<shadow_name>/delete   # subgroup migration teardown
 ```
 
 The bridge also publishes to the control-plane topic in its own namespace:
@@ -238,7 +237,7 @@ substitution (§3.5).
 #### Rule A: Cloud-to-bridge `from_cloud` rewrite (pure SQL)
 
 ```sql
-SELECT * FROM 'rainmaker/things/+/from_cloud'
+SELECT * FROM 'rainmaker/nodes/+/from_cloud'
 WHERE indexof(topic(3), '--') >= 0
 ```
 
@@ -260,7 +259,7 @@ so the rule is a no-op for them. No cross-impact on existing flows.
 #### Rule B: Cloud-to-bridge unicast params rewrite (pure SQL)
 
 ```sql
-SELECT * FROM 'rainmaker/things/+/user/+/params'
+SELECT * FROM 'rainmaker/nodes/+/user/+/params'
 WHERE indexof(topic(3), '--') >= 0
 ```
 
@@ -309,8 +308,8 @@ WHERE clientid() = topic(3)
 
 | Rule | Source → Destination | Lambda? |
 |---|---|---|
-| A | `rainmaker/things/+/from_cloud` → bridge namespace | No (pure SQL Republish) |
-| B | `rainmaker/things/+/user/+/params` → bridge namespace | No (pure SQL Republish) |
+| A | `rainmaker/nodes/+/from_cloud` → bridge namespace | No (pure SQL Republish) |
+| B | `rainmaker/nodes/+/user/+/params` → bridge namespace | No (pure SQL Republish) |
 | (none) | `$aws/things/<child>/shadow/...` | No rule; direct publish from bridge |
 | D | `rainmaker/bridges/+/to_cloud` → `control_lambda` | Yes, but Lambda **is** the action target (control plane), not enrichment; authorization gate is in SQL WHERE |
 
@@ -450,10 +449,10 @@ topic/$aws/things/brdge--*/shadow/name/*/*
 ```
 
 The trailing `*` covers `update`, `delete`, and `get` — all named-shadow
-action topics. `delete` is needed for subgroup shadow migration (the old
-`params-<groupID>[-<sg>]` shadow must be removed when a child moves
-groups). The scope is still named shadows only (`shadow/name/…`); unnamed
-(classic) shadows are not covered. The naming constraints in §3.1 (no `--`
+action topics. Only `update` is exercised today: shadow migration on a
+group or subgroup move is done cloud-side (§3.3, §5.5), so the grant is
+wider than the bridge currently needs. The scope is still named shadows
+only (`shadow/name/…`); unnamed (classic) shadows are not covered. The naming constraints in §3.1 (no `--`
 in bridge names, direct device names, or child suffixes) make `brdge--*`
 unambiguous: it can only match descendants of `brdge`.
 
@@ -564,7 +563,7 @@ Rule D (Section 3.4) routes them to the bridge control Lambda.
 }
 ```
 
-The Lambda responds on `rainmaker/things/<parent>/from_cloud` with:
+The Lambda responds on `rainmaker/nodes/<parent>/from_cloud` with:
 
 ```text
 {
@@ -672,12 +671,12 @@ side effects beyond a shadow write, namely child Thing lifecycle
 4. Lambda creates child Thing, writes bridge_children, runs
    ADD NODE TO GROUP FLOW
 5. ADD NODE TO GROUP FLOW publishes getGroupInfo to
-   rainmaker/things/<child>/from_cloud
+   rainmaker/nodes/<child>/from_cloud
 6. Rule A rewrites that publish to
    rainmaker/bridges/<parent>/children/<child>/from_cloud
 7. Bridge receives the getGroupInfo on its existing subscription, records
    the child's group/subgroup state in its local table
-8. Lambda responds with bridgeAck on rainmaker/things/<parent>/from_cloud
+8. Lambda responds with bridgeAck on rainmaker/nodes/<parent>/from_cloud
 ```
 
 ### 5.2 Child Param Update (Device → Cloud)
@@ -736,7 +735,7 @@ when emitting them.
 
 ```
 1. User app publishes a command to
-     rainmaker/things/<child>/user/params-<groupID>/params
+     rainmaker/nodes/<child>/user/params-<groupID>/params
 2. Rule B rewrites to
      rainmaker/bridges/<parent>/children/<child>/user/params-<groupID>/params
 3. Bridge receives the message, extracts <child> from the topic, dispatches
@@ -790,13 +789,13 @@ bridge and its children share the same group-level trust boundary
 Standard group APIs (Section "Add Node to Subgroup" / "Remove Node from
 Subgroup" in [group.md](group.md)) are used by the user/app to manage child
 subgroup membership. These APIs operate on the child's `group_device_mapping`
-entry and publish `getGroupInfo` to `rainmaker/things/<child>/from_cloud`.
+entry and publish `getGroupInfo` to `rainmaker/nodes/<child>/from_cloud`.
 
 ```
 1. App calls POST /group/<groupID>/<subGroupID>/<child>
 2. group_device_mapping row updated for <child>
 3. Shadow migrated to new shadow name (params-<groupID>-<sgID>)
-4. getGroupInfo published to rainmaker/things/<child>/from_cloud
+4. getGroupInfo published to rainmaker/nodes/<child>/from_cloud
 5. Rule A rewrites to bridge namespace
 6. Bridge updates its local child → subgroup table
 ```
@@ -983,7 +982,7 @@ authenticated by the bridge's certificate.
 
 `assume_role` generates session policies based on group/subgroup
 membership. Children appear in `group_device_mapping` like any other node,
-so the existing `topic/rainmaker/things/*/user/params-<groupID>*/*` pattern
+so the existing `topic/rainmaker/nodes/*/user/params-<groupID>*/*` pattern
 already covers user→child unicast publishes. The app does not interact
 with the bridge namespace directly.
 
@@ -1016,8 +1015,8 @@ is trusted to deliver them only to the correct children.
 | Node association `challenge_response` flow | Used by bridges; children skip association (created via `add_child`) |
 | `group_device_mapping` schema | Children are normal rows in this table |
 | `user_group_mapping` schema | Sharing works through the existing flow for children |
-| `assume_role` and IAM session policy generation | Existing patterns cover children via the standard `rainmaker/things/*/...` topic shape |
-| Group control topic structure (`rainmaker/things/g/...`) | Bridge subscribes per existing rules; forwards to children locally |
+| `assume_role` and IAM session policy generation | Existing patterns cover children via the standard `rainmaker/nodes/*/...` topic shape |
+| Group control topic structure (`rainmaker/nodes/groups/...`) | Bridge subscribes per existing rules; forwards to children locally |
 | `getGroupInfo` payload format | Reused unchanged; rewritten by Rule A onto bridge namespace |
 | `node_data_reset` Lambda | Called per-child during cascade delete; no schema change |
 | Shadow naming convention (`params-<groupID>[-<sg1>...]`) | Reused for children |

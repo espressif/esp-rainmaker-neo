@@ -33,7 +33,7 @@ var _ = Describe("iot_event_mode lambda", func() {
 		publish    ruleConfig
 		timeseries ruleConfig
 		offlineSql = "SELECT * FROM '$aws/events/presence/disconnected/#'"
-		toCloudSql = "SELECT topic(3) as thing_name, * as data FROM 'rainmaker/things/+/to_cloud'"
+		toCloudSql = "SELECT topic(3) as thing_name, * as data FROM 'rainmaker/nodes/+/to_cloud'"
 		errorAct   = &iottypes.Action{
 			CloudwatchLogs: &iottypes.CloudwatchLogsAction{
 				LogGroupName: aws.String("IoTRules/Test"),
