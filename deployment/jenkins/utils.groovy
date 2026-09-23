@@ -133,128 +133,39 @@ def setup_git() {
 }
 
 
-def validate_cdk_outputs(currentAccountId, currentRegion) {
-    println('Validating CDK outputs against AWS credentials')
-
-    def validationResult = sh(script: """
+def generate_cdk_outputs() {
+    sh '''
     . ./aws_creds
     cd /root/esp-rainmaker-neo
-
-    # Use the account ID and region passed from functions
-    CURRENT_ACCOUNT_ID=${currentAccountId}
-    CURRENT_REGION=${currentRegion}
-
-    echo "Current AWS Account ID: \${CURRENT_ACCOUNT_ID}"
-    echo "Current AWS Region: \${CURRENT_REGION}"
-    echo ""
-
-    # Extract account and region from CDK outputs
-    # First, try to get from StackAccountId and StackRegion fields
-    CDK_ACCOUNT=\$(jq -r '.[] | .StackAccountId // empty' rmng-outputs.json 2>/dev/null | head -1)
-    CDK_REGION=\$(jq -r '.[] | .StackRegion // empty' rmng-outputs.json 2>/dev/null | head -1)
-
-    # Fallback: Extract from ARNs if StackAccountId/StackRegion not found
-    if [ -z "\$CDK_ACCOUNT" ] || [ -z "\$CDK_REGION" ]; then
-        # Get the first ARN from CDK outputs
-        FIRST_ARN=\$(jq -r '.[] | to_entries[] | select(.key | contains("Arn")) | .value' rmng-outputs.json 2>/dev/null | head -1)
-
-        if [ -n "\$FIRST_ARN" ]; then
-            # Extract account ID from ARN (position 5 in arn:aws:service:region:account:resource)
-            if [ -z "\$CDK_ACCOUNT" ]; then
-                CDK_ACCOUNT=\$(echo "\$FIRST_ARN" | cut -d':' -f5)
-            fi
-
-            # Extract region from ARN (position 4 in arn:aws:service:region:account:resource)
-            if [ -z "\$CDK_REGION" ]; then
-                CDK_REGION=\$(echo "\$FIRST_ARN" | cut -d':' -f4)
-            fi
-        fi
-    fi
-
-    echo "CDK Outputs Account ID: \${CDK_ACCOUNT}"
-    echo "CDK Outputs Region: \${CDK_REGION}"
-    echo ""
-
-    # Validation flags
-    VALIDATION_PASSED=true
-
-    # Validate Account ID
-    if [ -n "\$CDK_ACCOUNT" ]; then
-        if [ "\$CDK_ACCOUNT" != "\$CURRENT_ACCOUNT_ID" ]; then
-            echo "ERROR: Account ID mismatch!"
-            echo "  CDK Outputs Account: \${CDK_ACCOUNT}"
-            echo "  Current AWS Account: \${CURRENT_ACCOUNT_ID}"
-            VALIDATION_PASSED=false
-        else
-            echo "✓ Account ID validation passed"
-        fi
-    else
-        echo "ERROR: Could not extract Account ID from CDK outputs"
-        VALIDATION_PASSED=false
-    fi
-
-    # Validate Region
-    if [ -n "\$CDK_REGION" ]; then
-        if [ "\$CDK_REGION" != "\$CURRENT_REGION" ]; then
-            echo "ERROR: Region mismatch!"
-            echo "  CDK Outputs Region: \${CDK_REGION}"
-            echo "  Current AWS Region: \${CURRENT_REGION}"
-            VALIDATION_PASSED=false
-        else
-            echo "✓ Region validation passed"
-        fi
-    else
-        echo "ERROR: Could not extract Region from CDK outputs"
-        VALIDATION_PASSED=false
-    fi
-
-    if [ "\$VALIDATION_PASSED" = "false" ]; then
-        echo ""
-        echo "VALIDATION FAILED: CDK outputs do not match the provided AWS credentials!"
-        exit 1
-    fi
-
-    echo ""
-    echo "✓ CDK outputs validation successful"
-    """, returnStatus: true)
-
-    if (validationResult != 0) {
-        error('CDK outputs validation failed! Please ensure the CDK outputs match the AWS account and region.')
-    }
-
-    println('CDK outputs validation passed')
+    AWS_REGION="${AWS_REGION}" python3 ./scripts/generate_stack_outputs.py
+    '''
+    println('CDK outputs generated from CloudFormation')
 }
 
-def setup_cdk_outputs(currentAccountId, currentRegion) {
-    println('Setting up CDK outputs from input parameter')
+
+def install_requirements() {
     sh '''
     cd /root/esp-rainmaker-neo
-    echo "${RMNG_OUTPUTS_JSON}" > rmng-outputs.json
-
-    if [ ! -s rmng-outputs.json ]; then
-        echo "Error: CDK outputs file is empty"
-        exit 1
-    fi
-
-    echo "CDK outputs file created successfully"
-    cat rmng-outputs.json
+    pip3 install -r requirements.txt
+    pip3 install -e ./cli --no-deps
     '''
-    println('CDK outputs setup done')
-
-    // Validate CDK outputs against AWS credentials
-    validate_cdk_outputs(currentAccountId, currentRegion)
+    println('Python requirements installed')
 }
+
 
 def build_and_deploy() {
     println("Building and deploying in mode: ${env.DEPLOY_MODE}")
 
     // make deploy gathers Stackfile prompt inputs (e.g. AdminEmails) from the environment.
     withEnv(["RMNG_ADMIN_EMAILS=${params.RMNG_ADMIN_EMAILS ?: ''}"]) {
+        if (env.DEPLOY_MODE != "Don't deploy") {
+            install_requirements()
+        }
+
         if (env.DEPLOY_MODE == 'New deployment') {
             sh '''
             . ./aws_creds
             cd /root/esp-rainmaker-neo
-            pip3 install -r requirements.txt
             make setup
             make deploy
             '''
@@ -262,7 +173,6 @@ def build_and_deploy() {
             sh '''
             . ./aws_creds
             cd /root/esp-rainmaker-neo
-            pip3 install -r requirements.txt
             make deploy
             '''
         } else {
