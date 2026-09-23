@@ -21,8 +21,8 @@ pipeline {
         // Repo hosts are secret-text credentials, so they can only be bound here (not in the agent block); every sh step that clones reads them from the environment and Jenkins masks them in the log.
         JENKINS_RMNG_REPO_URL = credentials('JENKINS_RMNG_REPO_URL')
         JENKINS_RMNG_CLOUD_COMPONENTS_REPO_URL = credentials('JENKINS_RMNG_CLOUD_COMPONENTS_REPO_URL')
-        RMNG_ITEST_CONFIG_JSON = credentials('RMNG_ITEST_CONFIG_JSON')
-        RMNG_NOTIFY_DATA_JSON = credentials('RMNG_NOTIFY_DATA_JSON')
+        RMNG_ITEST_CONFIG_JSON = credentials('JENKINS_RMNG_ITEST_CONFIG_JSON')
+        RMNG_NOTIFY_DATA_JSON = credentials('JENKINS_RMNG_ITEST_NOTIFY_DATA_JSON')
         ITEST_ARGS = '-n 12 -m "not cognito"'
         RUN_CLAIM_QUOTA_TEST = '1'
     }
