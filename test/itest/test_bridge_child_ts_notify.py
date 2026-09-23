@@ -16,7 +16,12 @@ The mechanism (same as to_cloud):
   2. The existing `node_ts_rule` (filter `rainmaker/nodes/+/ts/+`)
      extracts `topic(3) = <child>` and writes to the
      `rmng-raw-ts-data` table.
-  3. Symmetric for `node_notify_rule` invoking the notifications
+  3. Batched reports take the `/batch` segment and `node_ts_batch_rule`
+     (filter `rainmaker/nodes/+/ts/+/batch`) instead, which hands the
+     points to timeseries_ingest_handler. The policy needs no new
+     statement: `*` spans `/` in an IoT policy resource, so the
+     existing `ts/*` grant already covers `ts/<group>/batch`.
+  4. Symmetric for `node_notify_rule` invoking the notifications
      Lambda.
 
 The naming-constraint argument from §3.5 holds: a bridge cannot
@@ -27,6 +32,7 @@ substitution pins the prefix segment.
 import json
 import time
 import uuid
+from queue import Empty
 
 import boto3
 import pytest
@@ -184,5 +190,77 @@ def test_cross_parent_ts_publish_denied(bridge_in_group, ddb):
     assert not _ts_row_exists(ddb, foreign_node_key_dt, ts_ms), (
         f"foreign ts row was ingested ({foreign_node_key_dt} ts={ts_ms}) — "
         f"policy substitution did not deny cross-parent /ts/ publish "
+        f"(publish_raised={publish_raised!r})"
+    )
+
+
+def test_bridge_publishes_child_ts_batch(bridge_in_group, ddb, seed_child):
+    """Batched counterpart of test_bridge_publishes_child_ts: the bridge
+    publishes several points for a child in one message on the `/batch`
+    topic, and timeseries_ingest_handler writes one raw_ts_data row per
+    point, keyed the same way as the single-point path.
+
+    This covers the `ts/*` grant stretching over the extra `/batch`
+    segment — the reason the batch topic was given a suffix rather than a
+    separate topic shape."""
+    bridge = bridge_in_group["bridge"]
+    group_id = bridge_in_group["group_id"]
+    child = seed_child("ts_batch_child", "0xTS_BATCH1")
+    assert child is not None, "addChild failed during setup"
+
+    probe = f"itest_{uuid.uuid4().hex[:8]}"
+    ts_ms = int(time.time() * 1000)
+    # Two keys of different dt so each lands on its own node_key_dt, proving
+    # the batch fans out into one row per point rather than one per message.
+    points = [
+        {"k": f"{probe}_a", "dt": "int", "tz": "UTC", "t": ts_ms, "v": 7, "cumulative": False},
+        {"k": f"{probe}_b", "dt": "float", "tz": "UTC", "t": ts_ms + 1, "v": 1.5, "cumulative": False},
+    ]
+    topic = f"rainmaker/nodes/{child}/ts/{group_id}/batch"
+    _bridge_publish(bridge, topic, {"data": points})
+
+    expected = [
+        (f"{child}.{probe}_a.int", ts_ms),
+        (f"{child}.{probe}_b.float", ts_ms + 1),
+    ]
+    # Longer than the single-point budget: this path adds a Lambda hop, and
+    # in SQS mode an event-source-mapping batching window on top.
+    deadline = time.time() + TS_INGEST_SETTLE_S * 3
+    pending = list(expected)
+    while pending and time.time() < deadline:
+        pending = [(k, t) for k, t in pending if not _ts_row_exists(ddb, k, t)]
+        if pending:
+            time.sleep(0.5)
+
+    assert not pending, (
+        f"batch ts rows not found in {RAW_TS_DATA_TABLE} for child={child}: "
+        f"{pending}"
+    )
+
+
+def test_cross_parent_ts_batch_publish_denied(bridge_in_group, ddb):
+    """The `/batch` suffix must not open a hole in the parent pinning that
+    test_cross_parent_ts_publish_denied covers for single points."""
+    bridge = bridge_in_group["bridge"]
+    foreign = "rmng-other-bridge-88--ts_batch_intruder"
+    probe = f"itest_attack_{uuid.uuid4().hex[:8]}"
+    ts_ms = int(time.time() * 1000)
+    points = [
+        {"k": probe, "dt": "int", "tz": "UTC", "t": ts_ms, "v": 9999, "cumulative": False},
+    ]
+    topic = f"rainmaker/nodes/{foreign}/ts/anything/batch"
+
+    publish_raised = None
+    try:
+        _bridge_publish(bridge, topic, {"data": points})
+    except Exception as e:
+        publish_raised = str(e)
+
+    time.sleep(TS_INGEST_SETTLE_S)
+
+    foreign_node_key_dt = f"{foreign}.{probe}.int"
+    assert not _ts_row_exists(ddb, foreign_node_key_dt, ts_ms), (
+        f"foreign batch ts row was ingested ({foreign_node_key_dt} ts={ts_ms}) — "
+        f"policy substitution did not deny cross-parent /ts/ batch publish "
         f"(publish_raised={publish_raised!r})"
     )

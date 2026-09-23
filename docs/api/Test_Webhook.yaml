@@ -366,7 +366,7 @@ paths:
           required: true
           schema:
             type: string
-          example: rainmaker/things/<node_id>/from_cloud
+          example: rainmaker/nodes/<node_id>/from_cloud
       responses:
         "200":
           description: Dequeued command
@@ -437,7 +437,7 @@ components:
         payload:
           type: string
           description: JSON-encoded string that must contain a `topic` key.
-          example: '{"topic":"rainmaker/things/<node_id>/from_cloud","payload":{"Light":{"Power":true,"Brightness":80}}}'
+          example: '{"topic":"rainmaker/nodes/<node_id>/from_cloud","payload":{"Light":{"Power":true,"Brightness":80}}}'
         payloadType:
           type: integer
           default: 0
