@@ -2,130 +2,47 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from test.itest.conftest import alexa_region_arn, ALEXA_REGION_ARNS
+from test.itest.conftest import alexa_region_arn
 import json
 import boto3
 import pytest
 
-# The Alexa integration configuration is a single global record, so tests that write it must
-# not run concurrently on different xdist workers or they clobber each other's round-trip.
-@pytest.mark.xdist_group("alexa_config")
-def test_alexa_post_then_get_configuration(admin_user):
-    """Test POST then GET /v1/admin/integrations/alexa/configuration to verify round-trip."""
+def test_alexa_configuration_is_readable(admin_user, alexa_region_arn):
+    """GET returns the configuration without the secret, and the skill Lambda's trigger
+    matches the configured skill id.
+
+    Read-only deliberately: a write here overwrites the deployment's real credentials and
+    nothing can put them back, since the secret is never returned. alexa_cfg's unit specs
+    cover the write path. The Lambda-policy check asserts deployed state rather than a POST
+    side effect, which is the part only an itest can prove.
+    """
     admin = admin_user
     admin.get_aws_credentials()
 
-    # POST configuration
-    post_response = admin.alexa_post_configuration(
-        redirect_uris=["https://pitangui.amazon.com/api/skill/link/TEST123", "https://layla.amazon.com/api/skill/link/TEST123"],
-        client_id="test-alexa-client-id",
-        client_secret="test-alexa-client-secret",
-        skill_id="amzn1.ask.skill.test-integration-skill"
-    )
-    assert post_response.status_code == 200, f"POST failed: {post_response.text}"
+    response = admin.alexa_get_configuration()
+    if response.status_code == 404:
+        pytest.skip("Alexa is not configured on this deployment")
+    assert response.status_code == 200, f"GET failed: {response.text}"
 
-    # GET configuration and verify
-    get_response = admin.alexa_get_configuration()
-    assert get_response.status_code == 200, f"GET failed: {get_response.text}"
+    body = response.json()
+    assert body.get('client_id'), f"configured deployment must report a client_id: {body}"
+    assert 'client_secret' not in body, f"client_secret must be omitted from GET: {body}"
+    assert body.get('redirect_uris'), f"configured deployment must report redirect_uris: {body}"
+    assert body.get('manufacturer_name'), f"manufacturer_name is never empty: {body}"
 
-    body = get_response.json()
-    assert body['client_id'] == 'test-alexa-client-id'
-    assert 'redirect_uris' in body
-    assert 'https://pitangui.amazon.com/api/skill/link/TEST123' in body['redirect_uris']
-    assert 'https://layla.amazon.com/api/skill/link/TEST123' in body['redirect_uris']
+    skill_id = body.get('skill_id')
+    assert skill_id, f"configured deployment must report a skill_id: {body}"
 
-    # Verify Lambda trigger was updated to new skill ID
-    region, alexa_skill_arn = ALEXA_REGION_ARNS[0]
+    # The config API grants the skill Lambda its invoke permission, scoping it to the
+    # skill id. A deployment whose policy has drifted from the stored id links but never
+    # receives a directive, which nothing else here would catch.
+    region, alexa_skill_arn = alexa_region_arn
     lambda_client = boto3.client('lambda', region_name=region)
-    policy_response = lambda_client.get_policy(FunctionName=alexa_skill_arn)
-    policy = json.loads(policy_response['Policy'])
-    alexa_statement = next(
-        (s for s in policy['Statement'] if s.get('Sid') == 'AlexaSkillInvoke'), None
-    )
-    assert alexa_statement is not None, "AlexaSkillInvoke permission not found in Lambda policy"
-    assert alexa_statement['Condition']['StringEquals']['lambda:EventSourceToken'] == 'amzn1.ask.skill.test-integration-skill'
-
-@pytest.mark.xdist_group("alexa_config")
-def test_alexa_update_configuration(admin_user):
-    """Test that POST with different values updates the configuration."""
-    admin = admin_user
-    admin.get_aws_credentials()
-
-    # POST initial configuration
-    post_response = admin.alexa_post_configuration(
-        redirect_uris=["https://pitangui.amazon.com/api/skill/link/FIRST"],
-        client_id="first-client-id",
-        client_secret="first-client-secret",
-        skill_id="amzn1.ask.skill.first-skill"
-    )
-    assert post_response.status_code == 200, f"First POST failed: {post_response.text}"
-
-    # POST updated configuration
-    post_response = admin.alexa_post_configuration(
-        redirect_uris=["https://layla.amazon.com/api/skill/link/SECOND"],
-        client_id="updated-client-id",
-        client_secret="updated-client-secret",
-        skill_id="amzn1.ask.skill.updated-skill"
-    )
-    assert post_response.status_code == 200, f"Second POST failed: {post_response.text}"
-
-    # GET and verify values were updated
-    get_response = admin.alexa_get_configuration()
-    assert get_response.status_code == 200, f"GET failed: {get_response.text}"
-
-    body = get_response.json()
-    assert body['client_id'] == 'updated-client-id'
-    assert body['skill_id'] == 'amzn1.ask.skill.updated-skill'
-    assert 'https://layla.amazon.com/api/skill/link/SECOND' in body['redirect_uris']
-
-    # Verify Lambda trigger was updated to new skill ID
-    region, alexa_skill_arn = ALEXA_REGION_ARNS[0]
-    lambda_client = boto3.client('lambda', region_name=region)
-    policy_response = lambda_client.get_policy(FunctionName=alexa_skill_arn)
-    policy = json.loads(policy_response['Policy'])
-    alexa_statement = next(
-        (s for s in policy['Statement'] if s.get('Sid') == 'AlexaSkillInvoke'), None
-    )
-    assert alexa_statement is not None, "AlexaSkillInvoke permission not found in Lambda policy"
-    assert alexa_statement['Condition']['StringEquals']['lambda:EventSourceToken'] == 'amzn1.ask.skill.updated-skill'
-
-
-@pytest.mark.xdist_group("alexa_config")
-def test_alexa_manufacturer_name_configuration(admin_user):
-    """Test that manufacturer_name round-trips, survives a credentials-only update, and resets."""
-    admin = admin_user
-    admin.get_aws_credentials()
-
-    creds = {
-        "redirect_uris": ["https://pitangui.amazon.com/api/skill/link/BRAND"],
-        "client_id": "brand-client-id",
-        "client_secret": "brand-client-secret",
-        "skill_id": "amzn1.ask.skill.brand-skill",
-    }
-
-    post_response = admin.alexa_post_configuration(**creds, manufacturer_name="Acme Devices")
-    assert post_response.status_code == 200, f"POST failed: {post_response.text}"
-
-    get_response = admin.alexa_get_configuration()
-    assert get_response.status_code == 200, f"GET failed: {get_response.text}"
-    assert get_response.json()['manufacturer_name'] == 'Acme Devices'
-
-    # Omitting the field must leave the stored brand alone, so rotating credentials does not
-    # silently reset an OEM's branding.
-    post_response = admin.alexa_post_configuration(**{**creds, "client_secret": "rotated-secret"})
-    assert post_response.status_code == 200, f"POST failed: {post_response.text}"
-
-    get_response = admin.alexa_get_configuration()
-    assert get_response.status_code == 200, f"GET failed: {get_response.text}"
-    assert get_response.json()['manufacturer_name'] == 'Acme Devices'
-
-    # Restore the default brand so the deployment is left as other tests expect it.
-    post_response = admin.alexa_post_configuration(**creds, manufacturer_name="")
-    assert post_response.status_code == 200, f"POST failed: {post_response.text}"
-
-    get_response = admin.alexa_get_configuration()
-    assert get_response.status_code == 200, f"GET failed: {get_response.text}"
-    assert get_response.json()['manufacturer_name'] == 'Espressif'
+    policy = json.loads(lambda_client.get_policy(FunctionName=alexa_skill_arn)['Policy'])
+    statement = next((s for s in policy['Statement'] if s.get('Sid') == 'AlexaSkillInvoke'), None)
+    assert statement is not None, "AlexaSkillInvoke permission not found in Lambda policy"
+    assert statement['Condition']['StringEquals']['lambda:EventSourceToken'] == skill_id, \
+        "the skill Lambda's event source token does not match the configured skill_id"
 
 
 def test_alexa_discovery(user_with_1_dev_each_in_2_groups, alexa_region_arn):

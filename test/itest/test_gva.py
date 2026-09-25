@@ -52,73 +52,34 @@ def _assert_gva_reported_online(base_url, api_key, user_sub, device_ids, expecte
         check()
 
 
-def _make_service_account(project_id="test-gva-project-123", client_email="test@test.iam.gserviceaccount.com"):
-    """Helper to build a test service account JSON."""
-    return {
-        "type": "service_account",
-        "project_id": project_id,
-        "private_key_id": "test-private-key-id",
-        "private_key": "-----BEGIN PRIVATE KEY-----\ntest-key\n-----END PRIVATE KEY-----\n",
-        "client_email": client_email,
-        "client_id": "123456789",
-        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-        "token_uri": "https://oauth2.googleapis.com/token",
-        "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-        "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/test",
-        "universe_domain": "googleapis.com"
-    }
 
-@pytest.mark.xdist_group("gva_config")
-def test_gva_post_then_get_configuration(admin_user):
-    """Test POST then GET /v1/admin/integrations/gva/configuration to verify round-trip."""
+def test_gva_configuration_is_readable(admin_user):
+    """GET returns the service account without its private key.
+
+    Read-only deliberately: a write here overwrites the deployment's real service account
+    and nothing can put it back, since the private key is never returned. gva_cfg's unit
+    specs cover the write path.
+    """
     admin = admin_user
     admin.get_aws_credentials()
 
-    sa = _make_service_account(project_id="test-gva-project-123", client_email="test@test-gva-project-123.iam.gserviceaccount.com")
+    response = admin.gva_get_configuration()
+    if response.status_code == 404:
+        pytest.skip("GVA is not configured on this deployment")
+    assert response.status_code == 200, f"GET failed: {response.text}"
 
-    # POST configuration
-    post_response = admin.gva_post_configuration(sa)
-    assert post_response.status_code == 200, f"POST failed: {post_response.text}"
-
-    # GET configuration and verify
-    get_response = admin.gva_get_configuration()
-    assert get_response.status_code == 200, f"GET failed: {get_response.text}"
-
-    body = get_response.json()
+    body = response.json()
     # M-13: the private key is write-only and must never come back via GET.
-    assert 'private_key' not in body
-    sa_expected = dict(sa)
-    del sa_expected['private_key']
-    sa_expected['redirect_uris'] = ['https://oauth-redirect.googleusercontent.com/r/test-gva-project-123']
-    assert body == sa_expected
+    assert 'private_key' not in body, f"private_key must be omitted from GET: {body}"
+    assert body.get('project_id'), f"configured deployment must report a project_id: {body}"
+    assert body.get('client_email'), f"configured deployment must report a client_email: {body}"
 
+    # The redirect URI Google links against is derived from the project id, so a mismatch
+    # here means account linking targets the wrong project.
+    expected = f"https://oauth-redirect.googleusercontent.com/r/{body['project_id']}"
+    assert expected in (body.get('redirect_uris') or []), \
+        f"redirect_uris must contain {expected}: {body}"
 
-@pytest.mark.xdist_group("gva_config")
-def test_gva_update_configuration(admin_user):
-    """Test that POST with different values updates the configuration."""
-    admin = admin_user
-    admin.get_aws_credentials()
-
-    # POST initial configuration
-    sa1 = _make_service_account(project_id="first-gva-project", client_email="first@first.iam.gserviceaccount.com")
-    post_response = admin.gva_post_configuration(sa1)
-    assert post_response.status_code == 200, f"First POST failed: {post_response.text}"
-
-    # POST updated configuration
-    sa2 = _make_service_account(project_id="updated-gva-project", client_email="updated@updated.iam.gserviceaccount.com")
-    post_response = admin.gva_post_configuration(sa2)
-    assert post_response.status_code == 200, f"Second POST failed: {post_response.text}"
-
-    # GET and verify values were updated
-    get_response = admin.gva_get_configuration()
-    assert get_response.status_code == 200, f"GET failed: {get_response.text}"
-
-    body = get_response.json()
-    assert 'private_key' not in body
-    sa2_expected = dict(sa2)
-    del sa2_expected['private_key']
-    sa2_expected['redirect_uris'] = ['https://oauth-redirect.googleusercontent.com/r/updated-gva-project']
-    assert body == sa2_expected
 
 def test_gva_discovery(user_with_1_dev_each_in_2_groups):
     """Test GVA (Google Voice Assistant) device discovery."""
