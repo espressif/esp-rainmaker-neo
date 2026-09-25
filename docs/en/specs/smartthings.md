@@ -487,4 +487,6 @@ Ordered checklist for a developer verifying the whole pipeline on a fresh deploy
    make itest ITEST_ARGS=test/itest/test_smartthings.py
    ```
 
-   This covers config-API CRUD plus discovery/command/state-refresh by invoking each regional Schema App Lambda directly. The Schema tests skip with `No rmng-st-core regions in rmng-outputs.json` if step 1 was missed.
+   This covers a read-only config-API check plus discovery/command/state-refresh by invoking each regional Schema App Lambda directly.
+
+   The config test only reads: writing it would overwrite the deployment's real credentials, and `GET` never returns the secret to put them back, so `st_cfg`'s unit specs cover the write path. The Schema tests skip with `No rmng-st-core regions in rmng-outputs.json` if step 1 was missed.

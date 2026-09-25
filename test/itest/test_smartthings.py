@@ -74,32 +74,26 @@ def st_region_arn(request):
 # ---------------------------------------------------------------------------
 # 1. Config API CRUD (admin REST API)
 # ---------------------------------------------------------------------------
-@pytest.mark.xdist_group("smartthings_config")
-def test_smartthings_configuration_round_trip(admin_user):
-    """POST stores the credentials, GET returns client_id only, a second POST updates them,
-    DELETE removes them."""
+
+def test_smartthings_configuration_is_readable(admin_user):
+    """GET returns the deployment's client_id and never the secret.
+
+    Read-only deliberately: a write here overwrites the deployment's real credentials and
+    nothing can put them back, since the secret is never returned. st_cfg's unit specs
+    cover store, update and delete against mocked SSM.
+    """
     admin = admin_user
     admin.get_aws_credentials()
 
-    post_response = admin.st_post_configuration("test-st-client-id", "test-st-client-secret")
-    assert post_response.status_code == 200, f"POST failed: {post_response.text}"
+    response = admin.st_get_configuration()
+    if response.status_code == 404:
+        pytest.skip("SmartThings is not configured on this deployment")
+    assert response.status_code == 200, f"GET failed: {response.text}"
 
-    get_response = admin.st_get_configuration()
-    assert get_response.status_code == 200, f"GET failed: {get_response.text}"
-    body = get_response.json()
-    assert body['client_id'] == 'test-st-client-id'
-    # Secret must never be returned by GET.
-    assert 'client_secret' not in body, f"client_secret must be omitted from GET response: {body}"
-
-    post_response = admin.st_post_configuration("updated-st-client-id", "updated-st-client-secret")
-    assert post_response.status_code == 200, f"update POST failed: {post_response.text}"
-
-    get_response = admin.st_get_configuration()
-    assert get_response.status_code == 200, f"GET after update failed: {get_response.text}"
-    assert get_response.json()['client_id'] == 'updated-st-client-id'
-
-    delete_response = admin.st_delete_configuration()
-    assert delete_response.status_code == 200, f"DELETE failed: {delete_response.text}"
+    body = response.json()
+    assert body.get('client_id'), f"configured deployment must report a client_id: {body}"
+    # The secret must never be readable, which only a live call can prove.
+    assert 'client_secret' not in body, f"client_secret must be omitted from GET: {body}"
 
 
 def test_smartthings_config_non_admin_forbidden(test_user1):
