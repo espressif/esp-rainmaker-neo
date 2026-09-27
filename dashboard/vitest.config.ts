@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import path from 'node:path'
 import { defineConfig } from 'vitest/config'
 
 // Isolated unit-test config for the standalone matter-gen module.
@@ -12,11 +13,13 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   // Don't load the app's postcss.config.ts (needs ts-node); tests use no CSS.
   css: { postcss: { plugins: [] } },
+  resolve: {
+    alias: { '@': path.resolve(import.meta.dirname, 'src') },
+  },
   test: {
     environment: 'node',
-    // Page-level `_utils` are included too, but this config resolves no `@/`
-    // alias and provides no DOM — so anything matched here must be a pure unit
-    // whose non-relative imports are type-only.
+    // Page-level `_utils` are included too, but this config provides no DOM —
+    // so anything matched here must be a unit that runs without one.
     include: [
       'src/utils/**/*.test.ts',
       'src/lib/**/*.test.ts',

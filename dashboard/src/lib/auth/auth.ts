@@ -104,14 +104,15 @@ export async function checkAuthStatus(): Promise<boolean> {
     return true
   }
 
-  // Token appears expired - try to refresh
-  const refreshed = await refreshAccessToken()
-
-  if (refreshed) {
+  const refreshed = await refreshTokens()
+  if (refreshed.ok) {
     const newToken = getAccessToken()
-    if (newToken && !isTokenExpired(newToken)) {
-      return true
-    }
+    return newToken !== null && !isTokenExpired(newToken)
+  }
+
+  // Dead tokens left behind read as "signed in" to the login page, which would send the user to /home only to be bounced back here, forever.
+  if (refreshed.terminal) {
+    clearSession()
   }
 
   return false
@@ -183,6 +184,13 @@ export async function refreshAccessToken(): Promise<boolean> {
 /** Where {@link logout} sends the browser when the caller has no preference. */
 const DEFAULT_LOGOUT_REDIRECT = '/login'
 
+/** Forget everything the signed-in session left behind, without navigating. */
+function clearSession(): void {
+  clearAuthTokens()
+  useAuthStore.getState().clearCredentials()
+  useUserStore.getState().clearUser()
+}
+
 /**
  * Logout the current user: clears tokens and hard-navigates away.
  *
@@ -191,9 +199,7 @@ const DEFAULT_LOGOUT_REDIRECT = '/login'
  * caller land on `/login` with a banner param, e.g. after a self-service password change.
  */
 export function logout(redirectTo: string = DEFAULT_LOGOUT_REDIRECT): void {
-  clearAuthTokens()
-  useAuthStore.getState().clearCredentials()
-  useUserStore.getState().clearUser()
+  clearSession()
   window.location.href = redirectTo
 }
 
