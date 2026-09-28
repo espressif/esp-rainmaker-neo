@@ -42,5 +42,6 @@ export default defineConfig({
     allowKeepMeSignedIn: true,
     onboardingLayoutBackgroundImage: "assets/img/backgrounds/e22-home-banner.webp",
     onboardingHeading: "ESP RainMaker <gradient-text>NEO</gradient-text> Admin Dashboard",
+    onboardingShowcase: true,
   },
 });

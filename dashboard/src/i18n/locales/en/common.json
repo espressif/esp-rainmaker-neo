@@ -240,5 +240,15 @@
     "createdAt": "Created At",
     "lastUpdatedAt": "Last Updated At"
   },
-  "logoAlt": "Logo"
+  "logoAlt": "Logo",
+  "showcaseReel": {
+    "pause": "Pause showcase",
+    "play": "Play showcase",
+    "pagination": "Showcase slides",
+    "clips": {
+      "nodeManagement": "Generate, register and group nodes",
+      "ota": "Upload firmware and roll out an OTA job",
+      "voiceAssistants": "Set up Alexa and Google Home"
+    }
+  }
 }
