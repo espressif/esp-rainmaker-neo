@@ -8,7 +8,8 @@
  * Pre-load all assets from the assets directory for dynamic resolution
  * This enables Vite to bundle these assets and provide correct URLs
  */
-const assetModules = import.meta.glob<string>("/src/assets/**/*", {
+// The showcase clips are bundled by the showcase reel itself, so a build with it off leaves them out.
+const assetModules = import.meta.glob<string>(["/src/assets/**/*", "!/src/assets/video/**"], {
   eager: true,
   query: "?url",
   import: "default",

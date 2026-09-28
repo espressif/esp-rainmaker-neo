@@ -9,6 +9,7 @@ import react from '@vitejs/plugin-react'
 import svgr from 'vite-plugin-svgr'
 import path from 'path'
 import { appHead } from './vite-plugins/app-head.ts'
+import appConfig from './app.config.ts'
 
 export default defineConfig({
   plugins: [
@@ -21,6 +22,10 @@ export default defineConfig({
       },
     }),
   ],
+  define: {
+    // Read at build time so a build with the showcase off leaves its chunk and clips out of dist/.
+    __ONBOARDING_SHOWCASE__: JSON.stringify(appConfig.customAuth?.onboardingShowcase === true),
+  },
   resolve: {
     alias: {
       '@': path.resolve(import.meta.dirname, './src'),

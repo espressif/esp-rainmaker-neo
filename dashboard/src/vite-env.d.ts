@@ -17,6 +17,9 @@ declare module '*.svg?react' {
   export default ReactComponent
 }
 
+/** `customAuth.onboardingShowcase` from app.config.ts, inlined by `define` in vite.config.ts. */
+declare const __ONBOARDING_SHOWCASE__: boolean
+
 /**
  * Vite environment variables.
  *

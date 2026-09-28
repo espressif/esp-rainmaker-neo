@@ -75,6 +75,8 @@ export interface CustomAuthConfig {
   onboardingLayoutBackgroundImage?: string;
   /** Heading text displayed over the onboarding layout right panel */
   onboardingHeading?: string;
+  /** Play the product showcase clips in the right panel instead of the background image and heading. Read at build time: when off, the clips are left out of the build. */
+  onboardingShowcase?: boolean;
 }
 
 /**
