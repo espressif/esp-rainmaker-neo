@@ -60,15 +60,10 @@ class ClaimBase(Construct):
                 name="mac_addr",
                 type=dynamodb.AttributeType.STRING
             ),
-            # RETAIN, for the same reason as the CA key below.
-            #
             # This table is the authoritative {device, claimant} -> node_id
-            # mapping. Losing it does not just lose a lookup: every claimed
-            # device would be re-assigned a fresh node ID on its next claim,
-            # orphaning the IoT Thing, certificate, and shadow it already has.
-            # That is unrecoverable, and it would be triggered by nothing more
-            # than a deploy with claiming switched off.
-            removal_policy=RemovalPolicy.RETAIN,
+            # mapping: losing it re-assigns every claimed device a fresh node ID
+            # on its next claim, orphaning its IoT Thing, certificate, and shadow.
+            removal_policy=RemovalPolicy.DESTROY,
         )
 
         # Claiming CA signing key.
