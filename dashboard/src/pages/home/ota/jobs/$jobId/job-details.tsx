@@ -105,7 +105,7 @@ export default function OtaJobDetailsPage() {
         show: true,
         label: t("details.backToJobs", "Back to OTA Jobs"),
         href: "/home/ota/jobs",
-        LinkComponent: TanstackRouterLink,
+        linkComponent: TanstackRouterLink,
         className: "mx-5 mt-5",
       }}
       heading={

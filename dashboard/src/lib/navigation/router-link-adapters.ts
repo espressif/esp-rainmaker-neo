@@ -15,5 +15,5 @@ export type RouterLinkComponentProps = {
 
 export type RouterLinkComponent = ComponentType<RouterLinkComponentProps>;
 
-/** TanStack Router `Link` cast for dashboard-ui-components `LinkComponent` / `linkComponent` props. */
+/** TanStack Router `Link` cast for dashboard-ui-components `linkComponent` props. */
 export const TanstackRouterLink = Link as unknown as RouterLinkComponent;

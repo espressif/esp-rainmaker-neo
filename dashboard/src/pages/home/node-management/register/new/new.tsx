@@ -44,7 +44,7 @@ function RegisterNew() {
           "Back to registration jobs",
         ),
         href: "/home/node-management/register",
-        LinkComponent: TanstackRouterLink,
+        linkComponent: TanstackRouterLink,
       }}
     >
       <ContentContainer noGutters className="p-0">

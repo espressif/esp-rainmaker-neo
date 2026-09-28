@@ -143,7 +143,7 @@ export default function GroupDetailsPage() {
         show: true,
         label: t("details.backToGroups", "Back to node groups list"),
         href: "/home/node-management/node-groups",
-        LinkComponent: TanstackRouterLink,
+        linkComponent: TanstackRouterLink,
         className: "mx-5 mt-5",
       }}
       heading={

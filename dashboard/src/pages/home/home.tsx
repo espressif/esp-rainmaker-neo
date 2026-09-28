@@ -133,7 +133,7 @@ export default function Home() {
         items: sidebarEntries,
         currentPath: location.pathname.replace(/\$/g, "%24"),
         indexPath: "/home",
-        LinkComponent: TanstackRouterLink,
+        linkComponent: TanstackRouterLink,
         allowCollapsible: true,
         footer: <SidebarAccountCard />,
         hideCompanyBranding: true,

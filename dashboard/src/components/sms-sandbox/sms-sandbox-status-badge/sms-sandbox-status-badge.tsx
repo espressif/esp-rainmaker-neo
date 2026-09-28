@@ -20,5 +20,5 @@ export function SmsSandboxStatusBadge({ status }: SmsSandboxStatusBadgeProps) {
     getSmsSandboxStatusPresentation(status);
   const label = i18nKey ? t(i18nKey, labelFallback) : status;
 
-  return <StatusBadge label={label} Icon={Icon} color={color} variant="gradient" />;
+  return <StatusBadge label={label} icon={Icon} color={color} variant="gradient" />;
 }

@@ -31,7 +31,7 @@ function CreateOtaJobNew() {
         show: true,
         label: t("createOtaJobPage.backToJobs", "Back to OTA Jobs"),
         href: "/home/ota/jobs",
-        LinkComponent: TanstackRouterLink,
+        linkComponent: TanstackRouterLink,
       }}
     >
       <ContentContainer noGutters className="p-0">

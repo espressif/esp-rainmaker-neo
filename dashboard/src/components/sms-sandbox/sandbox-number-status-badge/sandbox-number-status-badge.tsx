@@ -25,7 +25,7 @@ export function SandboxNumberStatusBadge({
   return (
     <StatusBadge
       label={label}
-      Icon={Icon}
+      icon={Icon}
       color={color}
       variant="gradient"
       size="sm"

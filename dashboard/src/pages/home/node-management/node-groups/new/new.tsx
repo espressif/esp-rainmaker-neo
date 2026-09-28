@@ -23,7 +23,7 @@ function CreateNodeGroupNew() {
         show: true,
         label: t("new.backToGroups", "Back to node groups"),
         href: "/home/node-management/node-groups",
-        LinkComponent: TanstackRouterLink,
+        linkComponent: TanstackRouterLink,
       }}
     >
       <ContentContainer noGutters className="p-0">
