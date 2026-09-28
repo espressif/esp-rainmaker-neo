@@ -46,9 +46,6 @@ class TimeseriesBase(Construct):
                 type=dynamodb.AttributeType.NUMBER
             ),
             stream=dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
-            point_in_time_recovery_specification=dynamodb.PointInTimeRecoverySpecification(
-                point_in_time_recovery_enabled=True,
-            ),
             removal_policy=RemovalPolicy.DESTROY,
         )
 
@@ -65,9 +62,6 @@ class TimeseriesBase(Construct):
             sort_key=dynamodb.Attribute(
                 name="interval_key",
                 type=dynamodb.AttributeType.STRING
-            ),
-            point_in_time_recovery_specification=dynamodb.PointInTimeRecoverySpecification(
-                point_in_time_recovery_enabled=True,
             ),
             removal_policy=RemovalPolicy.DESTROY,
         )
