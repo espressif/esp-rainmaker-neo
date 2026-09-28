@@ -13,7 +13,7 @@ import {
 } from "@espressif/dashboard-ui-components/layouts";
 import { appConfig } from "@/lib/app-config";
 import { resolveAssetPath } from "@/lib/asset-resolver";
-import { getAccessToken } from "@/lib/auth";
+import { checkAuthStatus } from "@/lib/auth";
 import { useAppStore } from "@/stores/app.store";
 import { presetFallbackLogoAssets } from "@/components/brand-logo";
 
@@ -42,10 +42,17 @@ export default function OnboardingLayout({
   const storeDarkMode = useAppStore((state) => state.darkMode);
   const darkMode = darkModeProp ?? storeDarkMode;
 
+  // Same check as the /home guard, so a session it would reject is never sent there and the two pages cannot bounce each other.
   useEffect(() => {
-    if (getAccessToken()) {
-      void navigate({ to: "/home", replace: true });
-    }
+    let cancelled = false;
+    void checkAuthStatus().then((isAuthenticated) => {
+      if (isAuthenticated && !cancelled) {
+        void navigate({ to: "/home", replace: true });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [navigate]);
 
   const backgroundImageUrl =
