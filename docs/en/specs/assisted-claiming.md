@@ -277,11 +277,15 @@ Common Name is always the node ID and is never taken from configuration. The
 Minting reads the current configuration, signs a self-signed CA with the KMS key
 (§3.5) and publishes the certificate. Mint-once is enforced by the write itself,
 so the first call is the only one that mints and a repeat reports the existing CA
-unchanged. Rotation is an explicit `force` on the mint call — the sole action
+unchanged — provided it was signed by the current key. A CA that was not
+(typically one left in SSM by a previous install, since the certificate is
+written at runtime and outlives the stack while the key does not) is reported as
+`409` rather than as present, since no leaf could be issued against it; the
+operator re-mints with `force`. Rotation is an explicit `force` on the mint call — the sole action
 that overwrites the published CA, and therefore the one that leaves every
 certificate already issued by the previous CA unverifiable against the published
 one. There is no delete: the CA is never removed through the API, so a rotation
-is always deliberate and a teardown never revokes the fleet.
+is always deliberate. A teardown does revoke the fleet, through the key (§4).
 
 Leaf configuration is read at issuance, so a change to the subject or leaf
 validity takes effect on subsequent certificates with no redeploy. CA
@@ -305,10 +309,14 @@ fail closed until a admin sets a `mode` in the claiming configuration (§3.9)
 runtime configuration document, not in `rmng-inputs.json` — the claim group has
 no dependency on that file at all.
 
-- `ClaimBase` (base stack): reservation table and CA key, both `RETAIN`.
-  Destroying either is unrecoverable — the key cannot be regenerated, and losing
-  the table would re-assign every claimed device a fresh node ID, orphaning the
-  Thing, certificate and shadow it already has.
+- `ClaimBase` (base stack): reservation table and CA key, both `DESTROY`, so
+  tearing down `rmng-claim-base` leaves nothing behind to block a reinstall. The
+  teardown deletes the {device, claimant} → node ID mapping, so every device
+  claimed afterwards gets a fresh node ID, orphaning the Thing, certificate and
+  shadow it already has; and it schedules the CA key for deletion (recoverable
+  within the KMS pending window), after which every certificate the CA issued is
+  permanently unverifiable. The published CA certificate is not a CDK resource
+  and survives the teardown; a reinstall must re-mint it with `force` (§3.9).
 - `ClaimCore` (core stack): the claim Lambda and its routes, plus the admin
   CA configuration and bootstrap API (§3.9). Certificate identity and validity
   are set through that API at runtime, never through `rmng-inputs.json`.

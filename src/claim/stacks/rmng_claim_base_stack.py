@@ -10,7 +10,7 @@ from src.claim.handlers.base import ClaimBase
 
 class RMNGClaimBaseStack(Stack):
     """Stateful resources for assisted claiming — the node-ID reservation table
-    and the claiming CA KMS key (both RETAIN), plus the CA-key-ARN SSM
+    and the claiming CA KMS key (both DESTROY), plus the CA-key-ARN SSM
     parameter the claim handler reads.
 
     Owns these now that claiming is a separate stack group; rmng-base no longer

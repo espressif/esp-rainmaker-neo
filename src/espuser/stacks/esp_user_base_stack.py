@@ -388,7 +388,6 @@ class CreateDiscoveryStorage(Construct):
             alias_name=f"{common_resources.prefix}oidc-signing-key",
             description="ESP User OIDC RS256 token signing key",
             key_spec=kms.KeySpec.RSA_2048,
-            removal_policy=RemovalPolicy.RETAIN,
         )
         create_ssm_string_parameter(
             self, "EspUserKmsSigningKeyArnParameter",

@@ -6,6 +6,7 @@ package ca_bootstrap
 
 import (
 	"context"
+	"errors"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"testing"
@@ -220,13 +221,33 @@ var _ = Describe("Claiming CA bootstrap", func() {
 			Expect(cert.Subject.CommonName).To(Equal("Rotated CA"))
 		})
 
-		// A CA published out of band must also be respected.
 		It("does not replace a CA it did not write", func() {
-			putParam(certPemParam, "-----BEGIN CERTIFICATE-----\nexternal\n-----END CERTIFICATE-----")
-			res, err := BootstrapCA(ctx, cfg)
+			external := "-----BEGIN CERTIFICATE-----\nexternal\n-----END CERTIFICATE-----"
+			putParam(certPemParam, external)
+			_, err := BootstrapCA(ctx, cfg)
+			Expect(errors.Is(err, ErrCAKeyMismatch)).To(BeTrue())
+			Expect(*ssmMock.Parameters[certPemParam].Value).To(Equal(external))
+		})
+
+		// Reinstall: the key is destroyed with the stack, the runtime-written certificate is not.
+		It("reports a CA left over from a previous key instead of calling it present", func() {
+			stale, err := BootstrapCA(ctx, cfg)
 			Expect(err).To(BeNil())
-			Expect(res.AlreadyPresent).To(BeTrue())
-			Expect(res.CertPEM).To(ContainSubstring("external"))
+
+			const reinstalledKeyARN = "arn:aws:kms:us-east-1:111122223333:key/claiming-ca-reinstalled"
+			kmsMock.AddKey(reinstalledKeyARN)
+			putParam(keyArnParam, reinstalledKeyARN)
+
+			_, err = BootstrapCA(ctx, cfg)
+			Expect(errors.Is(err, ErrCAKeyMismatch)).To(BeTrue())
+			Expect(*ssmMock.Parameters[certPemParam].Value).To(Equal(stale.CertPEM))
+
+			forceCfg := cfg
+			forceCfg.Force = true
+			rotated, err := BootstrapCA(ctx, forceCfg)
+			Expect(err).To(BeNil())
+			Expect(rotated.KeyARN).To(Equal(reinstalledKeyARN))
+			Expect(*ssmMock.Parameters[certPemParam].Value).To(Equal(rotated.CertPEM))
 		})
 	})
 

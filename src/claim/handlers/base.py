@@ -74,11 +74,10 @@ class ClaimBase(Construct):
         # compromise of a Lambda — can yield an offline signing capability.
         # Each use is a kms:Sign entry in CloudTrail.
         #
-        # RETAIN, unlike the reservation table: destroying this key would
-        # permanently invalidate the certificate chain of every device ever
-        # claimed by this deployment, and the key cannot be regenerated. A
-        # stack teardown must leave it behind for an operator to remove
-        # deliberately.
+        # DESTROY schedules key deletion (KMS pending window, recoverable until
+        # it lapses). Once deleted, the certificate chain of every device
+        # claimed by this deployment is permanently invalid and the key cannot
+        # be regenerated.
         self.claiming_ca_key = kms.Key(
             self,
             "ClaimingCAKey",
@@ -87,7 +86,7 @@ class ClaimBase(Construct):
             key_usage=kms.KeyUsage.SIGN_VERIFY,
             alias=f"{common_resources.prefix}claiming-ca",
             enable_key_rotation=False,  # unsupported for asymmetric keys
-            removal_policy=RemovalPolicy.RETAIN,
+            removal_policy=RemovalPolicy.DESTROY,
         )
         self.claiming_ca_key.node.default_child.override_logical_id(
             stable_logical_id("KMSKey", "claiming-ca"))

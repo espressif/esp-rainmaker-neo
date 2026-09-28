@@ -34,7 +34,10 @@ const (
 )
 
 var _ = Describe("Claim admin API", func() {
-	var ctx context.Context
+	var (
+		ctx     context.Context
+		kmsMock *mock.MockKMS
+	)
 
 	request := func(user, resource, method, body string) events.APIGatewayProxyRequest {
 		return events.APIGatewayProxyRequest{
@@ -56,7 +59,7 @@ var _ = Describe("Claim admin API", func() {
 		_, _ = test_utils.SetupTestAdminUser(ctx, adminID, "admin@example.com")
 		_, _ = test_utils.SetupTestUser(ctx, dummyID, "dummy@example.com")
 
-		kmsMock := mock.NewMockKMS()
+		kmsMock = mock.NewMockKMS()
 		kmsMock.AddKey(keyARN)
 		awscommon.SetKMSClient(kmsMock)
 		kmsutil.ResetPublicKeyCache()
@@ -128,6 +131,25 @@ var _ = Describe("Claim admin API", func() {
 		repeat, err := handleRequest(ctx, request(adminID, caResource, http.MethodPost, ""))
 		Expect(err).To(BeNil())
 		Expect(repeat.StatusCode).To(Equal(http.StatusOK))
+
+		forced, err := handleRequest(ctx, request(adminID, caResource, http.MethodPost, `{"force":true}`))
+		Expect(err).To(BeNil())
+		Expect(forced.StatusCode).To(Equal(http.StatusCreated))
+	})
+
+	It("answers 409 when the published CA predates the current key", func() {
+		first, err := handleRequest(ctx, request(adminID, caResource, http.MethodPost, ""))
+		Expect(err).To(BeNil())
+		Expect(first.StatusCode).To(Equal(http.StatusCreated))
+
+		const reinstalledKeyARN = "arn:aws:kms:us-east-1:111122223333:key/claiming-ca-reinstalled"
+		kmsMock.AddKey(reinstalledKeyARN)
+		Expect(ssmutil.StoreParameterWithType(ctx, ca_bootstrap.ParamKeyArn, reinstalledKeyARN, ssm_types.ParameterTypeString)).To(BeNil())
+
+		stale, err := handleRequest(ctx, request(adminID, caResource, http.MethodPost, ""))
+		Expect(err).To(BeNil())
+		Expect(stale.StatusCode).To(Equal(http.StatusConflict))
+		Expect(stale.Body).To(ContainSubstring("force"))
 
 		forced, err := handleRequest(ctx, request(adminID, caResource, http.MethodPost, `{"force":true}`))
 		Expect(err).To(BeNil())

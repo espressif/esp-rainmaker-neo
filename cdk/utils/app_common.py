@@ -719,13 +719,14 @@ def create_kms_signing_key(
     alias_name: str,
     description: str,
     key_spec: kms.KeySpec,
-    removal_policy: RemovalPolicy = RemovalPolicy.RETAIN,
+    removal_policy: RemovalPolicy = RemovalPolicy.DESTROY,
 ) -> kms.Key:
     """Create an asymmetric SIGN_VERIFY KMS key with a separate Alias, both logical-ID pinned.
 
-    Defaults to RETAIN: signing keys cannot be regenerated, so a path-derived logical ID would let a
-    construct move orphan the live key and mint a new one — every signature already issued stops
-    verifying, and the retained key lingers untracked and billed.
+    Signing keys cannot be regenerated, so a path-derived logical ID would let a construct move
+    replace the live key with a new one and every signature already issued stops verifying; the
+    pinned ID prevents that. Defaults to DESTROY, which schedules deletion within the KMS pending
+    window on stack teardown.
 
     `alias_name` is the bare alias (no `alias/` prefix) and doubles as the logical-ID input, so the
     IDs track the physical alias rather than the construct path. Key rotation is not enabled:

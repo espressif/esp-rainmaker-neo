@@ -22,6 +22,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/kmsutil"
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/ssmutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/certissuer"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	ssm_types "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 )
@@ -88,6 +89,9 @@ func deriveCommonName(keyARN string) string {
 	return fmt.Sprintf("%s %s/%s", commonNameBase, account, region)
 }
 
+// ErrCAKeyMismatch: typically a reinstall, where the key is destroyed with the stack but the runtime-written certificate stays in SSM. Only a forced mint replaces it.
+var ErrCAKeyMismatch = errors.New("the published claiming CA certificate does not match the current signing key")
+
 // Result reports what a run did, so the caller can tell "minted" from
 // "already present" without inspecting SSM again.
 type Result struct {
@@ -104,11 +108,10 @@ func BootstrapCA(ctx context.Context, cfg Config) (Result, error) {
 	// would be worse than a round trip.
 	keyARN, err := ssmutil.GetParameterWithCaching(ctx, cfg.KeyArnParam, false, false)
 	if err != nil {
-		return Result{}, fmt.Errorf("could not read the claiming CA key ARN from %s "+
-			"(is the base stack deployed with claiming enabled?): %w", cfg.KeyArnParam, err)
+		return Result{}, rmerror.NewRMError(err, fmt.Sprintf("could not read the claiming CA key ARN from %s (is the base stack deployed with claiming enabled?)", cfg.KeyArnParam))
 	}
 	if keyARN == "" {
-		return Result{}, fmt.Errorf("%s is empty; claiming does not appear to be enabled on this deployment", cfg.KeyArnParam)
+		return Result{}, rmerror.NewRMError(nil, fmt.Sprintf("%s is empty; claiming does not appear to be enabled on this deployment", cfg.KeyArnParam))
 	}
 
 	commonName := cfg.CommonName
@@ -123,12 +126,12 @@ func BootstrapCA(ctx context.Context, cfg Config) (Result, error) {
 
 	signer, err := kmsutil.NewSigner(ctx, keyARN)
 	if err != nil {
-		return Result{}, fmt.Errorf("could not use the claiming CA key: %w", err)
+		return Result{}, rmerror.NewRMError(err, "could not use the claiming CA key")
 	}
 
 	caPEM, err := certissuer.NewSelfSignedCA(commonName, cfg.Subject, signer, validity)
 	if err != nil {
-		return Result{}, fmt.Errorf("could not mint the CA certificate: %w", err)
+		return Result{}, rmerror.NewRMError(err, "could not mint the CA certificate")
 	}
 
 	// Rotation: overwrite unconditionally. The caller has explicitly asked to
@@ -136,7 +139,7 @@ func BootstrapCA(ctx context.Context, cfg Config) (Result, error) {
 	// chaining to the published CA.
 	if cfg.Force {
 		if err := ssmutil.StoreParameterWithType(ctx, cfg.CertPemParam, caPEM, ssm_types.ParameterTypeString); err != nil {
-			return Result{}, fmt.Errorf("could not publish the rotated CA certificate: %w", err)
+			return Result{}, rmerror.NewRMError(err, "could not publish the rotated CA certificate")
 		}
 		return Result{CertPEM: caPEM, KeyARN: keyARN, CommonName: commonName}, nil
 	}
@@ -148,12 +151,16 @@ func BootstrapCA(ctx context.Context, cfg Config) (Result, error) {
 	if errors.Is(err, ssmutil.ErrParameterExists) {
 		existing, getErr := ssmutil.GetParameterWithCaching(ctx, cfg.CertPemParam, false, false)
 		if getErr != nil {
-			return Result{}, fmt.Errorf("a CA is already present but could not be read back: %w", getErr)
+			return Result{}, rmerror.NewRMError(getErr, "a CA is already present but could not be read back")
+		}
+		// The same check issuance makes, so "already present" means claiming can actually issue against it.
+		if _, issuerErr := certissuer.NewSigningIssuer(existing, signer); issuerErr != nil {
+			return Result{}, rmerror.NewRMError(ErrCAKeyMismatch, issuerErr.Error())
 		}
 		return Result{AlreadyPresent: true, CertPEM: existing, KeyARN: keyARN, CommonName: commonName}, nil
 	}
 	if err != nil {
-		return Result{}, fmt.Errorf("could not publish the CA certificate: %w", err)
+		return Result{}, rmerror.NewRMError(err, "could not publish the CA certificate")
 	}
 
 	return Result{CertPEM: caPEM, KeyARN: keyARN, CommonName: commonName}, nil
