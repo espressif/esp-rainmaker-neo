@@ -26,7 +26,7 @@ ask-sdk-model-runtime==1.0.1
 
 # Security & Crypto
 cryptography==50.0.0
-PyJWT==2.13.0
+PyJWT==2.14.0
 cffi==2.1.0
 
 # BLE Provisioning (esp_prov — app-sim `prov` command)
