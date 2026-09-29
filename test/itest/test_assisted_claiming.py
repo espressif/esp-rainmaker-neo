@@ -16,18 +16,24 @@ the suite stays green wherever claiming is switched off.
 import calendar
 import json
 import os
+import tempfile
 import time
 import uuid
 
 import boto3
 import pytest
+import requests
+from botocore.exceptions import ClientError
 from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from py_sdk.test_device import Device
 from py_sdk.test_group import Group
 from py_sdk.test_user import User
-from test.itest.conftest import CA_CERT, DEBUG, IOT_ENDPOINT, REGION, connect_device_with_retry
+from test.itest.conftest import (
+    CA_CERT, CREDENTIAL_PROVIDER_ENDPOINT, DEBUG, DEVICE_VIDEO_ROLE_ALIAS, IOT_ENDPOINT, REGION,
+    connect_device_with_retry,
+)
 
 # Claiming configuration the suite bootstraps with, via the admin admin API
 # (§3.9). Shared by the bootstrap fixture and the tests that assert the
@@ -214,6 +220,70 @@ def test_claimed_certificate_connects_to_mqtt(test_user1, claimed_nodes):
     device = Device(node_id, key_pem, cert_pem, CA_CERT, IOT_ENDPOINT, REGION, DEBUG)
     assert device.mqtt_connect(), "device could not connect with its claimed certificate"
     device.disconnect()
+
+
+def _claimed_camera_credentials(node_id, cert_pem, key_pem):
+    """Video-role credentials fetched with the claimed certificate alone.
+
+    Unlike test_kvs_camera's helper, this never attaches rmng-node-video-policy
+    itself: whether claiming attached it is part of what is under test.
+    """
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".pem") as cert_file, \
+            tempfile.NamedTemporaryFile(mode="w", suffix=".pem") as key_file:
+        cert_file.write(cert_pem)
+        cert_file.flush()
+        key_file.write(key_pem)
+        key_file.flush()
+        response = requests.get(
+            f"https://{CREDENTIAL_PROVIDER_ENDPOINT}/role-aliases/{DEVICE_VIDEO_ROLE_ALIAS}/credentials",
+            headers={"x-amzn-iot-thingname": node_id},
+            cert=(cert_file.name, key_file.name),
+            timeout=30,
+        )
+    assert response.status_code == 200, f"credential provider: {response.status_code} {response.text}"
+    return response.json()["credentials"]
+
+
+def test_camera_claimed_with_kvs_can_use_its_signaling_channel(test_user1, claimed_nodes):
+    """A camera onboarded by claiming, not admin registration, can stream.
+
+    The device video role may connect to rmng-v1-{node_id} but never create it,
+    so claim/verify with the "kvs" capability has to both attach
+    rmng-node-video-policy and create the channel. Checked from the device's own
+    credentials, which is what the camera firmware does.
+    """
+    c = test_user1.claim(capabilities=["kvs"])
+    node_id = c["node_id"]
+    claimed_nodes.append(node_id)
+    channel_name = f"rmng-v1-{node_id}"
+    try:
+        creds = _claimed_camera_credentials(node_id, c["certificate"], c["private_key"])
+        kvs = boto3.client(
+            "kinesisvideo", region_name=REGION,
+            aws_access_key_id=creds["accessKeyId"],
+            aws_secret_access_key=creds["secretAccessKey"],
+            aws_session_token=creds["sessionToken"],
+        )
+        info = kvs.describe_signaling_channel(ChannelName=channel_name)["ChannelInfo"]
+        assert info["ChannelType"] == "SINGLE_MASTER"
+        assert info["ChannelStatus"] == "ACTIVE"
+    finally:
+        admin_kvs = boto3.client("kinesisvideo", region_name=REGION)
+        try:
+            arn = admin_kvs.describe_signaling_channel(ChannelName=channel_name)["ChannelInfo"]["ChannelARN"]
+            admin_kvs.delete_signaling_channel(ChannelARN=arn)
+        except Exception:  # noqa: BLE001 - best-effort teardown
+            pass
+
+
+def test_claim_without_kvs_creates_no_channel(test_user1, claimed_nodes):
+    """Ordinary devices get no signaling channel from claiming."""
+    node_id, _cert, _ca, _key = _claim(test_user1)
+    claimed_nodes.append(node_id)
+    with pytest.raises(ClientError) as excinfo:
+        boto3.client("kinesisvideo", region_name=REGION).describe_signaling_channel(
+            ChannelName=f"rmng-v1-{node_id}")
+    assert excinfo.value.response["Error"]["Code"] == "ResourceNotFoundException"
 
 
 def test_claimed_certificate_authenticates_the_user_node_mapping(test_user1, claimed_nodes):

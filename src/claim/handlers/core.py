@@ -20,7 +20,7 @@ from app_common import (
 from src.bridge.stacks.base_res_constants import BRIDGE_RESOURCES
 from src.rmneo.stacks.base_res_constants import TABLE_NAMES, SSM_PARAMETERS, IOT_RESOURCES
 from src.espuser.stacks.base_res_constants import USER_TABLE_NAMES
-from arn_utils import get_table_arn, get_ssm_parameter_arn
+from arn_utils import get_table_arn, get_ssm_parameter_arn, get_kvs_channel_arn
 
 
 class ClaimCore(Construct):
@@ -126,6 +126,17 @@ class ClaimCore(Construct):
                 f"arn:aws:iot:{region}:{Aws.ACCOUNT_ID}:policy/{BRIDGE_RESOURCES['BRIDGE_POLICY_NAME']}",
                 f"arn:aws:iot:{region}:{Aws.ACCOUNT_ID}:cert/*",
             ],
+        ))
+
+        # A claim requesting the "kvs" capability creates the node's signaling
+        # channel (rmng-v1-{node_id}), as admin registration does: the device
+        # video role can connect to it but not create it.
+        lambda_role.add_to_policy(iam.PolicyStatement(
+            actions=[
+                "kinesisvideo:CreateSignalingChannel",
+                "kinesisvideo:DescribeSignalingChannel",
+            ],
+            resources=[get_kvs_channel_arn("rmng-v1-*", region)],
         ))
 
         self.claim_function = create_lambda_function(

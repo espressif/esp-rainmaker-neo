@@ -51,6 +51,7 @@ var _ = Describe("Claim Verify", func() {
 	var (
 		ctx     context.Context
 		kmsMock *mock.MockKMS
+		kvsMock *mock.KVSClientMock
 		caPEM   string
 		iotMock *mock.IoTClientMock
 		nodeID  string
@@ -127,6 +128,8 @@ var _ = Describe("Claim Verify", func() {
 		ctx = context.Background()
 		test_utils.TestSetup()
 		iotMock = awscommon.GetIoTClient().(*mock.IoTClientMock)
+		kvsMock = mock.NewKVSClientMock()
+		awscommon.SetKVSClient(kvsMock)
 
 		storeClaimingConfig(ctx, enabledConfig())
 		test_utils.SetupTestNonAdminUser(ctx, callerA, "a@example.com")
@@ -290,6 +293,55 @@ var _ = Describe("Claim Verify", func() {
 			Expect(json.Unmarshal([]byte(b.Body), &pb)).To(Succeed())
 			Expect(pb.NodeID).To(Equal(pa.NodeID))
 			Expect(pb.NodeID).To(Equal(nodeID))
+		})
+	})
+
+	// The device video role may connect to rmng-v1-{node_id} but not create it,
+	// so a camera onboarded by claiming depends on verify creating the channel.
+	Describe("kvs capability", func() {
+		kvsCaps := map[string]interface{}{"capabilities": []string{"kvs"}}
+		channelFor := func(id string) string { return "rmng-v1-" + id }
+
+		attachedPolicies := func() []string {
+			var all []string
+			for _, p := range iotMock.AttachedPolicies {
+				all = append(all, p...)
+			}
+			return all
+		}
+
+		It("creates the node's signaling channel and attaches the video policy", func() {
+			resp := verifyFor(callerA, testMac, kvsCaps)
+			Expect(resp.StatusCode).To(Equal(http.StatusCreated), resp.Body)
+
+			channel, exists := kvsMock.GetChannelDirect(channelFor(nodeID))
+			Expect(exists).To(BeTrue(), "claiming with kvs must create rmng-v1-{node_id}")
+			Expect(channel.ChannelName).To(Equal(channelFor(nodeID)))
+			Expect(attachedPolicies()).To(ContainElement("rmng-node-video-policy"))
+		})
+
+		It("creates no channel for a node without the kvs capability", func() {
+			resp := verifyFor(callerA, testMac)
+			Expect(resp.StatusCode).To(Equal(http.StatusCreated), resp.Body)
+			Expect(kvsMock.Channels).To(BeEmpty())
+		})
+
+		It("succeeds on re-claim when the channel already exists", func() {
+			Expect(verifyFor(callerA, testMac, kvsCaps).StatusCode).To(Equal(http.StatusCreated))
+			resp := verifyFor(callerA, testMac, kvsCaps)
+			Expect(resp.StatusCode).To(Equal(http.StatusCreated), resp.Body)
+			Expect(kvsMock.Channels).To(HaveLen(1))
+		})
+
+		// A kvs claim that cannot get its channel fails before the bind, so no
+		// certificate is left attached to a camera that could never stream.
+		It("returns 500 and binds nothing when the channel cannot be created", func() {
+			kvsMock.ForceCreateError = true
+			resp := verifyFor(callerA, testMac, kvsCaps)
+			Expect(resp.StatusCode).To(Equal(http.StatusInternalServerError))
+			Expect(resp.Body).NotTo(ContainSubstring("BEGIN CERTIFICATE"))
+			Expect(iotMock.Certificates).To(BeEmpty())
+			Expect(iotMock.VerifyThingExists(nodeID)).To(BeFalse())
 		})
 	})
 

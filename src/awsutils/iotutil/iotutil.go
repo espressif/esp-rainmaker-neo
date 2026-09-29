@@ -189,6 +189,21 @@ func CreateSignalingChannel(ctx context.Context, channelName string) error {
 	return nil
 }
 
+// EnsureSignalingChannel creates the node's KVS signaling channel,
+// rmng-v1-{nodeID}, when the node registers with the "kvs" capability.
+//
+// The device video role (rmng-node-video-role) may connect to that channel but
+// never create it, so the node layer calls this next to AttachDefaultPolicy on
+// every register and certificate replacement (node.RegisterNodeInRmng /
+// UpdateNodeInRmng): the video policy never comes without its channel. A no-op
+// for nodes without "kvs"; idempotent for an existing channel.
+func EnsureSignalingChannel(ctx context.Context, nodeID string, capabilities []string) error {
+	if !HasCapability(capabilities, "kvs") {
+		return nil
+	}
+	return CreateSignalingChannel(ctx, "rmng-v1-"+nodeID)
+}
+
 // HasCapability checks if a specific capability is present in the capabilities slice.
 func HasCapability(capabilities []string, target string) bool {
 	for _, c := range capabilities {
