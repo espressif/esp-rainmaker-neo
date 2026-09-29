@@ -17,7 +17,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/espressif/esp-rainmaker-neo/src/awsutils/iotutil"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_reg_req_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/nodeadmin/bulk_job"
@@ -110,13 +109,6 @@ func handleRegisterSingleNode(rctx *rmngctx.RmngContext, request events.APIGatew
 			return RegisterSingleNodeResponse{}, rmerror.NewRMError(err, fmt.Sprintf("node %s is already registered", nodeId))
 		}
 		return RegisterSingleNodeResponse{}, rmerror.NewRMError(err, "failed to register node")
-	}
-
-	// Create KVS signaling channel for the node (non-blocking — log and continue on failure)
-	if iotutil.HasCapability(req.Capabilities, "kvs") {
-		if err := iotutil.CreateSignalingChannel(rctx.Context, "rmng-v1-"+nodeId); err != nil {
-			rlog.Error(rctx).Err(err).Str("nodeId", nodeId).Msg("failed to create signaling channel during registration")
-		}
 	}
 
 	return RegisterSingleNodeResponse{

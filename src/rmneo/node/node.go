@@ -237,6 +237,13 @@ func (n *Node) registerInIotCore(rmngCtx *rmngctx.RmngContext, certPEM string, c
 		}
 	}
 
+	// A kvs node's signaling channel is created with its video policy, so no
+	// registration path can grant one without the other. A failure fails
+	// registration; the deferred rollback removes the half-provisioned cert/thing.
+	if err := iotutil.EnsureSignalingChannel(rmngCtx.Context, n.ThingName, capabilities); err != nil {
+		return "", rmerror.NewRMError(err, "failed to create signaling channel")
+	}
+
 	// Fire the node-register lifecycle hook synchronously so an optional stack
 	// (if deployed) can attach capability-specific IoT policies before the device
 	// connects and classify the node (node_type). A hook failure fails
@@ -1659,6 +1666,11 @@ func replaceNodeCert(rmngCtx *rmngctx.RmngContext, n *Node, newCertPEM string, c
 	// provider with AccessDenied rather than here, visibly.
 	if err := iotutil.AttachDefaultPolicy(rmngCtx.Context, newCertArn, capabilities); err != nil {
 		return rmerror.NewRMError(err, "failed to attach default policy to new cert")
+	}
+	// Same rule as first registration: the video policy comes with its channel.
+	// Idempotent, so a re-claim of a camera whose channel exists is unaffected.
+	if err := iotutil.EnsureSignalingChannel(rmngCtx.Context, n.ThingName, capabilities); err != nil {
+		return rmerror.NewRMError(err, "failed to create signaling channel for replacement cert")
 	}
 	// The node_type the hook returns is ignored on a cert replacement: this
 	// path does not touch the node_details row, whose node_type was set at

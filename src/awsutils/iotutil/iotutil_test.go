@@ -189,3 +189,33 @@ var _ = Describe("CreateSignalingChannel", func() {
 		Expect(err.Error()).To(ContainSubstring("failed to create signaling channel"))
 	})
 })
+
+var _ = Describe("EnsureSignalingChannel", func() {
+	var (
+		ctx     context.Context
+		kvsMock *mock.KVSClientMock
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		kvsMock = mock.NewKVSClientMock()
+		awscommon.SetKVSClient(kvsMock)
+	})
+
+	It("creates rmng-v1-{node_id} for a kvs node", func() {
+		Expect(iotutil.EnsureSignalingChannel(ctx, "node-1", []string{"s3", "kvs"})).To(Succeed())
+		_, exists := kvsMock.GetChannelDirect("rmng-v1-node-1")
+		Expect(exists).To(BeTrue())
+	})
+
+	It("does nothing for a node without the kvs capability", func() {
+		Expect(iotutil.EnsureSignalingChannel(ctx, "node-1", []string{"s3"})).To(Succeed())
+		Expect(iotutil.EnsureSignalingChannel(ctx, "node-1", nil)).To(Succeed())
+		Expect(kvsMock.Channels).To(BeEmpty())
+	})
+
+	It("propagates a KVS failure", func() {
+		kvsMock.ForceCreateError = true
+		Expect(iotutil.EnsureSignalingChannel(ctx, "node-1", []string{"kvs"})).NotTo(Succeed())
+	})
+})

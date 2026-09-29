@@ -19,9 +19,13 @@ established by the S3 device file storage feature, with a separate IoT policy
 2. **Separate IoT policy: `rmng-node-video-policy`** — independent from
    rmng-base-node-policy and rmng-node-file-policy, keeping each feature independently
    optional in future registration workflows.
-3. **Signaling channel created during node registration** — idempotent
-   `CreateSignalingChannel` call ensures channels are ready immediately after
-   registration. Failures are logged but don't block registration.
+3. **Signaling channel created with the video policy** — whenever a `kvs`
+   node's certificate is registered or replaced (admin single and bulk
+   registration, assisted claiming and re-claiming), the node layer attaches
+   `rmng-node-video-policy` and makes an idempotent `CreateSignalingChannel`
+   call in the same step, so the channel is ready immediately. The device video
+   role can connect to the channel but never create it, so the two must not be
+   separable. A creation failure fails the registration (see §3.3).
 4. **SINGLE_MASTER channel type** — one camera device as master, multiple
    concurrent viewers.
 5. **Trust policy uses `credentials.iot.amazonaws.com`** — the IoT Credential
@@ -94,15 +98,20 @@ only pay for signaling messages.
 
 Viewer credentials are minted **one node per call**.
 
-### 3.3 Channel Creation During Registration
+### 3.3 Channel Creation During Registration and Claiming
 
-1. Node registration completes successfully.
+1. Node registration completes successfully — or, for assisted claiming, the
+   certificate has been issued and is about to be bound.
 2. A `CreateSignalingChannel` call is made for `rmng-v1-{node_id}` with type
    `SINGLE_MASTER`.
 3. If the channel already exists (`ResourceInUseException`), it is treated as
    success.
-4. If creation fails for another reason, the error is logged and registration
-   continues — non-blocking.
+4. If creation fails for another reason, the registration fails like any
+   other policy-attach failure: a first registration rolls back the
+   half-provisioned certificate and Thing, admin/bulk registration reports the
+   node as failed, and `claim/verify` returns 500 without a certificate. Every
+   path is retryable as-is, since channel creation is idempotent (re-claiming
+   also reuses the reservation).
 5. `rmng-node-video-policy` is attached to the node only when its registered
    capabilities contain `"kvs"`. Without it, only rmng-base-node-policy (and
    optionally rmng-node-file-policy for `"s3"`) is attached.
