@@ -481,6 +481,14 @@ paths:
                 $ref: "#/components/schemas/AssumeRoleResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: The user has no group yet, so there is nothing to scope MQTT credentials to.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: "User has no groups"
         "500":
           $ref: "#/components/responses/InternalServerError"
 

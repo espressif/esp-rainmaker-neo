@@ -469,7 +469,14 @@ func resolveAssumeRoleGroupAccess(ctx context.Context, rmng_context *rmngctx.Rmn
 		return groupAccess{}, &resp
 	}
 
-	return toGroupAccess(rawAccess), nil
+	access := toGroupAccess(rawAccess)
+
+	// No group means no topic to scope the policy to (STS rejects an empty Resource list), so no MQTT credentials until the user joins or creates one.
+	if len(access.Groups) == 0 && len(access.Subgroups) == 0 {
+		resp := utils.APIGwRespJSON(http.StatusConflict, utils.NewAPIStatus("User has no groups"))
+		return groupAccess{}, &resp
+	}
+	return access, nil
 }
 
 // toGroupAccess converts the untyped map returned by group.ListUserAccessableGroups
