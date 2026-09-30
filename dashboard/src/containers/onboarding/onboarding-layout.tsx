@@ -5,7 +5,7 @@
  */
 
 import type { ReactNode } from "react";
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import {
   EntryLayout,
@@ -16,6 +16,11 @@ import { resolveAssetPath } from "@/lib/asset-resolver";
 import { checkAuthStatus } from "@/lib/auth";
 import { useAppStore } from "@/stores/app.store";
 import { presetFallbackLogoAssets } from "@/components/brand-logo";
+
+// A build-time constant, so a build with the showcase off drops this chunk and its clips entirely.
+const ShowcaseReel = __ONBOARDING_SHOWCASE__
+  ? lazy(() => import("./showcase-reel/showcase-reel"))
+  : null;
 
 export type OnboardingLayoutProps = Omit<
   EntryLayoutProps,
@@ -55,8 +60,10 @@ export default function OnboardingLayout({
     };
   }, [navigate]);
 
-  const backgroundImageUrl =
-    backgroundImageUrlProp ?? defaultBackgroundImageUrl();
+  const showShowcase = ShowcaseReel !== null;
+  const backgroundImageUrl = showShowcase
+    ? undefined
+    : (backgroundImageUrlProp ?? defaultBackgroundImageUrl());
 
   const resolvedHeading =
     heading ?? appConfig.customAuth?.onboardingHeading ?? undefined;
@@ -70,6 +77,14 @@ export default function OnboardingLayout({
       darkMode={darkMode}
       heading={resolvedHeading}
       backgroundImageUrl={backgroundImageUrl}
+      disableBackgroundImage={showShowcase}
+      customRightPanel={
+        ShowcaseReel ? (
+          <Suspense fallback={null}>
+            <ShowcaseReel darkMode={darkMode} />
+          </Suspense>
+        ) : undefined
+      }
       {...rest}
     >
       {children}

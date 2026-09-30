@@ -124,7 +124,7 @@ export default function ThingDetailsPage() {
         show: true,
         label: t("details.backToNodes", "Back"),
         href: "/home/node-management/nodes",
-        LinkComponent: TanstackRouterLink,
+        linkComponent: TanstackRouterLink,
         className: "mx-5 mt-5",
       }}
       heading={

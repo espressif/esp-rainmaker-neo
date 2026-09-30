@@ -71,7 +71,7 @@ export default function Static() {
         items: sidebarEntries,
         currentPath: location.pathname,
         indexPath: STATIC_BASE_PATH,
-        LinkComponent: TanstackRouterLink,
+        linkComponent: TanstackRouterLink,
         allowCollapsible: true,
         // The newer `footerBranding={false}` prop only lands in dashboard-ui-components
         // 0.11; on 0.10.x this flag is the only way to drop the footer branding.

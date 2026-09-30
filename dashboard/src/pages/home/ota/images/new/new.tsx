@@ -23,7 +23,7 @@ function UploadOtaImageNew() {
         show: true,
         label: t("backToImages", "Back to OTA Images"),
         href: "/home/ota/images",
-        LinkComponent: TanstackRouterLink,
+        linkComponent: TanstackRouterLink,
       }}
     >
       <ContentContainer noGutters className="p-0">

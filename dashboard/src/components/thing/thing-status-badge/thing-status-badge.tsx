@@ -26,7 +26,7 @@ export function ThingStatusBadge({ online }: ThingStatusBadgeProps) {
   return (
     <StatusBadge
       label={t(i18nKey, labelFallback)}
-      Icon={Icon}
+      icon={Icon}
       color={color}
       variant="gradient"
     />

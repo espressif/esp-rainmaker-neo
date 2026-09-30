@@ -22,7 +22,7 @@ export function OtaJobStatusBadge({ status }: OtaJobStatusBadgeProps) {
   return (
     <StatusBadge
       label={label}
-      Icon={Icon}
+      icon={Icon}
       color={color}
       variant="gradient"
       isLoading={spinning}

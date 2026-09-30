@@ -240,5 +240,15 @@
     "createdAt": "创建时间",
     "lastUpdatedAt": "最后更新时间"
   },
-  "logoAlt": "标志"
+  "logoAlt": "标志",
+  "showcaseReel": {
+    "pause": "暂停演示",
+    "play": "播放演示",
+    "pagination": "演示幻灯片",
+    "clips": {
+      "nodeManagement": "生成、注册节点并添加到分组",
+      "ota": "上传固件并发布 OTA 任务",
+      "voiceAssistants": "配置 Alexa 与 Google Home"
+    }
+  }
 }
