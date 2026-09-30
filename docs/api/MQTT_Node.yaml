@@ -1117,10 +1117,13 @@ components:
                       `false` on disconnect."
                     example: true
                   ncfg_ver:
-                    type: integer
-                    description:
-                      Unix timestamp of current node configuration version
-                    example: 1743656583
+                    type: string
+                    pattern: "^[0-9a-f]{64}$"
+                    description: >-
+                      Node configuration version: lowercase hex SHA-256 of the node
+                      config document last acknowledged via `setNodeConfig`. A change
+                      token compared for equality only; not a timestamp and not ordered.
+                    example: "9f2c6e1a4b7d3f08c5e2a91b6d4f7c3e0a8b5d2f1e6c9a7b4d3e0f8a2c5b1d6e"
       examples:
         - name: Full state on startup
           payload:
@@ -1134,7 +1137,7 @@ components:
                     version: 17436565837
                     alexa: true
                 online: true
-                ncfg_ver: 1743656583
+                ncfg_ver: "9f2c6e1a4b7d3f08c5e2a91b6d4f7c3e0a8b5d2f1e6c9a7b4d3e0f8a2c5b1d6e"
         - name: Delta update — brightness change
           payload:
             state:
@@ -1165,14 +1168,14 @@ components:
                   notify:
                     version: 17436565838
                 online: true
-                ncfg_ver: 1743656583
+                ncfg_ver: "9f2c6e1a4b7d3f08c5e2a91b6d4f7c3e0a8b5d2f1e6c9a7b4d3e0f8a2c5b1d6e"
 
     # ── Indexed shadow ───────────────────────────────────────────────────────
     indexedShadowUpdateMessage:
       name: IndexedShadowUpdate
       summary: Node reports indexed params and tags to iparams shadow
       description: |
-        Shadow name: `iparams` (static, not group-scoped). Same `state.reported` wrapper as the named shadow: optional `data` (tags), `params` (only parameters with the `indexed` config property), `online`, `ncfg_ver`, `notify`.
+        Shadow name: `iparams` (static, not group-scoped). Same `state.reported` wrapper as the named shadow: optional `data` (tags), `params` (only parameters with the `indexed` config property), `online`, `ncfg_ver`. The indexed shadow never carries `notify`.
 
         **Tags:** `state.reported.data.<who>.t` with `<who>` ∈ `admin` | `device` | `user`. Firmware should update **`device`** tags only.
 
@@ -1222,8 +1225,13 @@ components:
                     type: boolean
                     example: true
                   ncfg_ver:
-                    type: integer
-                    example: 1743656583
+                    type: string
+                    pattern: "^[0-9a-f]{64}$"
+                    description: >-
+                      Node configuration version: lowercase hex SHA-256 of the node
+                      config document last acknowledged via `setNodeConfig`. A change
+                      token compared for equality only; not a timestamp and not ordered.
+                    example: "9f2c6e1a4b7d3f08c5e2a91b6d4f7c3e0a8b5d2f1e6c9a7b4d3e0f8a2c5b1d6e"
       examples:
         - name: Full indexed state on startup
           payload:
@@ -1239,7 +1247,7 @@ components:
                   Light:
                     Brightness: 50
                 online: true
-                ncfg_ver: 1743656583
+                ncfg_ver: "9f2c6e1a4b7d3f08c5e2a91b6d4f7c3e0a8b5d2f1e6c9a7b4d3e0f8a2c5b1d6e"
 
     # ── Timeseries ───────────────────────────────────────────────────────────
     timeseriesMessage:

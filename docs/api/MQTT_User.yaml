@@ -397,7 +397,7 @@ components:
                       Power: true
                       Brightness: 50
                   online: true
-                  ncfg_ver: 1743656583
+                  ncfg_ver: "9f2c6e1a4b7d3f08c5e2a91b6d4f7c3e0a8b5d2f1e6c9a7b4d3e0f8a2c5b1d6e"
             current:
               state:
                 reported:
@@ -406,7 +406,7 @@ components:
                       Power: true
                       Brightness: 80
                   online: true
-                  ncfg_ver: 1743656583
+                  ncfg_ver: "9f2c6e1a4b7d3f08c5e2a91b6d4f7c3e0a8b5d2f1e6c9a7b4d3e0f8a2c5b1d6e"
             timestamp: 1743656590
 
     # ── Shadow delta ─────────────────────────────────────────────────────────
@@ -519,9 +519,12 @@ components:
                     commands
                   example: true
                 ncfg_ver:
-                  type: integer
-                  description: Node configuration version (Unix timestamp)
-                  example: 1743656583
+                  type: string
+                  description: >-
+                    Node configuration version: lowercase hex SHA-256 of the node config.
+                    Compare for equality only; when it differs from the version your cached
+                    config was fetched at, re-fetch the node config. 
+                  example: "9f2c6e1a4b7d3f08c5e2a91b6d4f7c3e0a8b5d2f1e6c9a7b4d3e0f8a2c5b1d6e"
             desired:
               type: object
               description: State desired by user/cloud (pending commands)

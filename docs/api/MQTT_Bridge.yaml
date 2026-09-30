@@ -558,7 +558,9 @@ components:
         Identical to the core `namedShadowUpdateMessage` (`MQTT_Node.yaml`) —
         refer to it for the `state.reported.params` payload and its examples,
         for both the default and the Matter data models. For a child, the bridge
-        sets `online` from protocol-side reachability.
+        sets `online` from protocol-side reachability, and reports the child's
+        own `ncfg_ver` (the SHA-256 of that child's config, emitted once the
+        cloud acknowledges its `setNodeConfig`), never the bridge's.
       payload:
         $ref: "#/components/schemas/passthroughPayload"
 
