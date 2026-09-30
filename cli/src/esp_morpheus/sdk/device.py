@@ -1510,8 +1510,8 @@ def generate_key_and_cert(thing_name, key_type='ec'):
 
 def reported_or_desired_shadow_to_structured(target_state):
     """
-    Restructures shadow state by moving all fields except data and online into params.
-    Assumes shadow structure defined in shadow_node.go.
+    Restructures shadow state by moving all fields except data, online and ncfg_ver into params.
+    Matches the firmware's reported layout: ncfg_ver sits beside online, not under params.
     """
     if not target_state:
         return target_state
@@ -1522,9 +1522,11 @@ def reported_or_desired_shadow_to_structured(target_state):
         structured_state["data"] = target_state["data"]
     if "online" in target_state:
         structured_state["online"] = target_state["online"]
+    if "ncfg_ver" in target_state:
+        structured_state["ncfg_ver"] = target_state["ncfg_ver"]
     # Move all other fields into params
     for key, value in target_state.items():
-        if key not in ["data", "online", "params"]:
+        if key not in ["data", "online", "ncfg_ver", "params"]:
             params[key] = value
     # Add existing params if any
     if "params" in target_state:

@@ -174,9 +174,10 @@ class DeviceSim:
                 return
 
             # Check if ncfg_ver is present in the reported state
-            if "state" in message and "reported" in message["state"] and "params" in message["state"]["reported"] and "ncfg_ver" in message["state"]["reported"]["params"]:
+            reported = message.get("state", {}).get("reported") or {}
+            if "ncfg_ver" in reported:
                 # Update our cached value
-                self.last_known_ncfg_ver = message["state"]["reported"]["params"]["ncfg_ver"]
+                self.last_known_ncfg_ver = reported["ncfg_ver"]
 
             self.message_queue.put(('params', message))
         except (json.JSONDecodeError, AttributeError) as e:
@@ -546,8 +547,9 @@ class DeviceSim:
         """Update both indexed and device shadows with parameters
 
         Args:
-            include_ncfg_ver (bool): Whether to include the ncfg_ver timestamp. Set to False when
-                                    only updating other parameters without changing node_config.
+            include_ncfg_ver (bool): Whether to stamp a new ncfg_ver (the node config's SHA-256
+                                    checksum, as firmware reports it). Set to False when only
+                                    updating other parameters without changing node_config.
 
         Returns:
             bool: True if both shadows updated successfully, False otherwise
@@ -555,12 +557,12 @@ class DeviceSim:
 
         device_indexed_params, device_params = self.get_default_params_from_node_cfg()
 
-        # Add timestamp for node_config version only if explicitly requested
+        # Add the node_config checksum as its version only if explicitly requested
         if include_ncfg_ver:
-            timestamp = int(time.time())
-            device_params["ncfg_ver"] = timestamp
+            checksum = self.calculate_checksum(self.node_config)
+            device_params["ncfg_ver"] = checksum
             # Update our cached value
-            self.last_known_ncfg_ver = timestamp
+            self.last_known_ncfg_ver = checksum
         elif self.last_known_ncfg_ver is not None:
             # Include the cached ncfg_ver if we have it
             device_params["ncfg_ver"] = self.last_known_ncfg_ver
@@ -574,6 +576,9 @@ class DeviceSim:
             node_tags["params"] = device_indexed_params
         else:
             node_tags = {"params": device_indexed_params}
+        # Firmware reports the same ncfg_ver in the indexed shadow
+        if "ncfg_ver" in device_params:
+            node_tags["ncfg_ver"] = device_params["ncfg_ver"]
 
         if not self.device.update_named_shadow(self.ishadow_name, node_tags):
             return False
@@ -624,7 +629,7 @@ class DeviceSim:
                 print("Failed to set node configuration")
                 return False
 
-            # Update shadows with processed parameters and new ncfg_ver timestamp
+            # Update shadows with processed parameters and new ncfg_ver checksum
             # Only update with ncfg_ver when configuration has changed
             if self.device.group_id:
                 if self.write_default_params(include_ncfg_ver=True):
