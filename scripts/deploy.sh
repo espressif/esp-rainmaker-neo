@@ -122,13 +122,7 @@ run_per_region() {
 
 # Parse command parameters
 if [ "$command" == "--setup" ]; then
-    # Bootstrap deliberately does NOT pass --app. Passing it makes the CDK execute
-    # the app, and the alexa/smartthings apps read rmng-outputs.json to resolve
-    # cross-stack parameters — a file that does not exist yet on a first
-    # deployment. That made `make setup` fail for exactly the groups that need a
-    # separate bootstrap, and the failure only surfaced later as
-    # "SSM parameter /cdk-bootstrap/<qualifier>/version not found" during deploy.
-    # An explicit environment is what bootstrap actually needs.
+    # Bootstrap runs from build/cdk, which has no cdk.json, so the CLI synths no app: an app needs rmng-outputs.json or dashboard/dist, and parallel synths collide on the cdk.out lock.
     set -e
     ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 
@@ -141,9 +135,9 @@ if [ "$command" == "--setup" ]; then
         local bootstrap_region="$1"
         local log="$LOG_DIR/$STACK_GROUP-$bootstrap_region.log"
         echo "Bootstrapping ${STACK_GROUP} (qualifier ${BOOTSTRAP_QUALIFIER}) in region: ${bootstrap_region}"
-        AWS_REGION="$bootstrap_region" cdk bootstrap --qualifier "$BOOTSTRAP_QUALIFIER" \
+        ( cd build/cdk && AWS_REGION="$bootstrap_region" cdk bootstrap --qualifier "$BOOTSTRAP_QUALIFIER" \
             --toolkit-stack-name "CDKToolkit-${STACK_GROUP}" \
-            "aws://${ACCOUNT_ID}/${bootstrap_region}" > "$log" 2>&1
+            "aws://${ACCOUNT_ID}/${bootstrap_region}" ) > "$log" 2>&1
     }
 
     SETUP_REGIONS=$(regions_for_group "$STACK_GROUP")
@@ -154,8 +148,11 @@ if [ "$command" == "--setup" ]; then
         # $AWS_REGION, not $REGION: the Makefile never exports REGION, it passes it as
         # --region, which this script parses into AWS_REGION. Bootstrapping used to be
         # handed an empty region here.
-        bootstrap_env "$AWS_REGION"
+        # set -e would exit before the log is shown, hiding why the bootstrap failed.
+        rc=0
+        bootstrap_env "$AWS_REGION" || rc=$?
         cat "$LOG_DIR/$STACK_GROUP-$AWS_REGION.log"
+        exit $rc
     fi
     exit 0
 elif [ "$command" == "--diff" ]; then
