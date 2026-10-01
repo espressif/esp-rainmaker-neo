@@ -1587,7 +1587,8 @@ func UpdateNodeInRmng(rmngCtx *rmngctx.RmngContext, nodeID string, newCertPEM st
 	}
 	rmngCtx.EnrichLogger("nid", nodeID)
 
-	details, err := node_details_db.NewNodeDetailsDB(rmngCtx).GetNodeDetails(nodeID)
+	detailsDB := node_details_db.NewNodeDetailsDB(rmngCtx)
+	details, err := detailsDB.GetNodeDetails(nodeID)
 	if err != nil {
 		return rmerror.NewRMError(err, "failed to look up node")
 	}
@@ -1598,8 +1599,15 @@ func UpdateNodeInRmng(rmngCtx *rmngctx.RmngContext, nodeID string, newCertPEM st
 	n := NewNode(nodeID)
 
 	if newCertPEM != "" {
-		if err := replaceNodeCert(rmngCtx, n, newCertPEM, capabilities); err != nil {
+		nodeType, err := replaceNodeCert(rmngCtx, n, newCertPEM, capabilities)
+		if err != nil {
 			return rmerror.NewRMError(err, "failed to update node certificate")
+		}
+		// A re-claim can add a capability the first registration lacked, e.g. "bridge".
+		if nodeType != "" && nodeType != details.NodeType() {
+			if err := detailsDB.SetNodeType(nodeID, nodeType); err != nil {
+				return rmerror.NewRMError(err, "failed to update node type")
+			}
 		}
 	}
 
@@ -1613,6 +1621,7 @@ func UpdateNodeInRmng(rmngCtx *rmngctx.RmngContext, nodeID string, newCertPEM st
 // replaceNodeCert replaces the cert binding for an existing Thing. The new
 // cert is registered (idempotent), attached, given the default policy, and
 // then any previously-attached certs are detached and deactivated.
+// It returns the node_type that the register hook assigns, or "" when the hook assigns none.
 //
 // Replace-and-deactivate (rather than "leave the old cert active alongside")
 // is the right semantic for the operator-correction use case — leaving the
@@ -1621,23 +1630,23 @@ func UpdateNodeInRmng(rmngCtx *rmngctx.RmngContext, nodeID string, newCertPEM st
 // If the new cert is already the only one attached, this function is a clean
 // no-op: the registration / attach / policy steps are absorbed as already-
 // exists, the detach loop skips the new cert.
-func replaceNodeCert(rmngCtx *rmngctx.RmngContext, n *Node, newCertPEM string, capabilities []string) error {
+func replaceNodeCert(rmngCtx *rmngctx.RmngContext, n *Node, newCertPEM string, capabilities []string) (string, error) {
 	if _, err := ValidateCAAndGetNodeId(newCertPEM, ""); err != nil {
-		return rmerror.NewRMError(err, "invalid cert PEM")
+		return "", rmerror.NewRMError(err, "invalid cert PEM")
 	}
 
 	// Compute the new cert's ID locally so the detach loop can recognize
 	// "this one is already the new cert" without an extra DescribeCertificate.
 	newCertID, err := iotutil.GetCertIDFromPEM(newCertPEM)
 	if err != nil {
-		return rmerror.NewRMError(err, "failed to compute cert ID for new cert")
+		return "", rmerror.NewRMError(err, "failed to compute cert ID for new cert")
 	}
 
 	// Snapshot the existing cert principals BEFORE we attach the new one,
 	// so the detach loop knows exactly what to clean up.
 	existingCerts, err := iotutil.GetThingCertificates(rmngCtx.Context, n.ThingName)
 	if err != nil {
-		return rmerror.NewRMError(err, "failed to list existing thing certificates")
+		return "", rmerror.NewRMError(err, "failed to list existing thing certificates")
 	}
 
 	// Register the new cert. registerCertOrRecoverARN absorbs the expected
@@ -1646,12 +1655,12 @@ func replaceNodeCert(rmngCtx *rmngctx.RmngContext, n *Node, newCertPEM string, c
 	// this node) and recovers the canonical ARN.
 	newCertArn, _, err := registerCertOrRecoverARN(rmngCtx.Context, newCertPEM)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	// Attach the new cert and the default policy. Both wrappers are idempotent.
 	if err := iotutil.AttachCertificateToThing(rmngCtx.Context, n.ThingName, newCertArn); err != nil {
-		return rmerror.NewRMError(err, "failed to attach new cert to thing")
+		return "", rmerror.NewRMError(err, "failed to attach new cert to thing")
 	}
 	// Attach the base policy plus every capability-gated policy implied by
 	// `capabilities`, and fire the same registration hook a first-time
@@ -1665,18 +1674,16 @@ func replaceNodeCert(rmngCtx *rmngctx.RmngContext, n *Node, newCertPEM string, c
 	// policies would leave the device to fail later at the credential
 	// provider with AccessDenied rather than here, visibly.
 	if err := iotutil.AttachDefaultPolicy(rmngCtx.Context, newCertArn, capabilities); err != nil {
-		return rmerror.NewRMError(err, "failed to attach default policy to new cert")
+		return "", rmerror.NewRMError(err, "failed to attach default policy to new cert")
 	}
 	// Same rule as first registration: the video policy comes with its channel.
 	// Idempotent, so a re-claim of a camera whose channel exists is unaffected.
 	if err := iotutil.EnsureSignalingChannel(rmngCtx.Context, n.ThingName, capabilities); err != nil {
-		return rmerror.NewRMError(err, "failed to create signaling channel for replacement cert")
+		return "", rmerror.NewRMError(err, "failed to create signaling channel for replacement cert")
 	}
-	// The node_type the hook returns is ignored on a cert replacement: this
-	// path does not touch the node_details row, whose node_type was set at
-	// first registration and does not change on a cert swap.
-	if _, err := nodelifecycle.OnNodeRegister(rmngCtx, n.ThingName, capabilities, newCertArn); err != nil {
-		return rmerror.NewRMError(err, "node register hook failed for replacement cert")
+	nodeType, err := nodelifecycle.OnNodeRegister(rmngCtx, n.ThingName, capabilities, newCertArn)
+	if err != nil {
+		return "", rmerror.NewRMError(err, "node register hook failed for replacement cert")
 	}
 
 	// Detach + deactivate any cert that isn't the new one. On a "same cert"
@@ -1696,15 +1703,15 @@ func replaceNodeCert(rmngCtx *rmngctx.RmngContext, n *Node, newCertPEM string, c
 		}
 		if oldCertArn != "" {
 			if err := iotutil.DetachThingPrincipal(rmngCtx.Context, n.ThingName, oldCertArn); err != nil {
-				return rmerror.NewRMError(err, fmt.Sprintf("failed to detach old cert %s", oldCertID))
+				return "", rmerror.NewRMError(err, fmt.Sprintf("failed to detach old cert %s", oldCertID))
 			}
 		}
 		if err := iotutil.UpdateCertificate(rmngCtx.Context, oldCertID, iot_types.CertificateStatusInactive); err != nil {
-			return rmerror.NewRMError(err, fmt.Sprintf("failed to deactivate old cert %s", oldCertID))
+			return "", rmerror.NewRMError(err, fmt.Sprintf("failed to deactivate old cert %s", oldCertID))
 		}
 	}
 
-	return nil
+	return nodeType, nil
 }
 
 // External contract — json tags must remain camelCase to match the AWS IoT Lifecycle Events payload.
