@@ -1980,28 +1980,33 @@ def extract_matter_oids(cert_pem):
     return result
 
 
-@pytest.fixture(scope="session")
-def chromium_browser():
-    """Provision + hand over a headless Chromium, installing the browser binary on first use so
-    a browser test needs no manual `playwright install`. Skips if the install/launch cannot
-    complete, so suites that only need HTTP-level coverage are unaffected."""
+def launch_chromium(playwright):
+    """Launch a headless Chromium, installing the browser binary on first use so a browser test needs no manual `playwright install`. Skips when neither the existing binary nor a fresh install can launch, so suites that only need HTTP-level coverage are unaffected.
+
+    Every browser test goes through here rather than calling `playwright.chromium.launch()` itself: a direct call in one helper is a hard failure on any runner whose image ships no browser binary.
+    """
     import subprocess
     import sys
 
+    try:
+        return playwright.chromium.launch(headless=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+        return playwright.chromium.launch(headless=True)
+    except Exception as e:  # noqa: BLE001
+        pytest.skip(f"chromium unavailable ({e})")
+
+
+@pytest.fixture(scope="session")
+def chromium_browser():
+    """Session-scoped headless Chromium for browser-level tests."""
     playwright_sync = pytest.importorskip("playwright.sync_api")
 
-    def _launch(p):
-        return p.chromium.launch(headless=True)
-
     with playwright_sync.sync_playwright() as p:
-        try:
-            browser = _launch(p)
-        except Exception:  # noqa: BLE001
-            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-            try:
-                browser = _launch(p)
-            except Exception as e:  # noqa: BLE001
-                pytest.skip(f"chromium unavailable ({e})")
+        browser = launch_chromium(p)
         yield browser
         browser.close()
 

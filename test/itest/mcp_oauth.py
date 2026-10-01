@@ -18,7 +18,7 @@ the flow is expensive. The token exchange yields both an ID token (carries
 ``custom:user_id`` → AdminGetUser fallback path), so both authorizer paths stay
 covered.
 """
-from test.itest.conftest import MCP_API_URL
+from test.itest.conftest import MCP_API_URL, launch_chromium
 from urllib.parse import urlparse, parse_qs, urljoin
 import threading
 import time
@@ -73,7 +73,7 @@ def complete_cognito_login(cognito_url, username, password):
     playwright_sync = __import__("playwright.sync_api", fromlist=["sync_playwright"])
 
     with playwright_sync.sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
+        browser = launch_chromium(pw)
         try:
             context = browser.new_context()
             page = context.new_page()
