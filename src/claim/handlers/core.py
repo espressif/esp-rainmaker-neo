@@ -114,6 +114,7 @@ class ClaimCore(Construct):
             "DEFAULT_THING_POLICY_NAME": IOT_RESOURCES['DEFAULT_THING_POLICY_NAME'],
             "DEVICE_FILE_POLICY_NAME": IOT_RESOURCES['DEVICE_FILE_POLICY_NAME'],
             "DEVICE_VIDEO_POLICY_NAME": IOT_RESOURCES['DEVICE_VIDEO_POLICY_NAME'],
+            "BRIDGE_POLICY_NAME": BRIDGE_RESOURCES['BRIDGE_POLICY_NAME'],
         }
 
         # Registration fires the bridge node-register hook in-process
