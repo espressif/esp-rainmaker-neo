@@ -33,7 +33,7 @@ pipeline {
         choice(name: 'DEPLOY_MODE', choices: ['Upgrade deployment', 'New deployment', 'Don\'t deploy'], description: 'Deployment mode')
         string(name: 'RMNG_ADMIN_EMAILS', defaultValue: '', description: '(Optional) Comma-separated admin emails to register on deploy')
         booleanParam(name: 'RUN_TEST', defaultValue: false, description: 'Run Pytest post deployment if checked')
-        booleanParam(name: 'DEPLOY_CLAIM', defaultValue: false, description: 'Also deploy the Assisted Claiming group (rmng-claim-base/core). Creates a billable KMS CA key, so it is excluded from the normal deploy')
+        booleanParam(name: 'DEPLOY_CLAIM', defaultValue: true, description: 'Also deploy the Assisted Claiming group (rmng-claim-base/core). Creates a billable KMS CA key; uncheck to skip it')
     }
     stages {
         stage('Initialization') {
