@@ -375,16 +375,12 @@ func newCallbackHeaders(interactionType string) STHeaders {
 	}
 }
 
-// The refresh is its own interaction type: sending the refresh_token grant under accessTokenRequest is rejected with UNSUPPORTED-GRANT-TYPE. Client credentials come from SSM, skipped in test mode as exchangeCodeForTokens skips them.
+// The refresh is its own interaction type: sending the refresh_token grant under accessTokenRequest is rejected with UNSUPPORTED-GRANT-TYPE.
 func refreshCallbackToken(ctx context.Context, oauthTokenURL string) func(string) (*integrationauth.TokenResponse, error) {
 	return func(refreshToken string) (*integrationauth.TokenResponse, error) {
-		var clientID, clientSecret string
-		if !isTestMode() {
-			var err error
-			clientID, clientSecret, err = getSTClientCredentials(ctx)
-			if err != nil {
-				return nil, err
-			}
+		clientID, clientSecret, err := tokenRequestCredentials(ctx, oauthTokenURL)
+		if err != nil {
+			return nil, err
 		}
 
 		reqBody := accessTokenRequest{

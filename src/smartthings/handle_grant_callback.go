@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/ssmutil"
@@ -26,14 +27,6 @@ const (
 	// stPlatform is the integration_id under which SmartThings callback tokens are stored in rmng-user-endpoints.
 	stPlatform = "smartthings"
 )
-
-// isTestMode reports whether this Lambda is pointed at the in-cloud webhook mock,
-// switching on the same env var the notifications Lambda uses (see
-// rmneo/handlers/notification/notifications: resolveMockBaseURL). Unset — the
-// production default — means the real SmartThings token endpoint is in play.
-func isTestMode() bool {
-	return os.Getenv("webhook_mock_base_url") != ""
-}
 
 // accessTokenRequest is the request body sent to SmartThings to exchange a code or refresh token.
 type accessTokenRequest struct {
@@ -155,20 +148,24 @@ func getSTClientCredentials(ctx context.Context) (clientID string, clientSecret 
 	return clientID, clientSecret, nil
 }
 
+// tokenRequestCredentials returns the SSM client credentials, or blank ones for the webhook mock, which never reads them; any other URL in test mode is refused.
+func tokenRequestCredentials(ctx context.Context, oauthTokenURL string) (clientID, clientSecret string, err error) {
+	mockBase := os.Getenv("webhook_mock_base_url")
+	if mockBase == "" {
+		return getSTClientCredentials(ctx)
+	}
+	if !strings.HasPrefix(oauthTokenURL, mockBase) {
+		return "", "", rmerror.NewRMError(nil, "webhook_mock_base_url is set but the token URL is not the webhook mock, refusing to send a token request without client credentials to "+oauthTokenURL)
+	}
+	return "", "", nil
+}
+
 // exchangeCodeForTokens sends an accessTokenRequest to SmartThings to exchange
 // an authorization code for access and refresh tokens.
 func exchangeCodeForTokens(ctx context.Context, code, oauthTokenURL string) (*accessTokenResponse, error) {
-	// The mock token endpoint answers from callbackAuthentication.code alone and never
-	// reads clientId/clientSecret, so demanding the SSM parameters in test mode would
-	// leave these the only integration tests needing account configuration — GVA and
-	// Alexa both bypass their real credentials the same way.
-	var clientID, clientSecret string
-	if !isTestMode() {
-		var err error
-		clientID, clientSecret, err = getSTClientCredentials(ctx)
-		if err != nil {
-			return nil, err
-		}
+	clientID, clientSecret, err := tokenRequestCredentials(ctx, oauthTokenURL)
+	if err != nil {
+		return nil, err
 	}
 
 	reqBody := accessTokenRequest{
@@ -196,8 +193,9 @@ func postAccessTokenRequest(reqBody accessTokenRequest, url string) (*accessToke
 		return nil, rmerror.NewRMError(err, "failed to marshal accessTokenRequest")
 	}
 
-	rlog.Debug(context.TODO()).Str("url", url).Str("interactionType", reqBody.Headers.InteractionType).
-		Str("grantType", reqBody.CallbackAuthentication.GrantType).Msg("sending accessTokenRequest to SmartThings")
+	rlog.Trace(context.TODO()).Str("url", url).Str("interactionType", reqBody.Headers.InteractionType).
+		Str("grantType", reqBody.CallbackAuthentication.GrantType).Bool("clientCredentialsSet", reqBody.CallbackAuthentication.ClientSecret != "").
+		Msg("sending token request")
 
 	// Use the shared (injectable) HTTP client — consistent with the state-callback path and
 	// unit-testable. MakeHTTPPostRequest returns an error for any non-2XX response.
