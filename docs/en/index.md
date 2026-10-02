@@ -23,6 +23,8 @@ specs/user_auth
 specs/espuser/oidc-oauth2
 specs/espuser/authorize-code-flow
 specs/espuser/auth-flows
+specs/espuser/sso-sessions
+specs/espuser/resource-indicators
 specs/espuser/federation
 specs/espuser/external-provider
 specs/espuser/legacy-user-auth
@@ -173,6 +175,10 @@ behind that overview:
   login: the authorization-code + PKCE handshake, and the flow record behind it.
 - [Token Endpoint](specs/espuser/auth-flows.md) — refresh-token rotation and the
   token, userinfo and revoke endpoints.
+- [SSO Sessions](specs/espuser/sso-sessions.md) — the authorization server's own
+  session: one row per sign-in, the session APIs, and sign-out.
+- [Resource Indicators](specs/espuser/resource-indicators.md) — RFC 8707
+  `resource`, and the audience it stamps into an access token.
 - [Brokered Federation](specs/espuser/federation.md) — upstream identity
   providers, brokered rather than passed through.
 - [External Identity Providers](specs/espuser/external-provider.md) — the

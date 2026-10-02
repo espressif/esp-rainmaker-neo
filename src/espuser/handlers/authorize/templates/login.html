@@ -1,0 +1,168 @@
+<!doctype html>
+
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · Espressif</title>
+<style>{{.CSS}}
+:root {
+  --accent: #e7352c;
+  --ramp: linear-gradient(90deg, #3f4bc9 0%, #8e4bc9 48%, #e7352c 100%);
+}
+</style>
+</head>
+<body>
+  <main class="card">
+    <div class="brand">{{.Wordmark}}</div>
+
+    <h1>Sign in</h1>
+
+    <div class="split">
+      <section class="col-left">
+        {{- if .Providers}}
+        <p class="col-head">Use an account</p>
+        {{- range .Providers}}
+        <a class="provider" href="{{.Href}}">
+          <span class="mark">{{if .LogoSVG}}{{.LogoSVG}}{{else}}{{$.DefaultMark}}{{end}}</span>
+          Continue with {{.Label}}
+        </a>
+        {{- end}}
+        {{- else}}
+        <p class="col-head">Use an account</p>
+        <p class="hint">No sign-in providers are configured for this deployment.</p>
+        {{- end}}
+      </section>
+
+      <div class="rule"><span>or</span></div>
+
+      <section class="col-right">
+        <p class="col-head">Use a one-time code</p>
+        <form id="identifier-form">
+          <label for="username">Email or phone number</label>
+          <input id="username" name="username" type="text" autocomplete="username" autofocus required>
+          <button type="submit">Continue</button>
+        </form>
+        <form id="otp-form" class="hidden">
+          <label for="code">Enter the 6-digit code sent to <span id="sent-to"></span></label>
+          <input id="code" name="code" inputmode="numeric" pattern="[0-9]*" maxlength="6"
+                 autocomplete="one-time-code" required>
+          <button type="submit" id="verify-btn">Verify</button>
+          <p class="hint"><a href="#" id="back-link">Use a different address</a></p>
+        </form>
+        <p id="error" class="err" role="alert" aria-live="polite"></p>
+      </section>
+    </div>
+
+  </main>
+
+<script nonce="{{.Nonce}}">
+(function () {
+  // Injected server-side from the HttpOnly flow cookie (not readable via document.cookie).
+  var flowId = {{.FlowID}};
+  var idForm = document.getElementById('identifier-form');
+  var otpForm = document.getElementById('otp-form');
+  var errEl = document.getElementById('error');
+
+  // The page is served at <base>/oauth2/login (base = the API Gateway stage, e.g. /prod, or
+  // empty on a custom domain). Prefix API calls with that base so a stage prefix is preserved.
+  var base = window.location.pathname.replace(/\/oauth2\/login\/?$/, '');
+
+  function fail(msg) { errEl.textContent = msg || 'Something went wrong. Please try again.'; }
+
+  if (!flowId) { fail('Your session has expired. Please start again.'); idForm.classList.add('hidden'); }
+
+  // A control that is working says so and stops accepting input. Without this a slow
+  // network reads as a dead button and the second click sends a second code.
+  function busy(el, on) {
+    if (on) { el.setAttribute('aria-busy', 'true'); } else { el.removeAttribute('aria-busy'); }
+  }
+
+  // The API's own words when it gives them, ours when it does not. A generic string in
+  // place of "that code has expired" is the difference between a person retrying and giving up.
+  function messageFrom(response, fallback) {
+    return response.json().then(function (body) {
+      return (body && (body.description || body.message)) || fallback;
+    }).catch(function () { return fallback; });
+  }
+
+  function show(formToShow, formToHide, returning) {
+    formToHide.classList.add('hidden');
+    formToShow.classList.remove('hidden');
+    if (returning) {
+      formToShow.classList.add('returning');
+      setTimeout(function () { formToShow.classList.remove('returning'); }, 340);
+    }
+  }
+
+  idForm.addEventListener('submit', function (e) {
+    e.preventDefault(); errEl.textContent = '';
+    var username = document.getElementById('username').value.trim();
+    var btn = idForm.querySelector('button');
+    busy(btn, true);
+    fetch(base + '/v1/auth/otp/initiate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ flow_id: flowId, username: username })
+    }).then(function (r) {
+      if (!r.ok) {
+        return messageFrom(r, r.status === 429
+          ? 'Too many attempts. Please wait a moment and try again.'
+          : 'We could not send a code to that address. Check it and try again.'
+        ).then(function (m) { throw new Error(m); });
+      }
+      document.getElementById('sent-to').textContent = username;
+      show(otpForm, idForm, false);
+      document.getElementById('code').focus();
+    }).catch(function (err) { fail(err && err.message); })
+      .then(function () { busy(btn, false); });
+  });
+
+  otpForm.addEventListener('submit', function (e) {
+    e.preventDefault(); errEl.textContent = '';
+    var codeEl = document.getElementById('code');
+    var btn = document.getElementById('verify-btn');
+    busy(btn, true);
+    fetch(base + '/v1/auth/otp/verify', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ flow_id: flowId, otp: codeEl.value.trim() })
+    }).then(function (r) {
+      if (!r.ok) {
+        return messageFrom(r, r.status === 429
+          ? 'Too many attempts. Please wait a moment and try again.'
+          : 'That code is not right, or it has expired.'
+        ).then(function (m) { throw new Error(m); });
+      }
+      return r.json().then(function (data) {
+        if (data && data.redirect_to) {
+          // Leave the button busy: the browser is navigating, and restoring the label first
+          // shows a live control on a page that is already leaving.
+          window.location.href = data.redirect_to;
+          return;
+        }
+        throw new Error('Signed in, but we could not continue. Please start again.');
+      });
+    }).catch(function (err) {
+      fail(err && err.message);
+      busy(btn, false);
+      codeEl.select();
+    });
+  });
+
+  // Returning to the address field re-animates in the opposite sense, so going back reads
+  // as going back rather than as the page resetting.
+  document.getElementById('back-link').addEventListener('click', function (e) {
+    e.preventDefault(); errEl.textContent = '';
+    show(idForm, otpForm, true);
+    document.getElementById('username').focus();
+  });
+
+  // A provider hop is a full navigation; mark the button so a slow redirect is visibly
+  // in progress rather than an unresponsive link.
+  Array.prototype.forEach.call(document.querySelectorAll('.provider'), function (a) {
+    a.addEventListener('click', function () { a.setAttribute('aria-busy', 'true'); });
+  });
+
+})();
+</script>
+</body>
+</html>

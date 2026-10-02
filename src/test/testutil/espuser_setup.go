@@ -117,9 +117,11 @@ func seedEspUserSchema(m *mock.DynamoDBMock) {
 	m.AddTable("espuser-auth-flows", "flow_id", "")
 	m.AddTable("espuser-admin-config", "config_name", "subtype")
 	m.AddTable("espuser-identity-providers", "provider_name", "")
+	m.AddTable("espuser-sessions", "session_hash", "")
 	gomega.Expect(m.AddSecondaryIndex("espuser-user-details-by-email", "espuser-user-details", "email", "")).To(gomega.Succeed())
 	gomega.Expect(m.AddSecondaryIndex("espuser-user-details-by-phone", "espuser-user-details", "phone", "")).To(gomega.Succeed())
 	gomega.Expect(m.AddSecondaryIndex("espuser-auth-flows-by-code", "espuser-auth-flows", "code", "")).To(gomega.Succeed())
+	gomega.Expect(m.AddSecondaryIndex("espuser-sessions-by-user", "espuser-sessions", "user_id", "sid")).To(gomega.Succeed())
 }
 
 func startJWKSServer(pub *rsa.PublicKey) *httptest.Server {

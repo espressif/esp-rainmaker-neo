@@ -1,0 +1,268 @@
+
+/* Three theme states, not two. Bare :root is dark; the media query is guarded so an
+   explicit light choice beats a dark OS; the [data-theme] stamps win over both. A colour
+   defined only inside a media block never applies in the un-stamped state, which is the
+   classic unreadable-page bug. */
+:root {
+  --bg: #0c0d0e;
+  --card: #141517;
+  --field: #1a1c1f;
+  --line: #24262a;
+  --line-strong: #32363b;
+  --text: #f4f4f3;
+  --muted: #a2a5aa;
+  --faint: #74777d;
+  --accent: #5b67dd;
+  --accent-ink: #ffffff;
+  --danger: #ff6b60;
+  --dot: rgb(255 255 255 / 0.028);
+  --shadow: 0 24px 64px -24px rgb(0 0 0 / 0.7), 0 1px 2px rgb(0 0 0 / 0.4);
+  --sheen: rgb(255 255 255 / 0.035);
+  --halo: rgb(255 255 255 / 0.045);
+  --bevel: rgb(255 255 255 / 0.04);
+  /* A single accent line by default. A deployment supplies its own ramp through the
+     profile; nothing here belongs to any particular company. */
+  --ramp: linear-gradient(90deg, var(--accent), var(--accent));
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    --bg: #f4f4f3;
+    --card: #ffffff;
+    --field: #fbfbfa;
+    --line: #e4e4e2;
+    --line-strong: #cfcfcc;
+    --text: #17181a;
+    --muted: #5f6266;
+    --faint: #8b8e93;
+    --accent-ink: #ffffff;
+    --danger: #b4231a;
+    --dot: rgb(0 0 0 / 0.035);
+    --shadow: 0 24px 64px -28px rgb(0 0 0 / 0.18), 0 1px 2px rgb(0 0 0 / 0.06);
+    --sheen: rgb(255 255 255 / 0.7);
+    --halo: rgb(0 0 0 / 0.012);
+    --bevel: rgb(255 255 255 / 0.9);
+  }
+}
+:root[data-theme='light'] {
+  --bg: #f4f4f3; --card: #ffffff; --field: #fbfbfa; --line: #e4e4e2;
+  --line-strong: #cfcfcc; --text: #17181a; --muted: #5f6266; --faint: #8b8e93;
+  --danger: #b4231a; --dot: rgb(0 0 0 / 0.035);
+  --shadow: 0 24px 64px -28px rgb(0 0 0 / 0.18), 0 1px 2px rgb(0 0 0 / 0.06);
+  --sheen: rgb(255 255 255 / 0.7); --halo: rgb(0 0 0 / 0.012); --bevel: rgb(255 255 255 / 0.9);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px 20px;
+  /* Painted explicitly: the page must not borrow a ground from anywhere else. */
+  background-color: var(--bg);
+  background-image: radial-gradient(var(--dot) 1px, transparent 1px);
+  background-size: 22px 22px;
+  color: var(--text);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.card {
+  position: relative;
+  width: 100%;
+  max-width: 840px;          /* the horizontal composition; it never grows past this */
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  padding: 44px 48px 40px;
+  overflow: hidden;
+}
+/* A light source above the card. Without it the surface is a rectangle with a border, which
+   is what makes an otherwise correct layout look like a wireframe. */
+.card::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
+  background:
+    linear-gradient(180deg, var(--sheen) 0%, transparent 42%),
+    radial-gradient(120% 80% at 50% -20%, var(--halo), transparent 60%);
+}
+.card > * { position: relative; z-index: 1; }
+/* The one place the brand ramp appears. Two pixels, and nowhere else on the page. */
+.card::before {
+  content: ""; position: absolute; inset: 0 0 auto 0; height: 2px; background: var(--ramp);
+}
+
+.brand { display: flex; align-items: center; min-height: 28px; margin-bottom: 30px; }
+.brand svg { height: 26px; width: auto; display: block; color: var(--text); }
+.brand .fallback { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+
+h1 { margin: 0 0 30px; font-size: 26px; line-height: 1.2; font-weight: 600; letter-spacing: -0.02em; }
+
+/* The horizontal split: providers left, identifier right, a rule and "or" between.
+   Symmetric columns so neither side reads as the afterthought. */
+.split { display: grid; grid-template-columns: 1fr 44px 1fr; align-items: start; }
+.col-head {
+  margin: 0 0 16px; font-size: 11.5px; font-weight: 500; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--faint); opacity: .85;
+}
+
+.rule { position: relative; justify-self: center; align-self: stretch; width: 1px; background: var(--line); }
+.rule {
+  background: linear-gradient(180deg, transparent, var(--line) 12%, var(--line) 88%, transparent);
+}
+.rule span {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  background: var(--card); padding: 9px 0; font-size: 11.5px; color: var(--faint);
+}
+
+.provider {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  padding: 0 16px; height: 48px; margin-bottom: 10px;
+  background: linear-gradient(180deg, var(--bevel), transparent 60%), var(--field);
+  border: 1px solid var(--line); border-radius: 11px;
+  color: var(--text); text-decoration: none; font-size: 14.5px; font-weight: 500;
+  transition: border-color .15s ease, background-color .15s ease;
+}
+.provider:hover { border-color: var(--line-strong); }
+.provider .mark { display: flex; width: 20px; height: 20px; flex: none; align-items: center; justify-content: center; }
+.provider .mark svg, .provider .mark img { width: 20px; height: 20px; display: block; }
+
+label { display: block; margin-bottom: 7px; font-size: 13px; color: var(--muted); }
+input {
+  width: 100%; height: 48px; padding: 0 14px;
+  background: var(--field); border: 1px solid var(--line); border-radius: 11px;
+  color: var(--text); font-size: 15px; font-family: inherit;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  box-shadow: 0 0 0 3.5px color-mix(in srgb, var(--accent) 15%, transparent);
+}
+input#code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums; letter-spacing: 0.5em; text-align: center;
+}
+
+button {
+  width: 100%; height: 48px; margin-top: 14px;
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.10), transparent 55%), var(--accent);
+  color: var(--accent-ink);
+  border: 0; border-radius: 11px; font-size: 15px; font-weight: 600;
+  font-family: inherit; cursor: pointer;
+  transition: filter .15s ease;
+}
+button:hover { filter: brightness(1.08); }
+button:active { transform: translateY(1px); }
+
+.hidden { display: none; }
+.err { margin: 12px 0 0; min-height: 1.2em; font-size: 13px; color: var(--danger); }
+.hint { margin: 12px 0 0; font-size: 13px; color: var(--faint); }
+.support { margin: 26px 0 0; font-size: 13px; }
+.support a { color: var(--muted); }
+
+/* Below this the two columns cannot both hold a 48px control comfortably, so they stack.
+   The desktop split is the design; this is the fallback. */
+@media (max-width: 720px) {
+  .card { padding: 32px 24px 28px; }
+  .split { grid-template-columns: 1fr; }
+  .rule { width: auto; height: 1px; align-self: auto; margin: 22px 0; }
+  .rule span { padding: 0 10px; }
+  .col-right { margin-top: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+}
+
+/* ── Motion ────────────────────────────────────────────────────────────────────
+   One entrance, then micro-feedback on the things a person touches. Every rule
+   here is disabled wholesale by the reduced-motion block at the end of the file,
+   so the page is fully usable with animation off -- nothing is *revealed* by an
+   animation, it only arrives sooner or later. */
+
+@keyframes rise {
+  from { opacity: 0; transform: translate3d(0, 14px, 0); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes sweep {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes shake {
+  10%, 90% { transform: translate3d(-1px, 0, 0); }
+  20%, 80% { transform: translate3d(2px, 0, 0); }
+  30%, 50%, 70% { transform: translate3d(-3px, 0, 0); }
+  40%, 60% { transform: translate3d(3px, 0, 0); }
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.card {
+  animation: rise .44s cubic-bezier(.22, .61, .36, 1) both;
+}
+/* The brand ramp draws itself left to right as the card lands. It is the only
+   moment the gradient is doing anything, which is what keeps it an accent. */
+.card::before { transform-origin: left; animation: sweep .7s cubic-bezier(.22, .61, .36, 1) .12s both; }
+
+/* Contents follow the card rather than arriving with it, so the eye lands on the
+   card edge first and the controls settle after. */
+.brand   { animation: rise .4s cubic-bezier(.22,.61,.36,1) .10s both; }
+h1       { animation: rise .4s cubic-bezier(.22,.61,.36,1) .16s both; }
+.col-left  { animation: rise .4s cubic-bezier(.22,.61,.36,1) .22s both; }
+.rule      { animation: fadeIn .5s ease .30s both; }
+.col-right { animation: rise .4s cubic-bezier(.22,.61,.36,1) .26s both; }
+.support   { animation: fadeIn .4s ease .40s both; }
+
+/* Provider buttons stagger, so a chooser with three rows reads as a list being
+   dealt rather than a block appearing. */
+.provider { animation: rise .34s cubic-bezier(.22,.61,.36,1) both; }
+.provider:nth-of-type(1) { animation-delay: .24s; }
+.provider:nth-of-type(2) { animation-delay: .30s; }
+.provider:nth-of-type(3) { animation-delay: .36s; }
+.provider:nth-of-type(4) { animation-delay: .42s; }
+.provider:nth-of-type(n+5) { animation-delay: .46s; }
+
+.provider:hover { transform: translateY(-1px); }
+.provider:active { transform: translateY(0); }
+.provider { transition: border-color .15s ease, background-color .15s ease, transform .15s ease; }
+
+button { transition: filter .15s ease, transform .1s ease, opacity .15s ease; }
+
+/* The step change is a real transition: the code field arrives from the right, so
+   the direction carries the sense of moving forward through the flow. */
+@keyframes stepIn {
+  from { opacity: 0; transform: translate3d(12px, 0, 0); }
+  to   { opacity: 1; transform: none; }
+}
+#otp-form:not(.hidden) { animation: stepIn .32s cubic-bezier(.22,.61,.36,1) both; }
+#identifier-form.returning { animation: stepIn .32s cubic-bezier(.22,.61,.36,1) both; }
+
+/* An error should be felt, once, and then stay readable. */
+.err:not(:empty) { animation: shake .5s cubic-bezier(.36,.07,.19,.97) both; }
+
+/* Busy state. The label is replaced by a spinner rather than the button vanishing,
+   so the layout never shifts under a cursor mid-click. */
+button[aria-busy='true'] { color: transparent; pointer-events: none; position: relative; }
+button[aria-busy='true']::after {
+  content: ""; position: absolute; top: 50%; left: 50%;
+  width: 18px; height: 18px; margin: -9px 0 0 -9px;
+  border: 2px solid color-mix(in srgb, var(--accent-ink) 35%, transparent);
+  border-top-color: var(--accent-ink);
+  border-radius: 50%;
+  animation: spin .6s linear infinite;
+}
+.provider[aria-busy='true'] { opacity: .55; pointer-events: none; }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+  .provider:hover { transform: none; }
+}

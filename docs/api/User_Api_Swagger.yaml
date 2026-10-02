@@ -68,18 +68,21 @@ tags:
       auth request.
   - name: OAuth2 / OIDC Core
     description:
-      Token issuance/rotation, userinfo, revocation, and user lookup — the
-      endpoints every login method converges on.
+      Authorization, token issuance/rotation, userinfo, revocation, and sign-out — the endpoints every login method converges on.
   - name: Federated Login
     description:
-      Browser authorization-code + PKCE login brokered to an upstream identity
-      provider (Cognito hosted UI in the open-source deployment). Clients only
-      ever receive ESP User tokens.
+      The upstream legs of a browser login started at `/oauth2/authorize`, brokered to an upstream identity provider (Cognito hosted UI in the open-source deployment). Clients only ever receive ESP User tokens.
   - name: User Auth
     description:
       The main-era native `/v1/user/auth/*` password surface, kept
       request/response compatible. Credentials verify against the bundled
       Cognito pool server-side; every token returned is an ESP User token.
+  - name: Sessions
+    description:
+      The authorization server's own browser session — sign-out, and a person's
+      list of the browsers they are signed in on.
+  - name: Users
+    description: User lookup.
   - name: Admin Clients
     description: Admin-only OAuth client registry
   - name: Admin Creds
@@ -145,18 +148,11 @@ paths:
     get:
       summary: Start browser login (authorization code + PKCE)
       description: |
-        Begins the OAuth 2.1 / OIDC authorization-code flow. Validates the
-        client, `redirect_uri` (exact match), and PKCE, writes an internal login
-        flow record, sets an opaque `flow_id` session cookie, and routes the
-        login surface by the enabled identity providers: with exactly one OIDC
-        provider (the open-source Cognito case) the browser is `302`d straight
-        to `/oauth2/federation/start`; an OTP-only deployment deep-links to its
-        login page; otherwise the built-in login page is served. After login the
-        browser is redirected to the client's `redirect_uri` with a single-use
-        `code` (and `state`). PKCE (`S256`) is required for every client. See
-        specs `authorize-code-flow.md` and `federation.md`.
+        Starts the authorization-code + PKCE (`S256`) login. Validates the client, the exact `redirect_uri` and PKCE, sets the `__Host-esp_flow_id` cookie, and sends the browser to the login: straight to `/oauth2/federation/start` when exactly one provider is enabled, to the OTP page in an OTP-only deployment, otherwise to `/oauth2/login`. On success the browser returns to `redirect_uri` with a single-use `code` and `state`.
+
+        A live `__Host-esp_session` cookie skips the login and returns the code immediately (single sign-on), unless `prompt`, `max_age` or `id_token_hint` rule it out.
       tags:
-        - Federated Login
+        - OAuth2 / OIDC Core
       security: []
       parameters:
         - name: response_type
@@ -210,12 +206,75 @@ paths:
             Opaque value echoed back on the redirect (client CSRF token).
           schema:
             type: string
+        - name: resource
+          in: query
+          required: false
+          description: |
+            RFC 8707 resource indicator: the API the access token is for, stamped into
+            `aud` on that token and on every token the resulting refresh family later
+            mints. Must appear in the client's `allowed_resources`, or the request is
+            rejected with `invalid_target`.
+
+            **Default when omitted:** `aud` is the `client_id`. **At most one** value; two
+            are refused rather than minting a token good at two APIs. An ID token's `aud`
+            is the `client_id` either way — it is a statement to that client.
+          schema:
+            type: string
+            format: uri
+          example: "https://api.accounts.espressif.com"
+        - name: prompt
+          in: query
+          required: false
+          description: |
+            OIDC Core §3.1.2.1. **Default when
+            omitted:** a live session answers the request silently.
+
+            `none` never shows a prompt — it answers from the session or redirects back
+            with `error=login_required`. `login` forces re-authentication even with a live
+            session, and is carried to the upstream provider so it re-authenticates too.
+
+            `consent` and `select_account` are accepted, but this server does not yet
+            distinguish them from `login`: all three disable the session shortcut, and the
+            value is forwarded verbatim to the upstream provider. Neither renders a surface
+            of its own here — there is no consent screen, and account choice belongs to the
+            provider — so any difference you observe between them comes from the provider,
+            not from us.
+          schema:
+            type: string
+            example: "none"
+        - name: max_age
+          in: query
+          required: false
+          description: |
+            Maximum acceptable age, in seconds, of the session's authentication (its
+            `auth_time`, inherited from the upstream provider). A session older than this
+            is not used and the user re-authenticates.
+
+            **Default when omitted:** no age bound — a session is used however old its
+            authentication, up to the session's own idle and absolute limits. `max_age=0`
+            always forces re-authentication. Carried to the upstream provider alongside
+            `prompt`.
+          schema:
+            type: integer
+            minimum: 0
+        - name: id_token_hint
+          in: query
+          required: false
+          description: |
+            A previously issued ID token naming the expected subject. A session
+            belonging to anyone else — or a hint that does not verify — is not
+            used; the flow never switches to the hinted user.
+          schema:
+            type: string
       responses:
         "302":
           description: |
-            Redirect to the login UI (with a `flow_id` session cookie). A
-            post-validation error instead redirects to
-            `redirect_uri?error=<code>&state=<state>`.
+            Redirect to the login UI (with a `flow_id` session cookie) — or, when
+            a live session satisfies `prompt`/`max_age`/`id_token_hint`,
+            straight back to `redirect_uri?code=…&state=…` with
+            no login surface at all. A post-validation error instead redirects to
+            `redirect_uri?error=<code>&state=<state>` (`invalid_scope`,
+            `invalid_target`, or `login_required` for a failed `prompt=none`).
           headers:
             Location:
               schema:
@@ -238,12 +297,7 @@ paths:
     get:
       summary: Redirect to an upstream identity provider
       description: |
-        Federation leg of the browser login: reads the `esp_flow_id` cookie set
-        by `/oauth2/authorize`, mints an upstream-only `state` (HMAC-bound to the
-        flow), `nonce`, and PKCE verifier, persists them on the flow record, and
-        `302`s the browser to the provider's hosted login (Cognito hosted UI in
-        the open-source deployment). The upstream leg is private to the broker —
-        it never mixes with the client's own PKCE/state. See spec `federation.md`.
+        Sends the browser to the upstream provider's login. Reads the flow from the `__Host-esp_flow_id` cookie, refuses a provider the client does not allow, and records this leg's own `state`, `nonce` and PKCE verifier on the flow. The client's values never reach the provider.
       tags:
         - Federated Login
       security: []
@@ -255,7 +309,7 @@ paths:
             Provider name from the identity-provider registry (e.g. `cognito`).
           schema:
             type: string
-        - name: esp_flow_id
+        - name: __Host-esp_flow_id
           in: cookie
           required: true
           description: Login-flow session cookie set by `/oauth2/authorize`.
@@ -280,14 +334,7 @@ paths:
     get:
       summary: Upstream provider callback
       description: |
-        The provider redirects here after the user authenticates. The broker
-        verifies the HMAC `state` against the flow, exchanges the upstream
-        `code` server-side, validates the upstream `id_token`
-        (`iss`/`aud`/`nonce`/`exp`/signature), resolves the verified contact to
-        an ESP User account (JIT-creating it on first login), and `302`s the
-        browser to the client's `redirect_uri` with OUR single-use authorization
-        `code`. Upstream tokens are discarded — refresh never touches the
-        provider.
+        The provider returns here after login. Verifies `state` against the flow, exchanges the upstream code, validates the upstream `id_token`, finds or creates the ESP User account, and redirects to the client's `redirect_uri` with a single-use `code`. Upstream tokens are discarded.
       tags:
         - Federated Login
       security: []
@@ -312,6 +359,16 @@ paths:
             Location:
               schema:
                 type: string
+            Set-Cookie:
+              description: |
+                The `__Host-esp_session` cookie
+                (`Path=/; HttpOnly; Secure; SameSite=Lax`) establishing the
+                authorization server's own session, whose record inherits the
+                upstream's `auth_time`. It stores no token — an opaque revocable
+                identifier only. A session-layer failure never blocks the login
+                itself.
+              schema:
+                type: string
         "400":
           description:
             State/flow mismatch or upstream validation failure (HTML error
@@ -325,16 +382,12 @@ paths:
     post:
       summary: OAuth token endpoint
       description: |
-        Standard OAuth 2.0 token endpoint, selected by `grant_type`. Supports
-        `authorization_code` (exchange a browser-login code + PKCE verifier for a
-        token set) and `refresh_token` (exchange a refresh token for a fresh set,
-        rotating the refresh token). Other grant types return
-        `unsupported_grant_type`.
+        Issues tokens by `grant_type`:
+        - `authorization_code`: a login code and its PKCE verifier for a token set
+        - `refresh_token`: a new token set; the refresh token rotates
+        - `client_credentials`: a confidential client's own access token; no user, refresh token or id token
 
-        Client authentication is HTTP Basic (RFC 6749 §2.3.1): confidential
-        clients MUST present `base64(client_id:secret)` (bad/missing → `401
-        invalid_client`); public clients send `client_id` (Basic or form body)
-        with no secret and rely on PKCE / rotation.
+        Other grants return `unsupported_grant_type`. A confidential client authenticates with HTTP Basic (`401 invalid_client` on failure); a public client sends `client_id` with no secret.
       tags:
         - OAuth2 / OIDC Core
       security:
@@ -348,6 +401,7 @@ paths:
               oneOf:
                 - $ref: "#/components/schemas/TokenCodeRequest"
                 - $ref: "#/components/schemas/TokenRefreshRequest"
+                - $ref: "#/components/schemas/TokenClientCredentialsRequest"
               discriminator:
                 propertyName: grant_type
       responses:
@@ -374,10 +428,7 @@ paths:
     get:
       summary: OIDC UserInfo endpoint
       description: |
-        Returns the signed-in user's profile claims for the presented access
-        token. `sub` is always included; `email` is included only if the token
-        was granted the `email`/`profile` scope, and `phone_number` only with
-        the `phone` scope. The endpoint also accepts POST.
+        Returns the profile claims for the presented access token: `sub` always, `email` with the `email` or `profile` scope, `phone_number` with `phone`.
       tags:
         - OAuth2 / OIDC Core
       security:
@@ -400,9 +451,7 @@ paths:
     post:
       summary: OIDC UserInfo endpoint (POST variant)
       description: |
-        The POST form of the UserInfo endpoint. Same behavior as GET; the access
-        token may be sent in the `Authorization: Bearer` header or as the
-        `access_token` field of a form-encoded body.
+        Same as `GET`. The access token may also be sent as the `access_token` field of a form body.
       tags:
         - OAuth2 / OIDC Core
       security:
@@ -438,14 +487,9 @@ paths:
     post:
       summary: OAuth token revocation endpoint
       description: |
-        Revokes the given refresh token. Only that one token is invalidated, not
-        the other tokens from the same login. A presented access token is
-        accepted and ignored. Always returns `200`, even if the token is unknown.
+        Ends the login the refresh token belongs to: its whole refresh family, for that application only. An access token is accepted and ignored. Always `200`, even for an unknown token.
 
-        The client must identify itself (RFC 7009 §5): a confidential client via
-        HTTP Basic `base64(client_id:secret)`; a public client via the `client_id`
-        form parameter (no secret). Neither present → `400 invalid_request`; bad
-        secret / unknown client → `401 invalid_client`.
+        The client identifies itself with HTTP Basic (confidential) or the `client_id` form field (public). Neither returns `400 invalid_request`; a bad secret or unknown client returns `401 invalid_client`.
       tags:
         - OAuth2 / OIDC Core
       security:
@@ -485,12 +529,275 @@ paths:
   # Native auth (/v1/user/auth/*)
   # Main-era request/response shapes; Cognito verified server-side, OUR tokens returned.
   # ==========================================
+  # ==========================================
+  # Sessions and sign-out
+  # ==========================================
+
+  /oauth2/logout:
+    get:
+      summary: RP-Initiated Logout (OpenID Connect RP-Initiated Logout 1.0 §2)
+      description: |
+        Signs this browser out: deletes every refresh family under its session, the session and its cookie, then redirects to `post_logout_redirect_uri`. When the identity provider has its own sign-out, the browser goes there first and comes back through `/oauth2/logout/done`.
+
+        - Must be a top-level navigation; a `fetch` does not carry the `SameSite=Lax` session cookie.
+        - `post_logout_redirect_uri` must exactly match one registered for the client. Otherwise it is ignored and the response is `200 Signed out.`; the sign-out still happens.
+        - Access tokens already issued stay valid until they expire (up to an hour).
+      tags:
+        - OAuth2 / OIDC Core
+      security: []
+      parameters:
+        - name: __Host-esp_session
+          in: cookie
+          required: false
+          schema:
+            type: string
+          description:
+            The session credential. The browser is identified by this cookie, not by the
+            query parameters below, which are optional hints. Absent means there is no
+            session to end and the request still succeeds (nothing to do).
+        - name: client_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description:
+            The client whose registered list the return URL is checked against. Optional when an `id_token_hint` is sent, which names the client itself; when both are sent and `client_id` is not the hint's audience, the return URL is ignored (RP-Initiated Logout 1.0 §2). The sign-out happens either way.
+        - name: post_logout_redirect_uri
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uri
+          description:
+            Where to send the browser afterwards. Must exact-match one of the client's
+            registered `post_logout_redirect_uris`.
+        - name: id_token_hint
+          in: query
+          required: false
+          schema:
+            type: string
+          description: |
+            A previously issued ID token naming who is signing out. RECOMMENDED, not
+            required. A hint that verifies and names a **different** subject ends nothing —
+            ending a stranger's session on a stranger's say-so is the one outcome that must
+            not happen. A hint that cannot be verified at all is ignored and the sign-out
+            proceeds: omitting the parameter was always allowed, so refusing there would buy
+            nothing and cost every sign-out whose token had merely aged past its hour.
+            Expiry is deliberately not checked for the same reason. A verified hint also names the client when `client_id` is absent.
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+          description:
+            Opaque value echoed back on the redirect to `post_logout_redirect_uri`
+            (RP-Initiated Logout 1.0 §2), so the RP can correlate the logout response with
+            its request. Ignored when there is no validated destination to return to.
+      responses:
+        "302":
+          description: |
+            Redirect to the validated destination, or onward to the provider's end-session
+            endpoint. Clears the session cookie.
+        "200":
+          description:
+            Signed out, with nowhere validated to return to. Clears the session cookie.
+        "405":
+          description: Method not allowed.
+    post:
+      summary: RP-Initiated Logout (form POST)
+      description: |
+        Same as `GET`, sent as a form POST.
+      tags:
+        - OAuth2 / OIDC Core
+      security: []
+      responses:
+        "302":
+          description: As `GET`.
+        "200":
+          description: As `GET`.
+
+  /oauth2/logout/done:
+    get:
+      summary: Return point for the upstream provider's sign-out
+      description: |
+        Where the identity provider returns the browser after its own sign-out. Redirects to the `post_logout_redirect_uri` saved in the `__Host-esp_logout_to` cookie, or answers `200 Signed out.` when there is none. This is the one sign-out URL registered with the provider; applications never call it.
+      tags:
+        - OAuth2 / OIDC Core
+      security: []
+      responses:
+        "302":
+          description: Redirect to the remembered destination, clearing the memo cookie.
+        "200":
+          description: |
+            No memo, or one naming somewhere this server will not forward to: the sign-out
+            is reported complete rather than inventing a destination.
+
+  /v1/user/sessions:
+    get:
+      summary: The browsers this person is signed in on
+      description: |
+        Lists the person's signed-in user agents, each with the applications signed in on it. Requires the `account:sessions` scope.
+      tags:
+        - Sessions
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The caller's own sessions.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        session_id:
+                          type: string
+                          description: The session's public identifier. Exposed as `session_id` in the body; the path parameter stays `{sessionId}`, and the underlying OIDC token claim and stored attribute remain `sid`.
+                        current:
+                          type: boolean
+                          description: True for the session this request's own token was minted under.
+                        user_agent_type:
+                          type: string
+                          description: The readable rendering of user_agent, derived at render time — "Chrome on macOS" for a browser, "Android app" for a native client whose User-Agent names only an SDK. "Unknown" / "App" when it cannot be told.
+                        user_agent_name:
+                          type: string
+                          description: The label the person gave this login at OTP initiate, when one was supplied. Absent on every other login path. A client showing a name should prefer this over user_agent_type — one is chosen, the other inferred.
+                        user_agent: { type: string }
+                        ip_address: { type: string }
+                        provider: { type: string }
+                        origin:
+                          type: string
+                          enum: [browser, app]
+                          description: Whether this sign-in origin holds a cookie (browser, SSO possible) or none (app, never SSO). Absent reads as browser.
+                        signed_in_at:
+                          type: integer
+                          format: int64
+                          description: auth_time, epoch seconds. A fact, never moved by use.
+                        last_seen_at:
+                          type: integer
+                          format: int64
+                          description: Most recent activity of any kind — rendered as "last active".
+                        expires_at:
+                          type: integer
+                          format: int64
+                          description: The session's retention deadline and the table's TTL attribute; the row is swept once this passes with no activity. A cookie_expires_at in the past on a row still listed here is what "signed in, but this browser must sign in again" looks like — an app row simply has no cookie_expires_at.
+                        cookie_expires_at:
+                          type: integer
+                          format: int64
+                          description: When the browser will drop the cookie (browser rows only). A record of what we told the browser, not a control.
+                        clients:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              client_id: { type: string }
+                              created_at: { type: integer, format: int64 }
+                              last_used: { type: integer, format: int64 }
+              example:
+                sessions:
+                  - session_id: sess_9fA2
+                    current: true
+                    user_agent_type: Chrome on macOS
+                    origin: browser
+                    signed_in_at: 1725100000
+                    last_seen_at: 1725190000
+                    expires_at: 1759750000
+                    cookie_expires_at: 1759750000
+                    clients:
+                      - { client_id: esp-account-dashboard, created_at: 1725100000, last_used: 1725190000 }
+                  - session_id: sess_7bQ9
+                    current: false
+                    user_agent_type: Android app
+                    user_agent_name: John's iPhone
+                    origin: app
+                    signed_in_at: 1725000000
+                    last_seen_at: 1725300000
+                    expires_at: 1759860000
+                    clients:
+                      - { client_id: user-pool-client, created_at: 1725000000, last_used: 1725300000 }
+        "401":
+          description: Missing, malformed, expired, or not an access token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+        "403":
+          description: The token was not granted `account:sessions`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+    delete:
+      summary: Sign out everywhere
+      description: |
+        Signs the person out of every user agent, including this one, by deleting every session and refresh family. Requires the `account:sessions` scope.
+      tags:
+        - Sessions
+      security:
+        - bearerAuth: []
+      responses:
+        "204":
+          description: Everything ended.
+        "401":
+          description: Missing, malformed, expired, or not an access token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+        "403":
+          description: The token was not granted `account:sessions`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+
+  /v1/user/sessions/{sessionId}:
+    delete:
+      summary: End one browser's session
+      description: |
+        Signs one user agent out from anywhere by deleting its session and its refresh families. `204` on success; `404` when the caller has no such session, including one that belongs to someone else. Requires the `account:sessions` scope.
+      tags:
+        - Sessions
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The session's public id, from `GET /v1/user/sessions`.
+      responses:
+        "204":
+          description: The session was ended.
+        "401":
+          description: Missing, malformed, expired, or not an access token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+        "403":
+          description: The token was not granted `account:sessions`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+        "404":
+          description: No such session for this user (the cross-user case included).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+
   /v1/user/auth/token:
     post:
       summary: Password sign-in
       description: |
-        Verifies `username`/`password` against the bundled Cognito pool
-        server-side and returns an ESP User token set.
+        Signs in with `username` and `password`, verified against the bundled Cognito pool, and returns an ESP User token set.
       tags:
         - User Auth
       security: []
@@ -526,10 +833,7 @@ paths:
     post:
       summary: Refresh tokens
       description: |
-        Redeems a refresh token issued by this surface for a fresh token set.
-        The refresh token is **rotated**: the response carries a new one and the
-        presented token is spent. Replaying a spent token is treated as theft and
-        terminates the login, so clients must persist the token from each response.
+        Exchanges a refresh token for a new token set. The refresh token rotates: store the new one, because replaying a spent one ends the login.
       tags:
         - User Auth
       security: []
@@ -555,9 +859,7 @@ paths:
     post:
       summary: Create an account
       description: |
-        Creates the user in the bundled Cognito pool with exactly one of
-        `email` or `phone_number` plus a `password`; Cognito emails/texts the
-        verification code confirmed at `signup/verify`.
+        Creates an account with exactly one of `email` or `phone_number` plus a `password`, and sends a verification code to confirm at `signup/verify`.
       tags:
         - User Auth
       security: []
@@ -687,9 +989,7 @@ paths:
     post:
       summary: Change password
       description: |
-        Changes the caller's password. The caller presents this issuer's access token, which is
-        verified before anything else because it identifies whose password is being changed, plus the
-        current password. All-device sign-out is not offered; see the signout route.
+        Changes the caller's password. Requires this issuer's access token and the current password. Other sessions stay signed in.
       tags:
         - User Auth
       security: []
@@ -728,12 +1028,7 @@ paths:
     post:
       summary: Sign out
       description: |
-        Revokes the presented refresh token's family, signing out every device fed by it.
-
-        `global: "true"` is rejected with `400`. Sessions here are this issuer's own refresh
-        families, which a provider-side sign-out does not touch, so an all-devices request cannot be
-        honoured and is refused rather than answered with a success that ended nothing. Sign out each
-        session with its own refresh token.
+        Ends the login the refresh token belongs to (its refresh family), the same as `/oauth2/revoke`. `global: "true"` is refused with `400`; sign out each login with its own refresh token.
       tags:
         - User Auth
       security: []
@@ -756,7 +1051,7 @@ paths:
           description: Signed out.
         "400":
           description:
-            Refresh token missing, or an all-devices signout was requested.
+            Refresh token missing, or a global signout was requested.
           content:
             application/json:
               schema:
@@ -776,12 +1071,9 @@ paths:
     get:
       summary: Get user details
       description: |
-        Returns the profile of the user. Use `me` as the userId to get details
-        for the currently authenticated user. The endpoint has no API Gateway
-        authorizer (authorizer type NONE); the OIDC access token is presented as
-        a `Bearer` token and validated in-handler against the provider's public keys.
+        Returns a user's profile; `me` means the caller. The access token is sent as `Bearer` and verified in the handler (no API Gateway authorizer).
       tags:
-        - OAuth2 / OIDC Core
+        - Users
       security:
         - bearerAuth: []
       responses:
@@ -810,10 +1102,7 @@ paths:
     post:
       summary: Create OAuth client
       description: |
-        Registers a new OAuth/OIDC client. Admin only. `redirect_uris` must
-        be exact matches (no wildcards); `implicit` and `password` grants are not
-        allowed; public clients must use PKCE. For confidential clients a secret
-        is generated and its plaintext is returned **once** in this response.
+        Registers an OAuth client. `redirect_uris` are exact matches, `implicit` and `password` grants are refused, and public clients must use PKCE. A confidential client's secret is generated and returned in the response. Admin only.
       tags:
         - Admin Clients
       security:
@@ -842,10 +1131,7 @@ paths:
     get:
       summary: List OAuth clients
       description: |
-        Lists every registered client. By default the secret is omitted; pass
-        `get_secret=true` to include each confidential client's plaintext secret
-        (this is how a lost secret is recovered — there is no rotate endpoint).
-        Whether a client has a secret is implied by `client_type`. Admin only.
+        Lists every client. `get_secret=true` includes each confidential client's secret, which is how a lost secret is recovered. Admin only.
       tags:
         - Admin Clients
       security:
@@ -892,9 +1178,7 @@ paths:
     put:
       summary: Update OAuth client
       description: |
-        Replaces a client's mutable fields with the request body (full update — omitted
-        fields reset to empty/default). `client_id`, `client_type`, and the secret cannot
-        be changed. The same validation rules as create are applied. Admin only.
+        Replaces a client's editable fields; omitted fields reset to their defaults. `client_id`, `client_type` and the secret cannot change. Same validation as create. Admin only.
       tags:
         - Admin Clients
       security:
@@ -923,9 +1207,7 @@ paths:
     delete:
       summary: Delete OAuth client
       description: |
-        Permanently deletes the client. Already-issued tokens keep working until
-        they expire, but the client can no longer authorize, exchange, or use OTP.
-        Admin only.
+        Deletes the client. It can no longer sign users in or get tokens; tokens already issued work until they expire. Admin only.
       tags:
         - Admin Clients
       security:
@@ -944,10 +1226,7 @@ paths:
     post:
       summary: Get espuser-scoped AWS credentials (admin)
       description: |
-        Returns short-lived STS credentials whose session policy is scoped to the
-        espuser-owned post-deployment actions the dashboard performs itself: SNS SMS
-        sandbox status, the SMS monthly spend limit, and ServiceQuotas reads and
-        increase requests.
+        Returns short-lived AWS credentials limited to the espuser setup steps the dashboard runs: SNS SMS sandbox status, the SMS monthly spend limit, and Service Quotas reads and increase requests.
       tags:
         - Admin Creds
       security:
@@ -1226,6 +1505,7 @@ components:
             - unauthorized_client
             - unsupported_grant_type
             - invalid_scope
+            - invalid_target
             - invalid_token
           example: "invalid_grant"
         error_description:
@@ -1234,6 +1514,47 @@ components:
             Human-readable detail. Does not distinguish why the token was
             rejected.
           example: "The refresh token is invalid, expired, or revoked."
+
+    TokenClientCredentialsRequest:
+      type: object
+      description: |
+        A confidential client obtains an access token for **itself** (RFC 6749 §4.4).
+        There is no resource owner, so the response carries **no refresh token** (the
+        client re-authenticates by presenting its credentials again) and **no id token**
+        (there is no human to describe).
+
+        In the minted token `sub` is the `client_id` (RFC 9068 §2.2.1) and `aud` is the
+        requested `resource` — the API the token will be spent at, not the caller.
+        Rejected for public clients with `unauthorized_client`: a public client has no
+        credentials to present.
+      required:
+        - grant_type
+      properties:
+        grant_type:
+          type: string
+          enum: ["client_credentials"]
+          example: "client_credentials"
+        scope:
+          type: string
+          description: |
+            Space-separated subset of the client's registered scopes. Omitted grants all
+            of them — there is no user whose consent could narrow it further, so the
+            registration is the only bound. An unregistered scope returns `invalid_scope`.
+          example: "account.admin"
+        resource:
+          type: string
+          format: uri
+          description: |
+            RFC 8707 resource indicator: the API this token is for, stamped into `aud`.
+            Must appear in the client's `allowed_resources` or the request is rejected
+            with `invalid_target`; a client with none registered may request none.
+
+            **At most one.** Two `resource` values are rejected rather than producing a
+            multi-audience token, so a leaked token is useful against exactly one API.
+
+            Omitted leaves `aud` as the `client_id`, which is the shape a caller that does
+            not use this extension sees.
+          example: "https://api.accounts.espressif.com"
 
     TokenCodeRequest:
       type: object
@@ -1381,7 +1702,27 @@ components:
           type: array
           items:
             type: string
-          description: Exact-match callback URLs (no wildcards).
+          description: |
+            Exact-match callback URLs. Validated at registration: absolute, fragment-free,
+            no wildcards; `https` must carry a host; plain `http` is accepted only for
+            loopback (`localhost`, `127.0.0.1`, `::1`) per RFC 8252 s7.3; a private-use
+            scheme (`com.example.app://cb`) must address something; and `javascript:`,
+            `data:`, `vbscript:`, `file:`, `blob:`, `about:` are refused -- they name code
+            or a local file rather than a destination.
+        post_logout_redirect_uris:
+          type: array
+          description: |
+            Where GET /oauth2/logout may return the browser afterwards. Validated with
+            exactly the rules `redirect_uris` gets, for the same reason: an endpoint that
+            forwards a browser anywhere on a caller's say-so is an open redirect wearing the
+            issuer's own hostname, and validating only one of the two lists would make the
+            weaker one the list an attacker uses.
+
+            A logout naming an unregistered URI is still
+            performed; the browser simply lands on the issuer's own page instead.
+          items:
+            type: string
+          example: ["https://app.example.com/signed-out"]
         grant_types:
           type: array
           items:
@@ -1392,11 +1733,38 @@ components:
           type: array
           items:
             type: string
-            enum: ["openid", "email", "profile", "phone"]
+            enum: ["openid", "email", "profile", "phone", "account:sessions"]
           example: ["openid", "profile", "email", "phone"]
         require_pkce:
           type: boolean
           description: Always true for public clients.
+        first_party:
+          type: boolean
+          description: Whether this client is one the account ships itself; only a first-party client may manage a user's own sessions.
+        allowed_resources:
+          type: array
+          description:
+            RFC 8707 resource identifiers this client may request an access token for.
+            Absent means none, never any -- the parameter must enforce something for a
+            client nobody configured.
+
+            Each entry must be an absolute URI **with a host** and without a fragment,
+            validated at write time. Requiring an authority is deliberately stricter than
+            RFC 8707 s2, because a one-slash `https:/api.example.com` is a legal absolute
+            URI with an empty host that would register happily and then never match the
+            `https://api.example.com` a client actually sends. Non-authority forms such as
+            `urn:` are rejected.
+          items:
+            type: string
+            format: uri
+        allowed_providers:
+          type: array
+          description:
+            Identity providers this client offers at login. Absent means ALL of them --
+            the reverse of allowed_resources, because a provider list is a menu and an
+            absent menu cannot sensibly mean none.
+          items:
+            type: string
         client_secret:
           type: string
           description:
@@ -1426,10 +1794,30 @@ components:
           enum: ["public", "confidential"]
         redirect_uris:
           type: array
-          description: Exact-match callback URLs (no wildcards).
+          description: |
+            Exact-match callback URLs. Validated at registration: absolute, fragment-free,
+            no wildcards; `https` must carry a host; plain `http` is accepted only for
+            loopback (`localhost`, `127.0.0.1`, `::1`) per RFC 8252 s7.3; a private-use
+            scheme (`com.example.app://cb`) must address something; and `javascript:`,
+            `data:`, `vbscript:`, `file:`, `blob:`, `about:` are refused -- they name code
+            or a local file rather than a destination.
           items:
             type: string
           default: []
+        post_logout_redirect_uris:
+          type: array
+          description: |
+            Where GET /oauth2/logout may return the browser afterwards. Validated with
+            exactly the rules `redirect_uris` gets, for the same reason: an endpoint that
+            forwards a browser anywhere on a caller's say-so is an open redirect wearing the
+            issuer's own hostname, and validating only one of the two lists would make the
+            weaker one the list an attacker uses.
+
+            A logout naming an unregistered URI is still
+            performed; the browser simply lands on the issuer's own page instead.
+          items:
+            type: string
+          example: ["https://app.example.com/signed-out"]
         grant_types:
           type: array
           description: implicit/password are rejected.
@@ -1445,7 +1833,7 @@ components:
             effect today.
           items:
             type: string
-            enum: ["openid", "email", "profile", "phone"]
+            enum: ["openid", "email", "profile", "phone", "account:sessions"]
           default: []
         require_pkce:
           type: boolean
@@ -1453,6 +1841,36 @@ components:
             Always true for public clients (forced server-side); applies to
             confidential clients as sent.
           default: false
+        first_party:
+          type: boolean
+          description:
+            Mark this client as one the account ships itself. Only a first-party client may
+            manage a user's own sessions; leave false for third-party integrations.
+          default: false
+        allowed_resources:
+          type: array
+          description:
+            RFC 8707 resource identifiers this client may request an access token for.
+            Absent means none, never any -- the parameter must enforce something for a
+            client nobody configured.
+
+            Each entry must be an absolute URI **with a host** and without a fragment,
+            validated at write time. Requiring an authority is deliberately stricter than
+            RFC 8707 s2, because a one-slash `https:/api.example.com` is a legal absolute
+            URI with an empty host that would register happily and then never match the
+            `https://api.example.com` a client actually sends. Non-authority forms such as
+            `urn:` are rejected.
+          items:
+            type: string
+            format: uri
+        allowed_providers:
+          type: array
+          description:
+            Identity providers this client offers at login. Absent means ALL of them --
+            the reverse of allowed_resources, because a provider list is a menu and an
+            absent menu cannot sensibly mean none.
+          items:
+            type: string
 
     ClientUpdateRequest:
       type: object
@@ -1469,6 +1887,20 @@ components:
           type: array
           items:
             type: string
+        post_logout_redirect_uris:
+          type: array
+          description: |
+            Where GET /oauth2/logout may return the browser afterwards. Validated with
+            exactly the rules `redirect_uris` gets, for the same reason: an endpoint that
+            forwards a browser anywhere on a caller's say-so is an open redirect wearing the
+            issuer's own hostname, and validating only one of the two lists would make the
+            weaker one the list an attacker uses.
+
+            A logout naming an unregistered URI is still
+            performed; the browser simply lands on the issuer's own page instead.
+          items:
+            type: string
+          example: ["https://app.example.com/signed-out"]
         grant_types:
           type: array
           items:
@@ -1478,9 +1910,38 @@ components:
           type: array
           items:
             type: string
-            enum: ["openid", "email", "profile", "phone"]
+            enum: ["openid", "email", "profile", "phone", "account:sessions"]
         require_pkce:
           type: boolean
+        first_party:
+          type: boolean
+          description:
+            Whether this client is one the account ships itself. PUT replaces it, so omitting
+            it resets to false.
+        allowed_resources:
+          type: array
+          description:
+            RFC 8707 resource identifiers this client may request an access token for.
+            Absent means none, never any -- the parameter must enforce something for a
+            client nobody configured.
+
+            Each entry must be an absolute URI **with a host** and without a fragment,
+            validated at write time. Requiring an authority is deliberately stricter than
+            RFC 8707 s2, because a one-slash `https:/api.example.com` is a legal absolute
+            URI with an empty host that would register happily and then never match the
+            `https://api.example.com` a client actually sends. Non-authority forms such as
+            `urn:` are rejected.
+          items:
+            type: string
+            format: uri
+        allowed_providers:
+          type: array
+          description:
+            Identity providers this client offers at login. Absent means ALL of them --
+            the reverse of allowed_resources, because a provider list is a menu and an
+            absent menu cannot sensibly mean none.
+          items:
+            type: string
 
     ClientCreateResponse:
       type: object

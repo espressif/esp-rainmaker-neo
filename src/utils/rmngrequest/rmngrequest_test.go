@@ -203,6 +203,21 @@ var _ = Describe("RedactForLog", func() {
 	})
 })
 
+var _ = Describe("FormValues", func() {
+	It("returns every occurrence of a field, from a plain or base64 body", func() {
+		body := "resource=https%3A%2F%2Fa.example&resource=https%3A%2F%2Fb.example&grant_type=x"
+		Expect(FormValues(events.APIGatewayProxyRequest{Body: body}, "resource")).To(Equal([]string{"https://a.example", "https://b.example"}))
+		encoded := events.APIGatewayProxyRequest{Body: base64.StdEncoding.EncodeToString([]byte(body)), IsBase64Encoded: true}
+		Expect(FormValues(encoded, "resource")).To(HaveLen(2))
+	})
+
+	It("returns nil for an absent field or an undecodable body", func() {
+		Expect(FormValues(events.APIGatewayProxyRequest{Body: "grant_type=x"}, "resource")).To(BeNil())
+		Expect(FormValues(events.APIGatewayProxyRequest{Body: "!!not-base64", IsBase64Encoded: true}, "resource")).To(BeNil())
+		Expect(FormValues(events.APIGatewayProxyRequest{Body: "a=%zz"}, "a")).To(BeNil())
+	})
+})
+
 func TestRmngRequest(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "rmng request Suite")

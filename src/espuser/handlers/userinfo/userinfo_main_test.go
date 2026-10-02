@@ -73,7 +73,7 @@ var _ = Describe("OIDC userinfo endpoint", func() {
 			contact.PhoneNumber = phone
 		}
 		minter := jwtutil.NewMinter(backend.Issuer, backend.SigningKey, oidc.SigningKeyID)
-		token, err := minter.AccessToken(userID, testClientID, scope, "", contact)
+		token, err := minter.AccessToken(userID, testClientID, scope, "", "", contact)
 		Expect(err).NotTo(HaveOccurred())
 		return token
 	}
@@ -133,7 +133,7 @@ var _ = Describe("OIDC userinfo endpoint", func() {
 		// RFC 9700 §4: an id token is for the client, not a resource-server credential. userinfo
 		// must refuse it even though it is validly signed by the same issuer.
 		minter := jwtutil.NewMinter(backend.Issuer, backend.SigningKey, oidc.SigningKeyID)
-		idToken, err := minter.IDToken("user-123", testClientID, "", jwtutil.Contact{})
+		idToken, err := minter.IDToken("user-123", testClientID, "", 0, jwtutil.Contact{})
 		Expect(err).NotTo(HaveOccurred())
 		resp, err := handleUserinfoRequest(context.Background(), getRequest(idToken))
 		Expect(err).NotTo(HaveOccurred())

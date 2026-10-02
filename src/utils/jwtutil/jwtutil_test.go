@@ -307,7 +307,7 @@ var _ = Describe("Minter over a crypto.Signer", func() {
 		kid := jwtutil.RSAThumbprint(&priv.PublicKey)
 		minter := jwtutil.NewMinter("https://issuer.example", priv, kid)
 
-		token, err := minter.AccessToken("u1", "c1", "openid email", "", jwtutil.Contact{Email: "u@example.com"})
+		token, err := minter.AccessToken("u1", "c1", "openid email", "", "", jwtutil.Contact{Email: "u@example.com"})
 		Expect(err).NotTo(HaveOccurred())
 
 		jwks := jwtutil.BuildJWKS(jwtutil.BuildJWK(&priv.PublicKey, kid))

@@ -65,7 +65,7 @@ sequenceDiagram
   Cognito pool (`SignUp`, `ConfirmSignUp`, `ForgotPassword`, `ConfirmForgotPassword`,
   `ChangePassword`), exactly as `main`. These do not mint tokens.
 - **signout**: revokes **our** refresh token / family (our revoke path). A missing refresh token is
-  rejected rather than reported as success, and an all-devices request is refused: our sessions are
+  rejected rather than reported as success, and a global signout request is refused: our sessions are
   refresh families of ours, which a provider-side sign-out does not touch, so a success there would
   mean nothing was ended.
 - **password**: the client presents our access token plus the old password. The token is verified

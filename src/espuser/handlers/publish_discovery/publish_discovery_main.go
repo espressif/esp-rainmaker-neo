@@ -25,9 +25,27 @@ import (
 )
 
 const (
-	jsonContentType      = "application/json"
-	metadataCacheControl = "public, max-age=86400"
-	jwksCacheControl     = "public, max-age=86400"
+	jsonContentType = "application/json"
+
+	// These two documents ADVERTISE CAPABILITIES, so their cache lifetime is the delay
+	// between shipping a feature and clients being able to use it.
+	//
+	// At 24 hours -- the previous value -- adding end_session_endpoint was undeployable: every
+	// browser that had already fetched the document kept the copy without it for a day, and
+	// the SDK, finding no endpoint, silently degraded to dropping local tokens. Sign-out
+	// looked successful and ended nothing. The server was correct the whole time; the clients
+	// were reading yesterday's advertisement.
+	//
+	// Five minutes costs one conditional GET per client per five minutes -- answered 304 from
+	// the ETag, so a few hundred bytes -- and makes a discovery change land while you are
+	// still watching the deploy.
+	metadataCacheControl = "public, max-age=300, must-revalidate"
+
+	// JWKS is longer because it is fetched on a hot path (every token verification that misses
+	// the in-process cache) and because a rotation publishes the NEW key alongside the old one
+	// before anything signs with it. An hour is the propagation delay for a rotation; a day
+	// was long enough that an emergency key change could not be relied on to take effect.
+	jwksCacheControl = "public, max-age=3600"
 )
 
 type Config struct {

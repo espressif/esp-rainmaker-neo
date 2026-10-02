@@ -21,13 +21,6 @@ import (
 // OIDC UserInfo endpoint (OIDC Core §5.3); spec: espuser/docs/en/specs/auth-flows.md.
 const pathUserinfo = "/oauth2/userinfo"
 
-// unauthorized is the RFC 6750 §3 bearer challenge; every token problem collapses to invalid_token (no oracle).
-func unauthorized() events.APIGatewayProxyResponse {
-	resp := oidc.OAuthErrorResp(http.StatusUnauthorized, "invalid_token", "The access token is missing, expired, or invalid.")
-	resp.Headers["WWW-Authenticate"] = `Bearer error="invalid_token"`
-	return resp
-}
-
 func handleUserinfo(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	// Token may ride the Authorization header or, on a form POST, the access_token field (RFC 6750 §2).
 	accessToken := rmngrequest.ExtractAuthToken(request.Headers)
@@ -35,7 +28,7 @@ func handleUserinfo(ctx context.Context, request events.APIGatewayProxyRequest) 
 		accessToken = accessTokenFromForm(request)
 	}
 	if accessToken == "" {
-		return unauthorized(), nil
+		return oidc.OAuthUnauthorizedResp(), nil
 	}
 
 	svc, err := auth.NewOAuthUserAuthService(ctx)
@@ -47,7 +40,7 @@ func handleUserinfo(ctx context.Context, request events.APIGatewayProxyRequest) 
 	claims, err := svc.ParseUserInfoFromToken(ctx, accessToken)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Msg("Userinfo token rejected")
-		return unauthorized(), nil
+		return oidc.OAuthUnauthorizedResp(), nil
 	}
 
 	return utils.APIGwRespJSON(http.StatusOK, claims), nil

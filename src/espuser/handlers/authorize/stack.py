@@ -63,6 +63,21 @@ class AuthorizeAPI(Construct):
             ],
         ))
 
+        # Sessions (SSO): the callback establishes them, authorize consults and touches them,
+        # and expired rows are enforced in code (the TTL sweep lags).
+        #
+        # DeleteItem is needed because a login on a browser that already held a session for
+        # the same user ROTATES rather than adds: the new row is written, then the row whose
+        # cookie was presented is retired, so re-authenticating actually invalidates the
+        # cookie it replaces. Without this grant the write half still succeeds and the delete
+        # fails silently -- the visible result is two live rows for one browser and a previous
+        # cookie that never stops working, which is the whole defect the rotation closes.
+        authorize_lambda_role.add_to_policy(iam.PolicyStatement(
+            actions=["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem",
+                     "dynamodb:DeleteItem"],
+            resources=[get_table_arn(USER_TABLE_NAMES['SESSIONS'], region)],
+        ))
+
         authorize_lambda_role.add_to_policy(iam.PolicyStatement(
             actions=["ssm:GetParameter"],
             resources=[

@@ -1196,7 +1196,11 @@ func (m *DynamoDBMock) UpdateItem(ctx context.Context, input *dynamodb.UpdateIte
 		}
 
 	} else {
-		return nil, &types.ConditionalCheckFailedException{Message: aws.String("Condition not met")}
+		ccf := &types.ConditionalCheckFailedException{Message: aws.String("Condition not met")}
+		if input.ReturnValuesOnConditionCheckFailure == types.ReturnValuesOnConditionCheckFailureAllOld {
+			ccf.Item = item
+		}
+		return nil, ccf
 	}
 
 	// The item read above is a copy, so it has to be written back explicitly; a REMOVE- or ADD-only expression would otherwise be silently lost.

@@ -1,5 +1,8 @@
 # Brokered Federation
 
+> The federation callback is also where a single-sign-on session is established — see
+> [sso-sessions.md](sso-sessions.md).
+
 > Implements the brokered-federation design (the
 > Dex "normalize and reissue" broker) for the first concrete upstream provider,
 > **AWS Cognito**. This spec is the authoritative description of what is built;
@@ -61,8 +64,8 @@ sequenceDiagram
     Client->>Browser: 302 to /oauth2/authorize (client_id, redirect_uri, scope, state, code_challenge S256)
     Browser->>Authz: GET /oauth2/authorize
     Authz->>Flows: Put LOGIN record (flow_id, client PKCE/state/redirect)
-    Authz-->>Browser: 302 to federation/start?provider=cognito (Set-Cookie: esp_flow_id) — single-provider auto-redirect
-    Browser->>Start: GET /oauth2/federation/start?provider=cognito (cookie: esp_flow_id)
+    Authz-->>Browser: 302 to federation/start?provider=cognito (Set-Cookie: __Host-esp_flow_id) — single-provider auto-redirect
+    Browser->>Start: GET /oauth2/federation/start?provider=cognito (cookie: __Host-esp_flow_id)
     Start->>Flows: Store UPSTREAM leg (our state=HMAC(flow_id), our nonce, our PKCE verifier)
     Start-->>Browser: 302 to IdP authorize (broker client_id, OUR state/nonce/challenge)
     Browser->>IdP: hosted-UI login (user authenticates upstream)
@@ -93,7 +96,7 @@ Both live on the authorize lambda (same `EspUserApi`), auth type `NONE`.
 
 Begins the upstream leg for an in-flight authorization flow.
 
-- **Input:** `provider` (query) + the `esp_flow_id` HttpOnly cookie set by
+- **Input:** `provider` (query) + the `__Host-esp_flow_id` HttpOnly cookie set by
   `/oauth2/authorize`.
 - **Process:** resolve a live `LOGIN` flow by the cookie; load the provider from
   [`espuser-identity-providers`](#provider-registry) (must be `enabled`);

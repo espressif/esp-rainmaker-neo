@@ -40,6 +40,31 @@ var _ = Describe("publish config validation", func() {
 	})
 })
 
+var _ = Describe("cache lifetimes on the published documents", func() {
+	// Not cosmetic. The discovery document advertises which capabilities exist, so its
+	// max-age IS the delay between shipping a feature and clients being able to use it. At 24
+	// hours, adding end_session_endpoint shipped a server that could sign people out and
+	// browsers that kept yesterday's document saying it could not -- and the SDK, finding no
+	// endpoint, silently dropped local tokens and left the session alive. Sign-out looked
+	// successful and ended nothing.
+	It("keeps the metadata short enough that a discovery change lands the same day", func() {
+		Expect(metadataCacheControl).To(ContainSubstring("max-age=300"))
+		Expect(metadataCacheControl).To(ContainSubstring("must-revalidate"))
+	})
+
+	It("keeps JWKS cacheable but rotatable within the hour", func() {
+		// Longer than the metadata (it is fetched on a verification hot path) but far short
+		// of a day, so an emergency key rotation actually propagates.
+		Expect(jwksCacheControl).To(ContainSubstring("max-age=3600"))
+	})
+
+	It("never publishes a document cached for a day or more (the regression)", func() {
+		for _, header := range []string{metadataCacheControl, jwksCacheControl} {
+			Expect(header).NotTo(ContainSubstring("86400"))
+		}
+	})
+})
+
 var _ = Describe("published JWKS", func() {
 	It("carries the KMS public key under its RFC 7638 thumbprint kid", func() {
 		kmsMock, key := mock.NewMockRSAKMS("arn:test")

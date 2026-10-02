@@ -294,7 +294,7 @@ func handleAuthServerMetadata() events.APIGatewayV2HTTPResponse {
 		"authorization_endpoint":                baseURL + "/oauth2/authorize",
 		"token_endpoint":                        baseURL + "/oauth2/token",
 		"response_types_supported":              []string{"code"},
-		"grant_types_supported":                 oidc.SupportedGrantTypes,
+		"grant_types_supported":                 proxyGrantTypesSupported,
 		"code_challenge_methods_supported":      []string{"S256"},
 		"client_id_metadata_document_supported": true,
 		"scopes_supported":                      []string{"openid", "email"},
@@ -311,6 +311,11 @@ func handleAuthServerMetadata() events.APIGatewayV2HTTPResponse {
 		Body: string(body),
 	}
 }
+
+// This proxy implements only the browser grants. oidc.SupportedGrantTypes describes the
+// espuser authorization server, which also issues client_credentials -- advertising that
+// here would publish a grant this endpoint rejects.
+var proxyGrantTypesSupported = []string{oidc.GrantAuthorizationCode, oidc.GrantRefreshToken}
 
 func errorResponse(statusCode int, errMsg string) events.APIGatewayV2HTTPResponse {
 	body, _ := json.Marshal(map[string]string{"error": errMsg})

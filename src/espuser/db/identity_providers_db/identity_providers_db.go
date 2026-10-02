@@ -45,6 +45,11 @@ type ProviderEntry struct {
 	ProviderName string `dynamodbav:"provider_name"`
 	Type         string `dynamodbav:"type,omitempty"`
 	DisplayName  string `dynamodbav:"display_name,omitempty"`
+	// Logo is the mark drawn on this provider's button, as inline SVG. Inline rather than a
+	// URL because the login page's CSP admits no remote origin, and rather than a data URI
+	// because inline markup inherits currentColor and so works on either theme. Absent draws
+	// a neutral default.
+	Logo string `dynamodbav:"logo,omitempty"`
 	// A pointer so a stored false persists, which omitempty would drop.
 	Enabled *bool `dynamodbav:"enabled,omitempty"`
 	// Everything an admin may need to override per provider lives on the row, so adding a provider
@@ -64,8 +69,25 @@ type ProviderEntry struct {
 	PasswordGrant     *bool             `dynamodbav:"password_grant,omitempty"`
 	TokenEndpointAuth string            `dynamodbav:"token_endpoint_auth,omitempty"` // one of the utils.TokenAuth* methods
 	AttributeMapping  map[string]string `dynamodbav:"attribute_mapping,omitempty"`   // OUR claim -> upstream claim
-	CreatedAt         int64             `dynamodbav:"created_at,omitempty"`
-	UpdatedAt         int64             `dynamodbav:"updated_at,omitempty"`
+	// SessionMaxTTLSeconds bounds OUR session's absolute lifetime for logins this provider
+	// authenticated: the operator's assertion of what the upstream sanctions (the value is not
+	// discoverable over OIDC). Combined as min(global, this), so a row can only ever shorten
+	// the deployment-wide cap. Unset means the global cap applies unchanged.
+	SessionMaxTTLSeconds int64 `dynamodbav:"session_max_ttl_seconds,omitempty"`
+	// EndSessionURL is where the browser is sent after OUR session is destroyed, so the
+	// upstream's own cookie ends too. Without this hop, sign-out is only half true: our
+	// session is gone and the provider silently re-authenticates on the very next click.
+	//
+	// May already carry query parameters -- a Cognito hosted-UI row bakes its client_id in
+	// here, because Cognito's logout endpoint is not the OIDC-standard shape.
+	EndSessionURL string `dynamodbav:"end_session_url,omitempty"`
+	// EndSessionRedirectParam names the query parameter that upstream uses for "come back
+	// here afterwards". Defaults to the OIDC-standard post_logout_redirect_uri; a Cognito
+	// row sets logout_uri. A parameter name rather than a provider-type branch, so a new
+	// upstream is a row and never a code change.
+	EndSessionRedirectParam string `dynamodbav:"end_session_redirect_param,omitempty"`
+	CreatedAt               int64  `dynamodbav:"created_at,omitempty"`
+	UpdatedAt               int64  `dynamodbav:"updated_at,omitempty"`
 }
 
 func (p *ProviderEntry) GetHKey() string { return identityProvidersHashKey }

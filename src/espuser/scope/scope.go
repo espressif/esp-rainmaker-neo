@@ -13,6 +13,10 @@ const (
 	Email   = "email"
 	Profile = "profile"
 	Phone   = "phone"
+	// Sessions gates the account's own session-management surface: list my user agents, end
+	// one, end them all. Deliberately not implied by openid -- signing a person in and
+	// enumerating every browser they use are different powers.
+	Sessions = "account:sessions"
 )
 
 // Has reports whether any of want is present in the space-delimited scope string.

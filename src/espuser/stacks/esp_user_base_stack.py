@@ -160,6 +160,35 @@ class CreateUserTables(Construct):
             removal_policy=RemovalPolicy.DESTROY,
         )
 
+        # The authorization server's own user agent row (SSO). Keyed by the SHA-256 of the cookie
+        # value; expires_at is the rolling retention deadline and doubles as the TTL attribute,
+        # so a user agent the person stops using is swept once its retention lapses.
+        self.sessions_table = ManagedTable(
+            self, "SessionsTable",
+            common_resources=common_resources,
+            table_name=USER_TABLE_NAMES['SESSIONS'],
+            partition_key=aws_dynamodb.Attribute(name="session_hash", type=aws_dynamodb.AttributeType.STRING),
+            time_to_live_attribute="expires_at",
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+
+        # "Which sessions does this person have, and end that one." The base table is keyed
+        # by the SHA-256 of the cookie value, and that hash cannot be derived from a sid --
+        # so without this index a session is reachable only from the browser holding its
+        # cookie, and signing out a user agent you are not on is impossible, not merely awkward.
+        #
+        # KEYS_ONLY is the whole cost story. expires_at is rewritten on every /oauth2/authorize
+        # and every token refresh, and DynamoDB writes an index entry only when a key or a
+        # PROJECTED attribute changes. Projecting nothing keeps the hot path free: entries
+        # change on session create and delete only, twice per session lifetime. It is also the
+        # only way a back-channel token refresh can reach a user agent from its sid.
+        self.sessions_table.add_global_secondary_index(
+            index_name=USER_INDEX_NAMES['SESSIONS_BY_USER'],
+            partition_key=aws_dynamodb.Attribute(name="user_id", type=aws_dynamodb.AttributeType.STRING),
+            sort_key=aws_dynamodb.Attribute(name="sid", type=aws_dynamodb.AttributeType.STRING),
+            projection_type=aws_dynamodb.ProjectionType.KEYS_ONLY,
+        )
+
         self._seed_oauth_clients()
 
     def _seed_oauth_clients(self) -> None:
@@ -320,6 +349,26 @@ class CreateDiscoveryStorage(Construct):
         self.discovery_bucket = create_s3_bucket(
             self, "DiscoveryBucket", common_resources, "oauth",
             public=True,
+            # Browsers fetch these two documents with JavaScript, so a public object is not
+            # enough: without CORS the request succeeds and the browser discards the response,
+            # which surfaces to a user as "could not reach the sign-in service" even though the
+            # object returned 200. Every OIDC relying party running in a browser reads
+            # /.well-known/openid-configuration before it can start a login, so this is not
+            # optional for any of them.
+            #
+            # `*` is correct here rather than an origin allowlist: these documents are public by
+            # specification and are already world-readable over plain HTTPS, so naming origins
+            # would restrict nothing an attacker could not read with curl, while guaranteeing
+            # that each new product must edit this stack before it can sign anyone in. Nothing
+            # here is credentialed — no cookies, no Authorization header — so there is no
+            # ambient authority for a hostile origin to borrow.
+            cors=[s3.CorsRule(
+                allowed_methods=[s3.HttpMethods.GET, s3.HttpMethods.HEAD],
+                allowed_origins=["*"],
+                allowed_headers=["*"],
+                exposed_headers=["ETag"],
+                max_age=86400,
+            )],
             removal_policy=RemovalPolicy.DESTROY,
             auto_delete_objects=True,
         )
@@ -365,7 +414,8 @@ class CreateEndUserPoolResources(Construct):
     legacy password grant. Only our issuer holds its secret, so nobody who merely learns the client id
     can drive sign-up or password reset against the pool.
     """
-    def __init__(self, scope: Construct, id: str, *, federation_callback_url: str, **kwargs) -> None:
+    def __init__(self, scope: Construct, id: str, *, federation_callback_url: str,
+                 logout_done_url: str, **kwargs) -> None:
         super().__init__(scope, id, **kwargs)
         region = Stack.of(scope).region
 
@@ -391,6 +441,14 @@ class CreateEndUserPoolResources(Construct):
                 scopes=[cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PHONE,
                         cognito.OAuthScope.PROFILE, cognito.OAuthScope.COGNITO_ADMIN],
                 callback_urls=[federation_callback_url],
+                # The ONE sign-out URL this pool needs to know, however many products exist
+                # -- the counterpart of the single callback above. At sign-out the issuer
+                # hands the browser here so the pool ends its own session, then forwards to
+                # whichever product asked. Declared here rather than set by hand because
+                # UpdateUserPoolClient replaces a client's whole configuration: a manual
+                # edit that forgets one field silently drops the callback URL and every
+                # login fails with redirect_mismatch.
+                logout_urls=[logout_done_url],
             ),
             generate_secret=True,
             refresh_token_validity=Duration.days(3650),
@@ -529,9 +587,11 @@ class EspUserBaseStack(Stack):
         # custom domain is mapped. Federated sign-in breaks if this host is not the one the IdPs
         # are registered against, so it has to be the resolved hostname, not the execute-api one.
         federation_callback_url = f"{esp_user_api_base_url}/oauth2/federation/callback"
+        logout_done_url = f"{esp_user_api_base_url}/oauth2/logout/done"
         self.end_user_pool = CreateEndUserPoolResources(
             self, "CreateEndUserPoolResources",
             federation_callback_url=federation_callback_url,
+            logout_done_url=logout_done_url,
         )
         self._publish_end_user_pool_params()
 
@@ -798,6 +858,10 @@ class EspUserBaseStack(Stack):
                 "COGNITO_ISSUER": self.end_user_pool.issuer,
                 "COGNITO_CLIENT_ID": self.end_user_pool.broker_client.user_pool_client_id,
                 "COGNITO_CLIENT_SECRET": self.end_user_pool.broker_client.user_pool_client_secret.unsafe_unwrap(),
+                # Hosted-UI base (https://<prefix>.auth.<region>.amazoncognito.com) so the seed can
+                # build the upstream sign-out URL below. Without it /oauth2/logout ends OUR session but
+                # never Cognito's, and the next sign-in silently re-authenticates.
+                "COGNITO_HOSTED_UI_URL": self.end_user_pool.domain.base_url(),
             },
             code=lambda_.Code.from_inline("""
 import os, json, boto3, urllib3
@@ -838,6 +902,14 @@ def handler(event, context):
                 'client_secret': os.environ['COGNITO_CLIENT_SECRET'],
                 'password_grant': True,
                 'token_endpoint_auth': 'client_secret_basic',
+                # Cognito's sign-out is not the OIDC-standard end_session_endpoint: it lives on the
+                # hosted-UI domain and names its return parameter logout_uri, not
+                # post_logout_redirect_uri. Both fields are on the row so /oauth2/logout hands the
+                # browser to Cognito to end ITS session too -- otherwise sign-out ends ours alone and
+                # the next login silently re-authenticates. client_id is baked in because Cognito
+                # requires it on the logout URL.
+                'end_session_url': f"{os.environ['COGNITO_HOSTED_UI_URL']}/logout?client_id={os.environ['COGNITO_CLIENT_ID']}",
+                'end_session_redirect_param': 'logout_uri',
                 'attribute_mapping': {
                     'external_sub': 'sub',
                     'email': 'email',
@@ -864,7 +936,10 @@ def handler(event, context):
             properties={
                 "Issuer": self.end_user_pool.issuer,
                 "ClientId": self.end_user_pool.broker_client.user_pool_client_id,
-                "SeedVersion": "6",
+                # 7: the cognito row gained end_session_url + end_session_redirect_param so
+                # /oauth2/logout ends Cognito's own session. The seed re-runs only when a property
+                # here changes, so the bump is what refreshes the existing row.
+                "SeedVersion": "7",
             },
         )
         cr.node.add_dependency(self.gsi_readiness)

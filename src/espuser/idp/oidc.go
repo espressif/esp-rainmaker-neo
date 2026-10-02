@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils/httpclient"
@@ -37,12 +38,19 @@ type OIDCProvider struct {
 	TokenURL          string
 	TokenEndpointAuth string            // oidc.TokenAuthBasic (default) or oidc.TokenAuthPost
 	AttributeMapping  map[string]string // OUR claim name -> upstream claim name (overrides defaults)
+	// SessionMaxTTLSeconds mirrors the provider row (see identity_providers_db.ProviderEntry).
+	SessionMaxTTLSeconds int64
 
 	// Injectable for tests; nil falls back to the production client.
 	httpClient httpclient.Client
 }
 
 func (p *OIDCProvider) Name() string { return p.ProviderName }
+
+// SessionMaxTTL is deliberately not on the Provider interface: only the federation callback
+// needs it, and widening the interface would break every test fake for a value most
+// implementations don't carry. Callers type-assert to *OIDCProvider.
+func (p *OIDCProvider) SessionMaxTTL() int64 { return p.SessionMaxTTLSeconds }
 
 func (p *OIDCProvider) scopeParam() string {
 	if len(p.Scopes) == 0 {
@@ -65,6 +73,14 @@ func (p *OIDCProvider) AuthorizeRedirectURL(_ context.Context, leg UpstreamLeg) 
 	q.Set("nonce", leg.Nonce)
 	q.Set("code_challenge", pkceutil.ChallengeS256(leg.PKCEVerifier))
 	q.Set("code_challenge_method", oidc.PKCEMethodS256)
+	// Pass the RP's demands on. Only when asked: an unconditional prompt= would turn every
+	// federated login into a forced re-authentication.
+	if leg.Prompt != "" {
+		q.Set("prompt", leg.Prompt)
+	}
+	if leg.MaxAge != "" {
+		q.Set("max_age", leg.MaxAge)
+	}
 	// AppendQuery, not "?"+encode: a registry row may pin an authorize_url that already carries one.
 	return oidc.AppendQuery(base, q), nil
 }
@@ -82,23 +98,26 @@ var defaultAttributeMapping = map[string]string{
 	"family_name":    "family_name",
 	"locale":         "locale",
 	"picture":        "picture",
+	"auth_time":      "auth_time",
+	"amr":            "amr",
+	"acr":            "acr",
+}
+
+// claimKey is the upstream claim name for one of ours: the registry's attribute_mapping when set, else the default.
+func (p *OIDCProvider) claimKey(ours string) string {
+	if mapped := p.AttributeMapping[ours]; mapped != "" {
+		return mapped
+	}
+	return defaultAttributeMapping[ours]
 }
 
 func (p *OIDCProvider) upstreamClaim(claims jwt.MapClaims, ours string) string {
-	key := defaultAttributeMapping[ours]
-	if mapped := p.AttributeMapping[ours]; mapped != "" {
-		key = mapped
-	}
-	v, _ := claims[key].(string)
+	v, _ := claims[p.claimKey(ours)].(string)
 	return v
 }
 
 func (p *OIDCProvider) upstreamBoolClaim(claims jwt.MapClaims, ours string) bool {
-	key := defaultAttributeMapping[ours]
-	if mapped := p.AttributeMapping[ours]; mapped != "" {
-		key = mapped
-	}
-	switch v := claims[key].(type) {
+	switch v := claims[p.claimKey(ours)].(type) {
 	case bool:
 		return v
 	case string:
@@ -106,6 +125,56 @@ func (p *OIDCProvider) upstreamBoolClaim(claims jwt.MapClaims, ours string) bool
 	default:
 		return false
 	}
+}
+
+// upstreamNumClaim reads a numeric claim (auth_time, iat): JSON numbers arrive as float64
+// from jwt.MapClaims, but a provider may also send a json.Number or a string.
+func (p *OIDCProvider) upstreamNumClaim(claims jwt.MapClaims, ours string) int64 {
+	switch v := claims[p.claimKey(ours)].(type) {
+	case float64:
+		return int64(v)
+	case json.Number:
+		n, _ := v.Int64()
+		return n
+	case string:
+		n, _ := strconv.ParseInt(v, 10, 64)
+		return n
+	default:
+		return 0
+	}
+}
+
+// upstreamStringsClaim reads a string-array claim (amr). A lone string counts as one entry.
+func (p *OIDCProvider) upstreamStringsClaim(claims jwt.MapClaims, ours string) []string {
+	switch v := claims[p.claimKey(ours)].(type) {
+	case []interface{}:
+		var out []string
+		for _, e := range v {
+			if s, ok := e.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case string:
+		if v == "" {
+			return nil
+		}
+		return []string{v}
+	default:
+		return nil
+	}
+}
+
+// authTimeClaim prefers auth_time; a provider that omits it (the claim is optional unless
+// max_age was requested) gets the id token's iat, which on a fresh mint is the same moment.
+func (p *OIDCProvider) authTimeClaim(claims jwt.MapClaims) int64 {
+	if at := p.upstreamNumClaim(claims, "auth_time"); at > 0 {
+		return at
+	}
+	if iat, ok := claims["iat"].(float64); ok {
+		return int64(iat)
+	}
+	return 0
 }
 
 func (p *OIDCProvider) HandleCallback(ctx context.Context, code string, leg UpstreamLeg) (Identity, error) {
@@ -144,6 +213,9 @@ func (p *OIDCProvider) HandleCallback(ctx context.Context, code string, leg Upst
 		FamilyName:    p.upstreamClaim(claims, "family_name"),
 		Locale:        p.upstreamClaim(claims, "locale"),
 		Picture:       p.upstreamClaim(claims, "picture"),
+		AuthTime:      p.authTimeClaim(claims),
+		AMR:           p.upstreamStringsClaim(claims, "amr"),
+		ACR:           p.upstreamClaim(claims, "acr"),
 	}, nil
 }
 

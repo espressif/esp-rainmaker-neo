@@ -71,6 +71,19 @@ class TokenAPI(Construct):
             resources=[get_table_arn(USER_TABLE_NAMES['OAUTH_CLIENTS'], region)],
         ))
 
+        # The refresh grant clamp bumps the user agent's expires_at so a family can never outlive its
+        # user agent: a Query on the by-user index to resolve the family's sid to a session row, then a
+        # GetItem (the provider ceiling) and an UpdateItem to roll retention. A missing grant degrades
+        # to "no bump" (the family keeps its plain TTL) rather than failing the token call.
+        token_lambda_role.add_to_policy(iam.PolicyStatement(
+            actions=["dynamodb:Query"],
+            resources=[get_table_index_arn(USER_TABLE_NAMES['SESSIONS'], USER_INDEX_NAMES['SESSIONS_BY_USER'], region)],
+        ))
+        token_lambda_role.add_to_policy(iam.PolicyStatement(
+            actions=["dynamodb:GetItem", "dynamodb:UpdateItem"],
+            resources=[get_table_arn(USER_TABLE_NAMES['SESSIONS'], region)],
+        ))
+
         token_lambda_role.add_to_policy(iam.PolicyStatement(
             actions=["ssm:GetParameter"],
             resources=[

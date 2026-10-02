@@ -3170,6 +3170,40 @@ class User:
         )
         return response
 
+    def oauth_client_credentials(self, client_id, client_secret, scope=None, resource=None,
+                                 use_basic=True, extra_resources=None):
+        """Obtain an access token for the client itself (POST /oauth2/token, RFC 6749 s4.4).
+
+        Args:
+            client_id (str), client_secret (str): the confidential client's credentials.
+            scope (str): space-separated; omitted grants the client's registered scopes.
+            resource (str): RFC 8707 resource indicator; stamped into the token's aud.
+            use_basic (bool): HTTP Basic when True, client_secret_post otherwise.
+            extra_resources (list): additional resource values, to prove two are refused.
+
+        Returns:
+            requests.Response: carries the access token on success, an OAuth error otherwise.
+        """
+        fields = [("grant_type", "client_credentials")]
+        if scope is not None:
+            fields.append(("scope", scope))
+        if resource is not None:
+            fields.append(("resource", resource))
+        for extra in (extra_resources or []):
+            fields.append(("resource", extra))
+
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        if use_basic:
+            headers["Authorization"] = "Basic " + base64.b64encode(
+                f"{client_id}:{client_secret}".encode()).decode()
+        else:
+            fields += [("client_id", client_id), ("client_secret", client_secret)]
+
+        return self.session.post(
+            f"{self.user_api_gateway_url}/oauth2/token",
+            headers=headers, data=urlencode(fields),
+        )
+
     def oauth_authorize(self, client_id, redirect_uri, code_challenge, scope="openid email", state="xyz"):
         """Start the browser authorization-code flow (GET /oauth2/authorize). Does not follow
         the redirect, so the flow_id cookie and Location are returned for inspection."""

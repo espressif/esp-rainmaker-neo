@@ -20,6 +20,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngrequest"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/validation"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -33,33 +34,62 @@ type User struct {
 	Permissions rbac.EntityPermissions
 	AuthService auth.AuthService
 	UserInfo    auth.UserInfo
+	// Claims is the zero value on an AWS_IAM route, where only the subject survives the identity-pool exchange.
+	Claims auth.TokenClaims
 }
 
 func NewContextWithAPIRequest(ctx context.Context, request events.APIGatewayProxyRequest) *rmngctx.RmngContext {
-	// The factory extracts the caller identity from the request and picks the resolving
-	// service (OIDC user service by sub, or Cognito admin); we then resolve the user.
-	authService, identity, err := auth.NewAuthServiceFactory().CreateAuthServiceFromAPIRequest(ctx, request)
-	if err != nil {
-		rlog.Error(ctx).Err(err).Msg("Failed to create auth service")
-		return nil
-	}
-	if authService == nil {
-		rlog.Error(ctx).Msg("auth service unavailable")
-		return nil
-	}
-	userInfo, err := authService.GetUserFromProvider(ctx, identity)
-	if err != nil {
-		rlog.Error(ctx).Err(err).Msg("Failed to get user from provider")
-		return nil
+	factory := auth.NewAuthServiceFactory()
+
+	authService, identity, err := factory.CreateAuthServiceFromAPIRequest(ctx, request)
+	if err == nil && authService != nil {
+		userInfo, err := authService.GetUserFromProvider(ctx, identity)
+		if err != nil {
+			rlog.Error(ctx).Err(err).Msg("Failed to get user from provider")
+			return nil
+		}
+		return newUserContext(ctx, userInfo, auth.TokenClaims{}, authService)
 	}
 
-	return rmngctx.NewRmngContextWithUser(ctx, NewUserFromRequest(userInfo.UserID, userInfo, authService), userInfo.UserID)
+	token := rmngrequest.ExtractAuthToken(request.Headers)
+	if token == "" {
+		rlog.Error(ctx).Err(err).Msg("No gateway identity and no bearer token")
+		return nil
+	}
+	svc, err := auth.NewOAuthUserAuthService(ctx)
+	if err != nil {
+		rlog.Error(ctx).Err(err).Msg("Failed to build user auth service")
+		return nil
+	}
+	claims, err := svc.VerifyAccessToken(token)
+	if err != nil {
+		rlog.Error(ctx).Err(err).Msg("Bearer access token rejected")
+		return nil
+	}
+	return newUserContext(ctx, claims.UserInfo(), claims, svc)
 }
 
-func NewUserFromRequest(userID string, userInfo auth.UserInfo, authService auth.AuthService) *User {
+func newUserContext(ctx context.Context, userInfo auth.UserInfo, claims auth.TokenClaims, authService auth.AuthService) *rmngctx.RmngContext {
+	if userInfo.UserID == "" {
+		rlog.Error(ctx).Msg("Resolved caller has no user id")
+		return nil
+	}
+	return rmngctx.NewRmngContextWithUser(ctx, NewUserFromRequest(userInfo.UserID, userInfo, claims, authService), userInfo.UserID)
+}
+
+// ClaimsFrom returns the caller's verified token claims, or the zero value when there are none.
+func ClaimsFrom(ctx *rmngctx.RmngContext) auth.TokenClaims {
+	if u, ok := ctx.GetAccessor().(*User); ok && u != nil {
+		return u.Claims
+	}
+	return auth.TokenClaims{}
+}
+
+func NewUserFromRequest(userID string, userInfo auth.UserInfo, claims auth.TokenClaims, authService auth.AuthService) *User {
 	u := &User{
 		UserID:      userID,
 		UserInfo:    userInfo,
+		Claims:      claims,
 		AuthService: authService,
 	}
 

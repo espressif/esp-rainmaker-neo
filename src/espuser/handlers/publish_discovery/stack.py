@@ -66,7 +66,18 @@ class PublishDiscovery(Construct):
             "Bucket": discovery_bucket.bucket_name,
             "JwksParam": jwks_param,
             "KmsKeyArn": signing_kms_key.key_arn,
-            "PublishVersion": "4",
+            # 5: grant_types_supported gained client_credentials. The documents are
+            # built from oidc.SupportedGrantTypes at publish time, and a change there moves
+            # no property below, so nothing else would make CloudFormation republish.
+            # 6: end_session_endpoint added (RP-Initiated Logout) and scopes_supported gained
+            # account:sessions. Same trap as 5, and it bites harder here: a client discovers
+            # sign-out FROM this document, so a stale copy means every SDK silently falls back
+            # to dropping local tokens and the session survives.
+            # 7: cache-control on the published documents cut from 24h to 5min (metadata) and
+            # 1h (jwks). The header is part of the OUTPUT, not of any property below, so this
+            # bump is the only thing that republishes it -- and until it does, every browser
+            # holding yesterday's document keeps it for the rest of the day.
+            "PublishVersion": "7",
         }
         signing_kms_key.grant(lambda_role, "kms:GetPublicKey")
 

@@ -239,7 +239,7 @@ func handleSignout(ctx context.Context, request events.APIGatewayProxyRequest, s
 	}
 	if req.Global == "true" {
 		return utils.APIGwRespJSON(http.StatusBadRequest,
-			utils.NewAPIStatus("All-device signout is not supported; sign out each session with its refresh token")), nil
+			utils.NewAPIStatus("Global signout is not supported; sign out each session with its refresh token")), nil
 	}
 	// Reported, not ignored: returning success for a signout that revoked nothing is worse than a 400.
 	if req.RefreshToken == "" {

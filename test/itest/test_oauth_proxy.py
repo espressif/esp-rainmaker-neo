@@ -263,14 +263,14 @@ def test_authorize_with_real_cimd_wrong_redirect_uri(enable_test_cimd):
 
 def _complete_federation_at_authorize(session, authorize_url, email, password):
     """Drive the CORE login leg of the brokered authorize: follow the proxy's redirect to
-    /oauth2/authorize (which sets the esp_flow_id cookie), take the Cognito federation leg
+    /oauth2/authorize (which sets the __Host-esp_flow_id cookie), take the Cognito federation leg
     (hosted-UI password login), and return the /oauth2/callback URL the federation callback
     redirects the browser back to (carrying the authorization code + proxy state). Uses
     federation — not OTP — so this end-to-end proxy test runs on OSS deployments too."""
     authz = session.get(authorize_url, allow_redirects=False)
     assert authz.status_code == 302, f"espuser authorize should redirect to login: {authz.status_code} {authz.text}"
     flow_id = flow_id_from_cookie(authz)
-    assert flow_id, "espuser authorize must set the esp_flow_id cookie"
+    assert flow_id, "espuser authorize must set the __Host-esp_flow_id cookie"
 
     fed = session.get(f"{USER_API_GATEWAY_URL}/oauth2/federation/start",
                       params={"provider": "cognito"}, allow_redirects=False)

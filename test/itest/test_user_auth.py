@@ -14,13 +14,24 @@ from test.itest.conftest import (
     END_USER_POOL_ID,
     complete_federation_login,
     decode_jwt_claims,
+    requires_espuser,
+)
+from py_sdk.espuser_oauth import (
+    Browser,
+    WebClient,
+    client_ids_under,
+    session_with,
+    sids_in,
+    sign_out_destination,
 )
 from test.itest.email_utils import (
     generate_random_email,
     generate_test_password,
 )
 from urllib.parse import parse_qs, urlparse
+import base64
 import boto3
+import json
 import pytest
 import requests
 import uuid
@@ -462,3 +473,270 @@ def test_scope_gating_withholds_unrequested_claims(federated_identity, fed_clien
     assert "email" not in reflected, f"userinfo leaked the email without the scope: {reflected}"
     for claim in _UPSTREAM_PROFILE:
         assert claim not in reflected, f"userinfo leaked {claim} without the scope: {reflected}"
+
+
+# ============================================================================
+# Authorization-code journey: three products, one browser, one login, one sign-out
+# ============================================================================
+# The product promise end to end, merged here from the old test_espuser_journey.py. Every other
+# espuser test asserts a rule; this asserts the thing a person would describe -- I opened three of
+# your apps, signed in once, and signing out of one signed me out of all of them, on this device and
+# no other. It re-drives sign-in, single sign-on and sign-out on purpose: a failure in a rule-shaped
+# test says a rule regressed, a failure here says the product does not work. A lambda missing one IAM
+# grant reads every branch correctly and simply cannot see that sessions exist, so sign-out reaches
+# nothing while every rule-shaped test stays green -- only signing in to several products and using
+# them after sign-out catches it. Spec: espuser/docs/specs/sso-sessions.md.
+
+_JOURNEY_CALLBACK = "https://example.com/espuser-itest/journey-{}/callback"
+_JOURNEY_SIGNED_OUT = "https://example.com/espuser-itest/journey-{}/signed-out"
+
+
+@pytest.fixture
+def three_products(register_espuser_client):
+    """Three unrelated applications, as a person's browser would hold: a dashboard and two products
+    that know nothing about each other."""
+    apps = []
+    for name in ("dashboard", "product-a", "product-b"):
+        uri, bye = _JOURNEY_CALLBACK.format(name), _JOURNEY_SIGNED_OUT.format(name)
+        client = register_espuser_client(
+            client_name=f"itest {name}", redirect_uris=[uri], post_logout_redirect_uris=[bye])
+        apps.append(WebClient(client.client_id, uri, post_logout_redirect_uri=bye))
+    return apps
+
+
+@pytest.mark.espuser
+@requires_espuser
+def test_three_products_one_login_one_sign_out(three_products, espuser_person):
+    dashboard, product_a, product_b = three_products
+    browser = Browser("Mozilla/5.0 (Macintosh) itest-journey")
+
+    # 1 -- the person signs in, once, at whichever app they opened first.
+    first = dashboard.sign_in(browser, espuser_person)
+    assert first.used_upstream, "the first login must actually authenticate somebody"
+    dashboard_tokens = dashboard.tokens(first)
+    assert browser.session_cookie, "a completed login must leave a session cookie"
+
+    # 2 -- the other two are already signed in. No page, no provider, no second password.
+    tokens = {dashboard.client_id: dashboard_tokens}
+    for app in (product_a, product_b):
+        authz = app.sign_in(browser, espuser_person)
+        assert not authz.used_upstream, \
+            f"{app.client_id} went back to the provider; that is not single sign-on"
+        tokens[app.client_id] = app.tokens(authz)
+
+    for app in three_products:
+        assert app.still_signed_in(tokens[app.client_id]["refresh_token"]), \
+            f"{app.client_id} did not end up with working credentials"
+
+    # 3 -- and the person can see exactly that: one browser, three products under it.
+    listing = WebClient.sessions(dashboard_tokens["access_token"])
+    assert listing.status_code == 200, listing.text
+    body = listing.json()
+    assert len(body["sessions"]) == 1, f"one browser is one device: {body}"
+    view = body["sessions"][0]
+    assert view["current"] is True
+    assert client_ids_under(view) == sorted(a.client_id for a in three_products), view
+    assert not body.get("unattached_products"), \
+        f"nothing may be standing access with no session behind it: {body}"
+
+    # 4 -- they sign out of ONE of them, and it reaches all three.
+    out = product_a.logout(browser, id_token_hint=tokens[product_a.client_id].get("id_token"))
+    assert out.status_code in (200, 302), f"{out.status_code} {out.text[:300]}"
+    assert _JOURNEY_SIGNED_OUT.format("product-a") in sign_out_destination(browser, out), (
+        "the app that asked must get its person back, however many hops the chain takes: "
+        f"{out.headers.get('Location')!r}"
+    )
+
+    for app in three_products:
+        assert not app.still_signed_in(tokens[app.client_id]["refresh_token"]), (
+            f"{app.client_id} can still get new tokens after the sign-out; the person is signed out "
+            "of the app they clicked in and still signed in here"
+        )
+
+    # 5 -- and the browser itself is signed out: no session, no silent code.
+    assert browser.session_cookie is None, "the session cookie must be cleared, not merely stale"
+    assert dashboard.authorize(browser, prompt="none").error == "login_required", \
+        "the browser still holds a working session; the row was not deleted"
+
+
+@pytest.mark.espuser
+@requires_espuser
+def test_sso_logout_the_other_device_is_untouched(three_products, espuser_person):
+    """The same journey from two devices, ending in the thing people actually worry about: signing
+    out on one machine must not sign them out on the other."""
+    dashboard, product_a, _ = three_products
+    laptop, phone = Browser("laptop"), Browser("phone")
+
+    laptop_dash = dashboard.tokens(dashboard.sign_in(laptop, espuser_person))
+    laptop_a = product_a.tokens(product_a.sign_in(laptop, espuser_person))
+    phone_dash = dashboard.tokens(dashboard.sign_in(phone, espuser_person))
+
+    body = WebClient.sessions(phone_dash["access_token"]).json()
+    assert len(body["sessions"]) == 2, f"two devices, two rows: {body}"
+
+    product_a.logout(laptop)
+
+    assert not dashboard.still_signed_in(laptop_dash["refresh_token"])
+    assert not product_a.still_signed_in(laptop_a["refresh_token"])
+    assert dashboard.still_signed_in(phone_dash["refresh_token"]), \
+        "the phone was never asked to sign out"
+
+    after = WebClient.sessions(phone_dash["access_token"]).json()
+    assert len(after["sessions"]) == 1 and after["sessions"][0]["current"], after
+
+
+@pytest.mark.espuser
+@requires_espuser
+def test_sso_logout_lost_phone(three_products, espuser_person):
+    """The recovery story, which is the sessions API's whole reason for existing: the device is
+    gone, so it cannot be asked to sign itself out. Somebody else's device has to do it, and reaching
+    a session from a device that does not hold its cookie is what the by-user index is for."""
+    dashboard, product_a, _ = three_products
+    laptop, phone = Browser("laptop"), Browser("phone")
+
+    laptop_tokens = dashboard.tokens(dashboard.sign_in(laptop, espuser_person))
+    phone_dash = dashboard.tokens(dashboard.sign_in(phone, espuser_person))
+    phone_a = product_a.tokens(product_a.sign_in(phone, espuser_person))
+
+    body = WebClient.sessions(laptop_tokens["access_token"]).json()
+    phone_sid = [s["session_id"] for s in body["sessions"] if not s["current"]][0]
+    phone_view = session_with(body, phone_sid)
+    assert client_ids_under(phone_view) == sorted([dashboard.client_id, product_a.client_id]), (
+        "the list has to show what is signed in on the lost device, or the person cannot tell which "
+        f"one it is: {phone_view}"
+    )
+
+    ended = WebClient.end_session(laptop_tokens["access_token"], phone_sid)
+    assert ended.status_code == 204, f"{ended.status_code} {ended.text[:200]}"
+
+    assert not dashboard.still_signed_in(phone_dash["refresh_token"])
+    assert not product_a.still_signed_in(phone_a["refresh_token"]), \
+        "ending a device must take every product on it, not just the one that was listed"
+    assert dashboard.still_signed_in(laptop_tokens["refresh_token"]), \
+        "and must leave the device that did the ending signed in"
+
+    assert phone_sid not in sids_in(WebClient.sessions(laptop_tokens["access_token"]).json())
+
+    # The phone, if it ever comes back, is a stranger.
+    assert dashboard.authorize(phone, prompt="none").error == "login_required", \
+        "the ended device still holds a working session cookie"
+
+
+# ============================================================================
+# client_credentials grant (machine-to-machine)
+# ============================================================================
+# Merged here from the old test_client_credentials.py. The unit specs cover the handler's branches;
+# these prove the deployed endpoint behaves the same and that the token it mints is one a resource
+# server can act on -- in particular that `aud` names the API and not the caller, the property the
+# whole grant exists to get right. The seven near-identical exchanges that once looked at one field
+# each are one test now: the deployment cannot make them disagree, so the extra round trips bought
+# nothing. That the openid-configuration advertises this grant is asserted in test_oidc_discovery.py.
+# Spec: espuser/docs/specs/admin-clients.md, docs/api/User_Api_Swagger.yaml.
+
+_CC_RESOURCE = "https://api.itest-accounts.example.com"
+_CC_OTHER_RESOURCE = "https://api.itest-other.example.com"
+_CC_SCOPES = ["account.admin", "credits.consume"]
+
+
+def _cc_claims(access_token):
+    """Token payload without verification -- these assert on what the server put in it."""
+    payload = access_token.split(".")[1]
+    return json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+
+
+@pytest.fixture
+def m2m_client(admin_user):
+    """A confidential client registered for client_credentials, removed afterwards."""
+    client_id = "itest_cc_" + uuid.uuid4().hex[:8]
+    create = admin_user.create_oauth_client({
+        "client_id": client_id,
+        "client_name": "itest m2m",
+        "client_type": "confidential",
+        "grant_types": ["client_credentials"],
+        "scopes": _CC_SCOPES,
+        "allowed_resources": [_CC_RESOURCE],
+    })
+    assert create.status_code == 201, create.text
+    secret = create.json().get("client_secret")
+    assert secret, "a confidential client must be issued a secret"
+    yield client_id, secret
+    admin_user.delete_oauth_client(client_id)
+
+
+@pytest.mark.espuser
+@requires_espuser
+def test_client_credentials_mints_one_scoped_access_token(admin_user, m2m_client):
+    """One exchange, every property of the response, and the audience binding folded in. There is no
+    user, so no refresh_token and no id_token; RFC 9068 s2.2.1 makes sub the client; and `aud` names
+    the callee -- the API when a resource is asked for, the client itself when none is, never
+    conflating the two, which is the bug this grant must not repeat."""
+    client_id, secret = m2m_client
+    resp = admin_user.oauth_client_credentials(client_id, secret, scope="account.admin")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    assert body["access_token"] and body["token_type"] == "Bearer" and body.get("expires_in")
+    assert "refresh_token" not in body, "there is no user to act for later"
+    assert "id_token" not in body, "there is no human to describe"
+
+    c = _cc_claims(body["access_token"])
+    assert c["sub"] == client_id, "RFC 9068 s2.2.1: with no resource owner, sub is the client"
+    assert c["client_id"] == client_id and c["token_use"] == "access"
+    assert c["aud"] == client_id, "no resource requested leaves aud as the client id"
+
+    # Body credentials must work as well as Basic: Google account linking sends one, Alexa the other,
+    # and a regression in either is invisible from the server's own logs.
+    assert admin_user.oauth_client_credentials(
+        client_id, secret, scope="account.admin", use_basic=False).status_code == 200
+
+    # Omitting scope grants the registered set rather than none.
+    everything = _cc_claims(admin_user.oauth_client_credentials(
+        client_id, secret).json()["access_token"])
+    assert sorted(everything["scope"].split()) == sorted(_CC_SCOPES)
+
+    # A requested resource becomes the audience -- the one property whose failure means tokens are
+    # usable at the wrong API.
+    scoped = _cc_claims(admin_user.oauth_client_credentials(
+        client_id, secret, scope="account.admin", resource=_CC_RESOURCE).json()["access_token"])
+    assert scoped["aud"] == _CC_RESOURCE and scoped["aud"] != scoped["client_id"]
+
+
+@pytest.mark.espuser
+@requires_espuser
+def test_client_credentials_refuses_an_unregistered_scope_or_resource(admin_user, m2m_client):
+    """The target validation, without which the scope and resource parameters would be decorative.
+    An unregistered scope is invalid_scope; an unregistered resource, or more than one resource (one
+    resource, one aud -- a multi-audience token is one leak that opens two doors), is invalid_target."""
+    client_id, secret = m2m_client
+
+    bad_scope = admin_user.oauth_client_credentials(client_id, secret, scope="nope.write")
+    assert bad_scope.status_code == 400 and bad_scope.json()["error"] == "invalid_scope", bad_scope.text
+
+    bad_resource = admin_user.oauth_client_credentials(
+        client_id, secret, scope="account.admin", resource=_CC_OTHER_RESOURCE)
+    assert bad_resource.status_code == 400 and bad_resource.json()["error"] == "invalid_target", \
+        bad_resource.text
+
+    two = admin_user.oauth_client_credentials(
+        client_id, secret, scope="account.admin",
+        resource=_CC_RESOURCE, extra_resources=[_CC_OTHER_RESOURCE])
+    assert two.status_code == 400 and two.json()["error"] == "invalid_target", two.text
+
+
+@pytest.mark.espuser
+@requires_espuser
+def test_client_credentials_refuses_a_client_not_registered_for_the_grant(admin_user):
+    """Registered as confidential, but only for authorization_code -- the grant gate must hold
+    independently of whether the client could authenticate."""
+    client_id = "itest_cc_nogrant_" + uuid.uuid4().hex[:8]
+    create = admin_user.create_oauth_client({
+        "client_id": client_id, "client_name": "itest authcode only",
+        "client_type": "confidential", "grant_types": ["authorization_code"],
+    })
+    assert create.status_code == 201, create.text
+    secret = create.json()["client_secret"]
+    try:
+        resp = admin_user.oauth_client_credentials(client_id, secret)
+        assert resp.status_code == 400 and resp.json()["error"] == "unauthorized_client", resp.text
+    finally:
+        admin_user.delete_oauth_client(client_id)

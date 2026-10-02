@@ -1,5 +1,10 @@
 # Authorization Flow
 
+> Two behaviours of this endpoint have specs of their own: whether the login leg can be
+> skipped for a browser that already signed in is [sso-sessions.md](sso-sessions.md), and
+> what the `resource` parameter does to a token's audience is
+> [resource-indicators.md](resource-indicators.md).
+
 ## What this is
 
 The standard OAuth 2.1 / OIDC browser login: a client (e.g. the Alexa or Google Voice Assistant account-linking web view) redirects the user to `GET /oauth2/authorize`, the user logs in passwordlessly via OTP on a **service-served login UI**, and we hand the client back a single-use **authorization code** at its `redirect_uri`. The client then exchanges that code (with its PKCE verifier) at `POST /oauth2/token` for the token set.
@@ -17,7 +22,9 @@ This is the interactive counterpart to [direct-token OTP](auth-flows.md): same O
 
 **In:** `GET /oauth2/authorize`, a minimal service-served login UI, OTP as the first factor, single-use code issuance, and the `authorization_code` grant at `POST /oauth2/token`. First-party clients only.
 
-**Out (deferred):** consent screen, SSO sessions / silent re-auth, social federation, per-client branding, custom-domain→issuer, and the full S3+CloudFront branded SPA. Those are deferred features and are **not** built here. Since first-party clients skip consent, the flow goes login → OTP → code with no consent step.
+**In:** SSO sessions and silent re-auth — see [Single sign-on](#single-sign-on--the-session) below.
+
+**Out (deferred):** consent screen, per-client branding, custom-domain→issuer, and the full S3+CloudFront branded SPA. Those are deferred features and are **not** built here. Since first-party clients skip consent, the flow goes login → OTP → code with no consent step.
 
 ## Pre-requisites
 
@@ -50,16 +57,21 @@ sequenceDiagram
     participant Flows as "espuser-auth-flows"
 
     Client->>Browser: 302 to /oauth2/authorize (client_id, redirect_uri, scope, state, code_challenge S256)
-    Browser->>Authz: GET /oauth2/authorize
-    Authz->>Flows: Put LOGIN record (flow_id, client_id, scopes, PKCE, redirect_uri, state)
-    Authz-->>Browser: 302 to login UI (Set-Cookie: flow_id — HttpOnly)
-    Browser->>UI: GET /login (cookie: flow_id)
-    UI-->>Browser: Render email/phone form (reads flow record for client)
-    Browser->>OTP: POST /v1/auth/otp/initiate (username, flow_id)
-    OTP-->>Browser: code sent
-    Browser->>OTP: POST /v1/auth/otp/verify (flow_id, code)
-    OTP->>Flows: Resolve subject, stamp CODE on the flow record
-    OTP-->>Browser: { redirect_to: redirect_uri?code=...&state=... }
+    Browser->>Authz: GET /oauth2/authorize (cookie: __Host-esp_session, if any)
+    alt session cookie present and satisfies prompt / max_age (SSO shortcut — no login)
+        Authz->>Flows: Put flow record, stamp CODE directly (subject from the session)
+        Authz-->>Browser: 302 redirect_uri?code=...&state=...
+    else no session, or prompt=login / max_age exceeded
+        Authz->>Flows: Put LOGIN record (flow_id, client_id, scopes, PKCE, redirect_uri, state)
+        Authz-->>Browser: 302 to login UI (Set-Cookie: flow_id — HttpOnly)
+        Browser->>UI: GET /login (cookie: flow_id)
+        UI-->>Browser: Render email/phone form (reads flow record for client)
+        Browser->>OTP: POST /v1/auth/otp/initiate (username, flow_id)
+        OTP-->>Browser: code sent
+        Browser->>OTP: POST /v1/auth/otp/verify (flow_id, code)
+        OTP->>Flows: Resolve subject, stamp CODE on the flow record (Set-Cookie: __Host-esp_session)
+        OTP-->>Browser: { redirect_to: redirect_uri?code=...&state=... }
+    end
     Browser->>Client: 302 redirect_uri?code=...&state=...
     Client->>Token: POST /oauth2/token (grant_type=authorization_code, code, code_verifier, client_id, redirect_uri)
     Token->>Flows: GetItem(code) — verify PKCE, client, redirect — consume (false→true)
@@ -81,6 +93,10 @@ Starts the flow. Validates the request, writes a `LOGIN` flow record, and redire
 | `state` | recommended | Opaque; echoed back on the redirect (client CSRF token). |
 | `code_challenge` | conditional | PKCE (RFC 7636). Required when the client is registered with `require_pkce` (always true for public clients — RFC 9700 §2.1.1); optional otherwise. |
 | `code_challenge_method` | conditional | Must be `S256` when a `code_challenge` is present. |
+| `resource` | no | RFC 8707: the API the access token is for. **Omitted, `aud` is the `client_id`** — the pre-RFC-8707 behaviour every existing caller still sees. When present it must be one of the client's `allowed_resources`, or the request redirects with `invalid_target`; at most one value, and that value becomes the token's `aud`. Remembered on the flow and by the refresh family, so every renewal keeps the audience. |
+| `prompt` | no | OIDC Core §3.1.2.1: `none` answers silently from the session or redirects with `login_required`; `login` always re-authenticates; other values disable the session shortcut. |
+| `max_age` | no | Maximum acceptable age (seconds) of the session's `auth_time`. An older session is not used. |
+| `id_token_hint` | no | A previously issued ID token naming the expected subject. A session belonging to anyone else, or an unverifiable hint, is not used — the flow never switches to the hinted user. |
 
 **Process**:
 1. Validate `response_type=code` and that `client_id` is a registered client. A structural failure here renders the **service error page** (we cannot safely redirect yet).
@@ -91,6 +107,18 @@ Starts the flow. Validates the request, writes a `LOGIN` flow record, and redire
 5. Set the `flow_id` in a short-lived `HttpOnly` `Secure` `SameSite=Lax` cookie and `302` to the login UI.
 
 **Errors** — pre-redirect failures (steps 1–2) render the error page with an RFC 6749 §5.2 error body; post-validation failures (step 3+) redirect to `redirect_uri?error=<code>&state=<state>`.
+
+After validation and the flow write, the browser's session is consulted before choosing the login surface — see the next section. A live session that satisfies `prompt`/`max_age`/`id_token_hint` issues the code immediately; otherwise the login redirect proceeds exactly as above.
+
+## Single sign-on — the session
+
+The authorization server keeps its own browser session (`__Host-esp_session`), so a person who authenticated once is not asked again when a second client starts a login, and `prompt=none` can be answered. [sso-sessions.md](sso-sessions.md) owns the session model: lifetimes, the `espuser-sessions` row, re-authentication, and sign-out.
+
+What this flow relies on:
+
+- **Consulted** at `/oauth2/authorize`, after request validation: a live session that satisfies `prompt`/`max_age`/`id_token_hint` issues the code immediately. `prompt=none` with no usable session redirects with `error=login_required`; `prompt=login` is always honoured.
+- **Established** on every first-party login (federation, OTP, the legacy password API); the flow's `sid` is stamped at code issuance and carried onto the refresh family.
+- **`auth_time` is the session's**, stamped on the flow at code issuance and on the refresh family, so an ID token from the shortcut or a refresh names the original authentication, never the mint time.
 
 ## Login UI (service-served)
 
@@ -157,6 +185,8 @@ The flow record threading a request from `/oauth2/authorize` through OTP login t
 | `redirect_uri` | String | Validated, exact-match. |
 | `state` | String | Echoed on the redirect (client CSRF token). |
 | `code_challenge` / `code_challenge_method` | String | PKCE (`S256`). |
+| `resource` | String | RFC 8707 audience the login asked for; read at the code exchange and carried onto the refresh family. Empty ⇒ `aud = client_id`. |
+| `sid` | String | The browser session this login ran under; ties the refresh family to its parent session. |
 | `subject` | String | Resolved `user_id`; set by in-flow OTP verify. |
 | `granted_scope` | List<String> | Stamped at code issuance (= requested, first-party no-consent). |
 | `code` | String | The single-use authorization code; minted when the record becomes `CODE`. Looked up by a `by-code` GSI. |
@@ -183,10 +213,8 @@ The flow record threading a request from `/oauth2/authorize` through OTP login t
 - `TODO:` audit events (`authorize`, `code_issued`, `code_redeemed`) — same open question as the OTP audit log in [auth-flows.md](auth-flows.md).
 - `TODO:` rate-limit `/oauth2/authorize` (flow-record creation) per client + IP.
 - `TODO:` `nonce` (OIDC replay protection) — accept it and inject it into the id_token together (OIDC Core §2 requires an accepted `nonce` to appear in the id_token).
-- `TODO:` `requested_audience` / `granted_audience` (RFC 8707) on the flow record — omitted this slice.
 - `TODO:` fold the `OTP` challenge onto `espuser-auth-flows` instead of a separate `espuser-otp` row (one flow record carrying its challenge).
 - `TODO:` additional client-auth methods beyond `client_secret_basic`: `private_key_jwt` / `client_secret_jwt` (RFC 7523, needs per-client JWKS) and mTLS `tls_client_auth` (RFC 8705, needs cert distribution).
-- `TODO:` per-client `token_endpoint_auth_method` is derived (public → `none`, confidential → basic), not stored/configurable; make it an explicit registered field when more methods land.
 - `TODO:` secret rotation for confidential clients (two active secrets during rollover); today a client has a single secret.
-- `TODO:` `client_credentials` grant (M2M) — a confidential client with no user; separate later slice, same Basic auth.
+- `TODO:` `prompt=consent` / `select_account` currently disable the session shortcut rather than rendering their surfaces (no consent screen exists).
 - `TODO:` on authorization-code reuse, revoke the tokens (refresh-token family) minted from that code (RFC 6749 §10.5 SHOULD) — today reuse is only denied (`invalid_grant`), not revoked. Requires recording the minted family id on the flow record; mirror the refresh-token reuse-detection path.

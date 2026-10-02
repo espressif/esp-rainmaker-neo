@@ -121,12 +121,23 @@ func NewAuthEventID() string {
 //
 // authEventID ties this token to the id token minted alongside it; pass the same value to
 // IDToken. Empty omits the claim, for a token issued outside any pair.
-func (m *Minter) AccessToken(userID, clientID, scope, authEventID string, contact Contact) (string, error) {
+//
+// audience is the RFC 8707 resource the token is for -- the API it will be spent at, which
+// is what an access token's aud means. Empty falls back to the client id, which is what
+// every token looked like before resource indicators and what a caller not using them still
+// gets. Note the contrast with IDToken below, whose audience is the client by definition.
+// sid is optional and names the browser session this token was minted under (OIDC Core
+// s2). A resource server needs it to answer "which of my sessions is this request on" --
+// the session cookie lives on the issuer's origin and never reaches a product's API.
+func (m *Minter) AccessToken(userID, clientID, scope, authEventID, audience string, contact Contact, sid ...string) (string, error) {
+	if audience == "" {
+		audience = clientID
+	}
 	now := time.Now()
 	claims := jwt.MapClaims{
 		"iss":       m.issuer,
 		"sub":       userID,
-		"aud":       clientID,
+		"aud":       audience,
 		"client_id": clientID,
 		"token_use": TokenUseAccess,
 		"scope":     scope,
@@ -135,25 +146,68 @@ func (m *Minter) AccessToken(userID, clientID, scope, authEventID string, contac
 	}
 	addAuthEvent(claims, authEventID)
 	addContact(claims, contact)
+	addSID(claims, sid)
 	return SignRS256(claims, m.signer, m.kid)
+}
+
+// addSID stamps the session identifier when one was supplied. Absent when the session write failed or the token predates sessions, and a consumer must treat it as "unknown", never as an error.
+func addSID(claims jwt.MapClaims, sid []string) {
+	if len(sid) > 0 && sid[0] != "" {
+		claims["sid"] = sid[0]
+	}
+}
+
+// ClientCredentialsToken mints an access token for the client itself (RFC 6749 s4.4).
+//
+// Two claims differ from AccessToken deliberately. sub is the client, because no resource
+// owner is involved and RFC 9068 s2.2.1 asks for an identifier the server uses for the
+// client application. aud is the requested resource (RFC 8707) rather than the client:
+// an access token's audience is the API it will be spent at, and conflating that with the
+// caller is what lets a token minted for one service be replayed against another. When no
+// resource is requested the audience falls back to the client id, which keeps the shape a
+// caller sees today and never leaves aud absent.
+//
+// There is no contact and no auth event: both describe a human sign-in that did not happen.
+func (m *Minter) ClientCredentialsToken(clientID, scope, audience string) (string, error) {
+	if audience == "" {
+		audience = clientID
+	}
+	now := time.Now()
+	return SignRS256(jwt.MapClaims{
+		"iss":       m.issuer,
+		"sub":       clientID,
+		"aud":       audience,
+		"client_id": clientID,
+		"token_use": TokenUseAccess,
+		"gty":       "client_credentials", // marks the machine grant so a resource server can refuse it where a human subject is required (RFC 6749 s4.4)
+		"scope":     scope,
+		"iat":       now.Unix(),
+		"exp":       now.Add(AccessTokenTTL).Unix(),
+	}, m.signer, m.kid)
 }
 
 // IDToken mints a signed RS256 id token (OIDC), stamping auth_time and scope-gated contact claims when present.
 //
 // authEventID must be the same value given to the AccessToken minted in the same sign-in.
-func (m *Minter) IDToken(userID, clientID, authEventID string, contact Contact) (string, error) {
+//
+// authTime is when the person authenticated, not the mint time (OIDC Core §2); zero means now.
+func (m *Minter) IDToken(userID, clientID, authEventID string, authTime int64, contact Contact, sid ...string) (string, error) {
 	now := time.Now()
+	if authTime <= 0 {
+		authTime = now.Unix()
+	}
 	claims := jwt.MapClaims{
 		"iss":       m.issuer,
 		"sub":       userID,
 		"aud":       clientID,
 		"token_use": TokenUseID,
-		"auth_time": now.Unix(),
+		"auth_time": authTime,
 		"iat":       now.Unix(),
 		"exp":       now.Add(IDTokenTTL).Unix(),
 	}
 	addAuthEvent(claims, authEventID)
 	addContact(claims, contact)
+	addSID(claims, sid)
 	return SignRS256(claims, m.signer, m.kid)
 }
 
@@ -206,6 +260,27 @@ func VerifyJWTInto(tokenString string, keySet jwk.Set, dest jwt.Claims) error {
 		return fmt.Errorf("token is expired")
 	}
 	return nil
+}
+
+// VerifyJWTExpiredOK verifies signature + kid + RSA-alg and returns the claims WITHOUT
+// enforcing expiry. It exists for exactly one caller shape: a token presented as a HINT
+// rather than as a credential.
+//
+// Nothing is authorized on the strength of this. The caller still has to hold a real
+// credential (a session cookie, in the only current use) and must compare the claims it
+// finds here against that credential. What the signature check still proves is that WE
+// minted the token, which is all a hint is asked to establish.
+//
+// Never call this where a token grants access. For that, expiry IS the security property
+// and VerifyJWT is the function.
+func VerifyJWTExpiredOK(tokenString string, keySet jwk.Set) (jwt.MapClaims, error) {
+	claims := jwt.MapClaims{}
+	// WithoutClaimsValidation skips the registered-claim checks (exp, nbf, iat) but keeps
+	// signature and algorithm verification, which is the whole point.
+	if _, err := jwt.ParseWithClaims(tokenString, claims, rs256KeyFunc(keySet), jwt.WithoutClaimsValidation()); err != nil {
+		return nil, fmt.Errorf("failed to verify token: %w", err)
+	}
+	return claims, nil
 }
 
 // VerifyJWT verifies an RS256 token against keySet and returns the parsed claims as a map.
