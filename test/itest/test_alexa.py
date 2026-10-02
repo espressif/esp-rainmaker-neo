@@ -236,3 +236,65 @@ def test_alexa_control(user_with_1_dev_each_in_2_groups, alexa_region_arn):
 
     device1.update_named_shadow(shadow_name, {"Light1": {"Brightness": 50}})
     validate_report_state_directive("Light1", [{"name": "brightness", "value": 50}])
+
+
+# ---------------------------------------------------------------------------
+# Rename. Alexa learns friendlyName from a discovery response only, exactly like
+# SmartThings: a ChangeReport carries capability properties and no name. The
+# adapter already emits AddOrUpdateReport when a node joins a group
+# (marshalGroupMembership), but nothing fires it on a rename, so the name in the
+# Alexa app goes stale. This test documents that gap; it is expected to fail
+# until the rename path is wired up the way SmartThings' discoveryCallback is.
+# ---------------------------------------------------------------------------
+@pytest.mark.xdist_group("env_mut")
+@pytest.mark.xfail(reason="Alexa has no rename path: no AddOrUpdateReport is emitted for esp.param.name",
+                   strict=False)
+def test_alexa_rename_emits_add_or_update_report(user_with_1_dev_each_in_2_groups, webhook_mock):
+    """Renaming a device should reach Alexa as an AddOrUpdateReport."""
+    import time
+    import requests
+
+    webhook_mock_base_url, webhook_mock_api_key = webhook_mock
+    device1, _device2, group1_id, _group2_id, test_user1 = user_with_1_dev_each_in_2_groups
+
+    test_user1.get_aws_credentials()
+    assert device1.connect(), "Failed to connect to MQTT"
+    shadow_name = f"params-{group1_id}"
+    assert device1.shadow_connect([shadow_name]), "Failed to connect to shadow"
+    device1.update_named_shadow(shadow_name, {
+        "online": True,
+        "Light1": {"Power": False, "Brightness": 0, "Name": "Light1"},
+    })
+
+    device1.update_named_shadow(shadow_name, {
+        "Light1": {"Name": "Reading Lamp"},
+        "notify": {"version": 12, "alexa": True},
+    })
+
+    def check():
+        response = requests.get(
+            f"{webhook_mock_base_url}/v1/alexa/validate",
+            params={"uuid": test_user1.sub},
+            headers={"x-api-key": webhook_mock_api_key})
+        assert response.status_code == 200, \
+            f"Failed to read Alexa notification: {response.text}"
+        payload = response.json()
+        assert payload is not None, "No Alexa notification captured"
+
+        header = payload.get("event", {}).get("header", {})
+        assert header.get("name") == "AddOrUpdateReport", \
+            f"Expected AddOrUpdateReport after a rename, got {header.get('name')}"
+
+        endpoints = payload["event"]["payload"].get("endpoints") or []
+        names = [e.get("friendlyName") for e in endpoints]
+        assert "Reading Lamp" in names, f"Renamed device not in AddOrUpdateReport: {names}"
+
+    last_error = None
+    for _ in range(3):
+        try:
+            check()
+            return
+        except AssertionError as e:
+            last_error = e
+            time.sleep(5)
+    raise last_error

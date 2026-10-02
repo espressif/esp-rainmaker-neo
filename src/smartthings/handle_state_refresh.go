@@ -213,11 +213,18 @@ func mapShadowToSTStates(deviceCfg *config.NodeCfgDevice, deviceData map[string]
 
 		case ParamTypeCCT:
 			if cct, ok := toNumericValue(value); ok {
+				// st.colorTemperature declares a minimum of 1, and SmartThings rejects
+				// the entire response with BAD-RESPONSE if any attribute is below it —
+				// so one light reporting CCT 0 loses every other state in the batch.
+				kelvin := int(cct)
+				if kelvin < minColorTemperatureK {
+					kelvin = minColorTemperatureK
+				}
 				states = append(states, STState{
 					Component:  ComponentMain,
 					Capability: CapabilityColorTemperature,
 					Attribute:  AttributeColorTemperature,
-					Value:      int(cct),
+					Value:      kelvin,
 					Unit:       "K",
 				})
 			}

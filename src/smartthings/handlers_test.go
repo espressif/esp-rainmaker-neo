@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_details_db"
@@ -196,6 +197,37 @@ func stRequest(userID, interactionType string) STRequest {
 	}
 }
 
+// statePayloadIn returns the stateCallback from a shadow-update Marshal result, which
+// is a batch so that a rename can carry a discoveryCallback alongside it. Returns nil
+// when the batch has no stateCallback.
+func statePayloadIn(out interface{}) *STStateCallbackPayload {
+	payloads, ok := out.([]stCallbackPayload)
+	if !ok {
+		return nil
+	}
+	for _, p := range payloads {
+		if state, ok := p.(*STStateCallbackPayload); ok {
+			return state
+		}
+	}
+	return nil
+}
+
+// discoveryPayloadIn returns the discoveryCallback from a shadow-update Marshal result,
+// or nil when the batch has none.
+func discoveryPayloadIn(out interface{}) *STDiscoveryCallbackPayload {
+	payloads, ok := out.([]stCallbackPayload)
+	if !ok {
+		return nil
+	}
+	for _, p := range payloads {
+		if discovery, ok := p.(*STDiscoveryCallbackPayload); ok {
+			return discovery
+		}
+	}
+	return nil
+}
+
 // findDeviceState returns the device state matching the externalDeviceId, or nil.
 func findDeviceState(states []STDeviceState, externalDeviceID string) *STDeviceState {
 	for i := range states {
@@ -253,6 +285,12 @@ var _ = Describe("SmartThings handlers", func() {
 
 		mockHTTP = mock.NewMockHTTPClient()
 		httpclient.Set(mockHTTP)
+
+		// The grant-request limiter is process-wide and outlives a spec, so a later
+		// spec would silently inherit an earlier one's ask and stop requesting.
+		grantAskedMu.Lock()
+		grantAskedAt = map[string]time.Time{}
+		grantAskedMu.Unlock()
 	})
 
 	AfterEach(func() {
@@ -267,6 +305,34 @@ var _ = Describe("SmartThings handlers", func() {
 			resp, err := HandleDiscovery(ctx, stRequest(userID, InteractionDiscoveryRequest))
 			Expect(err).To(BeNil())
 			Expect(resp.RequestGrantCallbackAccess).To(BeTrue())
+		})
+
+		It("does not repeat the grant request on a second discovery in the same window", func() {
+			// Each request makes SmartThings re-run the grant flow and re-provision the
+			// user's devices, so repeating it on every refresh leaves a duplicate tile
+			// behind each time the grant then fails.
+			first, err := HandleDiscovery(ctx, stRequest(userID, InteractionDiscoveryRequest))
+			Expect(err).To(BeNil())
+			Expect(first.RequestGrantCallbackAccess).To(BeTrue())
+
+			second, err := HandleDiscovery(ctx, stRequest(userID, InteractionDiscoveryRequest))
+			Expect(err).To(BeNil())
+			Expect(second.RequestGrantCallbackAccess).To(BeFalse())
+			Expect(second.Devices).To(HaveLen(len(first.Devices)))
+		})
+
+		It("asks again once the grant-request window has elapsed", func() {
+			first, err := HandleDiscovery(ctx, stRequest(userID, InteractionDiscoveryRequest))
+			Expect(err).To(BeNil())
+			Expect(first.RequestGrantCallbackAccess).To(BeTrue())
+
+			grantAskedMu.Lock()
+			grantAskedAt[userID] = time.Now().Add(-grantRequestInterval - time.Minute)
+			grantAskedMu.Unlock()
+
+			second, err := HandleDiscovery(ctx, stRequest(userID, InteractionDiscoveryRequest))
+			Expect(err).To(BeNil())
+			Expect(second.RequestGrantCallbackAccess).To(BeTrue())
 		})
 
 		It("does not ask for a callback grant when the user already has tokens", func() {
@@ -973,8 +1039,8 @@ var _ = Describe("SmartThings handlers", func() {
 				Expect(err).To(BeNil())
 				Expect(out).NotTo(BeNil())
 
-				payload, ok := out.(*STStateCallbackPayload)
-				Expect(ok).To(BeTrue())
+				payload := statePayloadIn(out)
+				Expect(payload).NotTo(BeNil())
 				Expect(payload.Headers.Schema).To(Equal("st-schema"))
 				Expect(payload.Headers.Version).To(Equal("1.0"))
 				Expect(payload.Headers.InteractionType).To(Equal(InteractionStateCallback))
@@ -989,6 +1055,126 @@ var _ = Describe("SmartThings handlers", func() {
 				health, ok := stateValue(ds.States, CapabilityHealthCheck, "healthStatus")
 				Expect(ok).To(BeTrue())
 				Expect(health).To(Equal("online"))
+			})
+
+			It("sends a discoveryCallback alongside the state when a device is renamed", func() {
+				// esp.param.name maps to no capability, so without the extra callback a
+				// rename travels as a stateCallback carrying only healthCheck and the
+				// tile keeps its old name indefinitely.
+				online := true
+				seedReportedShadow(switchNodeID, testGroup.GroupID, map[string]interface{}{
+					"Switch": map[string]interface{}{"power": true, "name": "Kitchen Lamp"},
+				})
+
+				notif := &notification.Notification{
+					NotificationType: notification.NotificationTypeShadowUpdate,
+					GroupID:          testGroup.GroupID,
+					ShadowUpdateData: &notification.ShadowUpdateNotification{
+						NodeID: switchNodeID,
+						Delta: node.ReportedOrDesiredShadow{
+							Params: map[string]interface{}{"Switch": map[string]interface{}{"name": "Kitchen Lamp"}},
+						},
+						State: node.ReportedOrDesiredShadow{
+							Online: &online,
+							Params: map[string]interface{}{"Switch": map[string]interface{}{"power": true, "name": "Kitchen Lamp"}},
+						},
+					},
+				}
+
+				out, err := stNotif.Marshal(notif)
+				Expect(err).To(BeNil())
+
+				discovery := discoveryPayloadIn(out)
+				Expect(discovery).NotTo(BeNil())
+				Expect(discovery.Headers.InteractionType).To(Equal(InteractionDiscoveryCallback))
+				Expect(discovery.Devices).To(HaveLen(1))
+				Expect(discovery.Devices[0].ExternalDeviceID).To(Equal(GetDeviceID(switchNodeID, "Switch")))
+				Expect(discovery.Devices[0].FriendlyName).To(Equal("Kitchen Lamp"))
+			})
+
+			It("sends no discoveryCallback when the delta renames nothing", func() {
+				online := true
+				notif := &notification.Notification{
+					NotificationType: notification.NotificationTypeShadowUpdate,
+					GroupID:          testGroup.GroupID,
+					ShadowUpdateData: &notification.ShadowUpdateNotification{
+						NodeID: switchNodeID,
+						Delta: node.ReportedOrDesiredShadow{
+							Params: map[string]interface{}{"Switch": map[string]interface{}{"power": false}},
+						},
+						State: node.ReportedOrDesiredShadow{
+							Online: &online,
+							Params: map[string]interface{}{"Switch": map[string]interface{}{"power": false}},
+						},
+					},
+				}
+
+				out, err := stNotif.Marshal(notif)
+				Expect(err).To(BeNil())
+				Expect(statePayloadIn(out)).NotTo(BeNil())
+				Expect(discoveryPayloadIn(out)).To(BeNil())
+			})
+
+			It("floors colorTemperature at the SmartThings minimum", func() {
+				// st.colorTemperature declares a minimum of 1; below it SmartThings
+				// rejects the whole response with BAD-RESPONSE, losing every other state.
+				online := true
+				notif := &notification.Notification{
+					NotificationType: notification.NotificationTypeShadowUpdate,
+					GroupID:          testGroup.GroupID,
+					ShadowUpdateData: &notification.ShadowUpdateNotification{
+						NodeID: lightNodeID,
+						Delta: node.ReportedOrDesiredShadow{
+							Params: map[string]interface{}{"Light": map[string]interface{}{"cct": 0}},
+						},
+						State: node.ReportedOrDesiredShadow{
+							Online: &online,
+							Params: map[string]interface{}{"Light": map[string]interface{}{"cct": 0}},
+						},
+					},
+				}
+
+				out, err := stNotif.Marshal(notif)
+				Expect(err).To(BeNil())
+
+				payload := statePayloadIn(out)
+				Expect(payload).NotTo(BeNil())
+				ds := findDeviceState(payload.DeviceState, GetDeviceID(lightNodeID, "Light"))
+				Expect(ds).NotTo(BeNil())
+
+				cct, ok := stateValue(ds.States, CapabilityColorTemperature, AttributeColorTemperature)
+				Expect(ok).To(BeTrue())
+				Expect(cct).To(Equal(minColorTemperatureK))
+			})
+
+			It("leaves a colorTemperature above the minimum unchanged", func() {
+				online := true
+				notif := &notification.Notification{
+					NotificationType: notification.NotificationTypeShadowUpdate,
+					GroupID:          testGroup.GroupID,
+					ShadowUpdateData: &notification.ShadowUpdateNotification{
+						NodeID: lightNodeID,
+						Delta: node.ReportedOrDesiredShadow{
+							Params: map[string]interface{}{"Light": map[string]interface{}{"cct": 3000}},
+						},
+						State: node.ReportedOrDesiredShadow{
+							Online: &online,
+							Params: map[string]interface{}{"Light": map[string]interface{}{"cct": 3000}},
+						},
+					},
+				}
+
+				out, err := stNotif.Marshal(notif)
+				Expect(err).To(BeNil())
+
+				payload := statePayloadIn(out)
+				Expect(payload).NotTo(BeNil())
+				ds := findDeviceState(payload.DeviceState, GetDeviceID(lightNodeID, "Light"))
+				Expect(ds).NotTo(BeNil())
+
+				cct, ok := stateValue(ds.States, CapabilityColorTemperature, AttributeColorTemperature)
+				Expect(ok).To(BeTrue())
+				Expect(cct).To(Equal(3000))
 			})
 
 			It("reports healthCheck alone when only connectivity changed", func() {
@@ -1010,8 +1196,8 @@ var _ = Describe("SmartThings handlers", func() {
 				Expect(err).To(BeNil())
 				Expect(out).NotTo(BeNil())
 
-				payload, ok := out.(*STStateCallbackPayload)
-				Expect(ok).To(BeTrue())
+				payload := statePayloadIn(out)
+				Expect(payload).NotTo(BeNil())
 
 				ds := findDeviceState(payload.DeviceState, GetDeviceID(switchNodeID, "Switch"))
 				Expect(ds).NotTo(BeNil())
@@ -1039,8 +1225,8 @@ var _ = Describe("SmartThings handlers", func() {
 				out, err := stNotif.Marshal(notif)
 				Expect(err).To(BeNil())
 
-				payload, ok := out.(*STStateCallbackPayload)
-				Expect(ok).To(BeTrue())
+				payload := statePayloadIn(out)
+				Expect(payload).NotTo(BeNil())
 
 				ds := findDeviceState(payload.DeviceState, GetDeviceID(switchNodeID, "Switch"))
 				Expect(ds).NotTo(BeNil())
@@ -1068,7 +1254,8 @@ var _ = Describe("SmartThings handlers", func() {
 
 				out, err := stNotif.Marshal(notif)
 				Expect(err).To(BeNil())
-				payload := out.(*STStateCallbackPayload)
+				payload := statePayloadIn(out)
+				Expect(payload).NotTo(BeNil())
 				ds := findDeviceState(payload.DeviceState, GetDeviceID(switchNodeID, "Switch"))
 				Expect(ds).NotTo(BeNil())
 				health, ok := stateValue(ds.States, CapabilityHealthCheck, "healthStatus")
@@ -1141,6 +1328,7 @@ var _ = Describe("SmartThings handlers", func() {
 				out, err := stNotif.Marshal(notif)
 				Expect(err).To(BeNil())
 
+				// Group membership stays a single payload; only shadow updates batch.
 				payload, ok := out.(*STStateCallbackPayload)
 				Expect(ok).To(BeTrue())
 				Expect(payload.Headers.InteractionType).To(Equal(InteractionStateCallback))

@@ -44,3 +44,31 @@ func TestStepColorTemperatureBounds(t *testing.T) {
 		}
 	}
 }
+
+func TestPowerReportSurvivesNonBoolParam(t *testing.T) {
+	h := &PowerControllerHandler{}
+
+	// Shadow params are device-controlled: a node reporting a string here used to
+	// panic the whole notification fan-out, taking Alexa, GVA and SmartThings with it.
+	for _, value := range []interface{}{"True", 1, nil, map[string]interface{}{}} {
+		props := ContextPropertyList{}
+		err := h.HandleReport(map[string]interface{}{"power": value}, "power", nil, &props)
+		if err != nil {
+			t.Fatalf("HandleReport(power=%#v): %v", value, err)
+		}
+		if len(props) != 0 {
+			t.Errorf("power=%#v must not be reported, got %v", value, props)
+		}
+	}
+
+	props := ContextPropertyList{}
+	if err := h.HandleReport(map[string]interface{}{"power": true}, "power", nil, &props); err != nil {
+		t.Fatalf("HandleReport(power=true): %v", err)
+	}
+	if len(props) != 1 {
+		t.Fatalf("power=true must be reported, got %v", props)
+	}
+	if props[0].Value != "ON" {
+		t.Errorf("power=true must report ON, got %v", props[0].Value)
+	}
+}

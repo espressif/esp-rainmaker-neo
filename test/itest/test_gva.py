@@ -698,3 +698,78 @@ def test_gva_error_handling(user_with_1_dev_each_in_2_groups):
     assert query_response == expected
 
     print("GVA error handling test completed successfully!")
+
+
+# ---------------------------------------------------------------------------
+# Rename. Google only learns a device's name from a fresh SYNC, so a rename is
+# dispatched as a RequestSync alongside the Report State rather than as state.
+# ---------------------------------------------------------------------------
+def _read_gva_raw_notification(base_url, api_key, user_sub):
+    """Return the whole record the mock captured, not just its payload field.
+
+    The mock stores the request body verbatim (plus gva: true). A Report State
+    body carries a "payload" key; a RequestSync body is {agentUserId, async} and
+    has none, so digging into "payload" the way _read_gva_notification does
+    discards exactly the record this test is looking for.
+    """
+    response = requests.get(
+        f"{base_url}/v1/gva/validate",
+        params={"uuid": user_sub},
+        headers={"x-api-key": api_key})
+    assert response.status_code == 200, \
+        f"Failed to read GVA notification for user {user_sub}: {response.text}"
+    notification_data = response.json()
+    assert notification_data is not None, f"No GVA notification for user {user_sub}"
+    return notification_data
+
+
+@pytest.mark.xdist_group("env_mut")
+def test_gva_rename_requests_sync(user_with_1_dev_each_in_2_groups, webhook_mock):
+    """Renaming a device dispatches a RequestSync to Google.
+
+    The Report State that accompanies it carries no name, so without the
+    RequestSync the Home app would keep showing the old one.
+    """
+    webhook_mock_base_url, webhook_mock_api_key = webhook_mock
+    device1, _device2, group1_id, _group2_id, test_user1 = user_with_1_dev_each_in_2_groups
+
+    test_user1.get_aws_credentials()
+    assert device1.connect(), "Failed to connect to MQTT"
+    shadow_name = f"params-{group1_id}"
+    assert device1.shadow_connect([shadow_name]), "Failed to connect to shadow"
+    device1.update_named_shadow(shadow_name, {
+        "online": True,
+        "Light1": {"Power": False, "Brightness": 0, "Name": "Light1"},
+    })
+
+    # SYNC records the account link. Nothing is dispatched to an unlinked user --
+    # filterLinkedUsers drops them and the send stops at "no GVA-linked users
+    # among the recipients".
+    test_user1.gva_discover_devices()
+
+    device1.update_named_shadow(shadow_name, {
+        "Light1": {"Name": "Reading Lamp"},
+        "notify": {"version": 11, "gva": True},
+    })
+
+    def check():
+        record = _read_gva_raw_notification(
+            webhook_mock_base_url, webhook_mock_api_key, test_user1.sub)
+        assert record.get("agentUserId") == test_user1.sub, \
+            f"Last GVA record is not for this user: {record}"
+        # The Report State fires first and the RequestSync overwrites it ~150ms
+        # later, so a read landing between the two sees the report; retry.
+        assert "async" in record and "payload" not in record, \
+            f"Expected a RequestSync, got a Report State: {record}"
+
+    last_error = None
+    for _ in range(3):
+        try:
+            check()
+            break
+        except AssertionError as e:
+            last_error = e
+            print(f"GVA RequestSync validation retrying: {e}")
+            time.sleep(5)
+    else:
+        raise last_error

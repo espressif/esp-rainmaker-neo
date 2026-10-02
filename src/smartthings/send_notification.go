@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	alexa_skill "github.com/espressif/esp-rainmaker-neo/src/alexa"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_integration_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification/integrationauth"
@@ -71,8 +72,15 @@ func (s *STNotification) SendTo(notif interface{}, userIDs []string) error {
 		return nil
 	}
 
-	callbackPayload, ok := notif.(stCallbackPayload)
-	if !ok {
+	// A rename needs both a stateCallback and a discoveryCallback, so Marshal may
+	// return several payloads for one shadow update; everything else returns one.
+	var callbackPayloads []stCallbackPayload
+	switch payload := notif.(type) {
+	case []stCallbackPayload:
+		callbackPayloads = payload
+	case stCallbackPayload:
+		callbackPayloads = []stCallbackPayload{payload}
+	default:
 		return rmerror.NewRMError(nil, "failed to cast notification to a SmartThings callback payload")
 	}
 
@@ -102,12 +110,14 @@ func (s *STNotification) SendTo(notif interface{}, userIDs []string) error {
 				callbackURL = s.mockURL
 			}
 
-			if err := sendCallback(callbackPayload, tokenData.AccessToken, callbackURL); err != nil {
-				rlog.Error(ctx).Err(err).Str("userID", userID).Msg("failed to send callback, continuing with remaining users")
-				continue
-			}
+			for _, callbackPayload := range callbackPayloads {
+				if err := sendCallback(callbackPayload, tokenData.AccessToken, callbackURL); err != nil {
+					rlog.Error(ctx).Err(err).Str("userID", userID).Msg("failed to send callback, continuing with remaining users")
+					continue
+				}
 
-			rlog.Debug(ctx).Str("userID", userID).Msg("successfully sent SmartThings callback")
+				rlog.Debug(ctx).Str("userID", userID).Msg("successfully sent SmartThings callback")
+			}
 		}
 	}
 
@@ -198,17 +208,57 @@ func (s *STNotification) Marshal(notif *notification.Notification) (interface{},
 		})
 	}
 
-	if len(deviceStates) == 0 {
+	// SmartThings learns friendlyName from a discovery response alone — esp.param.name
+	// maps to no capability, so a rename would otherwise emit a stateCallback carrying
+	// nothing but healthCheck and the tile would keep its old name forever. GVA solves
+	// the same problem with RequestSync (src/gva/send_notification.go:338); the ST Schema
+	// has no such flag, so send a discoveryCallback alongside. buildSTDevices resolves
+	// names from the reported shadow, which already holds the new one by now.
+	var payloads []stCallbackPayload
+
+	if len(deviceStates) > 0 {
+		payloads = append(payloads, &STStateCallbackPayload{
+			Headers:     newCallbackHeaders(InteractionStateCallback),
+			DeviceState: deviceStates,
+		})
+	}
+
+	if deltaRenamesDevice(shadowUpdate.Delta.Params, nodeCfg.Devices) {
+		if devices := buildSTDevices(rmngCtx, shadowUpdate.NodeID, notif.GroupID); len(devices) > 0 {
+			payloads = append(payloads, &STDiscoveryCallbackPayload{
+				Headers: newCallbackHeaders(InteractionDiscoveryCallback),
+				Devices: devices,
+			})
+		}
+	}
+
+	if len(payloads) == 0 {
 		rlog.Debug(context.TODO()).Msg("no changed device states to report for SmartThings, skipping")
 		return nil, nil
 	}
 
-	payload := &STStateCallbackPayload{
-		Headers:     newCallbackHeaders(InteractionStateCallback),
-		DeviceState: deviceStates,
-	}
+	return payloads, nil
+}
 
-	return payload, nil
+// deltaRenamesDevice reports whether the delta changed any device's esp.param.name.
+// Mirrors GVA's helper of the same name; both exist because a rename reaches the
+// assistant only through a fresh discovery, never through a state report.
+func deltaRenamesDevice(deltaParams map[string]interface{}, devices []config.NodeCfgDevice) bool {
+	for _, device := range devices {
+		deviceDelta, ok := deltaParams[device.ID].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		for _, param := range device.Params {
+			if param.Type != alexa_skill.RMParamName {
+				continue
+			}
+			if _, renamed := deviceDelta[param.ID]; renamed {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // marshalDeviceStates maps device shadow parameters to SmartThings capability states

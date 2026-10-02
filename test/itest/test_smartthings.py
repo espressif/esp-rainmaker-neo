@@ -1081,3 +1081,83 @@ def test_smartthings_device_removed_callback(user_with_1_dev_each_in_2_groups, w
 
     # Leave the pooled device where the other tests expect it.
     test_user1.do_user_node_assoc(device1, group1_id)
+
+
+# ---------------------------------------------------------------------------
+# Rename. esp.param.name maps to no SmartThings capability, so a rename cannot
+# travel as a stateCallback: SmartThings learns friendlyName from a discovery
+# response alone. The adapter therefore emits a discoveryCallback alongside the
+# state report, mirroring GVA's RequestSync.
+# ---------------------------------------------------------------------------
+def _assert_st_discovery_reported(base_url, api_key, callback_token, device_id, expected_name):
+    """Assert the mock captured a discoveryCallback naming device_id expected_name.
+
+    Same retry shape as _assert_st_reported: the callback travels
+    device -> shadow -> shadow_notify_rule -> notifications lambda -> mock.
+    """
+    def check():
+        payload = _read_st_notification(base_url, api_key, callback_token)
+        assert payload["headers"]["interactionType"] == "discoveryCallback", \
+            f"Not a discoveryCallback: {payload}"
+
+        devices = payload.get("devices") or []
+        match = [d for d in devices if d.get("externalDeviceId") == device_id]
+        assert match, f"Device {device_id} not in discoveryCallback: {payload}"
+        assert match[0].get("friendlyName") == expected_name, \
+            f"Expected friendlyName={expected_name}, got {match[0].get('friendlyName')}"
+
+    last_error = None
+    for _ in range(3):
+        try:
+            check()
+            return
+        except AssertionError as e:
+            last_error = e
+            print(f"SmartThings discoveryCallback validation retrying: {e}")
+            time.sleep(5)
+    raise last_error
+
+
+@pytest.mark.xdist_group("env_mut")
+def test_smartthings_rename_emits_discovery_callback(
+        user_with_1_dev_each_in_2_groups, webhook_mock, st_action_test_mode):
+    """Renaming a device reaches SmartThings as a discoveryCallback.
+
+    Without it the rename would emit a stateCallback carrying only healthCheck and
+    the tile would keep its old name indefinitely.
+    """
+    webhook_mock_base_url, webhook_mock_api_key = webhook_mock
+    if not ST_REGION_ARNS:
+        pytest.skip("No rmng-st-core regions in rmng-outputs.json")
+    region, arn = ST_REGION_ARNS[0]
+
+    device1, _device2, group1_id, _group2_id, test_user1 = user_with_1_dev_each_in_2_groups
+    test_user1.get_aws_credentials()
+
+    assert device1.connect(), "Failed to connect to MQTT"
+    shadow_name = f"params-{group1_id}"
+    assert device1.shadow_connect([shadow_name]), "Failed to connect to shadow"
+    device1.update_named_shadow(shadow_name, {
+        "online": True,
+        "Light1": {"Power": False, "Brightness": 0, "Name": "Light1"},
+    })
+
+    test_user1.st_discover_devices(lambda_arn=arn, region=region)
+
+    callback_token = f"st-rename-{test_user1.sub}"
+    test_user1.st_grant_callback(
+        callback_token,
+        f"{webhook_mock_base_url}/v1/smartthings/token",
+        f"{webhook_mock_base_url}/v1/smartthings/data",
+        lambda_arn=arn, region=region)
+
+    light1_id = st_external_device_id(device1.node_thing_name, "Light1")
+
+    device1.update_named_shadow(shadow_name, {
+        "Light1": {"Name": "Reading Lamp"},
+        "notify": {"version": 10, "smartthings": True},
+    })
+
+    _assert_st_discovery_reported(
+        webhook_mock_base_url, webhook_mock_api_key, callback_token,
+        light1_id, "Reading Lamp")
