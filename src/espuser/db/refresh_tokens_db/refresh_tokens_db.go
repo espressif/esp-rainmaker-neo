@@ -52,9 +52,22 @@ type FamilyEntry struct {
 	FamilyID     string `dynamodbav:"family_id,omitempty"`
 	Counter      int64  `dynamodbav:"counter"`
 	Scope        string `dynamodbav:"scope,omitempty"`
-	ExpiresOn    int64  `dynamodbav:"expires_on,omitempty"`
+	// Resource pins the audience of every access token this family will ever mint. The
+	// access token is renewed silently for as long as the login lasts, so a family that
+	// forgot it would start issuing tokens the resource server refuses, an hour after the
+	// login and nowhere near the cause. Empty on families minted before the field existed;
+	// those keep producing aud = client_id, which is what they always did.
+	Resource string `dynamodbav:"resource,omitempty"`
+	// SID names the browser session this login ran under (the sessions table's public id), so ending a session can end the refresh families created through it. Empty when the session write failed or the family predates sessions.
+	SID string `dynamodbav:"sid,omitempty"`
+	// AuthTime is the login's authentication time, so a refreshed ID token never claims a fresh sign-in; zero on older families.
+	AuthTime  int64 `dynamodbav:"auth_time,omitempty"`
+	ExpiresOn int64 `dynamodbav:"expires_on,omitempty"`
 	// RotatedAt (unix secs) bounds the reuse grace so a lost rotation response can be retried.
 	RotatedAt int64 `dynamodbav:"rotated_at,omitempty"`
+	// CreatedAt is when this application first got a token under this login. A sessions
+	// screen reads it as "connected since"; rotated_at is the "last used" beside it.
+	CreatedAt int64 `dynamodbav:"created_at,omitempty"`
 }
 
 func (e *FamilyEntry) GetHKey() string { return refreshTokensHashKey }
@@ -137,21 +150,11 @@ func (db *RefreshTokensDB) DeleteFamily(userID, clientID, familyID string) error
 }
 
 // DeleteAllForUser removes every family row for a user — "sign out everywhere" / compromise
-// response. One Query on the user partition, then a delete per family; no GSI.
+// response. The user partition listed, then a delete per family; no GSI.
 func (db *RefreshTokensDB) DeleteAllForUser(userID string) error {
-	keyCond := expression.Key(refreshTokensHashKey).Equal(expression.Value(userID))
-	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()
+	rows, err := db.ListByUser(userID)
 	if err != nil {
-		return rmerror.NewRMError(err, "failed to build expression")
-	}
-	rows, _, err := espdynamodb.DbQueryWithLoop(espdynamodb.QueryWithLoopInput[FamilyEntry]{
-		DBHandle:  &db.EspDB,
-		TableName: refreshTokensTableName,
-		Expr:      expr,
-		GetKey:    getLastEvaluatedKey,
-	})
-	if err != nil {
-		return rmerror.NewRMError(err, "failed to query user refresh token families")
+		return err
 	}
 	for i := range rows {
 		if err := db.DbDeleteItem(refreshTokensTableName, newFamilyKey(rows[i].UserID, rows[i].ClientID, rows[i].FamilyID)); err != nil {
@@ -166,4 +169,53 @@ func getLastEvaluatedKey(r FamilyEntry, _ ...string) map[string]types.AttributeV
 		refreshTokensHashKey:  &types.AttributeValueMemberS{Value: r.UserID},
 		refreshTokensRangeKey: &types.AttributeValueMemberS{Value: r.ClientFamily},
 	}
+}
+
+// ListByUser returns every refresh family a user holds -- one per application per login.
+// The base table is already partitioned by user_id, so this is a plain Query and needs no
+// index: "what am I signed in to" was always answerable, it is reaching the SESSION rows
+// that needed one.
+func (db *RefreshTokensDB) ListByUser(userID string) ([]FamilyEntry, error) {
+	keyCond := expression.Key(refreshTokensHashKey).Equal(expression.Value(userID))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()
+	if err != nil {
+		return nil, rmerror.NewRMError(err, "failed to build expression")
+	}
+	rows, _, err := espdynamodb.DbQueryWithLoop(espdynamodb.QueryWithLoopInput[FamilyEntry]{
+		DBHandle:  &db.EspDB,
+		TableName: refreshTokensTableName,
+		Expr:      expr,
+		GetKey:    getLastEvaluatedKey,
+	})
+	if err != nil {
+		return nil, rmerror.NewRMError(err, "failed to query user refresh token families")
+	}
+	return rows, nil
+}
+
+// DeleteBySID deletes every family created through one browser session, and reports how
+// many went. This is what makes one sign-out reach every product opened in that browser:
+// the session is the parent, the families are its children, and sid is the link already
+// stored on each row.
+//
+// Families with no sid are left alone. They predate sessions or were minted after a failed session write, and deleting a family we cannot prove belongs to this session would sign the user out of something they never asked about.
+func (db *RefreshTokensDB) DeleteBySID(userID, sid string) (int, error) {
+	if sid == "" {
+		return 0, nil
+	}
+	rows, err := db.ListByUser(userID)
+	if err != nil {
+		return 0, err
+	}
+	deleted := 0
+	for i := range rows {
+		if rows[i].SID != sid {
+			continue
+		}
+		if err := db.DbDeleteItem(refreshTokensTableName, newFamilyKey(rows[i].UserID, rows[i].ClientID, rows[i].FamilyID)); err != nil {
+			return deleted, rmerror.NewRMError(err, "failed to delete refresh token family")
+		}
+		deleted++
+	}
+	return deleted, nil
 }

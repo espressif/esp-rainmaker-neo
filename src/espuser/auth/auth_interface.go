@@ -26,9 +26,6 @@ type AuthService interface {
 	// GetUserFromProviderUsingToken verifies the token against its provider, then resolves the caller.
 	GetUserFromProviderUsingToken(ctx context.Context, token string) (UserInfo, error)
 
-	// VerifyToken validates signature and claims only, resolving no user.
-	VerifyToken(ctx context.Context, token string) error
-
 	// VerifyTokenPair validates an access token and an id token and requires both to come
 	// from one sign-in, for a caller handed the two halves by different routes.
 	VerifyTokenPair(ctx context.Context, accessToken, idToken string) error

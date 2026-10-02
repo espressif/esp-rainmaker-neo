@@ -34,9 +34,22 @@ type ClientWriteRequest struct {
 	ClientName   *string   `json:"client_name,omitempty"`
 	ClientType   string    `json:"client_type,omitempty"`
 	RedirectURIs *[]string `json:"redirect_uris,omitempty"`
-	GrantTypes   *[]string `json:"grant_types,omitempty"`
-	Scopes       *[]string `json:"scopes,omitempty"`
-	RequirePKCE  *bool     `json:"require_pkce,omitempty"`
+	// PostLogoutRedirectURIs is where /oauth2/logout may return the browser. Writable here
+	// for the same reason redirect_uris is: the logout endpoint validates against this list
+	// by exact match, so a list no API can populate makes the check unpassable and the
+	// post_logout_redirect_uri parameter dead -- every sign-out lands on the issuer's own
+	// page instead of the application that asked for it.
+	PostLogoutRedirectURIs *[]string `json:"post_logout_redirect_uris,omitempty"`
+	GrantTypes             *[]string `json:"grant_types,omitempty"`
+	Scopes                 *[]string `json:"scopes,omitempty"`
+	// AllowedResources are the RFC 8707 resource identifiers this client may request a
+	// token for. Absent means none -- never "any".
+	AllowedResources *[]string `json:"allowed_resources,omitempty"`
+	// Which identity providers this client offers at login. Absent means all of them.
+	AllowedProviders *[]string `json:"allowed_providers,omitempty"`
+	RequirePKCE      *bool     `json:"require_pkce,omitempty"`
+	// FirstParty marks a client we ship ourselves; only a first-party client may manage a user's own sessions.
+	FirstParty bool `json:"first_party,omitempty"`
 }
 
 // requireAdmin gates on the token verifying against the admin user pool via auth.RequireAdmin, mapping its errors to status codes.
@@ -63,13 +76,17 @@ func handleCreate(ctx context.Context, request events.APIGatewayProxyRequest) (e
 	}
 
 	result, err := clientsService(ctx).Create(clients.CreateInput{
-		ClientID:     req.ClientID,
-		ClientName:   derefStr(req.ClientName),
-		ClientType:   req.ClientType,
-		RedirectURIs: derefSlice(req.RedirectURIs),
-		GrantTypes:   derefSlice(req.GrantTypes),
-		Scopes:       derefSlice(req.Scopes),
-		RequirePKCE:  req.RequirePKCE,
+		ClientID:               req.ClientID,
+		ClientName:             derefStr(req.ClientName),
+		ClientType:             req.ClientType,
+		RedirectURIs:           derefSlice(req.RedirectURIs),
+		PostLogoutRedirectURIs: derefSlice(req.PostLogoutRedirectURIs),
+		GrantTypes:             derefSlice(req.GrantTypes),
+		Scopes:                 derefSlice(req.Scopes),
+		AllowedResources:       derefSlice(req.AllowedResources),
+		AllowedProviders:       derefSlice(req.AllowedProviders),
+		RequirePKCE:            req.RequirePKCE,
+		FirstParty:             req.FirstParty,
 	})
 	if err != nil {
 		// A validation failure or a duplicate client_id is a 400 (client's fault).
@@ -103,11 +120,15 @@ func handlePut(ctx context.Context, request events.APIGatewayProxyRequest) (even
 
 	// PUT is a full replace: the body is the complete desired state of the mutable fields.
 	client, err := clientsService(ctx).Update(clientID(request), clients.UpdateInput{
-		ClientName:   derefStr(req.ClientName),
-		RedirectURIs: derefSlice(req.RedirectURIs),
-		GrantTypes:   derefSlice(req.GrantTypes),
-		Scopes:       derefSlice(req.Scopes),
-		RequirePKCE:  req.RequirePKCE,
+		ClientName:             derefStr(req.ClientName),
+		RedirectURIs:           derefSlice(req.RedirectURIs),
+		PostLogoutRedirectURIs: derefSlice(req.PostLogoutRedirectURIs),
+		GrantTypes:             derefSlice(req.GrantTypes),
+		Scopes:                 derefSlice(req.Scopes),
+		AllowedResources:       derefSlice(req.AllowedResources),
+		AllowedProviders:       derefSlice(req.AllowedProviders),
+		RequirePKCE:            req.RequirePKCE,
+		FirstParty:             req.FirstParty,
 	})
 	if err != nil {
 		if errors.Is(err, oauth_clients_db.ErrOAuthClientNotFound) {

@@ -18,12 +18,14 @@ USER_TABLE_NAMES = {
     'AUTH_FLOWS': 'espuser-auth-flows',
     'ADMIN_CONFIG': 'espuser-admin-config',
     'IDENTITY_PROVIDERS': 'espuser-identity-providers',
+    'SESSIONS': 'espuser-sessions',
 }
 
 USER_INDEX_NAMES = {
     'USER_DETAILS_EMAIL': 'espuser-user-details-by-email',
     'USER_DETAILS_PHONE': 'espuser-user-details-by-phone',
     'AUTH_FLOWS_BY_CODE': 'espuser-auth-flows-by-code',
+    'SESSIONS_BY_USER': 'espuser-sessions-by-user',
 }
 
 # Mapping from index name to table name (logical key references; unchanged)
@@ -69,7 +71,7 @@ USER_SSM_PARAMETERS = {
 # the registry only accepts authorization_code/refresh_token grants.
 SEEDED_OAUTH_CLIENTS = [
     {'client_id': 'user-pool-client', 'client_name': 'RainMaker Client', 'client_type': 'public',
-     'grant_types': ['authorization_code', 'refresh_token'], 'require_pkce': True},
+     'grant_types': ['authorization_code', 'refresh_token'], 'require_pkce': True, 'first_party': True},
     {'client_id': 'va-client', 'client_name': 'Voice Assistant', 'client_type': 'confidential',
      'grant_types': ['authorization_code', 'refresh_token']},
     # MCP OAuth proxy: confidential client (secret-authenticated at the token endpoint). Its callback

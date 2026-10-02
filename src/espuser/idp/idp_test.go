@@ -218,6 +218,37 @@ var _ = Describe("OIDCProvider.HandleCallback", func() {
 		Expect(id.ExternalSub).To(Equal("cog-sub-1"))
 	})
 
+	It("inherits auth_time from the upstream id token — the session must never claim a fresher authentication", func() {
+		claims := baseClaims()
+		authTime := time.Now().Add(-4 * time.Hour).Unix() // upstream reused its own session
+		claims["auth_time"] = authTime
+		claims["amr"] = []string{"pwd", "mfa"}
+		claims["acr"] = "urn:example:l2"
+		tok, jwks := signedIDToken(priv, claims)
+		id, err := provider(tok, jwks).HandleCallback(context.Background(), "code", UpstreamLeg{Nonce: nonce})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(id.AuthTime).To(Equal(authTime))
+		Expect(id.AMR).To(Equal([]string{"pwd", "mfa"}))
+		Expect(id.ACR).To(Equal("urn:example:l2"))
+	})
+
+	It("falls back to iat when the provider omits auth_time (the claim is optional)", func() {
+		claims := baseClaims() // carries iat = now, no auth_time
+		tok, jwks := signedIDToken(priv, claims)
+		id, err := provider(tok, jwks).HandleCallback(context.Background(), "code", UpstreamLeg{Nonce: nonce})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(id.AuthTime).To(Equal(claims["iat"]))
+	})
+
+	It("tolerates a lone-string amr (provider quirk)", func() {
+		claims := baseClaims()
+		claims["amr"] = "pwd"
+		tok, jwks := signedIDToken(priv, claims)
+		id, err := provider(tok, jwks).HandleCallback(context.Background(), "code", UpstreamLeg{Nonce: nonce})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(id.AMR).To(Equal([]string{"pwd"}))
+	})
+
 	It("rejects a nonce mismatch (replay/injection guard)", func() {
 		tok, jwks := signedIDToken(priv, baseClaims())
 		_, err := provider(tok, jwks).HandleCallback(context.Background(), "code", UpstreamLeg{Nonce: "different"})

@@ -4,109 +4,97 @@
 
 package main
 
-// providerLogoDataURI is the logo drawn on every provider button. It is a data URI so the
-// page stays self-contained under a CSP that allows no remote origin. One image serves all
-// providers until the registry carries a per-provider logo.
-const providerLogoDataURI = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMjMyZjNlIiBzdHJva2Utd2lkdGg9IjEuNiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48cGF0aCBkPSJNMTIgMkw0IDZ2NmMwIDUgMy40IDguNCA4IDEwIDQuNi0xLjYgOC01IDgtMTBWNnoiLz48cGF0aCBkPSJNOSAxMmwyIDIgNC00Ii8+PC9zdmc+"
+import (
+	"bytes"
+	_ "embed"
+	"encoding/json"
+	"html/template"
+)
 
-// providerChooserHTML is one provider button: %s = href, %s = logo data URI, %s = display name.
-const providerChooserHTML = `    <a class="provider" href="%s"><img src="%s" alt="" width="20" height="20">%s</a>
-`
+// The page is embedded rather than fetched: one self-contained response under a CSP that allows no remote origin keeps a third-party outage or a compromised CDN out of the page where a sign-in credential is entered.
+//
+//go:embed templates/login.html
+var loginTemplateSrc string
 
-// loginPageHTML is the login UI: a button per federated provider, plus the passwordless
-// email/phone -> /v1/auth/otp/initiate -> code -> /v1/auth/otp/verify form, which navigates to the
-// redirect_to it returns. %s order: the CSP nonce, the provider buttons block, the injected flow id.
-const loginPageHTML = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sign in</title>
-<style>
-  body { font-family: system-ui, sans-serif; max-width: 22rem; margin: 4rem auto; padding: 0 1rem; }
-  h1 { font-size: 1.25rem; }
-  input, button { width: 100%%; padding: .6rem; margin: .35rem 0; font-size: 1rem; box-sizing: border-box; }
-  button { cursor: pointer; }
-  .hidden { display: none; }
-  .err { color: #b00020; min-height: 1.2rem; font-size: .9rem; }
-  .muted { color: #666; font-size: .85rem; }
-  .provider { display: flex; align-items: center; justify-content: center; gap: .5rem;
-              padding: .6rem; margin: .35rem 0; border: 1px solid #ccc; border-radius: .25rem;
-              color: inherit; text-decoration: none; font-size: 1rem; }
-  .provider:hover { background: #f4f4f4; }
-  .sep { display: flex; align-items: center; gap: .5rem; color: #888; font-size: .8rem; margin: 1rem 0 .25rem; }
-  .sep::before, .sep::after { content: ""; flex: 1; border-top: 1px solid #ddd; }
-</style>
-</head>
-<body>
-  <h1>Sign in</h1>
-%s  <form id="identifier-form">
-    <label for="username">Email or phone</label>
-    <input id="username" name="username" type="text" autocomplete="username" autofocus required>
-    <button type="submit">Continue</button>
-  </form>
-  <form id="otp-form" class="hidden">
-    <p class="muted">Enter the 6-digit code we sent you.</p>
-    <input id="code" name="code" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" required>
-    <button type="submit">Verify</button>
-  </form>
-  <p id="error" class="err"></p>
-<script nonce="%s">
-(function () {
-  // Injected server-side from the HttpOnly flow cookie (not readable via document.cookie).
-  var flowId = %s;
-  var idForm = document.getElementById('identifier-form');
-  var otpForm = document.getElementById('otp-form');
-  var errEl = document.getElementById('error');
+//go:embed templates/login.css
+var loginCSS string
 
-  // The page is served at <base>/oauth2/login (base = the API Gateway stage, e.g. /prod, or
-  // empty on a custom domain). Prefix API calls with that base so a stage prefix is preserved.
-  var base = window.location.pathname.replace(/\/oauth2\/login\/?$/, '');
+// The wordmark is inlined so it inherits currentColor and works on either theme.
+//
+//go:embed templates/espressif.svg
+var espressifWordmark string
 
-  function fail(msg) { errEl.textContent = msg || 'Something went wrong. Please try again.'; }
+//go:embed templates/error.html
+var errorTemplateSrc string
 
-  if (!flowId) { fail('Your session has expired. Please start again.'); idForm.classList.add('hidden'); }
+// loginTemplate is parsed once per cold start. html/template escapes by context, so a display
+// name or a href reaching the page cannot break out of its element -- escaping is the
+// compiler's job here rather than something each call site has to remember.
+var loginTemplate = template.Must(template.New("login").Parse(loginTemplateSrc))
 
-  idForm.addEventListener('submit', function (e) {
-    e.preventDefault(); errEl.textContent = '';
-    var username = document.getElementById('username').value.trim();
-    fetch(base + '/v1/auth/otp/initiate', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ flow_id: flowId, username: username })
-    }).then(function (r) {
-      if (!r.ok) throw new Error();
-      idForm.classList.add('hidden'); otpForm.classList.remove('hidden');
-      document.getElementById('code').focus();
-    }).catch(function () { fail('Could not send a code. Check the address and try again.'); });
-  });
+// errorTemplate is the terminal page shown when we cannot safely redirect -- an unknown
+// client, an unregistered redirect_uri. It shares the login page's stylesheet so a person
+// who lands here does not appear to have left the product.
+var errorTemplate = template.Must(template.New("error").Parse(errorTemplateSrc))
 
-  otpForm.addEventListener('submit', function (e) {
-    e.preventDefault(); errEl.textContent = '';
-    var code = document.getElementById('code').value.trim();
-    fetch(base + '/v1/auth/otp/verify', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ flow_id: flowId, otp: code })
-    }).then(function (r) {
-      if (!r.ok) throw new Error();
-      return r.json();
-    }).then(function (data) {
-      if (data && data.redirect_to) { window.location.href = data.redirect_to; }
-      else { fail(); }
-    }).catch(function () { fail('Invalid or expired code.'); });
-  });
-})();
-</script>
-</body>
-</html>`
+// providerView is one button. LogoSVG and DefaultMark are template.HTML because they are SVG
+// markup we control: the logo comes from the provider registry, which only an operator with
+// DynamoDB access can write, and the default is a constant in this file.
+type providerView struct {
+	Label   string
+	Href    string
+	LogoSVG template.HTML
+}
 
-// errorPageHTML is a non-leaking terminal error (%s = code, %s = description).
-const errorPageHTML = `<!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign-in error</title>
-<style>body{font-family:system-ui,sans-serif;max-width:22rem;margin:4rem auto;padding:0 1rem}h1{font-size:1.15rem}.muted{color:#666}</style>
-</head>
-<body>
-  <h1>We couldn't sign you in</h1>
-  <p class="muted">%s: %s</p>
-</body>
-</html>`
+// loginView is everything the page renders from.
+type loginView struct {
+	Wordmark    template.HTML
+	Providers   []providerView
+	CSS         template.CSS
+	DefaultMark template.HTML
+	Nonce       string
+	// FlowID is a JS string literal, marshalled rather than interpolated so it cannot
+	// terminate the script element.
+	FlowID template.JS
+}
+
+// renderLoginPage produces the sign-in page.
+func renderLoginPage(providers []providerView, nonce, flowID string) (string, error) {
+	flowIDLit, err := json.Marshal(flowID)
+	if err != nil {
+		return "", err
+	}
+	var out bytes.Buffer
+	err = loginTemplate.Execute(&out, loginView{
+		Wordmark:    template.HTML(espressifWordmark),
+		Providers:   providers,
+		CSS:         template.CSS(loginCSS),
+		DefaultMark: template.HTML(defaultMarkSVG),
+		Nonce:       nonce,
+		FlowID:      template.JS(flowIDLit),
+	})
+	if err != nil {
+		return "", err
+	}
+	return out.String(), nil
+}
+
+// renderErrorPage produces the terminal error page. It carries the OAuth code and the
+// description and nothing else: no stack, no client id, no state, because this page is
+// reachable by anyone who can construct a URL.
+func renderErrorPage(code, description string) (string, error) {
+	var out bytes.Buffer
+	err := errorTemplate.Execute(&out, struct {
+		Wordmark    template.HTML
+		CSS         template.CSS
+		Code        string
+		Description string
+	}{template.HTML(espressifWordmark), template.CSS(loginCSS), code, description})
+	if err != nil {
+		return "", err
+	}
+	return out.String(), nil
+}
+
+// defaultMarkSVG is the mark for a provider row that has no logo of its own.
+const defaultMarkSVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2L4 6v6c0 5 3.4 8.4 8 10 4.6-1.6 8-5 8-10V6z"/><path d="M9 12l2 2 4-4"/></svg>`

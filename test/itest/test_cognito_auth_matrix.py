@@ -966,7 +966,7 @@ def test_signout_requires_a_token_and_refuses_global(cognito_pool):
                                json={"refresh_token": "whatever", "global": "true"})
     assert global_out.status_code == 400, f"[{label}] {global_out.text}"
     assert _status(global_out) == (
-        "All-device signout is not supported; sign out each session with its refresh token"
+        "Global signout is not supported; sign out each session with its refresh token"
     ), global_out.text
 
 

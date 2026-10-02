@@ -18,6 +18,7 @@ from app_common import CommonResources, create_api_deployment
 from ..handlers.user_common.stack import UserCommonAPI
 from ..handlers.token.stack import TokenAPI
 from ..handlers.userinfo.stack import UserinfoAPI
+from ..handlers.sessions.stack import SessionsAPI
 from ..handlers.revoke.stack import RevokeAPI
 from ..handlers.clients.stack import ClientsAPI
 from ..handlers.authorize.stack import AuthorizeAPI
@@ -86,6 +87,7 @@ class EspUserCoreStack(Stack):
 
         token_api = TokenAPI(self, "TokenAPI", common_resources)
         userinfo_api = UserinfoAPI(self, "UserinfoAPI", common_resources)
+        sessions_api = SessionsAPI(self, "SessionsAPI", common_resources)
         revoke_api = RevokeAPI(self, "RevokeAPI", common_resources)
         clients_api = ClientsAPI(self, "ClientsAPI", common_resources)
         authorize_api = AuthorizeAPI(self, "AuthorizeAPI", common_resources)
@@ -106,6 +108,7 @@ class EspUserCoreStack(Stack):
         esp_user_api_deploy.node.add_dependency(user_common_api)
         esp_user_api_deploy.node.add_dependency(token_api)
         esp_user_api_deploy.node.add_dependency(userinfo_api)
+        esp_user_api_deploy.node.add_dependency(sessions_api)
         esp_user_api_deploy.node.add_dependency(revoke_api)
         esp_user_api_deploy.node.add_dependency(clients_api)
         esp_user_api_deploy.node.add_dependency(authorize_api)

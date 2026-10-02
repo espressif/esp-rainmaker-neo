@@ -4,7 +4,10 @@
 > [authorize-code-flow.md](authorize-code-flow.md); **upstream-provider federation**
 > (Cognito, social) is [federation.md](federation.md). This spec owns the
 > issuer-side token endpoints those flows all land on: the refresh-token service,
-> `POST /oauth2/token`, `GET /oauth2/userinfo`, and `POST /oauth2/revoke`.
+> `POST /oauth2/token`, `GET /oauth2/userinfo`, and `POST /oauth2/revoke`. Which API a
+> token is minted for is [resource-indicators.md](resource-indicators.md); the browser
+> session that lets a second application skip the login is
+> [sso-sessions.md](sso-sessions.md).
 
 ## Refresh tokens
 
@@ -39,7 +42,7 @@ The issued token is `base64(user_id | client_id | family_id | counter) . HMAC(se
 
 ## Token endpoint (`POST /oauth2/token`)
 
-The standard OAuth 2.0 token endpoint (RFC 6749 §3.2). One endpoint dispatched on `grant_type`; the request is `application/x-www-form-urlencoded`. This slice implements **`refresh_token`** only; `authorization_code`, `client_credentials`, and token-exchange (RFC 8693, native social) are separate later slices and MUST be rejected with `unsupported_grant_type` until built.
+The standard OAuth 2.0 token endpoint (RFC 6749 §3.2). One endpoint dispatched on `grant_type`; the request is `application/x-www-form-urlencoded`. Implemented: **`authorization_code`**, **`refresh_token`** and **`client_credentials`**. Token exchange (RFC 8693, native social) is a later slice and MUST be rejected with `unsupported_grant_type` until built. `client_credentials` requires a confidential client registered for the grant and returns an access token only — no refresh token, no ID token; see [admin-clients.md](admin-clients.md) for the registry fields that gate it.
 
 ### refresh_token grant
 
@@ -80,7 +83,7 @@ client_id=rm_mobile
 
 - `400 invalid_request` — missing/malformed `grant_type`, `refresh_token`, or `client_id`.
 - `400 invalid_grant` — unknown, expired, spent, or revoked refresh token (uniform; no distinction between them, no reuse oracle).
-- `400 unsupported_grant_type` — any `grant_type` other than `refresh_token` in this slice.
+- `400 unsupported_grant_type` — any `grant_type` outside `authorization_code`, `refresh_token` and `client_credentials`; token exchange (RFC 8693) is not built yet and lands here.
 - `401 invalid_client` — a confidential client that fails its auth method.
 
 - TODO: confirm where the `refresh` audit event is persisted.
@@ -139,7 +142,7 @@ token_type_hint=refresh_token   (optional)
 
 1. Authenticate the client from the Basic header against the registry: an unknown client or a confidential client with a missing/wrong secret is `401 invalid_client` (uniform — no oracle for which clients exist). A registered public client passes with an empty secret; a public client that presents a non-empty secret is rejected.
 2. Parse the form body; require `token`. `token_type_hint` is advisory and may be ignored.
-3. If `token` parses as one of our refresh tokens, revoke **its whole family** — the login the token belongs to (RFC 7009 §2.1: revoking a token MAY revoke the underlying grant). This ends the session on every device fed by that family. A malformed token or an access token is a no-op (access tokens are stateless RS256 JWTs, not revocable server-side).
+3. If `token` parses as one of our refresh tokens, revoke **its whole family** — the login the token belongs to (RFC 7009 §2.1: revoking a token MAY revoke the underlying grant). This ends the session on every user agent fed by that family. A malformed token or an access token is a no-op (access tokens are stateless RS256 JWTs, not revocable server-side).
 4. Always return `200` regardless of whether the token existed (RFC 7009 §2.2 — no oracle; an attacker learns nothing about validity). Only a truly malformed *request* (missing `token`) is `400 invalid_request`.
 
 **Response**: `200` with an empty body (RFC 7009 §2.2).

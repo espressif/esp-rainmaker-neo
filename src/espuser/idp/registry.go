@@ -86,16 +86,17 @@ func (r *Registry) Provider(name string) (Provider, error) {
 	secret := entry.ClientSecret
 
 	return &OIDCProvider{
-		ProviderName:      entry.ProviderName,
-		Issuer:            entry.Issuer,
-		ClientID:          entry.ClientID,
-		ClientSecret:      secret,
-		CallbackURL:       r.callbackURL,
-		JWKS:              jwks,
-		AuthorizeURL:      authorizeURL,
-		TokenURL:          tokenURL,
-		Scopes:            strings.Fields(entry.Scopes),
-		TokenEndpointAuth: entry.TokenEndpointAuth,
-		AttributeMapping:  entry.AttributeMapping,
+		ProviderName:         entry.ProviderName,
+		Issuer:               entry.Issuer,
+		ClientID:             entry.ClientID,
+		ClientSecret:         secret,
+		CallbackURL:          r.callbackURL,
+		JWKS:                 jwks,
+		AuthorizeURL:         authorizeURL,
+		TokenURL:             tokenURL,
+		Scopes:               strings.Fields(entry.Scopes),
+		TokenEndpointAuth:    entry.TokenEndpointAuth,
+		AttributeMapping:     entry.AttributeMapping,
+		SessionMaxTTLSeconds: entry.SessionMaxTTLSeconds,
 	}, nil
 }

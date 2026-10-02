@@ -79,6 +79,18 @@ class UserAuthAPI(Construct):
             resources=[get_table_arn(USER_TABLE_NAMES['IDENTITY_PROVIDERS'], region)],
         ))
 
+        # Legacy sign-in establishes a cookie-less app user agent (PutItem) and the grant clamp then
+        # bumps its retention (Query the by-user index, GetItem the ceiling, UpdateItem expires_at),
+        # so a legacy login is listed on the user agent screen and its refresh families stay clamped to it.
+        role.add_to_policy(iam.PolicyStatement(
+            actions=["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:UpdateItem"],
+            resources=[get_table_arn(USER_TABLE_NAMES['SESSIONS'], region)],
+        ))
+        role.add_to_policy(iam.PolicyStatement(
+            actions=["dynamodb:Query"],
+            resources=[get_table_index_arn(USER_TABLE_NAMES['SESSIONS'], USER_INDEX_NAMES['SESSIONS_BY_USER'], region)],
+        ))
+
         self.user_auth_function = create_lambda_function(
             self, function_name,
             common_resources,

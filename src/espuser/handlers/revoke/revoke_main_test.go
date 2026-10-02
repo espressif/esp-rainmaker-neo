@@ -71,7 +71,7 @@ var _ = Describe("RFC 7009 revoke endpoint", func() {
 	})
 
 	It("revokes the presented token and returns 200 with an empty body", func() {
-		token, err := svc.MintRefreshtoken("user-123", testClientID, "openid")
+		token, err := svc.MintRefreshtoken("user-123", testClientID, "openid", "", "", 0)
 		Expect(err).NotTo(HaveOccurred())
 
 		// Public client: Basic with an empty secret.
@@ -85,9 +85,38 @@ var _ = Describe("RFC 7009 revoke endpoint", func() {
 		Expect(rotErr).To(HaveOccurred())
 	})
 
+	It("revokes a family carrying a resource and a sid, and the rotation keeps both", func() {
+		// Every other spec here mints with empty resource and sid, so nothing pinned what
+		// happens to a family that carries them -- which is every family this MR creates.
+		// Two properties in one login, because they fail together:
+		//
+		//   - rotation PRESERVES them. A renewed token that lost its resource would start
+		//     minting aud = client_id, silently widening what the token opens; one that lost
+		//     its sid would detach from its browser session and survive that browser's sign-out.
+		//   - revocation IGNORES them. Revocation is by family, and a family is no harder to
+		//     end for being audience-scoped or session-bound.
+		const sid = "sess_revoke_1"
+		const resource = "https://api.accounts.example.com"
+
+		token, err := svc.MintRefreshtoken("user-123", testClientID, "openid", resource, sid, 0)
+		Expect(err).NotTo(HaveOccurred())
+
+		rot, err := svc.Rotate(testClientID, token)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(rot.Resource).To(Equal(resource), "a rotation that drops the resource re-widens the audience")
+		Expect(rot.SID).To(Equal(sid), "a rotation that drops the sid outlives its browser's sign-out")
+
+		resp, err := handleRevokeRequest(context.Background(), basicReq(testClientID, "", form(map[string]string{"token": rot.Token})))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.StatusCode).To(Equal(200))
+
+		_, rotErr := svc.Rotate(testClientID, rot.Token)
+		Expect(rotErr).To(HaveOccurred(), "the family must be dead regardless of resource or sid")
+	})
+
 	It("revokes the whole family, ending the login (RFC 7009 §2.1 grant revocation)", func() {
 		// Mint a login's first token, rotate once so the login has a spent old token + a fresh current one.
-		original, err := svc.MintRefreshtoken("user-123", testClientID, "openid")
+		original, err := svc.MintRefreshtoken("user-123", testClientID, "openid", "", "", 0)
 		Expect(err).NotTo(HaveOccurred())
 		rotated, err := svc.Rotate(testClientID, original)
 		Expect(err).NotTo(HaveOccurred())
@@ -122,14 +151,14 @@ var _ = Describe("RFC 7009 revoke endpoint", func() {
 	})
 
 	It("accepts a public client identifying via body client_id (no Basic, RFC 7009 §5)", func() {
-		token, _ := svc.MintRefreshtoken("user-123", testClientID, "openid")
+		token, _ := svc.MintRefreshtoken("user-123", testClientID, "openid", "", "", 0)
 		resp, err := handleRevokeRequest(context.Background(), formRequest(form(map[string]string{"token": token, "client_id": testClientID})))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.StatusCode).To(Equal(200))
 	})
 
 	It("rejects a request with neither Basic nor body client_id with 400 invalid_request", func() {
-		token, _ := svc.MintRefreshtoken("user-123", testClientID, "openid")
+		token, _ := svc.MintRefreshtoken("user-123", testClientID, "openid", "", "", 0)
 		resp, err := handleRevokeRequest(context.Background(), formRequest(form(map[string]string{"token": token})))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.StatusCode).To(Equal(400))
@@ -137,7 +166,7 @@ var _ = Describe("RFC 7009 revoke endpoint", func() {
 	})
 
 	It("rejects an unknown client with 401 invalid_client (negative, no oracle)", func() {
-		token, _ := svc.MintRefreshtoken("user-123", testClientID, "openid")
+		token, _ := svc.MintRefreshtoken("user-123", testClientID, "openid", "", "", 0)
 		resp, err := handleRevokeRequest(context.Background(), basicReq("ghost", "", form(map[string]string{"token": token})))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.StatusCode).To(Equal(401))
@@ -145,7 +174,7 @@ var _ = Describe("RFC 7009 revoke endpoint", func() {
 	})
 
 	It("rejects a public client that presents a secret with 401 invalid_client (negative)", func() {
-		token, _ := svc.MintRefreshtoken("user-123", testClientID, "openid")
+		token, _ := svc.MintRefreshtoken("user-123", testClientID, "openid", "", "", 0)
 		resp, err := handleRevokeRequest(context.Background(), basicReq(testClientID, "unexpected", form(map[string]string{"token": token})))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.StatusCode).To(Equal(401))
@@ -168,14 +197,14 @@ var _ = Describe("RFC 7009 revoke endpoint", func() {
 		})
 
 		It("accepts a valid secret via HTTP Basic (200)", func() {
-			token, _ := svc.MintRefreshtoken("user-123", confID, "openid")
+			token, _ := svc.MintRefreshtoken("user-123", confID, "openid", "", "", 0)
 			resp, err := handleRevokeRequest(context.Background(), basicReq(confID, confSecret, form(map[string]string{"token": token})))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp.StatusCode).To(Equal(200))
 		})
 
 		It("rejects a wrong secret with 401 invalid_client (negative)", func() {
-			token, _ := svc.MintRefreshtoken("user-123", confID, "openid")
+			token, _ := svc.MintRefreshtoken("user-123", confID, "openid", "", "", 0)
 			resp, err := handleRevokeRequest(context.Background(), basicReq(confID, "wrong", form(map[string]string{"token": token})))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp.StatusCode).To(Equal(401))
@@ -183,7 +212,7 @@ var _ = Describe("RFC 7009 revoke endpoint", func() {
 		})
 
 		It("rejects a missing secret with 401 invalid_client (negative, confidential needs a secret)", func() {
-			token, _ := svc.MintRefreshtoken("user-123", confID, "openid")
+			token, _ := svc.MintRefreshtoken("user-123", confID, "openid", "", "", 0)
 			resp, err := handleRevokeRequest(context.Background(), basicReq(confID, "", form(map[string]string{"token": token})))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp.StatusCode).To(Equal(401))

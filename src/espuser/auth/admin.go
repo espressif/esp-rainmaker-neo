@@ -71,7 +71,8 @@ func (s *AdminAuthService) GetUserFromProviderUsingToken(ctx context.Context, to
 	}, nil
 }
 
-// VerifyToken validates the Cognito token against the admin pool JWKS only (no live GetUser).
+// VerifyTokenPair validates an admin access/id token pair against the admin pool JWKS,
+// requiring both halves to name the admin app client and come from one sign-in.
 func (s *AdminAuthService) VerifyTokenPair(ctx context.Context, accessToken, idToken string) error {
 	clientID := os.Getenv("ADMIN_USER_POOL_CLIENT_ID")
 	if clientID == "" {
@@ -82,11 +83,6 @@ func (s *AdminAuthService) VerifyTokenPair(ctx context.Context, accessToken, idT
 		JWKS:             s.cognitoService.UserPoolJWKS,
 		AllowedClientIDs: []string{clientID},
 	}, accessToken, idToken)
-	return err
-}
-
-func (s *AdminAuthService) VerifyToken(ctx context.Context, token string) error {
-	_, err := jwtutil.ExtractCognitoClaimsFromIDOrAccessToken(s.cognitoService.UserPoolJWKS, s.cognitoService.UserPoolID, token)
 	return err
 }
 

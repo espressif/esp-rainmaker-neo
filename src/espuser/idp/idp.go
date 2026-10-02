@@ -30,6 +30,15 @@ type Identity struct {
 	FamilyName string
 	Locale     string
 	Picture    string
+
+	// Session metadata, never identity. AuthTime is the upstream's auth_time claim (falling
+	// back to the id token's iat) — WHEN the person actually authenticated there, which may be
+	// long before this callback when the upstream reused its own session. Stamping "now"
+	// instead would assert an authentication that did not happen, in the permissive direction,
+	// on the exact value max_age and step-up are computed from.
+	AuthTime int64
+	AMR      []string
+	ACR      string
 }
 
 // VerifiedContacts returns every contact the upstream vouched for, so an account can be found by
@@ -54,6 +63,9 @@ type UpstreamLeg struct {
 	State        string
 	Nonce        string
 	PKCEVerifier string
+	// Prompt and MaxAge are the relying party's authentication demands, carried through to the upstream unchanged: OIDC Core s3.1.2.1 says prompt=login MUST re-authenticate the End-User, which skipping only our session does not. Empty adds nothing.
+	Prompt string
+	MaxAge string
 }
 
 type Provider interface {

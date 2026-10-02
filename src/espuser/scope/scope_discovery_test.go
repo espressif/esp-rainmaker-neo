@@ -22,7 +22,7 @@ func TestScopeDiscovery(t *testing.T) {
 var _ = Describe("advertised scopes", func() {
 	It("matches the scopes the authorize endpoint grants", func() {
 		Expect(oidc.SupportedScopes).To(ConsistOf(
-			scope.OpenID, scope.Email, scope.Profile, scope.Phone,
+			scope.OpenID, scope.Email, scope.Profile, scope.Phone, scope.Sessions,
 		))
 	})
 })

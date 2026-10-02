@@ -70,6 +70,8 @@ EXCLUDED_PREFIXES = (
     "docs/api/swagger-ui",
     "docs/api/oauth2-redirect.html",
     "docs/api/index.css",
+    # Login/error templates are inlined into the served page; a header would leak into the response body.
+    "src/espuser/handlers/authorize/templates/",
     # Brand marks and artwork: trademark, not Apache-2.0. See NOTICE's TRADEMARKS section.
     "assets/architecture.svg",
     "dashboard/src/assets/img/logo/",

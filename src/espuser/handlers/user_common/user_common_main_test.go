@@ -55,7 +55,7 @@ var _ = Describe("User Common Handler", func() {
 			})).To(Succeed())
 
 			minter := jwtutil.NewMinter(backend.Issuer, backend.SigningKey, oidc.SigningKeyID)
-			token, err := minter.AccessToken(userID, testClientID, "openid email", "", jwtutil.Contact{})
+			token, err := minter.AccessToken(userID, testClientID, "openid email", "", "", jwtutil.Contact{})
 			Expect(err).NotTo(HaveOccurred())
 			return token
 		}

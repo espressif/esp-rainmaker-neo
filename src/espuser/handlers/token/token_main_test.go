@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/oauth_clients_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/refreshtoken"
 	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
@@ -55,14 +56,16 @@ func seedPublicClient(clientID string) {
 // mintRefreshToken seeds a live refresh-token family and returns its opaque token.
 func mintRefreshToken(userID, scope string) string {
 	svc := refreshtoken.NewService(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
-	token, err := svc.MintRefreshtoken(userID, testClientID, scope)
+	token, err := svc.MintRefreshtoken(userID, testClientID, scope, "", "", 0)
 	Expect(err).NotTo(HaveOccurred())
 	return token
 }
 
 var _ = Describe("OAuth token endpoint (refresh_token grant)", func() {
+	var backend *test_utils.EspUserBackend
+
 	BeforeEach(func() {
-		test_utils.SetupEspUserBackend(context.Background())
+		backend = test_utils.SetupEspUserBackend(context.Background())
 		seedPublicClient(testClientID)
 	})
 
@@ -75,8 +78,23 @@ var _ = Describe("OAuth token endpoint (refresh_token grant)", func() {
 	}
 
 	Describe("refresh_token grant", func() {
+		It("keeps minting today's audience for a family that carries no resource", func() {
+			// Families predating the resource field store none. They must go on working and
+			// go on producing aud = client_id, never an empty audience.
+			token := mintRefreshToken("user-legacy", "openid email")
+			resp, err := handleTokenRequest(context.Background(), formRequest(form(map[string]string{
+				"grant_type": "refresh_token", "refresh_token": token, "client_id": testClientID,
+			})))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(200), resp.Body)
+			claims := unverifiedClaims(decodeBody[map[string]any](resp)["access_token"].(string))
+			Expect(claims["aud"]).To(Equal(testClientID))
+		})
+
 		It("rotates a valid refresh token and returns a fresh token set (openid → id_token present)", func() {
 			token := mintRefreshToken("user-123", "openid email")
+			// Reset after minting, so the profile below measures only the refresh itself.
+			backend.DBMock.ProfileReset()
 			resp, err := handleTokenRequest(context.Background(), formRequest(form(map[string]string{
 				"grant_type": "refresh_token", "refresh_token": token, "client_id": testClientID,
 			})))
@@ -89,6 +107,22 @@ var _ = Describe("OAuth token endpoint (refresh_token grant)", func() {
 			Expect(body["token_type"]).To(Equal("Bearer"))
 			// The returned refresh token is new (the presented one is now spent).
 			Expect(body["refresh_token"]).NotTo(Equal(token))
+
+			// Three reads and one write per refresh:
+			//
+			//   1  GetItem    espuser-oauth-clients   client authentication
+			//   2  GetItem    espuser-refresh-tokens  the family row, by user + client#family
+			//   3  UpdateItem espuser-refresh-tokens  rotation: the new token replaces the old (write)
+			//   4  GetItem    espuser-user-details    the profile claims baked into the id token
+			//
+			// One write, not two: rotation updates the family row in place rather than writing a new
+			// row and deleting the old. This is the endpoint every signed-in app hits on a timer, so
+			// its per-call cost multiplies hardest across the fleet -- read 4 in particular is a whole
+			// extra GetItem spent on claims that rarely change between one refresh and the next.
+			profile := backend.DBMock.ProfileGet()
+			readCnt, writeCnt := profile.TotalCounts()
+			Expect(readCnt).To(Equal(3))
+			Expect(writeCnt).To(Equal(1))
 		})
 
 		It("omits id_token when openid is not in scope (negative)", func() {
@@ -147,12 +181,23 @@ var _ = Describe("OAuth token endpoint (refresh_token grant)", func() {
 		})
 
 		It("rejects an unknown token with invalid_grant (negative)", func() {
+			backend.DBMock.ProfileReset()
 			resp, err := handleTokenRequest(context.Background(), formRequest(form(map[string]string{
 				"grant_type": "refresh_token", "refresh_token": "nope.nope", "client_id": testClientID,
 			})))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp.StatusCode).To(Equal(400))
 			Expect(decodeBody[oidc.OAuthError](resp).Error).To(Equal("invalid_grant"))
+
+			// One read total: the client-auth GetItem. A token that fails its HMAC never reaches the
+			// refresh-tokens table at all, so a caller spraying forged tokens cannot make this endpoint
+			// do per-guess work against the token store, and cannot write anything.
+			profile := backend.DBMock.ProfileGet()
+			readCnt, writeCnt := profile.TotalCounts()
+			Expect(readCnt).To(Equal(1))
+			Expect(writeCnt).To(BeZero())
+			Expect(profile.Accesses).NotTo(HaveKey("espuser-refresh-tokens"),
+				"a forged token must be rejected by signature, before any lookup")
 		})
 
 		It("rejects a token presented under a different registered client_id (negative, per-client scoping)", func() {
@@ -178,12 +223,27 @@ var _ = Describe("OAuth token endpoint (refresh_token grant)", func() {
 
 	Describe("grant dispatch", func() {
 		It("rejects an unsupported grant_type (negative)", func() {
+			// client_credentials used to be the example here; it is implemented now, so a
+			// grant this server genuinely does not offer is needed to test the default arm.
+			for _, grant := range []string{"urn:ietf:params:oauth:grant-type:token-exchange", "password", "implicit"} {
+				resp, err := handleTokenRequest(context.Background(), formRequest(form(map[string]string{
+					"grant_type": grant, "client_id": testClientID,
+				})))
+				Expect(err).NotTo(HaveOccurred())
+				Expect(resp.StatusCode).To(Equal(400), "grant %q", grant)
+				Expect(decodeBody[oidc.OAuthError](resp).Error).To(Equal("unsupported_grant_type"), "grant %q", grant)
+			}
+		})
+
+		It("refuses client_credentials to a public client rather than treating it as unsupported (negative)", func() {
+			// The distinction matters: unsupported_grant_type says "this server does not do
+			// that", unauthorized_client says "it does, but not for you".
 			resp, err := handleTokenRequest(context.Background(), formRequest(form(map[string]string{
 				"grant_type": "client_credentials", "client_id": testClientID,
 			})))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp.StatusCode).To(Equal(400))
-			Expect(decodeBody[oidc.OAuthError](resp).Error).To(Equal("unsupported_grant_type"))
+			Expect(decodeBody[oidc.OAuthError](resp).Error).To(Equal("unauthorized_client"))
 		})
 
 		It("rejects a missing grant_type with invalid_request (negative)", func() {
@@ -194,6 +254,24 @@ var _ = Describe("OAuth token endpoint (refresh_token grant)", func() {
 			Expect(resp.StatusCode).To(Equal(400))
 			Expect(decodeBody[oidc.OAuthError](resp).Error).To(Equal("invalid_request"))
 		})
+
+		It("refuses a resource the client is not registered for, before any redirect", func() {
+			// A client may request only an API it registered in allowed_resources; the gate is the client model's own.
+			const resAPI, otherAPI = "https://api.accounts.example.com", "https://api.other.example.com"
+			svc := clients.NewService(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
+			_, err := svc.Create(clients.CreateInput{
+				ClientID: "rm_res_dispatch", ClientName: "Web", ClientType: "public",
+				RedirectURIs: []string{"com.example://cb"}, GrantTypes: []string{"authorization_code", "refresh_token"},
+				Scopes: []string{"openid", "email"}, AllowedResources: []string{resAPI},
+				RequirePKCE: utils.Ptr(true),
+			})
+			Expect(err).NotTo(HaveOccurred())
+			client, err := svc.Get("rm_res_dispatch")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(client.AllowsResource(otherAPI)).To(BeFalse())
+			Expect(client.AllowsResource(resAPI)).To(BeTrue())
+		})
+
 	})
 
 	Describe("routing", func() {

@@ -32,6 +32,19 @@ func decodedBody(request events.APIGatewayProxyRequest) (string, error) {
 	return request.Body, nil
 }
 
+// FormValues reads every occurrence of a form field from the request body; nil when the body is unreadable. A request struct holds only the first, which cannot tell "one value" from "two".
+func FormValues(request events.APIGatewayProxyRequest, key string) []string {
+	body, err := decodedBody(request)
+	if err != nil {
+		return nil
+	}
+	parsed, err := url.ParseQuery(body)
+	if err != nil {
+		return nil
+	}
+	return parsed[key]
+}
+
 // isFormRequest reports whether the request body is application/x-www-form-urlencoded (the OAuth token endpoint's encoding), read case-insensitively from Content-Type.
 func isFormRequest(request events.APIGatewayProxyRequest) bool {
 	ct := request.Headers["Content-Type"]
@@ -143,6 +156,22 @@ func authHeader(headers map[string]string) string {
 		return v
 	}
 	return headers["Authorization"]
+}
+
+// HeaderValue returns a request header's value, case-insensitively. API Gateway preserves
+// whatever casing the client sent, so a lookup pinned to one spelling misses on the other.
+// Absent returns "" -- every caller of this treats a missing header as unknown, not as an
+// error.
+func HeaderValue(headers map[string]string, name string) string {
+	if v, ok := headers[name]; ok {
+		return v
+	}
+	for k, v := range headers {
+		if strings.EqualFold(k, name) {
+			return v
+		}
+	}
+	return ""
 }
 
 // ExtractAuthToken returns the bearer token from the Authorization header, or "" if absent.

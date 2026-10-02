@@ -45,8 +45,34 @@ type OAuthClientEntry struct {
 	ClientType   string   `dynamodbav:"client_type,omitempty"`
 	Secret       string   `dynamodbav:"secret,omitempty"`
 	RedirectURIs []string `dynamodbav:"redirect_uris,stringset,omitempty"`
-	GrantTypes   []string `dynamodbav:"grant_types,omitempty"`
-	Scopes       []string `dynamodbav:"scopes,omitempty"`
+	// PostLogoutRedirectURIs is where /oauth2/logout may return the browser afterwards.
+	// Validated by EXACT match, exactly like redirect_uris and for exactly the same reason:
+	// an unvalidated return URL turns the logout endpoint into an open redirect that borrows
+	// the issuer's hostname, which is the most credible phishing origin we own.
+	//
+	// Separate from redirect_uris on purpose -- a logout landing page is usually a different
+	// page from the OAuth callback, and reusing the callback would send the browser into a
+	// code exchange with no code.
+	PostLogoutRedirectURIs []string `dynamodbav:"post_logout_redirect_uris,stringset,omitempty"`
+	GrantTypes             []string `dynamodbav:"grant_types,omitempty"`
+	Scopes                 []string `dynamodbav:"scopes,omitempty"`
+	// AllowedResources are the RFC 8707 resource identifiers this client may request an
+	// access token for. Empty means the client may request none -- a token then carries
+	// aud = client_id, which is what a deployment that never uses the extension sees.
+	AllowedResources []string `dynamodbav:"allowed_resources,omitempty"`
+	// AllowedProviders narrows which identity providers this client offers at login.
+	//
+	// Absent means NO RESTRICTION -- the opposite of AllowedResources above, deliberately.
+	// A resource is an entitlement, so absent must mean none; a provider is a menu, and an
+	// empty menu would lock out every client registered before this field existed.
+	AllowedProviders []string `dynamodbav:"allowed_providers,omitempty"`
+
+	// FirstParty marks a client this account ships itself (web dashboard, mobile app) rather than a delegated third party (voice assistant, MCP). Only a first-party client may manage a user's own sessions. Absent reads as false: first-party is opt-in, set at registration, so a client made before this field, or any third party, is correctly not one.
+	FirstParty bool `dynamodbav:"first_party,omitempty"`
+
+	// TokenEndpointAuthMethod overrides the value otherwise derived from client_type: none
+	// for public, client_secret_basic for confidential.
+	TokenEndpointAuthMethod string `dynamodbav:"token_endpoint_auth_method,omitempty"`
 	// RequirePKCE is a pointer so a stored false persists (omitempty would drop it).
 	RequirePKCE *bool `dynamodbav:"require_pkce,omitempty"`
 	CreatedAt   int64 `dynamodbav:"created_at,omitempty"`

@@ -21,6 +21,8 @@ from py_sdk.test_user import User, user_log
 
 from py_sdk.test_device import Device, generate_key_and_cert, split_combined_cert_pem, validate_tags
 from py_sdk.test_group import Group
+from py_sdk import espuser_oauth
+from py_sdk.espuser_oauth import pkce_pair, cognito_hosted_login
 from test.itest.config_sources import describe_sources, load_json_config, repo_path
 from test.itest.email_utils import (
     ITEST_CONFIG_ENV_VAR,
@@ -42,6 +44,7 @@ from cryptography.hazmat.primitives import serialization, hashes
 from cryptography import x509
 import uuid
 import time
+from types import SimpleNamespace
 from queue import Empty
 
 import boto3
@@ -85,35 +88,18 @@ DEVICE_VIDEO_ROLE_ALIAS = rmng_base_outputs['NodeVideoRoleAliases'].split(',')[-
 FILES_BUCKET_NAME = rmng_base_outputs['FilesBucketName']
 
 
-def pkce_pair():
-    """Return (verifier, S256 challenge) for a PKCE code exchange (RFC 7636)."""
-    import base64
-    import hashlib
-    import secrets
-    verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
-    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
-    return verifier, challenge
-
-
-
-
-def cognito_hosted_login(session, hosted_authorize_url, email, password):
-    """Script the Cognito hosted-UI password login: follow to the login form, POST the
-    credentials with the CSRF token, and return the redirect back to our federation callback."""
-    page = session.get(hosted_authorize_url, allow_redirects=True)
-    assert page.status_code == 200, f"hosted UI login page failed: {page.status_code}"
-    csrf = session.cookies.get("XSRF-TOKEN")
-    assert csrf, "hosted UI did not set the XSRF-TOKEN cookie"
-    login = session.post(page.url, data={"_csrf": csrf, "username": email, "password": password},
-                         allow_redirects=False)
-    assert login.status_code == 302, \
-        f"hosted UI login failed for {email}: {login.status_code} {login.text[:300]}"
-    return login.headers["Location"]
+# pkce_pair and cognito_hosted_login now live in py_sdk.espuser_oauth (imported above) and are
+# re-exported here, so test_mcp / test_oauth_proxy keep importing them from conftest unchanged.
 
 
 def flow_id_from_cookie(response):
-    """Extract the esp_flow_id the authorize 302 set in a cookie."""
-    return response.cookies.get("esp_flow_id")
+    """Extract the flow id the authorize 302 set in a cookie.
+
+    __Host- prefixed, and that is a security property rather than a spelling: the browser
+    honours the prefix only for a Secure, Path=/, Domain-less cookie, so a page on a sibling
+    host cannot plant a flow id and have a victim's login complete into it.
+    """
+    return response.cookies.get("__Host-esp_flow_id")
 
 
 def _get_alexa_region_arns():
@@ -153,6 +139,29 @@ END_USER_POOL_ID = esp_user_base_outputs.get('EspEndUserPoolId', '')
 ADMIN_USER_POOL_ID = esp_user_base_outputs.get('EspAdminUserPoolId') or rmng_base_outputs.get('AdminUserPoolId', '')
 ADMIN_CLIENT_ID = esp_user_base_outputs.get('EspAdminUserPoolClientId') or rmng_base_outputs.get('AdminUserPoolClientId', '')
 USER_API_GATEWAY_URL = esp_user_base_outputs.get('EspUserApiUrl', '')
+# The OAuth test client (py_sdk.espuser_oauth) is deployment-agnostic; give it this run's base URL.
+espuser_oauth.API_BASE = USER_API_GATEWAY_URL
+
+# ── ESP User browser sessions ──────────────────────────────────────────────────────
+# The __Host- prefix on these cookie names is a security property, not a spelling: a browser
+# honours the prefix only for a Secure, Path=/, Domain-less cookie, so a page on a sibling host
+# cannot plant one and have a victim's login complete into it.
+SESSION_COOKIE = "__Host-esp_session"          # the browser credential single sign-on runs on
+LOGOUT_MEMO_COOKIE = "__Host-esp_logout_to"    # carries the post-logout URL across the provider hop
+FLOW_COOKIE = "__Host-esp_flow_id"             # binds an authorize request to its federation callback
+
+# The scope that gates reading and ending one's own browser sessions.
+SESSIONS_SCOPE = "account:sessions"
+
+# The identity provider this deployment federates to; overridable so a different upstream needs no
+# change to the tests.
+UPSTREAM_PROVIDER = os.getenv("ESPUSER_ITEST_PROVIDER", "cognito")
+
+# Skips the ESP User suites when no stack is deployed, so a checkout with no espuser outputs still
+# runs the rest of the itests instead of erroring.
+requires_espuser = pytest.mark.skipif(
+    not USER_API_GATEWAY_URL,
+    reason="EspUserApiUrl not in rmng-outputs.json; deploy the espuser stacks")
 
 # Hardcoded values (previously from test_config.json)
 CA_CERT = """-----BEGIN CERTIFICATE-----
@@ -2039,7 +2048,7 @@ def complete_federation_login(client_id, redirect_uri, username, password, scope
         "code_challenge_method": "S256",
     }, allow_redirects=False)
     assert authz.status_code == 302, f"authorize: {authz.status_code} {authz.text[:200]}"
-    assert flow_id_from_cookie(authz), "authorize must set the esp_flow_id cookie"
+    assert flow_id_from_cookie(authz), "authorize must set the __Host-esp_flow_id cookie"
 
     fed = session.get(f"{USER_API_GATEWAY_URL}/oauth2/federation/start",
                       params={"provider": provider}, allow_redirects=False)
@@ -2462,3 +2471,64 @@ def seed_child(bridge_in_group):
         return None
 
     return _do
+
+# ============================================================================
+# ESP User
+# ============================================================================
+
+
+@pytest.fixture
+def register_espuser_client(admin_user):
+    """Factory for throwaway OAuth clients, all removed afterwards.
+
+    A factory rather than a fixture per shape because these tests need several clients at once --
+    three products open in one browser is the case the journey test is about -- and each needs its
+    own redirect_uri. This is also the only place an itest client is granted the account:sessions
+    scope, without which the sessions API refuses its tokens.
+    """
+    made = []
+
+    def _make(**overrides):
+        client_id = overrides.pop("client_id", None) or "itest_eu_" + uuid.uuid4().hex[:10]
+        body = {
+            "client_id": client_id,
+            "client_name": "espuser itest",
+            "client_type": "public",
+            "grant_types": ["authorization_code", "refresh_token"],
+            "scopes": ["openid", "email", "profile", SESSIONS_SCOPE],
+            "require_pkce": True,
+            "first_party": True,
+        }
+        body.update(overrides)
+        created = admin_user.create_oauth_client(body)
+        assert created.status_code == 201, f"registering {client_id}: {created.text}"
+        made.append(client_id)
+        return SimpleNamespace(
+            client_id=client_id,
+            client_secret=created.json().get("client_secret"),
+            redirect_uri=(body.get("redirect_uris") or [None])[0],
+        )
+
+    yield _make
+    for client_id in made:
+        admin_user.delete_oauth_client(client_id)
+
+
+@pytest.fixture
+def espuser_person(provision_end_user):
+    """One provider account with a password, both contacts pre-verified so no email or SMS is ever
+    sent. A thin convenience over provision_end_user that names the person and returns their
+    credentials; removed afterwards, account row included."""
+    email = f"espuser-{uuid.uuid4().hex[:12]}@example.com"
+    password = generate_test_password()
+    provision_end_user(email, {"email": email, "email_verified": "true"}, password)
+    return SimpleNamespace(email=email, password=password)
+
+
+@pytest.fixture
+def second_espuser_person(provision_end_user):
+    """A second, unrelated person. Cross-user isolation cannot be asserted with one."""
+    email = f"espuser-other-{uuid.uuid4().hex[:12]}@example.com"
+    password = generate_test_password()
+    provision_end_user(email, {"email": email, "email_verified": "true"}, password)
+    return SimpleNamespace(email=email, password=password)

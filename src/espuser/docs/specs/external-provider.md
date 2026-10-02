@@ -21,10 +21,58 @@ the same way. Cognito is one such row.
 | `token_endpoint_auth` | How the client authenticates at the token endpoint: `client_secret_basic` or `client_secret_post` |
 | `password_grant` | Whether `client_id` also accepts a direct username/password exchange |
 | `attribute_mapping` | Our claim name → the provider's claim name |
+| `session_max_ttl_seconds` | Optional cap on OUR session's absolute lifetime for logins this provider authenticated — the operator's assertion of what the upstream sanctions (not discoverable over OIDC). Combined as `min(global, this)`, so a row can only shorten the deployment cap, never extend it. Unset ⇒ the global cap applies |
+| `end_session_url` | The provider's sign-out endpoint. Unset ⇒ the upstream hop is skipped entirely and only OUR session ends. See **Sign-out** below |
+| `end_session_redirect_param` | The query parameter that provider uses for "come back here afterwards". Defaults to `post_logout_redirect_uri`; Cognito names it `logout_uri` |
 | `token_url`, `userinfo_url`, `jwks_url` | Optional pins that override discovery |
 
 Nothing else about a provider exists anywhere: no SSM parameters, no Lambda environment variables, no
 IAM grant naming it, no deploy step. Adding a provider is one write to this table.
+
+## Sign-out — two fields here, one URL there
+
+Adding a provider is not finished when logins work. Ending our session leaves the provider's
+own untouched, and a provider that still holds a cookie answers the next authorize request
+without prompting: the person signs out, signs in, and is straight back in without typing
+anything. Signed out in every technical sense, and not at all in the sense they meant.
+
+**Set on this row:**
+
+| Field | Cognito example |
+| --- | --- |
+| `end_session_url` | `https://<domain>/logout?client_id=<the client_id above>` |
+| `end_session_redirect_param` | `logout_uri` |
+
+Most OIDC providers publish the endpoint as `end_session_endpoint` in their discovery document
+and name the return parameter `post_logout_redirect_uri`, in which case the second field is
+left unset. Cognito publishes the endpoint but names the parameter `logout_uri` and expects
+`client_id` on the URL itself — which is exactly why both fields exist rather than a
+provider-type branch in code.
+
+**Register with the provider — exactly one URL, forever:**
+
+```
+{issuer}/oauth2/logout/done
+```
+
+That is this authorization server's sign-out return point, and it is the whole list. It does
+not grow when a product is added, because the provider is never told about products: it knows
+this authorization server and nothing behind it, exactly as it does on the login leg where it
+holds a single `/oauth2/federation/callback`. A product's own post-sign-out page is registered
+**here**, in that client's `post_logout_redirect_uris`, and applied after the provider hands
+the browser back.
+
+In Cognito that list is the app client's **Allowed sign-out URLs**. A provider that has none
+registered refuses the hop, and sign-out silently stops ending the upstream session.
+
+**Checklist for a new provider:**
+
+1. `end_session_url` on the row — or leave unset and accept that only our session ends.
+2. `end_session_redirect_param`, if the provider does not use the OIDC-standard name.
+3. `{issuer}/oauth2/logout/done` registered with the provider. Once.
+
+Then verify the way that matters: sign in, sign out, sign in again — the provider must ask for
+a password. If it does not, one of the three is missing.
 
 ## One confidential client per provider
 

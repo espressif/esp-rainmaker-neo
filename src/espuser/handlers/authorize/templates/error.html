@@ -1,0 +1,27 @@
+<!doctype html>
+
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign-in error · Espressif</title>
+<style>{{.CSS}}
+.card { max-width: 460px; text-align: left; }
+.code {
+  display: inline-block; margin-top: 18px; padding: 3px 8px;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--field); color: var(--faint);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+}
+</style>
+</head>
+<body>
+  <main class="card">
+    <div class="brand">{{.Wordmark}}</div>
+    <h1>We couldn't sign you in</h1>
+    <p class="hint" style="font-size:14.5px;color:var(--muted);margin:0">{{.Description}}</p>
+    <span class="code">{{.Code}}</span>
+    <p class="support">Close this window and start again from the app you were using.</p>
+  </main>
+</body>
+</html>

@@ -22,6 +22,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/user_details_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/idp"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/refreshtoken"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/session"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -123,7 +124,14 @@ func (s *Service) SigninWithPassword(ctx context.Context, username, password str
 	if err != nil {
 		return nil, err
 	}
-	return s.oauth.MintTokenSet(ctx, userID, legacyClientID, legacyScope)
+	// A cookie-less (app) user agent, so this legacy login is listed on the user agent screen and its
+	// families are reachable by sid, even though a ROPC client holds no browser and gets no SSO.
+	// auth_time is now (Establish defaults it): the authentication happened here, not upstream.
+	return s.oauth.MintTokenSetForFirstPartyLogin(ctx, userID, legacyClientID, legacyScope, auth.FirstPartyLogin{
+		Provider: s.providerName,
+		AMR:      []string{"pwd"},
+		Origin:   session.OriginApp,
+	})
 }
 
 func (s *Service) RefreshLegacy(ctx context.Context, refreshToken string) (*auth.UserTokens, error) {
@@ -217,10 +225,10 @@ func (s *Service) ChangePassword(ctx context.Context, accessToken, oldPassword, 
 	return nil
 }
 
-// ErrGlobalSignoutUnsupported is returned for an all-devices signout. Our sessions are refresh
+// ErrGlobalSignoutUnsupported is returned for a global signout. Our sessions are refresh
 // families of ours, which a provider-side sign-out does not touch, so honouring the request would
 // require revoking every family — deliberately not done. Reporting it beats a false success.
-var ErrGlobalSignoutUnsupported = errors.New("legacyauth: all-device signout is not supported")
+var ErrGlobalSignoutUnsupported = errors.New("legacyauth: global signout is not supported")
 
 func (s *Service) Signout(ctx context.Context, refreshToken string) error {
 	if refreshToken == "" {

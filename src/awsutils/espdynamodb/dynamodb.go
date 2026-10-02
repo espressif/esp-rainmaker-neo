@@ -162,10 +162,12 @@ func (d *EspDB) DbQueryCountLoop(input DbQueryCountInput) (int32, error) {
 }
 
 type DbUpdateItemInput struct {
-	TableName string
-	Update    expression.UpdateBuilder
-	Query     DBItem
-	Condition expression.ConditionBuilder
+	TableName                           string
+	Update                              expression.UpdateBuilder
+	Query                               DBItem
+	Condition                           expression.ConditionBuilder
+	ReturnValues                        types.ReturnValue                         // defaults to UPDATED_NEW; ALL_NEW returns the whole row instead of a separate read
+	ReturnValuesOnConditionCheckFailure types.ReturnValuesOnConditionCheckFailure // ALL_OLD puts the row on the ConditionalCheckFailedException
 }
 
 // DbUpdateItem updates the items in the database
@@ -190,14 +192,19 @@ func (d *EspDB) DbUpdateItem(input DbUpdateItemInput) (*dynamodb.UpdateItemOutpu
 		return nil, err
 	}
 
+	returnValues := input.ReturnValues
+	if returnValues == "" {
+		returnValues = types.ReturnValueUpdatedNew
+	}
 	return d.DB.UpdateItem(d.Ctx.Context, &dynamodb.UpdateItemInput{
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
-		Key:                       keys,
-		TableName:                 aws.String(input.TableName),
-		UpdateExpression:          expr.Update(),
-		ReturnValues:              types.ReturnValueUpdatedNew,
-		ConditionExpression:       expr.Condition(),
+		ExpressionAttributeNames:            expr.Names(),
+		ExpressionAttributeValues:           expr.Values(),
+		Key:                                 keys,
+		TableName:                           aws.String(input.TableName),
+		UpdateExpression:                    expr.Update(),
+		ReturnValues:                        returnValues,
+		ReturnValuesOnConditionCheckFailure: input.ReturnValuesOnConditionCheckFailure,
+		ConditionExpression:                 expr.Condition(),
 	})
 }
 

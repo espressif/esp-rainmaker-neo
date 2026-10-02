@@ -13,6 +13,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/espdynamodb"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
@@ -23,9 +24,13 @@ const (
 
 	authFlowsHashKey = "flow_id"
 
-	colCode    = "code"
-	colSubject = "subject"
-	colGranted = "granted_scope"
+	colCode     = "code"
+	colSubject  = "subject"
+	colGranted  = "granted_scope"
+	colSID      = "sid"
+	colAuthTime = "auth_time"
+
+	colExpiresOn = "expires_on"
 )
 
 var (
@@ -42,17 +47,29 @@ func NewAuthFlowsDB(ctx *rmngctx.RmngContext) *AuthFlowsDB {
 }
 
 type AuthFlow struct {
-	FlowID              string   `dynamodbav:"flow_id"`
-	ClientID            string   `dynamodbav:"client_id,omitempty"`
-	RedirectURI         string   `dynamodbav:"redirect_uri,omitempty"`
-	RequestedScope      []string `dynamodbav:"requested_scope,omitempty"`
-	State               string   `dynamodbav:"state,omitempty"`
-	CodeChallenge       string   `dynamodbav:"code_challenge,omitempty"`
-	CodeChallengeMethod string   `dynamodbav:"code_challenge_method,omitempty"`
-	Subject             string   `dynamodbav:"subject,omitempty"`
-	GrantedScope        []string `dynamodbav:"granted_scope,omitempty"`
-	Code                string   `dynamodbav:"code,omitempty"`
-	ExpiresOn           int64    `dynamodbav:"expires_on,omitempty"`
+	FlowID         string   `dynamodbav:"flow_id"`
+	ClientID       string   `dynamodbav:"client_id,omitempty"`
+	RedirectURI    string   `dynamodbav:"redirect_uri,omitempty"`
+	RequestedScope []string `dynamodbav:"requested_scope,omitempty"`
+	State          string   `dynamodbav:"state,omitempty"`
+	CodeChallenge  string   `dynamodbav:"code_challenge,omitempty"`
+	// Resource is the RFC 8707 identifier the client asked the token to be addressed to.
+	// Captured and validated at /authorize but not used until the code is exchanged minutes
+	// later, so like RedirectURI and CodeChallenge it has to survive in the flow record.
+	// Empty means none was requested, and the token falls back to aud = client_id.
+	Resource            string `dynamodbav:"resource,omitempty"`
+	CodeChallengeMethod string `dynamodbav:"code_challenge_method,omitempty"`
+	// Prompt and MaxAge are the relying party's authentication demands, parked on the flow so the federation leg, a separate request minutes later, can forward them to the upstream provider.
+	Prompt string `dynamodbav:"prompt,omitempty"`
+	MaxAge string `dynamodbav:"max_age,omitempty"`
+	// SID names the browser session this login ran under, so the refresh family minted at the exchange is tied to its parent session; empty when the session write failed or the row predates sessions.
+	SID string `dynamodbav:"sid,omitempty"`
+	// AuthTime is when the person authenticated, not when the code was issued (OIDC Core §2); zero on older flows means now.
+	AuthTime     int64    `dynamodbav:"auth_time,omitempty"`
+	Subject      string   `dynamodbav:"subject,omitempty"`
+	GrantedScope []string `dynamodbav:"granted_scope,omitempty"`
+	Code         string   `dynamodbav:"code,omitempty"`
+	ExpiresOn    int64    `dynamodbav:"expires_on,omitempty"`
 	// Our own state/nonce/verifier for the upstream round-trip. Never the client's: reusing the
 	// downstream values would leak them upstream and break the client-to-code binding.
 	Provider             string `dynamodbav:"provider,omitempty"`
@@ -103,24 +120,40 @@ func (db *AuthFlowsDB) GetFlow(flowID string) (*AuthFlow, error) {
 // IssueCode is the LOGIN -> CODE transition after OTP login: stamps subject, granted scopes, and
 // the single-use code. The subject is bound only when still unset (login-fixation guard): a flow
 // whose subject is already bound cannot be re-bound to a different user by a second verify.
-func (db *AuthFlowsDB) IssueCode(flowID, subject string, grantedScope []string, code string) error {
+// Returns the updated flow (no separate read); a missing, expired or bound flow is ErrFlowNotFound.
+func (db *AuthFlowsDB) IssueCode(flowID, subject string, grantedScope []string, code, sid string, authTime int64) (*AuthFlow, error) {
 	update := expression.Set(expression.Name(colSubject), expression.Value(subject)).
 		Set(expression.Name(colGranted), expression.Value(grantedScope)).
-		Set(expression.Name(colCode), expression.Value(code))
+		Set(expression.Name(colCode), expression.Value(code)).
+		Set(expression.Name(colSID), expression.Value(sid)).
+		Set(expression.Name(colAuthTime), expression.Value(authTime))
 	unbound := expression.Or(
 		expression.Name(colSubject).AttributeNotExists(),
 		expression.Name(colSubject).Equal(expression.Value("")),
 	)
-	_, err := db.DbUpdateItem(espdynamodb.DbUpdateItemInput{
-		TableName: authFlowsTableName,
-		Update:    update,
-		Query:     newAuthFlowKey(flowID),
-		Condition: unbound,
+	unexpired := expression.Or(
+		expression.Name(colExpiresOn).AttributeNotExists(),
+		expression.Name(colExpiresOn).GreaterThan(expression.Value(time.Now().Unix())),
+	)
+	out, err := db.DbUpdateItem(espdynamodb.DbUpdateItemInput{
+		TableName:    authFlowsTableName,
+		Update:       update,
+		Query:        newAuthFlowKey(flowID),
+		Condition:    unbound.And(unexpired),
+		ReturnValues: types.ReturnValueAllNew,
 	})
 	if err != nil {
-		return rmerror.NewRMError(err, "failed to issue authorization code")
+		var ccf *types.ConditionalCheckFailedException
+		if errors.As(err, &ccf) {
+			return nil, ErrFlowNotFound
+		}
+		return nil, rmerror.NewRMError(err, "failed to issue authorization code")
 	}
-	return nil
+	var flow AuthFlow
+	if err := attributevalue.UnmarshalMap(out.Attributes, &flow); err != nil {
+		return nil, rmerror.NewRMError(err, "failed to decode issued auth flow")
+	}
+	return &flow, nil
 }
 
 // Conditioned on the subject still being unbound: a flow that already resolved a subject must not
