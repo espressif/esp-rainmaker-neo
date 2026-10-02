@@ -27,7 +27,8 @@ const (
 	nodeDetailsHashKey = "node_id"
 
 	// Columns
-	nodeDetailsColRegTs = "reg_ts"
+	nodeDetailsColRegTs    = "reg_ts"
+	nodeDetailsColNodeType = "node_type"
 )
 
 type NodeDetailsEntry struct {
@@ -89,15 +90,12 @@ func (db *NodeDetailsDB) GetNodeType(nodeID string) (string, error) {
 		Key: map[string]types.AttributeValue{
 			nodeDetailsHashKey: &types.AttributeValueMemberS{Value: nodeID},
 		},
-		ProjectionExpression: aws.String("node_type"),
+		ProjectionExpression: aws.String(nodeDetailsColNodeType),
 	})
 	if err != nil {
 		return "", rmerror.NewRMError(err, "failed to get node type")
 	}
-	if v, ok := result.Item["node_type"].(*types.AttributeValueMemberS); ok {
-		return v.Value, nil
-	}
-	return "", nil
+	return (&NodeDetails{Data: result.Item}).NodeType(), nil
 }
 
 func (db *NodeDetailsDB) AddNode(nodeobj NodeDetailsEntry) error {
@@ -106,6 +104,22 @@ func (db *NodeDetailsDB) AddNode(nodeobj NodeDetailsEntry) error {
 	}
 
 	return db.DbCreateItem(NodeDetailsTable, &nodeobj)
+}
+
+// SetNodeType overwrites node_type on an existing row; it never creates one.
+func (db *NodeDetailsDB) SetNodeType(nodeID string, nodeType string) error {
+	if err := db.DB.IsAuthorized(utils.NodeAdminAdd, nodeID); err != nil {
+		return err
+	}
+	_, err := db.DbUpdateItem(espdynamodb.DbUpdateItemInput{
+		TableName: NodeDetailsTable,
+		Query:     &NodeDetailsEntry{NodeID: nodeID},
+		Update:    expression.Set(expression.Name(nodeDetailsColNodeType), expression.Value(nodeType)),
+	})
+	if err != nil {
+		return rmerror.NewRMError(err, "failed to set node type")
+	}
+	return nil
 }
 
 // GetServiceData retrieves data for a specific service
@@ -338,6 +352,16 @@ func (db *NodeDetailsDB) DeleteServiceDataWithVersion(nodeID string, serviceName
 // NodeDetails represents the complete row from node_details table
 type NodeDetails struct {
 	Data map[string]types.AttributeValue
+}
+
+func (nd *NodeDetails) NodeType() string {
+	if nd == nil {
+		return ""
+	}
+	if v, ok := nd.Data[nodeDetailsColNodeType].(*types.AttributeValueMemberS); ok {
+		return v.Value
+	}
+	return ""
 }
 
 // GetServiceData retrieves data for a specific service from NodeDetails

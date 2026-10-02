@@ -6,6 +6,7 @@ package node_test
 
 import (
 	"encoding/json"
+	"errors"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
@@ -1165,6 +1166,52 @@ var _ = Describe("Node", func() {
 				Expect(events[0].NodeID).To(Equal(nodeID))
 				Expect(events[0].Capabilities).To(Equal([]string{"camera"}))
 				Expect(events[0].CertArn).NotTo(BeEmpty())
+			})
+
+			It("sets node_type when a re-claim adds a classifying capability", func() {
+				nodeID, err := node.RegisterNodeInRmng(testCtx, nodeCert, "", nil, nil, "test-admin", nil)
+				Expect(err).To(BeNil())
+				installHook("bridge", nil)
+
+				Expect(node.UpdateNodeInRmng(testCtx, nodeID, replacementCert, nil, nil, []string{"bridge"})).To(Succeed())
+
+				nodeType, err := node_details_db.NewNodeDetailsDB(testCtx).GetNodeType(nodeID)
+				Expect(err).To(BeNil())
+				Expect(nodeType).To(Equal("bridge"))
+			})
+
+			It("keeps the stored node_type when the hook classifies nothing", func() {
+				installHook("bridge", nil)
+				nodeID, err := node.RegisterNodeInRmng(testCtx, nodeCert, "", nil, nil, "test-admin", []string{"bridge"})
+				Expect(err).To(BeNil())
+				installHook("", nil)
+
+				Expect(node.UpdateNodeInRmng(testCtx, nodeID, replacementCert, nil, nil, nil)).To(Succeed())
+
+				nodeType, err := node_details_db.NewNodeDetailsDB(testCtx).GetNodeType(nodeID)
+				Expect(err).To(BeNil())
+				Expect(nodeType).To(Equal("bridge"))
+			})
+
+			It("refuses to set node_type on a node with no row", func() {
+				detailsDB := node_details_db.NewNodeDetailsDB(testCtx)
+				Expect(detailsDB.SetNodeType("no-such-node", "bridge")).NotTo(Succeed())
+
+				nodeType, err := detailsDB.GetNodeType("no-such-node")
+				Expect(err).To(BeNil())
+				Expect(nodeType).To(BeEmpty())
+			})
+
+			It("fails the update when the hook errors on the replacement cert", func() {
+				nodeID, err := node.RegisterNodeInRmng(testCtx, nodeCert, "", nil, nil, "test-admin", nil)
+				Expect(err).To(BeNil())
+				installHook("bridge", errors.New("attach failed"))
+
+				Expect(node.UpdateNodeInRmng(testCtx, nodeID, replacementCert, nil, nil, []string{"bridge"})).NotTo(Succeed())
+
+				nodeType, err := node_details_db.NewNodeDetailsDB(testCtx).GetNodeType(nodeID)
+				Expect(err).To(BeNil())
+				Expect(nodeType).To(BeEmpty())
 			})
 		})
 	})

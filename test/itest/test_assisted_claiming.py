@@ -286,6 +286,44 @@ def test_claim_without_kvs_creates_no_channel(test_user1, claimed_nodes):
     assert excinfo.value.response["Error"]["Code"] == "ResourceNotFoundException"
 
 
+BRIDGE_POLICY_NAME = "rmng-bridge-policy"
+
+
+def _attached_cert_policies(node_id):
+    iot = boto3.client("iot", region_name=REGION)
+    principals = iot.list_thing_principals(thingName=node_id)["principals"]
+    assert len(principals) == 1, principals
+    return {p["policyName"] for p in iot.list_attached_policies(target=principals[0])["policies"]}
+
+
+def _node_type(node_id):
+    item = boto3.resource("dynamodb", region_name=REGION).Table("rmng-nodes").get_item(
+        Key={"node_id": node_id}).get("Item", {})
+    return item.get("node_type", "")
+
+
+def test_claim_with_bridge_attaches_the_bridge_policy(_bridge_stack_deployed, test_user1, claimed_nodes):
+    c = test_user1.claim(capabilities=["bridge"])
+    claimed_nodes.append(c["node_id"])
+
+    assert BRIDGE_POLICY_NAME in _attached_cert_policies(c["node_id"])
+    assert _node_type(c["node_id"]) == "bridge"
+
+
+def test_reclaim_with_bridge_upgrades_a_plain_node(_bridge_stack_deployed, test_user1, claimed_nodes):
+    mac = _random_mac()
+    node_id, _cert, _ca, _key = _claim(test_user1, mac)
+    claimed_nodes.append(node_id)
+    assert BRIDGE_POLICY_NAME not in _attached_cert_policies(node_id)
+
+    csr_pem, _key_pem = _make_csr()
+    resp = _verify(test_user1, mac, csr_pem, capabilities=["bridge"])
+    assert resp.status_code == 201, resp.text
+
+    assert BRIDGE_POLICY_NAME in _attached_cert_policies(node_id)
+    assert _node_type(node_id) == "bridge", "presence cascade filters on node_type"
+
+
 def test_claimed_certificate_authenticates_the_user_node_mapping(test_user1, claimed_nodes):
     """The same certificate, used the other way.
 

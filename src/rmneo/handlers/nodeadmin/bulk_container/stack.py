@@ -57,7 +57,9 @@ class CreateNodeRegisterPolicy(Construct):
                 iam.PolicyStatement(
                     actions=[
                         "dynamodb:GetItem",
-                        "dynamodb:PutItem"
+                        "dynamodb:PutItem",
+                        # A cert replacement re-classifies node_type when the hook returns a new one.
+                        "dynamodb:UpdateItem"
                     ],
                     resources=[get_table_arn(TABLE_NAMES['NODE_DETAILS'], region)]
                 ),
