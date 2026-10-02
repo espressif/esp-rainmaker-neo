@@ -201,32 +201,33 @@ class NotificationCore(Construct):
             self, "ShadowNotifyDispatchRule",
             rule_name="shadow_notify_rule",
             topic_rule_payload=iot.CfnTopicRule.TopicRulePayloadProperty(
+                # Dot paths, not nested get(): get() on an undefined value logs a rules-engine "Undefined result" ERROR on every update without params.notify
                 sql=f"""
                 SELECT
                     topic(3) as node_id,
                     topic(6) as topic_name,
                     'shadow_update' as notification_type,
-                    get(get(current, 'state'), 'reported') as curr_state,
-                    get(get(previous, 'state'), 'reported') as prev_state,
-                    get(get(get(get(current, 'state'), 'reported'), 'params'), 'notify') as notify
+                    current.state.reported as curr_state,
+                    previous.state.reported as prev_state,
+                    current.state.reported.params.notify as notify
                 FROM '$aws/things/+/shadow/name/+/update/documents'
                 WHERE startswith(topic(6), 'params-')
                 AND topic(6) <> 'params-'
                 AND (
                     (
-                        NOT isUndefined(get(get(get(get(get(current, 'state'), 'reported'), 'params'), 'notify'),'version'))
+                        NOT isUndefined(current.state.reported.params.notify.version)
                         AND (
-                            isUndefined(get(get(get(get(get(previous, 'state'), 'reported'), 'params'), 'notify'),'version'))
-                            OR get(get(get(get(get(current, 'state'), 'reported'), 'params'), 'notify'),'version') <>
-                               get(get(get(get(get(previous, 'state'), 'reported'), 'params'), 'notify'),'version')
+                            isUndefined(previous.state.reported.params.notify.version)
+                            OR current.state.reported.params.notify.version <>
+                               previous.state.reported.params.notify.version
                         )
                     )
                     OR (
-                        NOT isUndefined(get(get(get(current, 'state'), 'reported'), 'online'))
+                        NOT isUndefined(current.state.reported.online)
                         AND (
-                            isUndefined(get(get(get(previous, 'state'), 'reported'), 'online'))
-                            OR get(get(get(current, 'state'), 'reported'), 'online') <>
-                               get(get(get(previous, 'state'), 'reported'), 'online')
+                            isUndefined(previous.state.reported.online)
+                            OR current.state.reported.online <>
+                               previous.state.reported.online
                         )
                     )
                 )
