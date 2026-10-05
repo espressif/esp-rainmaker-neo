@@ -24,7 +24,7 @@ import os
 import json
 import hashlib
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from app_common import CommonResources, discover_cognito_custom_domain, discover_api_custom_domain, create_rest_api, create_ssm_string_parameter, create_cognito_user_pool, create_cognito_user_pool_client, create_cognito_user_pool_domain, create_cognito_authorizer, create_s3_bucket, create_kms_signing_key
+from app_common import CommonResources, discover_cognito_custom_domain, discover_cognito_email_configuration, discover_api_custom_domain, create_rest_api, create_ssm_string_parameter, create_cognito_user_pool, create_cognito_user_pool_client, create_cognito_user_pool_domain, create_cognito_authorizer, create_s3_bucket, create_kms_signing_key
 from gsi_infra import GsiInfraCore, ManagedTable, GsiReadinessGate
 from .base_res_constants import USER_TABLE_NAMES, USER_INDEX_NAMES, USER_SSM_PARAMETERS, USER_COGNITO_DOMAIN_PREFIXES, SEEDED_OAUTH_CLIENTS
 from ..handlers.publish_discovery.stack import PublishDiscovery
@@ -423,6 +423,11 @@ class CreateEndUserPoolResources(Construct):
             user_pool_name='ESP-End-Users',
             feature_plan=cognito.FeaturePlan.LITE,
             self_sign_up_enabled=True,
+        )
+        user_pool.node.default_child.email_configuration = discover_cognito_email_configuration(
+            self, "UserPoolEmailDiscovery",
+            name="end-user-pool-email-discovery",
+            user_pool_logical_id=user_pool.node.default_child.logical_id,
         )
 
         domain = create_cognito_user_pool_domain(
