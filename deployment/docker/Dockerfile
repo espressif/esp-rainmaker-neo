@@ -127,7 +127,7 @@ RUN mkdir -p /opt/asyncapi && cd /opt/asyncapi && \
     npm install --no-save @asyncapi/cli@${ASYNCAPI_CLI_VERSION}
 ENV PATH="/opt/asyncapi/node_modules/.bin:${PATH}"
 
-RUN pip3 install pip-audit build twine
+RUN pip3 install pip-audit build twine ruff==0.15.21
 
 COPY docs/requirements.txt ./docs/
 RUN pip3 install -r docs/requirements.txt && rm -rf docs

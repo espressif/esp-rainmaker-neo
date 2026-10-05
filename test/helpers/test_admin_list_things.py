@@ -27,7 +27,7 @@ API_GATEWAY_URL = _settings.api_gateway_url
 IDENTITY_POOL_ID = _settings.identity_pool_id
 ADMIN_USER_POOL_ID = _settings.admin_user_pool_id
 ADMIN_USER_POOL_CLIENT_ID = _settings.admin_client_id
-USER_API_GATEWAY_URL = esp_user_base_outputs.get('EspUserApiUrl', '')
+USER_API_GATEWAY_URL = _settings.user_api_gateway_url
 
 # Read test config
 with open('test_config.json', 'r') as f:

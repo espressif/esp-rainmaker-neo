@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Only undefined names are gated, and the gate blocks.
+#
+# F821 is a NameError waiting on whichever branch reaches that line. Compiling a file proves it parses, not that every name it uses exists: py_compile and ast.parse both accept a call to a function nobody defined or imported, so a rename that misses a call site ships and raises at run time. In a repo whose Python is simulators, deploy scripts and integration tests, that is often a nightly rather than a unit test.
+#
+# Ruff's default rules report 287 findings here, almost all unused imports, f-strings without placeholders and unused locals. Those are style, they would need a large cleanup before anything could block, and a job nobody can make green is a job that gets switched off. Add rules to `select` as the tree is cleaned up; everything stays reportable with an explicit `ruff check --select`.
+#
+# A file using `from x import *` defeats the analysis, so F403 reports where that blind spot is; it is listed here but not selected, to be run on demand.
+
+[lint]
+select = ["F821"]
