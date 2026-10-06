@@ -322,6 +322,8 @@ register hook attaches this policy when the requested capabilities contain
 classification is the hook's output, not what selects the policy. The base
 default policy is unchanged.
 
+When the bridge stack is not deployed the policy does not exist; the hook returns `nodelifecycle.CapabilityUnavailableError`, and claim-verify and admin registration answer `400` instead of `500`.
+
 > **Deployment note**: AWS IoT enforces a 2048-byte hard limit on the
 > stored policy document. The blocks below are organized by purpose
 > for review; the deployed `src/bridge/bridge_policy.json` consolidates

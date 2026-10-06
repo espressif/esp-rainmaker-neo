@@ -19,6 +19,7 @@ import (
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_reg_req_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node/nodelifecycle"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/nodeadmin/bulk_job"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/nodeadmin/jobs_api"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
@@ -270,6 +271,11 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 			if errors.Is(err, node.ErrNodeAlreadyRegistered) {
 				rlog.Warn(rctx).Err(err).Send()
 				return utils.APIGwRespJSON(http.StatusConflict, utils.NewAPIStatus(err.Error())), nil
+			}
+			var unavailable *nodelifecycle.CapabilityUnavailableError
+			if errors.As(err, &unavailable) {
+				rlog.Warn(rctx).Err(err).Send()
+				return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(unavailable.Error())), nil
 			}
 			rlog.Error(rctx).Err(err).Send()
 			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil

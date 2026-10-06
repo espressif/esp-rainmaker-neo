@@ -13,6 +13,7 @@ package hooks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -30,6 +31,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/iot"
+	"github.com/aws/smithy-go"
 )
 
 func init() {
@@ -62,6 +64,11 @@ func OnNodeRegister(rmngCtx *rmngctx.RmngContext, nodeID string, capabilities []
 		Target:     aws.String(certArn),
 	})
 	if err != nil {
+		// No bridge policy means the optional bridge stack is not deployed here.
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) && apiErr.ErrorCode() == "ResourceNotFoundException" {
+			return "", &nodelifecycle.CapabilityUnavailableError{Capability: "bridge", Err: err}
+		}
 		return "", fmt.Errorf("failed to attach bridge policy %q to %q: %w", policyName, certArn, err)
 	}
 
