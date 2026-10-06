@@ -708,11 +708,11 @@ class User:
         if request_logging:
             # ===== DETAILED REQUEST LOGGING =====
             print(f"\n{'='*80}")
-            print(f"🚀 API REQUEST:")
+            print("🚀 API REQUEST:")
             print(f"Method: {method}")
             print(f"URL: {url}")
             if params:
-                print(f"Query Parameters:")
+                print("Query Parameters:")
                 for key, value in params.items():
                     print(f"  {key}: {value}")
             if data:
@@ -745,15 +745,15 @@ class User:
 
         if request_logging:
             # ===== DETAILED RESPONSE LOGGING =====
-            print(f"📥 API RESPONSE:")
+            print("📥 API RESPONSE:")
             print(f"Status Code: {response.status_code}")
-            print(f"Response Headers:")
+            print("Response Headers:")
             for key, value in response.headers.items():
                 print(f"  {key}: {value}")
 
             try:
                 response_json = response.json()
-                print(f"Response Body (JSON):")
+                print("Response Body (JSON):")
                 print(json.dumps(response_json, indent=2))
             except (ValueError, json.JSONDecodeError):
                 print(f"Response Body (Text): {response.text}")
@@ -862,14 +862,14 @@ class User:
             if confirm_response.status_code not in (200, 201):
                 return f"ERROR_CONFIRM_FAILED_{confirm_response.status_code}"
 
-            user_log(f"Matter association successful")
+            user_log("Matter association successful")
             return {
                 "noc": verify_result.get("noc"),
                 "matter_node_id": verify_result.get("matter_node_id"),
                 "request_id": request_id
             }
 
-        user_log(f"Association successful")
+        user_log("Association successful")
         return None
 
     def initiate_node_assoc(self, group_id):
@@ -1248,7 +1248,7 @@ class User:
             self.disconnect_future = None
 
         if time.time() - self.previous_disconnect_time < 6:
-            user_log(f"Waiting for 6 seconds before reconnecting")
+            user_log("Waiting for 6 seconds before reconnecting")
             time.sleep(6)
 
         self.previous_disconnect_time = 0

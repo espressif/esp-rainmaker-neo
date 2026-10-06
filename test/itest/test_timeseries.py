@@ -198,10 +198,10 @@ def test_timeseries_comprehensive(associated_device, basic_ingest):
             latest_entry = data_entries[0]
 
             # Validate the data
-            assert latest_entry["key"] == path, f"Path should match"
-            assert latest_entry["dt"] == data_type, f"Data type should match"
+            assert latest_entry["key"] == path, "Path should match"
+            assert latest_entry["dt"] == data_type, "Data type should match"
             assert latest_entry["value"] == expected_value, f"Value should match for {path}"
-            assert latest_entry["cumulative"] == data_point["cumulative"], f"Cumulative flag should match"
+            assert latest_entry["cumulative"] == data_point["cumulative"], "Cumulative flag should match"
 
             # Validate timestamp is recent (within last 30 seconds for basic data)
             entry_timestamp = latest_entry["ts"]
@@ -429,7 +429,7 @@ def test_timeseries_comprehensive(associated_device, basic_ingest):
                 start_key = response["next_key"]
                 assert page_count < 20, "Too many pages - possible infinite loop"
             else:
-                assert "next_key" not in response or response.get("next_key") == "", f"Last page should not have next_key"
+                assert "next_key" not in response or response.get("next_key") == "", "Last page should not have next_key"
                 break
 
         print(f"✅ Collected {len(all_collected_data)} items across {page_count} pages")
@@ -441,7 +441,7 @@ def test_timeseries_comprehensive(associated_device, basic_ingest):
         for i in range(len(all_collected_data) - 1):
             current_timestamp = all_collected_data[i]["ts"]
             next_timestamp = all_collected_data[i + 1]["ts"]
-            assert current_timestamp > next_timestamp, f"Data should be in descending timestamp order"
+            assert current_timestamp > next_timestamp, "Data should be in descending timestamp order"
 
         # Verify no duplicate entries
         timestamps = [item["ts"] for item in all_collected_data]

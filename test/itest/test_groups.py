@@ -169,7 +169,7 @@ def test_list_groups_with_subgroups_and_nodes(test_user1, valid_device):
 
     # Associate the node with the main group
     result = test_user1.do_user_node_assoc(valid_device, main_group_id)
-    assert result == None, f"Association failed with error: {result}"
+    assert result is None, f"Association failed with error: {result}"
 
     # Add the node to the first subgroup
     user1_group_api.add_node_to_subgroup(main_group_id, subgroup_ids[0], valid_device.node_thing_name)
@@ -233,10 +233,10 @@ def test_list_groups_create_subgroups_and_add_nodes_from_different_user(test_use
     assert other_group is not None, f"Other user's group {other_group_id} not found in the list of groups"
     assert other_group["access_type"] == "primary", f"Expected access_type 'primary' for owner, got '{other_group.get('access_type')}'"
     assert "node_ids" in other_group and valid_device.node_thing_name in other_group["node_ids"], f"Original node {valid_device.node_thing_name} should still be in the other user's group"
-    assert len(other_group["node_ids"]) == 1, f"No additional nodes should be in the other user's group"
+    assert len(other_group["node_ids"]) == 1, "No additional nodes should be in the other user's group"
     other_subgroup = next((subgroup for subgroup in other_group.get("subgroups", []) if subgroup["subgroup_id"] == other_subgroup_id), None)
     assert other_subgroup is not None, f"Other user's subgroup {other_subgroup_id} not found in the group"
-    assert "node_ids" not in other_subgroup or len(other_subgroup["node_ids"]) == 0, f"No nodes should be in the other user's subgroup"
+    assert "node_ids" not in other_subgroup or len(other_subgroup["node_ids"]) == 0, "No nodes should be in the other user's subgroup"
     user2_group_api.empty_and_delete_group(other_group_id)
 
 def test_user_node_assoc_group_migration(test_user1, valid_device_rsa):
@@ -248,7 +248,7 @@ def test_user_node_assoc_group_migration(test_user1, valid_device_rsa):
     user1_group_api = Group(test_user1)
     group_id_1 = user1_group_api.create_group("Test Group 1")
     result = test_user1.do_user_node_assoc(valid_device_rsa, group_id_1)
-    assert result == None, f"Association failed with error: {result}"
+    assert result is None, f"Association failed with error: {result}"
 
     # Connect to MQTT
     test_user1.mqtt_connect()
@@ -260,7 +260,7 @@ def test_user_node_assoc_group_migration(test_user1, valid_device_rsa):
         # Now associate the same node with the second group
         group_id_2 = user1_group_api.create_group("Test Group 2")
         result = test_user1.do_user_node_assoc(valid_device_rsa, group_id_2)
-        assert result == None, f"Association failed with error: {result}"
+        assert result is None, f"Association failed with error: {result}"
 
         # Refresh MQTT credentials
         assert test_user1.mqtt_refresh_credentials(), "Failed to refresh MQTT credentials"
@@ -274,7 +274,7 @@ def test_user_node_assoc_group_migration(test_user1, valid_device_rsa):
         # Verify that the node is no longer in the first group
         group_1 = next((group for group in list_groups_data["groups"] if group["group_id"] == group_id_1), None)
         assert group_1 is not None, f"Created group {group_id_1} not found in the list of groups"
-        assert "node_ids" not in group_1, f"node_ids should not be in the group"
+        assert "node_ids" not in group_1, "node_ids should not be in the group"
         user1_group_api.empty_and_delete_group(group_id_1)
         user1_group_api.empty_and_delete_group(group_id_2)
 

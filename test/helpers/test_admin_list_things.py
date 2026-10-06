@@ -76,7 +76,7 @@ def get_credentials(id_token):
 
 def call_list_things(creds):
     """Call AWS IoT ListThings using the IoT control plane API."""
-    print(f"\nAttempting ListThings via IoT control plane API...")
+    print("\nAttempting ListThings via IoT control plane API...")
 
     session = boto3.Session(
         aws_access_key_id=creds['access_key_id'],

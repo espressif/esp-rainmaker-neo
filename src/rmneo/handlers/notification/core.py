@@ -202,7 +202,7 @@ class NotificationCore(Construct):
             rule_name="shadow_notify_rule",
             topic_rule_payload=iot.CfnTopicRule.TopicRulePayloadProperty(
                 # Dot paths, not nested get(): get() on an undefined value logs a rules-engine "Undefined result" ERROR on every update without params.notify
-                sql=f"""
+                sql="""
                 SELECT
                     topic(3) as node_id,
                     topic(6) as topic_name,
@@ -254,7 +254,7 @@ class NotificationCore(Construct):
             self, "NodeNotifyRule",
             rule_name="node_notify_rule",
             topic_rule_payload=iot.CfnTopicRule.TopicRulePayloadProperty(
-                sql=f"""
+                sql="""
                 SELECT 
                     topic(3) as node_id,
                     topic(5) as topic_name,

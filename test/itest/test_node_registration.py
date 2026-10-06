@@ -177,7 +177,7 @@ def test_register_node_parent_exists_child_created(admin_user, test_device_new):
                 break
             time.sleep(2 ** attempt)
         assert test_device_new.node_thing_name in things['things'], \
-            f"Node not found in child group after retries"
+            "Node not found in child group after retries"
 
     finally:
         for group in [child_group, parent_group]:
@@ -218,7 +218,7 @@ def test_register_node_parent_child_both_exist(admin_user, test_device_new):
                 break
             time.sleep(2 ** attempt)
         assert test_device_new.node_thing_name in things['things'], \
-            f"Node not found in child group after retries"
+            "Node not found in child group after retries"
 
     finally:
         for group in [child_group, parent_group]:

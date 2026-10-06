@@ -438,7 +438,7 @@ def test_multi_group_subgroup_shadow_access(test_user1, test_user2, bare_device)
                 test_user2.subscribe_to_named_shadows(node.node_thing_name, [shadow_name])
 
             connection_status = test_user2.read_connection_queue()
-            assert connection_status == "interrupted", f"User2 should get disconnected when trying to subscribe to unauthorized shadow"
+            assert connection_status == "interrupted", "User2 should get disconnected when trying to subscribe to unauthorized shadow"
         else:
             test_user2.subscribe_to_named_shadows(node.node_thing_name, [shadow_name])
             test_user2.read_shadow(node.node_thing_name, shadow_name)

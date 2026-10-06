@@ -525,7 +525,7 @@ class Device:
                 device_event(f"Desired State: {response.state.desired}")
 
     def on_update_shadow_rejected(self, error):
-        device_event(f"Shadow update rejected:")
+        device_event("Shadow update rejected:")
         device_event(f"Error code: {error.code}")
         device_event(f"Error message: {error.message}")
 

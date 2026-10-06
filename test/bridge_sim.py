@@ -643,13 +643,13 @@ class BridgeSim:
         print(f"  subgroups: {self.subgroups or '(none)'}")
         print(f"  shadow:    {_shadow_name(self.group, self.subgroups) if self.group else '(unknown)'}")
         if self.children:
-            print(f"  children:")
+            print("  children:")
             for name, c in sorted(self.children.items()):
                 print(f"    {name}  group={c.group!r}  subgroups={c.subgroups}  shadow={c.shadow_name() if c.group else '?'}")
         else:
-            print(f"  children:  (none)")
+            print("  children:  (none)")
         if self.local_id_to_child:
-            print(f"  local_id → child:")
+            print("  local_id → child:")
             for lid, ch in self.local_id_to_child.items():
                 print(f"    {lid} -> {ch}")
 

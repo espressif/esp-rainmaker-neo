@@ -157,7 +157,7 @@ class TimeseriesCore(Construct):
             self, "NodeTsRule",
             rule_name="node_ts_rule",
             topic_rule_payload=iot.CfnTopicRule.TopicRulePayloadProperty(
-                sql=f"""
+                sql="""
                 SELECT
                     topic(3) as node_id,
                     k as key,

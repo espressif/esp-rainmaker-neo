@@ -146,7 +146,7 @@ class TSPerformanceTester:
     def run_performance_test(self, num_devices: int = 1, data_points_per_device: int = 100,
                            concurrent_devices: int = 1, delay_between_points: float = 0.1):
         """Run a performance test with multiple devices publishing data points."""
-        print(f"Starting performance test with:")
+        print("Starting performance test with:")
         print(f"- Number of devices: {num_devices}")
         print(f"- Data points per device: {data_points_per_device}")
         print(f"- Concurrent devices: {concurrent_devices}")

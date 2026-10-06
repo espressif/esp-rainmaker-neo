@@ -480,7 +480,7 @@ def test_matter_dev_assoc_pure_rm_node(matter_group, session_valid_device_ec):
     assert connect_device_with_retry(device), "Failed to connect the device"
 
     # Associate using challenge_response (should succeed - adds node to group without NOC)
-    assert user.do_user_node_assoc(device, group_id) == None, "Failed to associate device with group"# Uses challenge_response flow
+    assert user.do_user_node_assoc(device, group_id) is None, "Failed to associate device with group"# Uses challenge_response flow
 
     # Verify node appears in group listing
     assert device.wait_for_group_info(), "Device failed to receive group info"

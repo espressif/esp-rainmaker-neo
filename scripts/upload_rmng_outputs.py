@@ -145,7 +145,7 @@ def ensure_bucket_exists(session, bucket_name):
                 return False
         if error_code == "403":
             print(f"[ERROR] ACCESS DENIED: {bucket_name}")
-            print(f"        Bucket exists, but you do not have permission to access it.")
+            print("        Bucket exists, but you do not have permission to access it.")
         else:
             print(f"[ERROR] Error checking bucket: {e}")
         return False
@@ -157,8 +157,8 @@ def private_paths(data):
     """
     if PRIVATE_PATHS_KEY not in data:
         print(f"[ERROR] {RMNG_OUTPUTS} has no {PRIVATE_PATHS_KEY} key, so no output can be")
-        print(f"[ERROR] confirmed safe to publish. Regenerate it first:")
-        print(f"[ERROR]     python3 scripts/generate_stack_outputs.py")
+        print("[ERROR] confirmed safe to publish. Regenerate it first:")
+        print("[ERROR]     python3 scripts/generate_stack_outputs.py")
         sys.exit(1)
 
     paths = data[PRIVATE_PATHS_KEY]
@@ -166,8 +166,8 @@ def private_paths(data):
         isinstance(p, list) and all(isinstance(part, str) for part in p) for p in paths
     ):
         print(f"[ERROR] {PRIVATE_PATHS_KEY} in {RMNG_OUTPUTS} is malformed; expected a list of")
-        print(f"[ERROR] string paths. Refusing to publish. Regenerate it first:")
-        print(f"[ERROR]     python3 scripts/generate_stack_outputs.py")
+        print("[ERROR] string paths. Refusing to publish. Regenerate it first:")
+        print("[ERROR]     python3 scripts/generate_stack_outputs.py")
         sys.exit(1)
 
     return paths

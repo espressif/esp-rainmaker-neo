@@ -1215,7 +1215,7 @@ class AppSim:
             self.http_api_count += 1
             self._print_stats()
 
-            if not schedule is None:
+            if schedule is not None:
                 print(f"Schedule details for device {device}:")
                 print(json.dumps(schedule, indent=2))
             else:

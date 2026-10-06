@@ -251,10 +251,10 @@ def test_webhook_notification(test_user2, test_user3, test_user4, associated_dev
 
             # Verify report state structure
             assert "payload" in notification_data, (
-                f"Missing payload in GVA notification")
+                "Missing payload in GVA notification")
             payload = notification_data["payload"]
             assert "devices" in payload, (
-                f"Missing devices in GVA payload")
+                "Missing devices in GVA payload")
             states = payload["devices"]["states"]
 
             for dev_id, expected in expected_device_states.items():
@@ -701,7 +701,7 @@ def test_mobile_push_notification(test_user2, associated_device, admin_user):
             """Upload custom push text configuration using the file API instead of direct S3 upload."""
             # Create a temporary file with the custom configuration
             config_body = json.dumps(custom_config, indent=2)
-            print(f"Uploading custom push text configuration via API:")
+            print("Uploading custom push text configuration via API:")
             print(config_body)
 
             # Create a temporary file

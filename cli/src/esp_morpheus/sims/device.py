@@ -155,7 +155,7 @@ class DeviceSim:
             return False
 
     def on_params_message(self, topic, payload, **kwargs):
-        print(f"Received message on params topic:")
+        print("Received message on params topic:")
         print(f"Topic: {topic}")
         try:
             # Handle both string and dict payloads
@@ -188,7 +188,7 @@ class DeviceSim:
                 print(f"Raw payload: {payload}")
 
     def on_from_cloud_message(self, topic, message):
-        print(f"Received message from cloud:")
+        print("Received message from cloud:")
         print(f"Payload: {json.dumps(message, indent=2)}")
         self.message_queue.put(('from_cloud', message))
 
@@ -633,7 +633,7 @@ class DeviceSim:
             # Only update with ncfg_ver when configuration has changed
             if self.device.group_id:
                 if self.write_default_params(include_ncfg_ver=True):
-                    print(f"Successfully updated device shadows with default parameters and new ncfg_ver")
+                    print("Successfully updated device shadows with default parameters and new ncfg_ver")
                 else:
                     print("Failed to write default parameters to shadow")
                     return False
@@ -646,7 +646,7 @@ class DeviceSim:
             # For unchanged config, still update shadows but don't update the ncfg_ver
             if self.device.group_id:
                 if self.write_default_params(include_ncfg_ver=False):
-                    print(f"Successfully updated device shadows with default parameters (preserved ncfg_ver)")
+                    print("Successfully updated device shadows with default parameters (preserved ncfg_ver)")
                 else:
                     print("Failed to write default parameters to shadow")
                     return False

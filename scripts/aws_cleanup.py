@@ -498,7 +498,7 @@ class AWSDeployCleanup:
                                 WaiterConfig={'Delay': 30, 'MaxAttempts': 240}  # 30 seconds * 240 attempts = 2 hours
                             )
                         except ClientError as e:
-                            self.console.print(f"Regular deletion failed, attempting force delete...")
+                            self.console.print("Regular deletion failed, attempting force delete...")
                             self.cloudformation.delete_stack(StackName=stack_name, DeletionMode='FORCE_DELETE_STACK')
                             waiter = self.cloudformation.get_waiter('stack_delete_complete')
                             waiter.wait(

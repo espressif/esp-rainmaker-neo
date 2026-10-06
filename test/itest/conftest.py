@@ -388,9 +388,9 @@ def _init_user():
                 if creds:
                     return user
                 else:
-                    print(f"[User] Failed to get credentials for existing user, will create new user")
+                    print("[User] Failed to get credentials for existing user, will create new user")
             else:
-                print(f"[User] Signin succeeded but no token received, will create new user")
+                print("[User] Signin succeeded but no token received, will create new user")
     except Exception as e:
         print(f"[User] Authentication failed (user may not exist): {e}")
 
@@ -475,9 +475,9 @@ def _init_admin_user():
                 if creds:
                     return user
                 else:
-                    print(f"[User] Failed to get credentials for existing admin user, will create new user")
+                    print("[User] Failed to get credentials for existing admin user, will create new user")
             else:
-                print(f"[User] Admin signin succeeded but no token received, will create new user")
+                print("[User] Admin signin succeeded but no token received, will create new user")
     except Exception as e:
         print(f"[User] Admin authentication failed (user may not exist): {e}")
 
@@ -1452,9 +1452,9 @@ def user_with_1_dev_each_in_2_groups(test_user1, session_valid_device_rsa, sessi
 
     # Associate devices with groups
     result = test_user1.do_user_node_assoc(device1, group1_id)
-    assert result == None, f"Association failed with error: {result}"
+    assert result is None, f"Association failed with error: {result}"
     result = test_user1.do_user_node_assoc(device2, group2_id)
-    assert result == None, f"Association failed with error: {result}"
+    assert result is None, f"Association failed with error: {result}"
     yield device1, device2, group1_id, group2_id, test_user1
     # Cleanup. Both devices are pooled — their fixtures reset+release them, so
     # only the groups are torn down here (which also removes the associations).

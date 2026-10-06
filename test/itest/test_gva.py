@@ -156,12 +156,12 @@ def test_gva_discovery(user_with_1_dev_each_in_2_groups):
     message1 = device1.wait_for_cloud_message(timeout=5)
     assert message1 is not None, "Timeout waiting for getGVAEn message for device1"
     assert "event" in message1 and "getGVAEn" in message1["event"], "getGVAEn event not found in message for device1"
-    assert message1["getGVAEn"]["enabled"] == True, "getGVAEn enabled not set to true for device1"
+    assert message1["getGVAEn"]["enabled"] is True, "getGVAEn enabled not set to true for device1"
 
     message2 = device2.wait_for_cloud_message(timeout=5)
     assert message2 is not None, "Timeout waiting for getGVAEn message for device2"
     assert "event" in message2 and "getGVAEn" in message2["event"], "getGVAEn event not found in message for device2"
-    assert message2["getGVAEn"]["enabled"] == True, "getGVAEn enabled not set to true for device2"
+    assert message2["getGVAEn"]["enabled"] is True, "getGVAEn enabled not set to true for device2"
 
 def test_gva_discovery_friendly_name(user_with_1_dev_each_in_2_groups):
     """Test that GVA sync uses esp.param.name from shadow as device name."""
@@ -549,7 +549,7 @@ def test_gva_comprehensive_discovery(user_with_1_dev_each_in_2_groups):
     assert normalize_for_comparison(discovery_response) == normalize_for_comparison(expected)
 
     message2 = device2.wait_for_cloud_message(timeout=5)
-    assert message2 is not None and "getGVAEn" in message2.get("event", []) and message2["getGVAEn"]["enabled"] == True
+    assert message2 is not None and "getGVAEn" in message2.get("event", []) and message2["getGVAEn"]["enabled"] is True
 
 def test_gva_comprehensive_control(user_with_1_dev_each_in_2_groups):
     """

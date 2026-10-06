@@ -116,12 +116,12 @@ def test_alexa_discovery(user_with_1_dev_each_in_2_groups, alexa_region_arn):
     message1 = device1.wait_for_cloud_message(timeout=5)
     assert message1 is not None, "Timeout waiting for getAlexaEn message for device1"
     assert "event" in message1 and "getAlexaEn" in message1["event"], "getAlexaEn event not found in message for device1"
-    assert message1["getAlexaEn"]["enabled"] == True, "getAlexaEn enabled not set to true for device1"
+    assert message1["getAlexaEn"]["enabled"] is True, "getAlexaEn enabled not set to true for device1"
 
     message2 = device2.wait_for_cloud_message(timeout=5)
     assert message2 is not None, "Timeout waiting for getAlexaEn message for device2"
     assert "event" in message2 and "getAlexaEn" in message2["event"], "getAlexaEn event not found in message for device2"
-    assert message2["getAlexaEn"]["enabled"] == True, "getAlexaEn enabled not set to true for device2"
+    assert message2["getAlexaEn"]["enabled"] is True, "getAlexaEn enabled not set to true for device2"
 
 
 def test_alexa_discovery_friendly_name(user_with_1_dev_each_in_2_groups, alexa_region_arn):
