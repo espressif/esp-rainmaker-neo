@@ -10,8 +10,9 @@ Usage:
 """
 import json
 import sys
-import requests
+
 import boto3
+import requests
 
 from scripts.rmng_outputs import RmngSettings
 from test.test_user import _admin_cognito_auth

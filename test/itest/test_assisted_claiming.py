@@ -31,8 +31,14 @@ from py_sdk.test_device import Device
 from py_sdk.test_group import Group
 from py_sdk.test_user import User
 from test.itest.conftest import (
-    CA_CERT, CREDENTIAL_PROVIDER_ENDPOINT, DEBUG, DEVICE_VIDEO_ROLE_ALIAS, IOT_ENDPOINT, REGION,
-    connect_device_with_retry, rmng_outputs,
+    CA_CERT,
+    CREDENTIAL_PROVIDER_ENDPOINT,
+    DEBUG,
+    DEVICE_VIDEO_ROLE_ALIAS,
+    IOT_ENDPOINT,
+    REGION,
+    connect_device_with_retry,
+    rmng_outputs,
 )
 
 # Claiming configuration the suite bootstraps with, via the admin admin API

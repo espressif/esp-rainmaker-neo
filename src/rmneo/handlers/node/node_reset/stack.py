@@ -3,18 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from aws_cdk import (
-    aws_iam as iam,
     Duration,
     Stack,
+    aws_iam as iam,
 )
 from constructs import Construct
+
 from app_common import (
     CommonResources,
-    create_lambda_function,
     create_base_lambda_role,
+    create_lambda_function,
 )
-from src.rmneo.stacks.base_res_constants import TABLE_NAMES
 from arn_utils import get_table_arn, get_topic_arn
+from src.rmneo.stacks.base_res_constants import TABLE_NAMES
 
 
 class NodeDataResetLambda(Construct):

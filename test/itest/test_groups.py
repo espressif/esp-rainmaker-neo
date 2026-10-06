@@ -3,16 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import pytest
 import time
+
 import boto3
+import pytest
+
 from py_sdk.test_group import Group
+from py_sdk.test_util import describe_thing_attributes, wait_until
 from test.itest.conftest import (
     REGION,
-    connect_device_with_retry,
     accept_sharing_request_for,
+    connect_device_with_retry,
 )
-from py_sdk.test_util import wait_until, describe_thing_attributes
 
 
 def test_create_and_list_groups(test_user1):

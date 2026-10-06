@@ -11,8 +11,8 @@ module: one class object, so isinstance holds across them, and private names sta
 
 import sys
 
-from esp_morpheus.sdk.gva_setup import *  # noqa: F401,F403
 import esp_morpheus.sdk.gva_setup as _target
+from esp_morpheus.sdk.gva_setup import *  # noqa: F401,F403
 
 if __name__ == "__main__":
     _target.main()

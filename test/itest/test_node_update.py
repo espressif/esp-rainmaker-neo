@@ -27,13 +27,12 @@ import pytest
 
 from py_sdk.test_device import Device, generate_key_and_cert, split_combined_cert_pem
 from test.itest.conftest import (
-    connect_device_with_retry,
-    REGION,
     CA_CERT,
-    IOT_ENDPOINT,
     DEBUG,
+    IOT_ENDPOINT,
+    REGION,
+    connect_device_with_retry,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

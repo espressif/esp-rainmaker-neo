@@ -32,7 +32,6 @@ from py_sdk.test_group import Group
 from py_sdk.test_smartthings import cookie_for, st_external_device_id
 from test.itest.conftest import REGION, accept_sharing_request_for, rmng_outputs
 
-
 # ---------------------------------------------------------------------------
 # SmartThings Schema App Lambda ARN lookup (mirrors conftest._get_alexa_region_arns).
 #

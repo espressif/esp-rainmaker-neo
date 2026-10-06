@@ -2,20 +2,22 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import json
-import os
-from .. import paths
-from ..outputs import TEST_CONFIG_PATH, RmngSettings
-from ..sdk.user import User
-from ..sdk.group import Group
-from ..sdk.util import shadow_to_unstructured
-from . import prov_ble
-from prompt_toolkit import PromptSession
-from queue import Queue, Empty
-import pathlib
-import time
 import asyncio
 import datetime
+import json
+import os
+import pathlib
+import time
+from queue import Empty, Queue
+
+from prompt_toolkit import PromptSession
+
+from .. import paths
+from ..outputs import TEST_CONFIG_PATH, RmngSettings
+from ..sdk.group import Group
+from ..sdk.user import User
+from ..sdk.util import shadow_to_unstructured
+from . import prov_ble
 
 # Never CWD-anchored: a cache that looks empty from a new directory would re-fetch every node
 # config the app already had.

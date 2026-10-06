@@ -6,9 +6,11 @@
 Common utility functions for testing.
 """
 
-import boto3
 import json
 import time
+
+import boto3
+
 
 def shadow_to_unstructured(shadow):
     """

@@ -21,6 +21,7 @@ Spec: espuser/docs/specs/sso-sessions.md, authorize-code-flow.md.
 import pytest
 import requests
 
+from py_sdk.espuser_oauth import Browser, WebClient, client_ids_under, sids_in
 from test.itest.conftest import (
     SESSION_COOKIE,
     SESSIONS_SCOPE,
@@ -28,7 +29,6 @@ from test.itest.conftest import (
     USER_API_GATEWAY_URL,
     requires_espuser,
 )
-from py_sdk.espuser_oauth import Browser, WebClient, client_ids_under, sids_in
 
 pytestmark = [pytest.mark.espuser, requires_espuser]
 

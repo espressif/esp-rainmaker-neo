@@ -3,8 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+
 import boto3
 import pytest
+
 
 def test_alexa_configuration_is_readable(admin_user, alexa_region_arn):
     """GET returns the configuration without the secret, and the skill Lambda's trigger
@@ -251,6 +253,7 @@ def test_alexa_control(user_with_1_dev_each_in_2_groups, alexa_region_arn):
 def test_alexa_rename_emits_add_or_update_report(user_with_1_dev_each_in_2_groups, webhook_mock):
     """Renaming a device should reach Alexa as an AddOrUpdateReport."""
     import time
+
     import requests
 
     webhook_mock_base_url, webhook_mock_api_key = webhook_mock

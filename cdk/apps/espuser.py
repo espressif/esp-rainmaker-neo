@@ -4,16 +4,17 @@
 
 import _bootstrap  # noqa: F401 — sys.path setup; must precede every repo-local import
 
-import os
 import importlib
-from dataclasses import dataclass
-from datetime import datetime, UTC
+import os
 from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import aws_cdk as cdk
+
+from app_common import CommonResources, apply_common_tags, get_rmng_inputs
 from src.espuser.stacks.esp_user_base_stack import EspUserBaseStack
 from src.espuser.stacks.esp_user_core_stack import EspUserCoreStack
-from app_common import apply_common_tags, get_rmng_inputs, CommonResources
 
 OPTIONAL_MODULES_DIR = "addon_modules"
 

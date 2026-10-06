@@ -3,7 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from constructs import Construct
+
 from app_common import CommonResources
+
 
 class AlexaSkillBase(Construct):
     """Base/infrastructure resources for Alexa Skill - placeholder for future infrastructure"""

@@ -3,7 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from constructs import Construct
+
 from app_common import CommonResources
+
 
 class GVAActionBase(Construct):
     """Base/infrastructure resources for GVA Action - placeholder for future infrastructure"""

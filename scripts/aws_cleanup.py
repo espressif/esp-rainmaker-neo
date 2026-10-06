@@ -5,9 +5,9 @@
 
 import boto3
 import click
+from botocore.exceptions import ClientError
 from rich.console import Console
 from rich.progress import Progress
-from botocore.exceptions import ClientError
 
 console = Console()
 

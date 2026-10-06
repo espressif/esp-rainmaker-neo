@@ -21,9 +21,16 @@ email quota, so the default `make itest` deselects it. Run it on its own with
 `make itest ITEST_ARGS='-m cognito -k admin_auth'`.
 """
 
+import contextlib
+import time
+
+import boto3
+import pytest
+
+from py_sdk.test_user import User
 from test.itest.conftest import (
-    ADMIN_USER_POOL_ID,
     ADMIN_CLIENT_ID,
+    ADMIN_USER_POOL_ID,
     API_GATEWAY_URL,
     IDENTITY_POOL_ID,
     IOT_ENDPOINT,
@@ -35,11 +42,6 @@ from test.itest.email_utils import (
     generate_test_password,
     get_verification_code_from_server,
 )
-from py_sdk.test_user import User
-import boto3
-import contextlib
-import pytest
-import time
 
 pytestmark = [pytest.mark.cognito]
 

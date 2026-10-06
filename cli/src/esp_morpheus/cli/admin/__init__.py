@@ -22,8 +22,16 @@ from .. import output
 from ..context import Session
 from ..guide import guide
 from ..shell import ContextGroup
-from . import (botuser, gendevice, integrations, messaging, nodes, platforms, runtime,
-               testdata)
+from . import (
+    botuser,
+    gendevice,
+    integrations,
+    messaging,
+    nodes,
+    platforms,
+    runtime,
+    testdata,
+)
 
 IDENTITY_HINT = ('name one with `morpheus admin <identity>`, or seed one with '
                  '`morpheus admin test-data setup`.')

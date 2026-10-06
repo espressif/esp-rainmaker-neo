@@ -15,7 +15,6 @@ import click
 import pytest
 from botocore.exceptions import ClientError, ProfileNotFound
 from click.testing import CliRunner
-
 from esp_morpheus.cli import output, shell
 from esp_morpheus.cli.context import Session, pass_device
 from esp_morpheus.cli.main import admin, cli, device, user
@@ -1091,6 +1090,7 @@ def test_a_record_is_never_cut_open_by_a_message():
     """The two orders interleave; they must not split. A message delivered from another thread
     part-way through a record has to wait for the record, and no longer."""
     import threading
+
     from rich.console import Console
 
     arrived = []

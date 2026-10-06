@@ -7,17 +7,18 @@ from aws_cdk import (
     aws_iam as iam,
 )
 from constructs import Construct
+
 from app_common import (
     CommonResources,
-    create_lambda_function,
+    add_cors_options,
     create_base_lambda_role,
     create_cfn_api_method,
+    create_lambda_function,
     get_or_create_api_resource,
-    add_cors_options
 )
-from src.rmneo.stacks.base_res_constants import TABLE_NAMES, INDEX_NAMES
 from arn_utils import get_table_arn, get_table_index_arn
 from src.espuser.stacks.base_res_constants import USER_TABLE_NAMES
+from src.rmneo.stacks.base_res_constants import INDEX_NAMES, TABLE_NAMES
 
 
 class NodeGroupsAPI(Construct):

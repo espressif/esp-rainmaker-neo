@@ -80,7 +80,6 @@ from queue import Empty, Queue
 from awscrt import io, mqtt
 from awsiot import mqtt_connection_builder
 
-
 DEFAULT_CONFIG = Path(".bridges/bridges_config.json")
 
 

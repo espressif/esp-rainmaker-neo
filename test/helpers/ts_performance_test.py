@@ -3,13 +3,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import argparse
 import json
+import os
+import random
+import sys
 import time
 import uuid
-import random
-import argparse
-import os
-import sys
 from concurrent.futures import ThreadPoolExecutor
 
 # Add project root to Python path
@@ -18,10 +18,10 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 # Now we can import our test modules
-from scripts.rmng_outputs import TEST_CONFIG_PATH, RmngSettings  # noqa: E402
-from py_sdk.test_device import Device, generate_key_and_cert, device_log  # noqa: E402
-from py_sdk.test_user import User  # noqa: E402
+from py_sdk.test_device import Device, device_log, generate_key_and_cert  # noqa: E402
 from py_sdk.test_group import Group  # noqa: E402
+from py_sdk.test_user import User  # noqa: E402
+from scripts.rmng_outputs import TEST_CONFIG_PATH, RmngSettings  # noqa: E402
 
 # Hardcoded AWS root CA certificate
 CA_CERT = """-----BEGIN CERTIFICATE-----

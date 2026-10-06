@@ -24,7 +24,6 @@ from aws_cdk import (
 )
 from constructs import Construct
 
-from arn_utils import get_cloudfront_distribution_arn
 from app_common import (
     CommonResources,
     cloudfront_security_headers,
@@ -37,6 +36,7 @@ from app_common import (
     create_s3_bucket,
     discover_cloudfront_custom_domain,
 )
+from arn_utils import get_cloudfront_distribution_arn
 
 BUCKET_PURPOSE = "app-assets"
 

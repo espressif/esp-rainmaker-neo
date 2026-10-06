@@ -10,21 +10,26 @@ from aws_cdk import (
     Stack,
     aws_iam as iam,
     aws_lambda as lambda_,
+    aws_ssm as ssm,
 )
-from app_common import get_or_create_api_resource
 from constructs import Construct
-from app_common import CommonResources, create_api_deployment
-from ..handlers.user_common.stack import UserCommonAPI
-from ..handlers.token.stack import TokenAPI
-from ..handlers.userinfo.stack import UserinfoAPI
-from ..handlers.sessions.stack import SessionsAPI
-from ..handlers.revoke.stack import RevokeAPI
-from ..handlers.clients.stack import ClientsAPI
+
+from app_common import (
+    CommonResources,
+    create_api_deployment,
+    get_or_create_api_resource,
+)
+
 from ..handlers.authorize.stack import AuthorizeAPI
-from ..handlers.user_auth.stack import UserAuthAPI
+from ..handlers.clients.stack import ClientsAPI
 from ..handlers.espuser_admin_creds.stack import AdminCredsAPI
+from ..handlers.revoke.stack import RevokeAPI
+from ..handlers.sessions.stack import SessionsAPI
+from ..handlers.token.stack import TokenAPI
+from ..handlers.user_auth.stack import UserAuthAPI
+from ..handlers.user_common.stack import UserCommonAPI
+from ..handlers.userinfo.stack import UserinfoAPI
 from .base_res_constants import USER_SSM_PARAMETERS
-from aws_cdk import aws_ssm as ssm
 
 # Comma-separated list of one or more email-shaped tokens (each at least a@b.c), whitespace around commas allowed. Blank is NOT accepted.
 ADMIN_EMAILS_ALLOWED_PATTERN = r"^\s*[^@\s,]+@[^@\s,]+\.[^@\s,]+(\s*,\s*[^@\s,]+@[^@\s,]+\.[^@\s,]+)*\s*$"

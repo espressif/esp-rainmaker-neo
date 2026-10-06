@@ -5,17 +5,18 @@
 
 import _bootstrap  # noqa: F401 — sys.path setup; must precede every repo-local import
 
-import os
-import json
 import importlib
-from dataclasses import dataclass
+import json
+import os
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import aws_cdk as cdk
+
+from app_common import CommonResources, apply_common_tags
+from src.rmneo.stacks.admin_dashboard_stack import AdminDashboardStack
 from src.rmneo.stacks.rmng_base_stack import RMNGBaseStack
 from src.rmneo.stacks.rmng_core_stack import RMNGCoreStack
-from src.rmneo.stacks.admin_dashboard_stack import AdminDashboardStack
-from app_common import CommonResources, apply_common_tags
 
 # Directory (sibling of this app) holding separately-distributed optional add-on modules. Overridable via env for alternate layouts.
 OPTIONAL_MODULES_DIR = os.environ.get("RMNG_OPTIONAL_MODULES_DIR", "addon_modules")

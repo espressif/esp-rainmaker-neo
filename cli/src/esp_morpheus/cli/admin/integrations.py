@@ -8,8 +8,7 @@ import os
 
 import click
 
-from ...sdk import alexa_setup as alexa_smapi
-from ...sdk import gva_setup as gva_gcp
+from ...sdk import alexa_setup as alexa_smapi, gva_setup as gva_gcp
 from .. import output
 from ..context import Session, pass_session, pass_user
 from ..guide import print_alexa_instructions

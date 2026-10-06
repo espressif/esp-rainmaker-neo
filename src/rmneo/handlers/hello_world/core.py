@@ -3,8 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from constructs import Construct
-from src.rmneo.handlers.hello_world.hello_world.stack import HelloWorldMod
+
 from app_common import CommonResources
+from src.rmneo.handlers.hello_world.hello_world.stack import HelloWorldMod
+
 
 class HelloWorldCore(Construct):
     """Core/compute resources for HelloWorld - Lambda function and API integration"""

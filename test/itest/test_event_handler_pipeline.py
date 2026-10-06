@@ -20,15 +20,14 @@ regardless of the deployment's current iot-event-mode and validate that:
 These tests don't mutate global state, so they're safe to run in parallel
 with each other and with test_iot_event_mode.py (no xdist_group needed).
 """
-from queue import Empty
 import json
 import time
+from queue import Empty
 
 import boto3
 import pytest
 
 from test.itest.conftest import REGION, wait_for_node_session, wait_for_reported_online
-
 
 NODE_CONN_QUEUE_NAME = "node-conn-queue"
 NODE_TO_CLOUD_QUEUE_NAME = "node-to-cloud-queue"

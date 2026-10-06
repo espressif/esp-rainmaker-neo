@@ -2,18 +2,20 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from py_sdk.test_user import user_log
+import time
+import uuid
+
+import boto3
+import pytest
+from botocore.exceptions import ClientError
+
 from py_sdk.test_group import Group
+from py_sdk.test_user import user_log
 from test.itest.conftest import (
-    REGION,
     IOT_USER_ROLE_ARN,
+    REGION,
     USER_API_GATEWAY_URL,
 )
-import pytest
-import boto3
-from botocore.exceptions import ClientError
-import uuid
-import time
 
 
 def test_ensure_privilege_escalation_not_possible(test_user1):

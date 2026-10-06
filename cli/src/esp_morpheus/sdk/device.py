@@ -2,30 +2,33 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import boto3
-import json
-import hashlib
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import ec, rsa, padding
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.utils import Prehashed
-from cryptography.hazmat.primitives.serialization import load_pem_private_key
-from cryptography.hazmat.primitives.asymmetric import utils as crypto_utils
-from cryptography import x509
-from cryptography.x509.oid import NameOID
 import datetime
-
-import time
-import tempfile
-import os
-import sys
-import subprocess
+import hashlib
+import json
 import logging
+import os
+import subprocess
+import sys
+import tempfile
+import time
+from queue import Empty, Queue
+
+import boto3
 import requests
-from botocore.exceptions import ClientError
 from awscrt import io, mqtt
 from awsiot import iotshadow, mqtt_connection_builder
-from queue import Queue, Empty
+from botocore.exceptions import ClientError
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import (
+    ec,
+    padding,
+    rsa,
+    utils as crypto_utils,
+)
+from cryptography.hazmat.primitives.asymmetric.utils import Prehashed
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
+from cryptography.x509.oid import NameOID
 
 from .errors import block, requires
 from .util import shadow_to_unstructured

@@ -44,7 +44,10 @@ _REPO_ROOT = _SCRIPT_DIR.parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-from cfn_stack_parser import load_stackfile, resolve_stack_name  # noqa: E402 - needs the sys.path insert above
+from cfn_stack_parser import (  # noqa: E402 - needs the sys.path insert above
+    load_stackfile,
+    resolve_stack_name,
+)
 
 
 def get_stack_outputs(cf_client, stack_name):

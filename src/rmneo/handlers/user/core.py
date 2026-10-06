@@ -3,10 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from constructs import Construct
+
 from app_common import CommonResources
 from src.rmneo.handlers.user.assume_role.stack import AssumeRoleAPI
 from src.rmneo.handlers.user.user_client.stack import RegisterClient
 from src.rmneo.handlers.user.user_creds.stack import UserCredsAPI
+
 
 class UserCore(Construct):
     """Core/compute resources for User service - Lambda functions and API integrations"""

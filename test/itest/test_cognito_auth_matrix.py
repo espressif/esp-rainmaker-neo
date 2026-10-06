@@ -37,10 +37,18 @@ endpoint:
                   the response assertion alone would not catch it.
 """
 
+import time
+import uuid
+
+import boto3
+import pytest
+import requests
+from botocore.exceptions import ClientError
+
 from test.itest.conftest import (
-    USER_API_GATEWAY_URL,
-    REGION,
     END_USER_POOL_ID,
+    REGION,
+    USER_API_GATEWAY_URL,
 )
 from test.itest.email_utils import (
     generate_mailosaur_email,
@@ -48,12 +56,6 @@ from test.itest.email_utils import (
     generate_test_password,
     get_verification_code_from_server,
 )
-from botocore.exceptions import ClientError
-import boto3
-import pytest
-import requests
-import time
-import uuid
 
 # This suite is opt-in: it makes many real signup calls that burn the pool's daily Cognito email
 # quota, so the default `make itest` deselects it (`-m "not ... and not cognito"`). Run it on its

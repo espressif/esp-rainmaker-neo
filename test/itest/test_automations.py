@@ -4,9 +4,12 @@
 
 import json
 import time
+
 import pytest
+
 from py_sdk.test_group import Group
 from test.itest.conftest import accept_sharing_request_for, connect_device_with_retry
+
 
 # Automation API Tests
 def test_automation_api_functionality(test_user1):

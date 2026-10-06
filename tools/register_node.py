@@ -26,7 +26,6 @@ import boto3
 import requests
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
-
 from test.test_user import _admin_cognito_auth
 
 

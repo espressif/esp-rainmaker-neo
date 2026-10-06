@@ -3,16 +3,24 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from aws_cdk import (
+    RemovalPolicy,
+    Stack,
+    aws_dynamodb as dynamodb,
     aws_iam as iam,
     aws_iot as iot,
-    aws_dynamodb as dynamodb,
-    Stack,
-    RemovalPolicy,
 )
 from constructs import Construct
-from app_common import CommonResources, ManagedTable, create_iot_topic_rule, stable_logical_id, create_iot_rule_log_group
-from src.rmneo.stacks.base_res_constants import TABLE_NAMES
+
+from app_common import (
+    CommonResources,
+    ManagedTable,
+    create_iot_rule_log_group,
+    create_iot_topic_rule,
+    stable_logical_id,
+)
 from arn_utils import get_table_arn
+from src.rmneo.stacks.base_res_constants import TABLE_NAMES
+
 
 class CreateNodeIndexedParamsTable(Construct):
     def __init__(self, scope: Construct, id: str, common_resources: CommonResources, **kwargs) -> None:

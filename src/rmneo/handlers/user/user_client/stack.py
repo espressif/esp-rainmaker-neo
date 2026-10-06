@@ -3,20 +3,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from aws_cdk import (
-    aws_iam as iam,
     Stack,
+    aws_iam as iam,
 )
 from constructs import Construct
+
 from app_common import (
     CommonResources,
-    create_lambda_function,
+    add_cors_options,
     create_base_lambda_role,
     create_cfn_api_method,
+    create_lambda_function,
     get_or_create_api_resource,
-    add_cors_options
 )
+from arn_utils import get_app_platform_endpt_arn, get_table_arn
 from src.rmneo.stacks.base_res_constants import TABLE_NAMES
-from arn_utils import get_table_arn, get_app_platform_endpt_arn
+
 
 class RegisterClient(Construct):
     def __init__(self, scope: Construct, id: str, common_resources: CommonResources, **kwargs) -> None:

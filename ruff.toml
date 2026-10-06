@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Ruff's defaults plus bugbear and pyupgrade; every selected rule blocks CI. A rule joins `select` only once the tree passes it; report one that is not gated yet with `ruff check --select <rule>`.
+# Ruff's defaults plus bugbear, pyupgrade and isort; every selected rule blocks CI. A rule joins `select` only once the tree passes it; report one that is not gated yet with `ruff check --select <rule>`.
 
 # esp-cloud-common is another repo's code, and CI lints without the submodule checked out. Generated protobuf modules stay as protoc writes them.
 extend-exclude = ["src/esp-cloud-common", "*_pb2.py"]
@@ -11,7 +11,7 @@ extend-exclude = ["src/esp-cloud-common", "*_pb2.py"]
 target-version = "py312"
 
 [lint]
-select = ["B", "E4", "E7", "E9", "F", "UP"]
+select = ["B", "E4", "E7", "E9", "F", "I", "UP"]
 
 [lint.flake8-bugbear]
 # CDK Durations are immutable, so one shared default is safe.
@@ -20,3 +20,13 @@ extend-immutable-calls = ["aws_cdk.Duration.days", "aws_cdk.Duration.seconds"]
 [lint.per-file-ignores]
 # Sphinx configs inherit their settings by star import.
 "docs/**/conf*.py" = ["F403", "F405"]
+
+[lint.isort]
+combine-as-imports = true
+# Repo-local modules reached through _bootstrap's sys.path, which ruff cannot see; named so CI without the submodule sorts gsi_infra the same.
+known-first-party = ["app_common", "arn_utils", "gsi_infra"]
+section-order = ["future", "bootstrap", "standard-library", "third-party", "first-party", "local-folder"]
+
+[lint.isort.sections]
+# cdk/apps/_bootstrap.py sets sys.path, so it must be imported before anything repo-local.
+bootstrap = ["_bootstrap"]

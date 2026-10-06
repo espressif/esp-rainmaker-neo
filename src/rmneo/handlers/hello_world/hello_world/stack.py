@@ -3,7 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from constructs import Construct
-from app_common import CommonResources, create_lambda_function, create_cfn_api_method, get_or_create_api_resource, add_cors_options
+
+from app_common import (
+    CommonResources,
+    add_cors_options,
+    create_cfn_api_method,
+    create_lambda_function,
+    get_or_create_api_resource,
+)
 
 
 class HelloWorldMod(Construct):

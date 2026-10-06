@@ -3,7 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from constructs import Construct
+
 from app_common import CommonResources
+
 
 class HelloWorldBase(Construct):
     """Base/infrastructure resources for HelloWorld service - placeholder for future infrastructure"""

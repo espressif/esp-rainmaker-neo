@@ -4,17 +4,28 @@
 
 import hashlib
 import json
-import pytest
 
-from test.itest.conftest import (
-    CA_CERT, IOT_ENDPOINT, REGION, DEBUG, accept_sharing_request_for,
-    reported_state, wait_for_shadow_absent,
-)
+import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+
 from py_sdk.test_device import Device
 from py_sdk.test_group import Group
-from py_sdk.test_util import wait_until, seed_node_data, assert_node_data_deleted, describe_thing_attributes
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives import serialization
+from py_sdk.test_util import (
+    assert_node_data_deleted,
+    describe_thing_attributes,
+    seed_node_data,
+    wait_until,
+)
+from test.itest.conftest import (
+    CA_CERT,
+    DEBUG,
+    IOT_ENDPOINT,
+    REGION,
+    accept_sharing_request_for,
+    reported_state,
+    wait_for_shadow_absent,
+)
 
 
 def _test_user_node_assoc_valid_device(test_user1, device):

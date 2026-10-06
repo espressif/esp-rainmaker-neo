@@ -4,7 +4,9 @@
 
 import json
 import warnings
+
 from .user import User
+
 
 class Group:
     def __init__(self, user: User):

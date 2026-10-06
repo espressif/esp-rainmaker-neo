@@ -5,40 +5,48 @@
 
 import json
 import os
-from datetime import datetime, UTC
+import re
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from aws_cdk import (
     ArnFormat,
     Aws,
-    Stack,
-    Duration,
     CustomResource,
-    IResolvable,
+    Duration,
     Fn,
+    IResolvable,
+    RemovalPolicy,
+    Stack,
     Tags,
-    aws_lambda as lambda_,
     aws_apigateway as apigateway,
+    aws_apigatewayv2 as apigwv2,
+    aws_cloudfront as cloudfront,
+    aws_cognito as cognito,
+    aws_ec2 as ec2,
+    aws_ecs as ecs,
     aws_iam as iam,
     aws_iot as iot,
     aws_kms as kms,
+    aws_lambda as lambda_,
     aws_lambda_event_sources as event_sources,
-    aws_s3 as s3,
-    aws_sqs as sqs,
-    RemovalPolicy,
-    aws_ecs as ecs,
-    aws_ec2 as ec2,
     aws_logs as logs,
+    aws_s3 as s3,
     aws_s3_assets as s3_assets,
+    aws_sqs as sqs,
     aws_ssm as ssm,
-    aws_cognito as cognito,
-    aws_apigatewayv2 as apigwv2,
-    aws_cloudfront as cloudfront,
 )
 from constructs import Construct
-from dataclasses import dataclass
-import re
-from arn_utils import get_lambda_integration_uri, get_api_gateway_invoke_arn, get_user_pool_arn, get_ssm_parameter_arn, get_table_arn
+
+from arn_utils import (
+    get_api_gateway_invoke_arn,
+    get_lambda_integration_uri,
+    get_ssm_parameter_arn,
+    get_table_arn,
+    get_user_pool_arn,
+)
+
 # The submodule's cdk_go/ (ManagedTable, GSI_MANAGED_BY_TAG_*, gsi_infra) is put on sys.path by
 # cdk/apps/_bootstrap.py, which every CDK entry point imports before any repo-local module --
 # so it is already there by the time this file loads. There used to be a second insert here

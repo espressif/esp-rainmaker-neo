@@ -2,16 +2,19 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import base64
 import json
-import time
 import sys
-import uuid
-import boto3
-import requests
 import tempfile
-from test.itest.conftest import accept_sharing_request_for, REGION, FILES_BUCKET_NAME
+import time
+import uuid
+
+import boto3
+import pytest
+import requests
+
+from test.itest.conftest import FILES_BUCKET_NAME, REGION, accept_sharing_request_for
+
 
 @pytest.mark.xdist_group("env_mut")
 def test_webhook_notification(test_user2, test_user3, test_user4, associated_device, webhook_mock):
@@ -213,6 +216,7 @@ def test_webhook_notification(test_user2, test_user3, test_user4, associated_dev
             # Compare with informative error message if they don't match
             if notification_data != expected_data:
                 import json
+
                 import pytest
                 pytest.fail(f"Incorrect alexa notification data for user {user.sub}:\n" +
                           f"ACTUAL:\n{json.dumps(notification_data, indent=2)}\n\n" +
@@ -459,9 +463,9 @@ def test_register_client_put_is_idempotent(test_user1):
 @pytest.mark.xdist_group("env_mut")
 def test_mobile_push_notification(test_user2, associated_device, admin_user):
     """Test mobile push notifications using SQS queue for validation."""
+    import os
     import subprocess
     import uuid
-    import os
 
     # Create SQS queue for capturing push notifications
     sqs = boto3.client('sqs', region_name=REGION)

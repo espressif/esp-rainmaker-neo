@@ -43,8 +43,7 @@ def ses_setup_sender(session, email, use_mailosaur, wait_seconds):
     SES mails a verification link to EMAIL, which its owner opens; re-run this afterwards to select
     the address. --mailosaur instead mints a test address and opens the link for you.
     """
-    from ...sdk import mailosaur
-    from ...sdk import ses as ses_sdk
+    from ...sdk import mailosaur, ses as ses_sdk
 
     if bool(email) == use_mailosaur:
         output.fail('Name the address to verify, or pass --mailosaur to mint one.')

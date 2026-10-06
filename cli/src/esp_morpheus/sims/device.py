@@ -2,13 +2,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
+import threading
+from queue import Empty, Queue
+
 from .. import paths
 from ..outputs import TEST_CONFIG_PATH, RmngSettings
 from ..sdk.device import Device
-from queue import Queue, Empty
-import threading
-import hashlib
+
 
 class DeviceSim:
     def __init__(self, device_id, config_path=TEST_CONFIG_PATH, rmng_outputs_path=None):

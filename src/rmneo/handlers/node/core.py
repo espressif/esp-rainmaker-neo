@@ -3,12 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from constructs import Construct
+
 from app_common import CommonResources
 from src.rmneo.handlers.node.node_assoc.stack import AssociateNodeAPI
 from src.rmneo.handlers.node.node_conn.stack import PresenceEventHandlerAPI
-from src.rmneo.handlers.node.node_to_cloud.stack import PublishInputEventHandlerAPI
 from src.rmneo.handlers.node.node_indexed_params.stack import NodeShadowUpdateToDB
 from src.rmneo.handlers.node.node_tags.stack import UserNodeTagsAPI
+from src.rmneo.handlers.node.node_to_cloud.stack import PublishInputEventHandlerAPI
+
 
 class NodeCore(Construct):
     """Core/compute resources for Node service - Lambda functions and API integrations"""

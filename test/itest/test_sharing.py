@@ -3,17 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import uuid
 import time
+import uuid
+
 import pytest
+
+from py_sdk.test_group import Group
 from test.itest.conftest import (
     accept_sharing_request_for,
     assert_subgroup_in_group,
-    validate_user_group_dynamodb_entry,
     run_shared_group_stages,
     run_shared_subgroup_stages,
+    validate_user_group_dynamodb_entry,
 )
-from py_sdk.test_group import Group
+
 
 def assert_sharing_request_has_primary_user_info(user, group_id, subgroup_id=""):
     """Assert that a sharing request for the given group contains primary user info."""

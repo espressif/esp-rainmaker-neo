@@ -26,10 +26,10 @@ pool, user-details table) resolved cross-stack via SSM.
 import _bootstrap  # noqa: F401 — sys.path setup; must precede every repo-local import
 
 import aws_cdk as cdk
+
 from app_common import CommonResources, apply_common_tags
 from src.claim.stacks.rmng_claim_base_stack import RMNGClaimBaseStack
 from src.claim.stacks.rmng_claim_core_stack import RMNGClaimCoreStack
-
 
 app = cdk.App()
 apply_common_tags(app)

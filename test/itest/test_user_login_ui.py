@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 import pytest
 
+from py_sdk.espuser_oauth import WebClient, client_ids_under, sids_in
 from test.itest.conftest import (
     FLOW_COOKIE,
     SESSION_COOKIE,
@@ -30,7 +31,6 @@ from test.itest.conftest import (
     pkce_pair,
     requires_espuser,
 )
-from py_sdk.espuser_oauth import WebClient, client_ids_under, sids_in
 
 pytest.importorskip("playwright.sync_api")
 

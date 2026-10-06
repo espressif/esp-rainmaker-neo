@@ -5,6 +5,7 @@
 import json
 import time
 
+
 def test_trigger_get_empty(associated_device):
     """Test getting triggers for a node that has no triggers set."""
     device, group_id, test_user1, user1_group_api = associated_device

@@ -9,26 +9,25 @@ Tests device file operations (upload, download, list, delete) using IoT Credenti
 credentials, and user file operations (list, download, delete) using assume-role credentials.
 """
 import json
-import pytest
 import uuid
 
+import pytest
 from botocore.exceptions import ClientError
 
 from py_sdk.test_device import Device, generate_key_and_cert
 from py_sdk.test_group import Group
 from test.itest.conftest import (
-    node_registrar_identity,
+    CA_CERT,
     CREDENTIAL_PROVIDER_ENDPOINT,
+    DEBUG,
     DEVICE_FILE_ROLE_ALIAS,
     FILES_BUCKET_NAME,
-    REGION,
-    CA_CERT,
     IOT_ENDPOINT,
-    DEBUG,
+    REGION,
     connect_device_with_retry,
     device_s3_client_with_retry,
+    node_registrar_identity,
 )
-
 
 NODE_DATA_PREFIX = "node-data"
 
@@ -370,9 +369,10 @@ def test_device_without_s3_capability_denied(bare_device):
     The IoT Credential Provider should return 400 because the rmng-node-file-policy
     is not attached to the device's certificate.
     """
-    import requests
-    import tempfile
     import os
+    import tempfile
+
+    import requests
 
     # Register a device WITHOUT capabilities (no rmng-node-file-policy attached)
     device = bare_device(thing_name=f"test-no-s3-cap-{uuid.uuid4().hex[:8]}", capabilities=None)  # No S3 capability

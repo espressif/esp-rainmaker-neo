@@ -9,25 +9,25 @@ Tests device KVS credential acquisition and access isolation using IoT Credentia
 and user KVS viewer access via assume-role credentials.
 """
 import json
-import pytest
-import uuid
-import tempfile
 import os
+import tempfile
+import uuid
 
 import boto3
+import pytest
 import requests
 from botocore.exceptions import ClientError
 
 from py_sdk.test_device import Device, generate_key_and_cert
 from py_sdk.test_group import Group
 from test.itest.conftest import (
-    node_registrar_identity,
-    CREDENTIAL_PROVIDER_ENDPOINT,
-    DEVICE_VIDEO_ROLE_ALIAS,
-    REGION,
     CA_CERT,
-    IOT_ENDPOINT,
+    CREDENTIAL_PROVIDER_ENDPOINT,
     DEBUG,
+    DEVICE_VIDEO_ROLE_ALIAS,
+    IOT_ENDPOINT,
+    REGION,
+    node_registrar_identity,
 )
 
 

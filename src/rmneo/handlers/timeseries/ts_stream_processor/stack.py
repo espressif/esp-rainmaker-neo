@@ -3,18 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from aws_cdk import (
-    aws_lambda as lambda_,
-    aws_iam as iam,
-    aws_lambda_event_sources as lambda_event_sources,
-    aws_dynamodb as dynamodb,
-    aws_ssm as ssm,
     Duration,
     Stack,
+    aws_dynamodb as dynamodb,
+    aws_iam as iam,
+    aws_lambda as lambda_,
+    aws_lambda_event_sources as lambda_event_sources,
+    aws_ssm as ssm,
 )
 from constructs import Construct
-from app_common import CommonResources, create_lambda_function, create_base_lambda_role
-from src.rmneo.stacks.base_res_constants import TABLE_NAMES, SSM_PARAMETERS
+
+from app_common import CommonResources, create_base_lambda_role, create_lambda_function
 from arn_utils import get_table_arn
+from src.rmneo.stacks.base_res_constants import SSM_PARAMETERS, TABLE_NAMES
+
 
 class TimeseriesStreamProcessorBase(Construct):
     """Base/infrastructure resources for Timeseries Stream Processor - placeholder for future infrastructure"""

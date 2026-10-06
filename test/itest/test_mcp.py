@@ -23,14 +23,19 @@ carrying isError, so the model can read the message and correct itself. Mixing t
 bug these assertions exist to catch.
 """
 import time
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 import requests
 
 from py_sdk.test_group import Group
 from py_sdk.test_mcp import Mcp, assert_matches_catalogue
-from test.itest.conftest import MCP_API_URL, USER_API_GATEWAY_URL, pkce_pair, cognito_hosted_login
+from test.itest.conftest import (
+    MCP_API_URL,
+    USER_API_GATEWAY_URL,
+    cognito_hosted_login,
+    pkce_pair,
+)
 from test.itest.mcp_oauth import get_mcp_access_token
 
 MCP_CLIENT_ID = "mcp-oauth-client"

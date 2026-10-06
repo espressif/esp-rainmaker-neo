@@ -10,18 +10,31 @@ Trace every API request and response: add --request-log
 Run a specific test: pytest test/itest/ -v -s -k "test_name"
 If some tests start failing due to mqtt connections, try running: pytest test/itest/ -v -s -m "not unsafe"
 """
-import pytest
+import csv
+import datetime
 import json
-import requests
-from scripts.rmng_outputs import find_outputs
-from scripts.rmng_outputs import load as load_rmng_outputs
-from py_sdk import test_user as user_sdk
-from py_sdk.test_user import User, user_log
+import os
+import subprocess
+import sys
+import threading
+import time
+import uuid
+from queue import Empty
+from types import SimpleNamespace
 
+import boto3
+import pytest
+import requests
+from botocore.exceptions import ClientError
+from cryptography import x509
+from cryptography.hazmat.primitives.asymmetric import ec
+
+from py_sdk import espuser_oauth, test_user as user_sdk
+from py_sdk.espuser_oauth import cognito_hosted_login, pkce_pair
 from py_sdk.test_device import Device, generate_key_and_cert, split_combined_cert_pem
 from py_sdk.test_group import Group
-from py_sdk import espuser_oauth
-from py_sdk.espuser_oauth import pkce_pair, cognito_hosted_login
+from py_sdk.test_user import User, user_log
+from scripts.rmng_outputs import find_outputs, load as load_rmng_outputs
 from test.itest.config_sources import describe_sources, load_json_config, repo_path
 from test.itest.email_utils import (
     ITEST_CONFIG_ENV_VAR,
@@ -29,22 +42,6 @@ from test.itest.email_utils import (
     generate_random_email,
     generate_test_password,
 )
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography import x509
-import uuid
-import time
-from types import SimpleNamespace
-from queue import Empty
-
-import boto3
-from botocore.exceptions import ClientError
-import subprocess
-import sys
-import os
-import csv
-import datetime
-import threading
-
 
 # Read configuration from rmng-outputs.json (merged CDK outputs)
 rmng_outputs = load_rmng_outputs()
@@ -983,7 +980,7 @@ def verified_email_sender():
     verified Mailosaur sender, then restores the prior row (or deletes it) on teardown. Mutates
     shared account config, so callers must carry @pytest.mark.xdist_group("env_mut").
     """
-    from test.itest.email_utils import generate_mailosaur_email, ensure_ses_verified
+    from test.itest.email_utils import ensure_ses_verified, generate_mailosaur_email
     sender = generate_mailosaur_email(user_index="sender")
     if not sender or not ensure_ses_verified(sender):
         pytest.skip("no SES-verifiable Mailosaur sender available")
@@ -2019,8 +2016,9 @@ def complete_federation_login(client_id, redirect_uri, username, password, scope
     endpoint — "basic" (HTTP Basic, what Alexa sends) or "post" (form-body credentials, what Google
     account linking sends).
     """
+    from urllib.parse import parse_qs as _parse_qs, urlparse as _urlparse
+
     import requests as _requests
-    from urllib.parse import urlparse as _urlparse, parse_qs as _parse_qs
 
     verifier, challenge = pkce_pair()
     session = _requests.Session()
@@ -2365,6 +2363,7 @@ def bridge_in_group(_bridge_stack_deployed):
         }
     """
     from queue import Queue
+
     from awscrt import mqtt as awscrt_mqtt
 
     resource = bridge_in_group_pool.acquire()

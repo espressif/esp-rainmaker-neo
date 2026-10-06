@@ -2,26 +2,28 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+import os
+import uuid
+
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+
 from py_sdk.test_group import Group
 from py_sdk.test_matter import (
     build_nocsr_elements_tlv,
-    sign_attestation_data,
     do_initiate,
-    do_verify_with_nocsr_elements,
     do_matter_dev_assoc,
+    do_verify_with_nocsr_elements,
+    sign_attestation_data,
 )
 from test.itest.conftest import (
     accept_sharing_request_for,
+    connect_device_with_retry,
     extract_matter_oids,
     verify_certificate_signed_by,
-    connect_device_with_retry,
 )
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography import x509
-import json
-import uuid
-import os
 
 
 def test_create_matter_group(test_user1):

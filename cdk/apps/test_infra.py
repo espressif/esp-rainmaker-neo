@@ -5,6 +5,7 @@
 import _bootstrap  # noqa: F401 — sys.path setup; must precede every repo-local import
 
 import aws_cdk as cdk
+
 from test.infra.stacks.test_infra_base_stack import TestInfraBaseStack
 from test.infra.stacks.test_infra_core_stack import TestInfraCoreStack
 

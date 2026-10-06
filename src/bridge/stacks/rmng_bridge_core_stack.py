@@ -45,8 +45,11 @@ from app_common import (
     create_lambda_function,
 )
 from arn_utils import get_index_arn, get_table_arn, get_topic_arn
+from src.bridge.stacks.base_res_constants import (
+    BRIDGE_RESOURCES,
+    EXTERNAL_FUNCTION_NAMES,
+)
 from src.rmneo.stacks.base_res_constants import TABLE_NAMES
-from src.bridge.stacks.base_res_constants import BRIDGE_RESOURCES, EXTERNAL_FUNCTION_NAMES
 
 
 class RMNGBridgeCoreStack(Stack):

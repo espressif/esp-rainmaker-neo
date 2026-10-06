@@ -6,11 +6,13 @@
 import _bootstrap  # noqa: F401 — sys.path setup; must precede every repo-local import
 
 import os
+
 import aws_cdk as cdk
 from aws_cdk import Tags
-from src.smartthings.stacks.st_stack import STStack
-from src.smartthings.stacks.rmng_st_cfg_core_stack import RMNGSTCfgCoreStack
+
 from app_common import CommonResources, apply_common_tags
+from src.smartthings.stacks.rmng_st_cfg_core_stack import RMNGSTCfgCoreStack
+from src.smartthings.stacks.st_stack import STStack
 
 
 def get_rmng_outputs():

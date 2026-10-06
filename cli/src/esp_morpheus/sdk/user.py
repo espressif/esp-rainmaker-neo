@@ -2,35 +2,35 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import boto3
+import base64
 import hashlib
+import json
+import os
+import queue
+import random
+import string
+import time
+import uuid
+from urllib.parse import urlencode
+
+import boto3
+import jwt
 import requests
+from awscrt import auth
+from awsiot import iotshadow, mqtt, mqtt_connection_builder
+from boto3.dynamodb.conditions import Key
 from botocore import UNSIGNED
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 from botocore.config import Config as BotocoreConfig
-from boto3.dynamodb.conditions import Key
-import json
-import base64
-from awscrt import auth
-from awsiot import mqtt_connection_builder
-import jwt
-from awsiot import mqtt
-from awsiot import iotshadow
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+
 from ..outputs import DEFAULT_ESP_USER_CLIENT_ID, RmngSettings
+from . import smartthings
 from .errors import requires
 from .util import shadow_to_unstructured
-from . import smartthings
-import random
-import string
-import queue
-import uuid
-import os
-import time
-from urllib.parse import urlencode
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography import x509
 
 blue = "\033[94m"
 cyan = "\033[96m"

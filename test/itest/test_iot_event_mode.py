@@ -20,12 +20,11 @@ order-independent.
 """
 import json
 
-from py_sdk.test_user import user_log
-from test.itest.conftest import REGION
-
 import boto3
 import pytest
 
+from py_sdk.test_user import user_log
+from test.itest.conftest import REGION
 
 # Every test in this module mutates the action attached to three global IoT
 # topic rules. They cannot run in

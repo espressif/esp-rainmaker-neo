@@ -28,8 +28,8 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
-from pathlib import Path
 from collections.abc import Iterable
+from pathlib import Path
 
 from .. import paths
 

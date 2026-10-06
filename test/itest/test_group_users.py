@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import uuid
-from test.itest.conftest import accept_sharing_request_for
+
 from py_sdk.test_group import Group
+from test.itest.conftest import accept_sharing_request_for
 
 
 def test_list_group_users_owner_only(test_user1):

@@ -3,7 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from constructs import Construct
+
 from app_common import CommonResources
+
 
 class IntegrationBase(Construct):
     """Base/infrastructure resources for Integrations - placeholder for future infrastructure"""

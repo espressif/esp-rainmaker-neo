@@ -19,9 +19,16 @@ from botocore.exceptions import NoCredentialsError
 
 from .. import __version__, paths
 from ..sdk.errors import NotReadyError
-from . import device as device_commands
-from . import groups, matter, nodes, output, sharing, sims
-from . import user as user_commands
+from . import (
+    device as device_commands,
+    groups,
+    matter,
+    nodes,
+    output,
+    sharing,
+    sims,
+    user as user_commands,
+)
 from .admin import admin
 from .context import Session
 from .shell import ContextGroup

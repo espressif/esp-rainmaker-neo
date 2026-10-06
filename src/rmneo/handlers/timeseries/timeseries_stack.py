@@ -3,13 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from aws_cdk import (
-    aws_dynamodb as dynamodb,
-    aws_iot as iot,
-    aws_iam as iam,
-    Stack,
     RemovalPolicy,
+    Stack,
+    aws_dynamodb as dynamodb,
+    aws_iam as iam,
+    aws_iot as iot,
 )
 from constructs import Construct
+
 from app_common import (
     CommonResources,
     ManagedTable,
@@ -21,8 +22,9 @@ from app_common import (
     create_ssm_string_parameter,
     setup_sqs_lambda_infra,
 )
-from src.rmneo.stacks.base_res_constants import TABLE_NAMES, SSM_PARAMETERS
 from arn_utils import get_table_arn
+from src.rmneo.stacks.base_res_constants import SSM_PARAMETERS, TABLE_NAMES
+
 
 class TimeseriesBase(Construct):
     """Base/infrastructure resources for Timeseries service - DynamoDB tables"""

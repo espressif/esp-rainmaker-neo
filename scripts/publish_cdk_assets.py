@@ -5,17 +5,17 @@
 
 import argparse
 import json
+import logging
 import os
 import re
-import sys
-import logging
 import shutil
-from pathlib import Path
+import sys
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 import boto3
 from botocore.exceptions import ClientError
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # -----------------------------
 # Constants

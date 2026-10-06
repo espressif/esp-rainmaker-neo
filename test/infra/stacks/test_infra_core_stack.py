@@ -2,19 +2,20 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 
 from aws_cdk import (
     Stack,
-    aws_ssm as ssm,
     aws_iam as iam,
+    aws_ssm as ssm,
     custom_resources as cr,
 )
+from constructs import Construct
 
 from app_common import CommonResources
-from constructs import Construct
-from test.infra.stacks.test_constants import SSM_PARAMETERS
 from test.infra.handlers.core import WebhookCore
+from test.infra.stacks.test_constants import SSM_PARAMETERS
+
 
 class TestInfraCoreStack(Stack):
     def __init__(self, scope: Construct, construct_id:str, **kwargs) -> None:

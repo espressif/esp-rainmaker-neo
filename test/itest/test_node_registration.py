@@ -2,23 +2,25 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from py_sdk.test_device import Device, generate_key_and_cert, split_combined_cert_pem
-from test.itest.conftest import (
-    connect_device_with_retry,
-    request_from_cloud,
-    REGION,
-    CA_CERT,
-    IOT_ENDPOINT,
-    DEBUG,
-)
-import boto3
 import csv
 import datetime
 import io
-import time
 import os
+import time
+
+import boto3
 import pytest
 import requests
+
+from py_sdk.test_device import Device, generate_key_and_cert, split_combined_cert_pem
+from test.itest.conftest import (
+    CA_CERT,
+    DEBUG,
+    IOT_ENDPOINT,
+    REGION,
+    connect_device_with_retry,
+    request_from_cloud,
+)
 
 
 def test_register_node_basic(admin_user, test_device_new):

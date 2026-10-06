@@ -14,12 +14,11 @@ the post-deployment page displays. The tests assert the credentials reach a admi
 denied to a non-admin, and — end to end — can perform their own read, cannot perform the other
 stack's, and cannot change any setting.
 """
+import boto3
 from botocore.exceptions import ClientError
 
 from py_sdk.test_user import user_log
 from test.itest.conftest import REGION
-
-import boto3
 
 
 def _assert_cred_shape(body):

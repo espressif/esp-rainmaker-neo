@@ -2,14 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from aws_cdk import (
-    aws_dynamodb as dynamodb,
-    RemovalPolicy
-)
-from app_common import CommonResources
-from gsi_infra import ManagedTable # type: ignore
+from aws_cdk import RemovalPolicy, aws_dynamodb as dynamodb
 from constructs import Construct
+
+from app_common import CommonResources
+from gsi_infra import ManagedTable  # type: ignore
 from test.infra.stacks.test_constants import TABLE_NAMES
+
 
 class WebhookBase(Construct):
 

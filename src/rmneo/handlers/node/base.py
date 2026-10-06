@@ -2,15 +2,19 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from src.rmneo.stacks.base_res_constants import TABLE_NAMES
 from aws_cdk import (
-    aws_dynamodb as dynamodb,
     RemovalPolicy,
+    aws_dynamodb as dynamodb,
 )
 from constructs import Construct
+
 from app_common import CommonResources, ManagedTable
 from src.rmneo.handlers.node.node_assoc.stack import CreateAssocRequestsTable
-from src.rmneo.handlers.node.node_indexed_params.stack import CreateNodeIndexedParamsTable
+from src.rmneo.handlers.node.node_indexed_params.stack import (
+    CreateNodeIndexedParamsTable,
+)
+from src.rmneo.stacks.base_res_constants import TABLE_NAMES
+
 
 class NodeBase(Construct):
     """Base/infrastructure resources for Node service - DynamoDB tables"""

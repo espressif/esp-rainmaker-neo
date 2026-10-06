@@ -2,22 +2,24 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from aws_cdk import (
-    aws_iam as iam,
-    Stack
-)
+from aws_cdk import Aws, Stack, aws_iam as iam
 from constructs import Construct
+
 from app_common import (
     CommonResources,
-    create_lambda_function,
+    add_cors_options,
     create_base_lambda_role,
     create_cfn_api_method,
+    create_lambda_function,
     get_or_create_api_resource,
-    add_cors_options
 )
-from src.rmneo.stacks.base_res_constants import TABLE_NAMES, NODE_LIFECYCLE_HOOKS, FUNCTION_NAMES
-from arn_utils import get_table_arn, get_index_arn, get_topic_arn
-from aws_cdk import Aws
+from arn_utils import get_index_arn, get_table_arn, get_topic_arn
+from src.rmneo.stacks.base_res_constants import (
+    FUNCTION_NAMES,
+    NODE_LIFECYCLE_HOOKS,
+    TABLE_NAMES,
+)
+
 
 class GroupAPI(Construct):
     def __init__(self, scope: Construct, id: str, common_resources: CommonResources, *, node_data_reset_function=None, **kwargs) -> None:

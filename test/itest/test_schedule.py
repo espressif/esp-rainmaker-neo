@@ -15,6 +15,7 @@ from test.itest.conftest import (
     run_shared_subgroup_stages,
 )
 
+
 def test_schedule_functionality(associated_device):
     """Test schedule functionality including setting and getting schedule."""
     device, group_id, test_user1, user1_group_api = associated_device

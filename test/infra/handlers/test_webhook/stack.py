@@ -9,9 +9,18 @@ from aws_cdk import (
     aws_secretsmanager as secretsmanager,
 )
 from constructs import Construct
-from app_common import CommonResources, get_or_create_api_resource, create_lambda_function, create_base_lambda_role, create_cfn_api_method, add_cors_options
+
+from app_common import (
+    CommonResources,
+    add_cors_options,
+    create_base_lambda_role,
+    create_cfn_api_method,
+    create_lambda_function,
+    get_or_create_api_resource,
+)
 from arn_utils import get_table_arn
 from test.infra.stacks.test_constants import TABLE_NAMES
+
 
 class WebhookApi(Construct):
 

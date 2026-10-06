@@ -2,22 +2,23 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from py_sdk.test_user import User
-from test.itest.email_utils import generate_random_email, generate_test_password
-from test.itest.conftest import (
-    connect_device_with_retry,
-    REGION,
-    IDENTITY_POOL_ID,
-    API_GATEWAY_URL,
-    USER_API_GATEWAY_URL,
-    IOT_ENDPOINT,
-)
 import calendar
 import os
+import time
 
 import boto3
 import pytest
-import time
+
+from py_sdk.test_user import User
+from test.itest.conftest import (
+    API_GATEWAY_URL,
+    IDENTITY_POOL_ID,
+    IOT_ENDPOINT,
+    REGION,
+    USER_API_GATEWAY_URL,
+    connect_device_with_retry,
+)
+from test.itest.email_utils import generate_random_email, generate_test_password
 
 
 @pytest.mark.parametrize("basic_ingest", [True, False], ids=["basic_ingest", "direct_topic"])

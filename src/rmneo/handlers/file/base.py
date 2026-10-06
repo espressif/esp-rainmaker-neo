@@ -2,10 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from constructs import Construct
 from aws_cdk import aws_s3 as s3
+from constructs import Construct
+
 from app_common import CommonResources, create_s3_bucket
 from src.rmneo.stacks.base_res_constants import S3_BUCKETS
+
 
 class FileBase(Construct):
     """Base/infrastructure resources for File service - S3 bucket"""

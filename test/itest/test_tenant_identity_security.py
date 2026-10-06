@@ -17,13 +17,13 @@ federation and password auth server-side and mints ours — so for the end-user 
 verified as deployed configuration. An admin signs in to Cognito directly and holds a real Cognito
 access token, so for the admin pool the attack is driven for real.
 """
-import pytest
 import boto3
+import pytest
 
 from test.itest.conftest import (
-    REGION,
-    END_USER_POOL_ID,
     ADMIN_USER_POOL_ID,
+    END_USER_POOL_ID,
+    REGION,
 )
 
 _PROTECTED_CLIENTS = [

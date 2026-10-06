@@ -14,13 +14,14 @@ Usage
 Uses AWS_REGION from the environment (default us-east-1 if unset).
 """
 
-import boto3
+import copy
 import glob
 import io
+import json
 import os
 import sys
-import json
-import copy
+
+import boto3
 import segno
 from botocore.exceptions import ClientError
 
@@ -31,6 +32,7 @@ PUBLIC_BUCKET_REGION  = "us-east-1"
 
 # Redaction is driven entirely by the [visibility:private] marker generate_stack_outputs.py records under PRIVATE_PATHS_KEY; no list of secrets here to fall out of sync with it, which is how EspMcpClientSecret stayed tagged-but-published.
 from generate_stack_outputs import PRIVATE_MARKER, PRIVATE_PATHS_KEY  # noqa: E402
+
 
 def get_user_account_id(session):
     sts = session.client('sts')

@@ -20,7 +20,11 @@ Spec: espuser/docs/en/specs/oidc-aouth2.md, sso-sessions.md.
 import pytest
 import requests
 
-from test.itest.conftest import SESSIONS_SCOPE, USER_API_GATEWAY_URL, esp_user_base_outputs
+from test.itest.conftest import (
+    SESSIONS_SCOPE,
+    USER_API_GATEWAY_URL,
+    esp_user_base_outputs,
+)
 
 ISSUER = (esp_user_base_outputs.get('EspUserDiscoveryIssuer') or '').rstrip('/')
 

@@ -6,11 +6,13 @@
 import _bootstrap  # noqa: F401 — sys.path setup; must precede every repo-local import
 
 import os
+
 import aws_cdk as cdk
 from aws_cdk import Tags
+
+from app_common import CommonResources, apply_common_tags
 from src.alexa.stacks.alexa_stack import AlexaStack
 from src.alexa.stacks.rmng_alexa_cfg_core_stack import RMNGAlexaCfgCoreStack
-from app_common import CommonResources, apply_common_tags
 
 
 def get_rmng_outputs():

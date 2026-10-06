@@ -3,8 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from constructs import Construct
+
 from app_common import CommonResources
 from src.alexa.handlers.alexa_cfg.stack import AlexaCfgAPI
+
 
 class AlexaSkillCore(Construct):
     """Core/compute resources for Alexa Skill - Lambda function and API integration"""

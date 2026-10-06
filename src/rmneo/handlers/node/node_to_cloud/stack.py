@@ -3,22 +3,24 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from aws_cdk import (
-    aws_iam as iam,
-    aws_iot as iot,
     Aws,
     Stack,
+    aws_iam as iam,
+    aws_iot as iot,
 )
 from constructs import Construct
+
 from app_common import (
     CommonResources,
-    create_lambda_function,
     create_base_lambda_role,
-    setup_sqs_lambda_infra,
     create_iot_rule_role,
     create_iot_topic_rule,
+    create_lambda_function,
+    setup_sqs_lambda_infra,
 )
+from arn_utils import get_index_arn, get_s3_object_arn, get_table_arn, get_topic_arn
 from src.rmneo.stacks.base_res_constants import TABLE_NAMES
-from arn_utils import get_table_arn, get_index_arn, get_topic_arn, get_s3_object_arn
+
 
 class PublishInputEventHandlerAPI(Construct):
     def __init__(self, scope: Construct, construct_id: str, common_resources: CommonResources, **kwargs) -> None:

@@ -5,12 +5,13 @@
 # A Program called Dr X that is used to inspect and correct an rmng deployment
 # For displaying logs: aws logs tail /aws/lambda/function_name --follow
 
+import argparse
+import json
+import logging
 import os
 import sys
-import json
+
 import boto3
-import argparse
-import logging
 from botocore.exceptions import ClientError
 
 logging.basicConfig(level=logging.INFO)

@@ -3,13 +3,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from aws_cdk import (
-    aws_iam as iam,
     Stack,
+    aws_iam as iam,
 )
 from constructs import Construct
+
 from app_common import CommonResources, create_container
+from arn_utils import (
+    get_iot_thing_arn,
+    get_kvs_channel_arn,
+    get_s3_bucket_resolved_name,
+    get_s3_object_arn,
+    get_table_arn,
+)
 from src.rmneo.stacks.base_res_constants import S3_BUCKETS, TABLE_NAMES
-from arn_utils import get_s3_object_arn, get_table_arn, get_iot_thing_arn, get_s3_bucket_resolved_name, get_kvs_channel_arn
+
 
 class CreateNodeRegisterPolicy(Construct):
     def __init__(self, scope: Construct, id: str, common_resources: CommonResources, **kwargs) -> None:
