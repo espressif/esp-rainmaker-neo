@@ -368,7 +368,7 @@ publish_cli:
     - export AWS_ACCESS_KEY_ID=${access_key}
     - export AWS_SECRET_ACCESS_KEY=${secret_access_key}
     - export AWS_SESSION_TOKEN=${session_token}
-    - python3 -u tools/aws_cleanup.py --access-key ${AWS_ACCESS_KEY_ID}
+    - python3 -u scripts/aws_cleanup.py --access-key ${AWS_ACCESS_KEY_ID}
       --secret-key ${AWS_SECRET_ACCESS_KEY} --session-token
       "${AWS_SESSION_TOKEN}" --region ${AWS_REGION}
   script:
