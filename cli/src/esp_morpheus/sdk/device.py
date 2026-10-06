@@ -1429,11 +1429,11 @@ def _generate_key_and_cert(thing_name, key_type='ec', node_key=None, node_validi
 
     # Create self-signed CA certificate
     ca_subject = issuer = x509.Name([
-        x509.NameAttribute(NameOID.COUNTRY_NAME, u"US"),
-        x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, u"California"),
-        x509.NameAttribute(NameOID.LOCALITY_NAME, u"San Francisco"),
-        x509.NameAttribute(NameOID.ORGANIZATION_NAME, u"Test CA"),
-        x509.NameAttribute(NameOID.COMMON_NAME, u"Test CA"),
+        x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
+        x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, "California"),
+        x509.NameAttribute(NameOID.LOCALITY_NAME, "San Francisco"),
+        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Test CA"),
+        x509.NameAttribute(NameOID.COMMON_NAME, "Test CA"),
     ])
     ca_cert = x509.CertificateBuilder().subject_name(
         ca_subject
@@ -1463,10 +1463,10 @@ def _generate_key_and_cert(thing_name, key_type='ec', node_key=None, node_validi
 
     # Create node certificate signed by CA
     node_subject = x509.Name([
-        x509.NameAttribute(NameOID.COUNTRY_NAME, u"US"),
-        x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, u"California"),
-        x509.NameAttribute(NameOID.LOCALITY_NAME, u"San Francisco"),
-        x509.NameAttribute(NameOID.ORGANIZATION_NAME, u"Test Organization"),
+        x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
+        x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, "California"),
+        x509.NameAttribute(NameOID.LOCALITY_NAME, "San Francisco"),
+        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Test Organization"),
         x509.NameAttribute(NameOID.COMMON_NAME, thing_name),
     ])
     node_cert = x509.CertificateBuilder().subject_name(

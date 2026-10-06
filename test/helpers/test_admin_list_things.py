@@ -27,7 +27,7 @@ ADMIN_USER_POOL_CLIENT_ID = _settings.admin_client_id
 USER_API_GATEWAY_URL = _settings.user_api_gateway_url
 
 # Read test config
-with open('test_config.json', 'r') as f:
+with open('test_config.json') as f:
     config = json.load(f)
 
 # Find admin user

@@ -9,7 +9,7 @@ import os
 import json
 import importlib
 from dataclasses import dataclass
-from typing import Callable
+from collections.abc import Callable
 
 import aws_cdk as cdk
 from src.rmneo.stacks.rmng_base_stack import RMNGBaseStack
@@ -81,7 +81,7 @@ def discover_optional_modules():
 def get_rmng_inputs():
     """Read RMNG input configuration from rmng-inputs.json"""
     try:
-        with open('rmng-inputs.json', 'r') as f:
+        with open('rmng-inputs.json') as f:
             inputs = json.load(f)
         return inputs
     except FileNotFoundError:

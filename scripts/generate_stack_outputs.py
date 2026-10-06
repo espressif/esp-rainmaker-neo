@@ -101,7 +101,7 @@ def main():
     output_data = {}
     if output_path.exists():
         try:
-            with open(output_path, "r") as f:
+            with open(output_path) as f:
                 output_data = json.load(f)
             print(f"Loaded existing data from {output_path}")
         except json.JSONDecodeError:

@@ -255,7 +255,7 @@ def handler(event, context):
     except Exception as e:
         print("seed error:", e)
         send(event, context, "FAILED")
-""" % (table_name,)),
+""" % (table_name,)),  # noqa: UP031 - the handler source is full of braces, so .format would need every one escaped
         )
         seed_fn.add_to_role_policy(iam.PolicyStatement(
             actions=["dynamodb:PutItem", "dynamodb:GetItem"],
@@ -312,7 +312,7 @@ def handler(event, context):
     except Exception as e:
         print("seed refresh secret error:", e)
         send(event, context, "FAILED")
-""" % (param_name,)),
+""" % (param_name,)),  # noqa: UP031 - the handler source is full of braces, so .format would need every one escaped
         )
         seed_fn.add_to_role_policy(iam.PolicyStatement(
             actions=["ssm:GetParameter", "ssm:PutParameter"],

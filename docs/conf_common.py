@@ -67,8 +67,8 @@ for _lang in languages:
 
     _specs = sorted(f for f in os.listdir(_ESPUSER_SPECS) if f.endswith(".md"))
     for _name in _specs:
-        _target = "{}src/espuser/docs/specs/{}".format(_STUB_TO_ROOT, _name)
-        _stub = "```{{include}} {}\n```\n".format(_target)
+        _target = f"{_STUB_TO_ROOT}src/espuser/docs/specs/{_name}"
+        _stub = f"```{{include}} {_target}\n```\n"
         _stub_path = os.path.join(_stub_dir, _name)
         if not os.path.exists(_stub_path) or open(_stub_path).read() != _stub:
             with open(_stub_path, "w") as _fh:

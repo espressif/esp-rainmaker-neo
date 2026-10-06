@@ -94,7 +94,7 @@ class DeviceSim:
         # which resolves against the checkout when there is one and against the packaged data
         # directory when there is not.
         file_path = paths.resolve_data(file_path)
-        with open(file_path, 'r') as config_file:
+        with open(file_path) as config_file:
             return json.load(config_file)
 
     def _get_node_config(self, device_id):
@@ -134,7 +134,7 @@ class DeviceSim:
         """Read the cached checksum from the cache file"""
         try:
             if self.cache_file.exists():
-                with open(self.cache_file, 'r') as f:
+                with open(self.cache_file) as f:
                     return f.read().strip()
             return None
         except Exception as e:

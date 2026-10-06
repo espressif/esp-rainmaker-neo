@@ -5,7 +5,7 @@
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 from aws_cdk import (
@@ -58,7 +58,7 @@ def get_rmng_inputs() -> dict:
     file is absent or unreadable, so a CDK app falls back to its own defaults.
     """
     try:
-        with open('rmng-inputs.json', 'r') as f:
+        with open('rmng-inputs.json') as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
@@ -1057,7 +1057,7 @@ def create_ssm_string_parameter(
 # per-synth salt in every discovery resource's properties turns each deploy into an
 # Update, so the handlers re-run and stale hostnames/URLs cannot survive a redeploy.
 # The handlers ignore the property itself.
-_DISCOVERY_SALT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+_DISCOVERY_SALT = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 _API_DEPLOYMENT_CODE = """

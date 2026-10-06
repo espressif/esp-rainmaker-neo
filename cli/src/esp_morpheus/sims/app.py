@@ -48,7 +48,7 @@ class AppSim:
         self.config = {}
         self.user = user
         if self.user is None:
-            with open(config_path, 'r') as f:
+            with open(config_path) as f:
                 self.config = json.load(f)
             self.user = self._get_user_config(user_id)
             if not self.user:
@@ -191,7 +191,7 @@ class AppSim:
         config_cache = {}
         try:
             if os.path.exists(cache_file):
-                with open(cache_file, 'r') as f:
+                with open(cache_file) as f:
                     config_cache = json.load(f)
                     print(f"Loaded cached configurations for {len(config_cache)} devices")
         except Exception as e:
@@ -1292,9 +1292,9 @@ class AppSim:
             return None
 
         print("\n==== Discovered devices ====")
-        print('{0: >4} {1: <33} {2}'.format('S.N.', 'Name', 'Address'))
+        print('{: >4} {: <33} {}'.format('S.N.', 'Name', 'Address'))
         for i, (name, addr) in enumerate(devices):
-            print('[{0: >2}] {1: <33} {2}'.format(i + 1, name, addr))
+            print(f'[{i + 1: >2}] {name: <33} {addr}')
 
         while True:
             try:

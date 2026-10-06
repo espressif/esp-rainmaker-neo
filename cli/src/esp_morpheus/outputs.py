@@ -82,7 +82,7 @@ def load(source=None):
         response = requests.get(source, timeout=30)
         response.raise_for_status()
         return response.json()
-    with open(source, 'r') as f:
+    with open(source) as f:
         return json.load(f)
 
 

@@ -336,7 +336,7 @@ def missing_credentials(settings=None):
 def read_json_file(path, what='file'):
     """Load a JSON file, reporting a missing or malformed one as a command failure."""
     try:
-        with open(path, 'r') as handle:
+        with open(path) as handle:
             return _json.load(handle)
     except FileNotFoundError:
         fail(f"{what.capitalize()} not found: {path}")

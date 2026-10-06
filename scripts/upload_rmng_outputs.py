@@ -203,7 +203,7 @@ def upload_to_s3(session, rmng_outputs_path, bucket_name, region):
         sys.exit(1)
 
     try:
-        with open(rmng_outputs_path, 'r') as f:
+        with open(rmng_outputs_path) as f:
             raw_data = json.load(f)
 
         paths_to_remove = private_paths(raw_data)
@@ -281,7 +281,7 @@ def upload_swagger_to_s3(session, bucket_name, region):
         filename = os.path.basename(path)
         key = f"{region}/swagger/{filename}"
         try:
-            with open(path, "r") as f:
+            with open(path) as f:
                 body = f.read()
             s3_client.put_object(
                 Bucket=bucket_name,

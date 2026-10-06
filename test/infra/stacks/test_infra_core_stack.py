@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 from aws_cdk import (
     Stack,
@@ -43,7 +43,7 @@ class TestInfraCoreStack(Stack):
         # Mirrors rmng_core_stack's ApiGatewayDeploy: CfnDeployment with a stage_name is
         # unreliable against a base-owned stage, so call the SDK directly. The per-synth
         # timestamp makes the resource re-run every deploy, always picking up the latest methods.
-        deployment_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        deployment_timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         deploy_call = cr.AwsSdkCall(
             service="APIGateway",
             action="createDeployment",
