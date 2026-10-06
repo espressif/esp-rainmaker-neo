@@ -343,6 +343,10 @@ $(RMNG_LINT): $(LINT_SRCS)
 lint: $(RMNG_LINT)  ## Run the rmng-lint static analysers over ./src/... and ./test/...
 	$(RMNG_LINT) ./src/... ./test/...
 
+# Scope lives in ruff.toml: F821 only, because a name nothing defines is a NameError that compiling the file does not catch. Ruff skips what .gitignore skips, so the vendored venv is not scanned.
+py-lint:  ## Fail on a Python name nothing defines
+	ruff check .
+
 # govulncheck analyses one module at a time and does not cross go.work boundaries
 # (same constraint as TEST_SUBMODULES above), so each module is scanned in its own
 # directory. Every module is scanned even if an earlier one reports findings, so the
@@ -430,6 +434,6 @@ githooks:  ## Point git at .githooks so the pre-commit secret scan runs
 # `deploy-%` there did nothing. They are phony in practice because no such file is produced.
 .PHONY: all help go_build optional-build admin-dashboard-build \
 	deploy setup diff destroy synth publish \
-	lint vulncheck test itest itest-setup test-infra-destroy plantuml clean githooks \
+	lint py-lint vulncheck test itest itest-setup test-infra-destroy plantuml clean githooks \
 	update-mcp-schema \
 	$(TEST_SUBMODULES:%=%-test)

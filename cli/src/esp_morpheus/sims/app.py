@@ -11,6 +11,7 @@ from ..sdk.user import User
 from ..sdk.group import Group
 from ..sdk.util import shadow_to_unstructured
 from . import prov_ble
+from prompt_toolkit import PromptSession
 from queue import Queue, Empty
 import pathlib
 import os

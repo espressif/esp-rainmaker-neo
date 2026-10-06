@@ -12,6 +12,7 @@ ARG NODE_VERSION=24
 ARG VERSION
 
 # Install system packages
+# All yum calls must precede the Python build: it repoints /usr/bin/python3 at 3.12, and yum's dnf module exists only for the system Python. The trailing group is Chromium's shared libraries.
 RUN yum update -y --allowerasing && \
     yum install -y --allowerasing \
         git \
@@ -29,7 +30,10 @@ RUN yum update -y --allowerasing && \
         zlib-devel \
         jq \
         unzip \
-        which && \
+        which \
+        alsa-lib atk at-spi2-atk at-spi2-core cairo cups-libs libdrm libX11 \
+        libXcomposite libXdamage libXext libXfixes libXrandr libxcb libxkbcommon \
+        mesa-libgbm nspr nss pango && \
     yum clean all
 
 # Install AWS CLI
@@ -85,13 +89,8 @@ RUN for f in requirements.txt requirements-dev.txt requirements-test.txt; do \
         if [ -f "$f" ]; then grep -v '^[[:space:]]*-e[[:space:]]' "$f" > /tmp/req.txt && pip3 install -r /tmp/req.txt; fi; \
     done && rm -f /tmp/req.txt
 
-# Chromium for the browser-level itests. Baked in rather than fetched on first use because `make itest` fans out to a dozen xdist workers that would otherwise race on the same download, and the shared libraries come from yum because playwright's own `--with-deps` only knows Debian/Ubuntu.
-RUN yum install -y --allowerasing \
-        alsa-lib atk at-spi2-atk at-spi2-core cairo cups-libs libdrm libX11 \
-        libXcomposite libXdamage libXext libXfixes libXrandr libxcb libxkbcommon \
-        mesa-libgbm nspr nss pango && \
-    yum clean all && \
-    python3 -m playwright install chromium
+# Chromium for the browser-level itests. Baked in rather than fetched on first use because `make itest` fans out to a dozen xdist workers that would otherwise race on the same download, and the shared libraries come from yum above because playwright's own `--with-deps` only knows Debian/Ubuntu.
+RUN python3 -m playwright install chromium
 
 # Install common Go tools
 # ginkgo/gomega are pinned to the versions in go.mod — a newer CLI than the
@@ -127,7 +126,7 @@ RUN mkdir -p /opt/asyncapi && cd /opt/asyncapi && \
     npm install --no-save @asyncapi/cli@${ASYNCAPI_CLI_VERSION}
 ENV PATH="/opt/asyncapi/node_modules/.bin:${PATH}"
 
-RUN pip3 install pip-audit build twine
+RUN pip3 install pip-audit build twine ruff==0.15.21
 
 COPY docs/requirements.txt ./docs/
 RUN pip3 install -r docs/requirements.txt && rm -rf docs
