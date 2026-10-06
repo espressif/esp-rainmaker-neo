@@ -12,14 +12,7 @@ from test.itest.conftest import (
     validate_user_group_dynamodb_entry,
     run_shared_group_stages,
     run_shared_subgroup_stages,
-    CA_CERT,
-    IOT_ENDPOINT,
-    REGION,
-    DEBUG,
-    IDENTITY_POOL_ID,
-    API_GATEWAY_URL,
 )
-from py_sdk.test_device import Device, generate_key_and_cert
 from py_sdk.test_group import Group
 
 def assert_sharing_request_has_primary_user_info(user, group_id, subgroup_id=""):
@@ -138,7 +131,7 @@ def _test_shadow_access_after_sharing(sharing_details):
         device.update_named_shadow(shadow_name, online_status)
 
         # Create a dummy group for user2 - assume role requires all users to have a group
-        user2_group_id = user2_group_api.create_group("Test Group")
+        user2_group_api.create_group("Test Group")
 
         # First verify that user2 cannot access the shadow
         # mqtt connect is going to assume_role everytime
@@ -218,7 +211,6 @@ def _test_get_node_config(sharing_details):
     """
     device = sharing_details["device"]
     group_id = sharing_details["group_id"]
-    user1_group_api = sharing_details["user1_group_api"]
     test_user1 = sharing_details["test_user1"]
     test_user2 = sharing_details["test_user2"]
     if sharing_details.get('subgroup_id'):

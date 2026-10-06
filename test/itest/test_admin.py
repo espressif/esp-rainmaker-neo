@@ -26,7 +26,6 @@ def test_ensure_privilege_escalation_not_possible(test_user1):
 
     Prevents the attack pattern where users could bypass access controls by directly assuming IoT roles.
     """
-    user1_group_api = Group(test_user1)
     user_log("🔐 Ensuring privilege escalation is not possible...")
 
     # Step 1: Get user's Cognito credentials and AWS credentials from identity pool
@@ -48,7 +47,7 @@ def test_ensure_privilege_escalation_not_possible(test_user1):
     privilege_escalation_blocked = False
     try:
         # Attempt to directly assume the IoTUserRole - this is the attack from attack.py
-        response = sts_client.assume_role(
+        sts_client.assume_role(
             RoleArn=IOT_USER_ROLE_ARN,
             RoleSessionName="DirectPrivilegeEscalationAttempt"
         )

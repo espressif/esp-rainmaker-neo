@@ -8,7 +8,6 @@ from py_sdk.test_matter import (
     sign_attestation_data,
     do_initiate,
     do_verify_with_nocsr_elements,
-    do_confirm,
     do_matter_dev_assoc,
 )
 from test.itest.conftest import (
@@ -20,7 +19,6 @@ from test.itest.conftest import (
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography import x509
-import pytest
 import json
 import uuid
 import os
@@ -330,7 +328,6 @@ def test_matter_node_remove_from_grp(matter_group, session_valid_device_ec):
     user = matter_group["user"]
     device = session_valid_device_ec
     group_id = matter_group["group_id"]
-    root_ca = matter_group["root_ca"]
     group_api = matter_group["group_api"]
 
     assert connect_device_with_retry(device), "Failed to connect the device"

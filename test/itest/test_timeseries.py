@@ -470,7 +470,7 @@ def test_timeseries_comprehensive(associated_device, basic_ingest):
                 else:
                     raise e
 
-    collected_pagination_data = retry_pagination_test()
+    retry_pagination_test()
     print("✅ Comprehensive pagination testing completed")
 
     # Test pagination with historical aggregates
@@ -493,7 +493,7 @@ def test_timeseries_comprehensive(associated_device, basic_ingest):
 
     try:
         # This should fail with unauthorized error
-        unauthorized_response = test_user2.get_timeseries_data(
+        test_user2.get_timeseries_data(
             group_id=group_id,
             node_id=device_thing_name,
             key="temperature",

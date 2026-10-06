@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from aws_cdk import (
-    RemovalPolicy,
     aws_dynamodb as dynamodb,
     RemovalPolicy,
 )

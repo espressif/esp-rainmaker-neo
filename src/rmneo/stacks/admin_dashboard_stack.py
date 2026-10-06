@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from aws_cdk import Stack, CfnOutput, CfnCondition, CustomResource
+from aws_cdk import Stack, CfnOutput, CustomResource
 from constructs import Construct
 from aws_cdk import (
     Aws,
@@ -10,9 +10,7 @@ from aws_cdk import (
     Fn,
     aws_cloudfront as cloudfront,
     aws_cloudfront_origins as origins,
-    aws_iam as iam,
     aws_s3_deployment as s3deploy,
-    custom_resources as cr,
 )
 
 from app_common import CommonResources, stable_logical_id, create_cloudfront_behavior, create_cloudfront_distribution, create_cloudfront_oac, create_s3_bucket, discover_cloudfront_custom_domain

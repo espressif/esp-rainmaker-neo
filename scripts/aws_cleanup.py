@@ -8,7 +8,6 @@ import click
 from rich.console import Console
 from rich.progress import Progress
 from botocore.exceptions import ClientError
-import time
 
 console = Console()
 
@@ -497,7 +496,7 @@ class AWSDeployCleanup:
                                 StackName=stack_name,
                                 WaiterConfig={'Delay': 30, 'MaxAttempts': 240}  # 30 seconds * 240 attempts = 2 hours
                             )
-                        except ClientError as e:
+                        except ClientError:
                             self.console.print("Regular deletion failed, attempting force delete...")
                             self.cloudformation.delete_stack(StackName=stack_name, DeletionMode='FORCE_DELETE_STACK')
                             waiter = self.cloudformation.get_waiter('stack_delete_complete')
@@ -878,7 +877,7 @@ class AWSDeployCleanup:
                 # We'll try to list all endpoints and filter for email ones
                 try:
                     # This might not work for all cases, but we'll try
-                    response = self.sns.list_endpoints_by_platform_application(PlatformApplicationArn='dummy')
+                    self.sns.list_endpoints_by_platform_application(PlatformApplicationArn='dummy')
                 except:
                     # If we can't list all endpoints, we'll skip email endpoint cleanup
                     self.console.print("[yellow]⚠ Warning: Could not list email endpoints (this is normal)[/yellow]")

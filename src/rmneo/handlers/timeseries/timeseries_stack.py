@@ -6,7 +6,6 @@ from aws_cdk import (
     aws_dynamodb as dynamodb,
     aws_iot as iot,
     aws_iam as iam,
-    aws_ssm as ssm,
     Stack,
     RemovalPolicy,
 )

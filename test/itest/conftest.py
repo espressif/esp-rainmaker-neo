@@ -13,13 +13,12 @@ If some tests start failing due to mqtt connections, try running: pytest test/it
 import pytest
 import json
 import requests
-from urllib.parse import urlparse
 from scripts.rmng_outputs import find_outputs
 from scripts.rmng_outputs import load as load_rmng_outputs
 from py_sdk import test_user as user_sdk
 from py_sdk.test_user import User, user_log
 
-from py_sdk.test_device import Device, generate_key_and_cert, split_combined_cert_pem, validate_tags
+from py_sdk.test_device import Device, generate_key_and_cert, split_combined_cert_pem
 from py_sdk.test_group import Group
 from py_sdk import espuser_oauth
 from py_sdk.espuser_oauth import pkce_pair, cognito_hosted_login
@@ -27,20 +26,10 @@ from test.itest.config_sources import describe_sources, load_json_config, repo_p
 from test.itest.email_utils import (
     ITEST_CONFIG_ENV_VAR,
     ITEST_CONFIG_REL_PATH,
-    generate_mailosaur_email,
     generate_random_email,
     generate_test_password,
 )
-from py_sdk.test_matter import (
-    build_nocsr_elements_tlv,
-    sign_attestation_data,
-    do_initiate,
-    do_verify_with_nocsr_elements,
-    do_confirm,
-    do_matter_dev_assoc,
-)
-from cryptography.hazmat.primitives.asymmetric import ec, rsa
-from cryptography.hazmat.primitives import serialization, hashes
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography import x509
 import uuid
 import time
@@ -54,8 +43,6 @@ import sys
 import os
 import csv
 import datetime
-import tempfile
-import random
 import threading
 
 

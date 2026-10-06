@@ -14,7 +14,7 @@ from aws_cdk import (
 from constructs import Construct
 from app_common import CommonResources, create_lambda_function, create_base_lambda_role
 from src.rmneo.stacks.base_res_constants import TABLE_NAMES, SSM_PARAMETERS
-from arn_utils import get_table_arn, get_table_stream_arn
+from arn_utils import get_table_arn
 
 class TimeseriesStreamProcessorBase(Construct):
     """Base/infrastructure resources for Timeseries Stream Processor - placeholder for future infrastructure"""

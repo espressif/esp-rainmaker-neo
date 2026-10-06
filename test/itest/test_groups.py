@@ -4,19 +4,14 @@
 
 import json
 import time
-import uuid
 import boto3
 from py_sdk.test_group import Group
-from py_sdk.test_device import Device, generate_key_and_cert
 from test.itest.conftest import (
-    CA_CERT,
-    IOT_ENDPOINT,
     REGION,
-    DEBUG,
     connect_device_with_retry,
     accept_sharing_request_for,
 )
-from py_sdk.test_util import wait_until, describe_thing_attributes, seed_node_data, assert_node_data_deleted
+from py_sdk.test_util import wait_until, describe_thing_attributes
 
 
 def test_create_and_list_groups(test_user1):

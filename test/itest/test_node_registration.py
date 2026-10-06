@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from py_sdk.test_device import Device, generate_key_and_cert, validate_tags, split_combined_cert_pem
+from py_sdk.test_device import Device, generate_key_and_cert, split_combined_cert_pem
 from test.itest.conftest import (
     connect_device_with_retry,
     request_from_cloud,
@@ -388,7 +388,6 @@ def test_list_registration_jobs(admin_user, node_csv_uploader):
     initial_response = admin_user.list_registration_jobs()
     assert initial_response is not None, "List registration jobs returned None"
     assert "jobs" in initial_response, "Response missing 'jobs' key"
-    initial_count = len(initial_response["jobs"])
 
     # Create a bulk registration to ensure at least one job exists
     nodes = [

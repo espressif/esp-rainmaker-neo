@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import uuid
-import pytest
 from test.itest.conftest import accept_sharing_request_for
 from py_sdk.test_group import Group
 

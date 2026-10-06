@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from aws_cdk import (
-    aws_lambda as lambda_,
     aws_iam as iam,
     aws_iot as iot,
     Duration,
@@ -12,7 +11,7 @@ from aws_cdk import (
 )
 from constructs import Construct
 from app_common import CommonResources, create_lambda_function, create_base_lambda_role, create_iot_topic_rule, stable_logical_id, create_iot_rule_log_group
-from src.rmneo.stacks.base_res_constants import TABLE_NAMES, S3_BUCKETS, SSM_PARAMETER_PREFIXES, FUNCTION_NAMES
+from src.rmneo.stacks.base_res_constants import TABLE_NAMES, S3_BUCKETS, FUNCTION_NAMES
 from arn_utils import (
     get_s3_bucket_arn, get_s3_object_arn, get_table_arn,
     get_index_arn, get_s3_bucket_resolved_name, get_ssm_parameter_prefix_arn

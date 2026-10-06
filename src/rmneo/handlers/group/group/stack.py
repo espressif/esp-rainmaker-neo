@@ -3,11 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from aws_cdk import (
-    aws_lambda as lambda_,
-    aws_apigateway as apigateway,
-    aws_dynamodb as dynamodb,
     aws_iam as iam,
-    RemovalPolicy,
     Stack
 )
 from constructs import Construct

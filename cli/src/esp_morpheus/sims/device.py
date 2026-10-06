@@ -6,12 +6,9 @@ import json
 from .. import paths
 from ..outputs import TEST_CONFIG_PATH, RmngSettings
 from ..sdk.device import Device
-import time
 from queue import Queue, Empty
 import threading
 import hashlib
-import os
-import pathlib
 
 class DeviceSim:
     def __init__(self, device_id, config_path=TEST_CONFIG_PATH, rmng_outputs_path=None):

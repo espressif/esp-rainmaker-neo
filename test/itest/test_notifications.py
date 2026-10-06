@@ -6,16 +6,12 @@ import pytest
 import base64
 import json
 import time
-import subprocess
 import sys
 import uuid
-import os
 import boto3
 import requests
 import tempfile
-from py_sdk.test_device import Device, generate_key_and_cert
-from py_sdk.test_group import Group
-from test.itest.conftest import accept_sharing_request_for, REGION, rmng_outputs, connect_device_with_retry, CA_CERT, IOT_ENDPOINT, DEBUG, FILES_BUCKET_NAME
+from test.itest.conftest import accept_sharing_request_for, REGION, FILES_BUCKET_NAME
 
 @pytest.mark.xdist_group("env_mut")
 def test_webhook_notification(test_user2, test_user3, test_user4, associated_device, webhook_mock):
@@ -916,7 +912,6 @@ def test_update_and_list_mobile_platforms(
     ios_config = apns_credentials
     android_config = firebase_service_account
 
-    sns_client = boto3.client('sns', region_name=REGION)
     created_platform_arns = []
 
     try:
@@ -1030,7 +1025,6 @@ def test_delete_mobile_platform(admin_user, apns_credentials, firebase_service_a
     ios_config = apns_credentials
     android_config = firebase_service_account
 
-    sns_client = boto3.client('sns', region_name=REGION)
 
     # Test iOS platform deletion
     ios_result = admin_user.register_ios_platform(

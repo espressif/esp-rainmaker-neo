@@ -8,15 +8,13 @@ from aws_cdk import (
     Stack,
     CfnOutput,
     Duration,
-    aws_apigateway as apigateway,
-    aws_apigatewayv2 as apigwv2,
     aws_ssm as ssm,
     aws_iam as iam,
     custom_resources as cr,
 )
 from constructs import Construct
 from app_common import CommonResources, stable_logical_id, get_or_create_api_resource, create_ssm_string_parameter, create_api_deployment
-from src.rmneo.stacks.base_res_constants import IOT_RESOURCES, SSM_PARAMETERS, TABLE_NAMES
+from src.rmneo.stacks.base_res_constants import SSM_PARAMETERS, TABLE_NAMES
 from src.espuser.stacks.base_res_constants import USER_SSM_PARAMETERS, USER_TABLE_NAMES
 from arn_utils import get_table_arn, get_index_arn, get_ssm_parameter_arn
 from src.rmneo.handlers.hello_world.core import HelloWorldCore
@@ -41,9 +39,6 @@ class RMNGCoreStack(Stack):
         # create common resources for core stack
         common_resources.api_gateway_id = ssm.StringParameter.value_for_string_parameter(
             self, SSM_PARAMETERS['API_GATEWAY_ID']
-        )
-        api_gateway_url = ssm.StringParameter.value_for_string_parameter(
-            self, SSM_PARAMETERS['API_GATEWAY_URL']
         )
         common_resources.api_gateway_root_resource_id = ssm.StringParameter.value_for_string_parameter(
             self, SSM_PARAMETERS['API_GATEWAY_ROOT_RESOURCE_ID']

@@ -10,10 +10,7 @@ Usage:
 """
 import json
 import sys
-import os
 import requests
-from botocore.auth import SigV4Auth
-from botocore.awsrequest import AWSRequest
 import boto3
 
 from scripts.rmng_outputs import RmngSettings

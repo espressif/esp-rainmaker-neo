@@ -8,11 +8,10 @@
 import os
 import sys
 import json
-import requests
 import boto3
 import argparse
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 from botocore.exceptions import ClientError
 
 logging.basicConfig(level=logging.INFO)
@@ -217,7 +216,7 @@ def main():
     subparsers = parser.add_subparsers(dest='command', help='Commands')
 
     # List functions command
-    list_parser = subparsers.add_parser('list', help='List all Lambda functions')
+    subparsers.add_parser('list', help='List all Lambda functions')
 
     # Update environment variable command
     update_parser = subparsers.add_parser('update-env', help='Update Lambda function environment variables')

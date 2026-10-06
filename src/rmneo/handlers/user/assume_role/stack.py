@@ -4,7 +4,6 @@
 
 import json
 from aws_cdk import (
-    aws_lambda as lambda_,
     aws_iam as iam,
     custom_resources as cr,
     Stack

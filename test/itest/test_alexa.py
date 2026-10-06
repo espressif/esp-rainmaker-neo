@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from test.itest.conftest import alexa_region_arn
 import json
 import boto3
 import pytest

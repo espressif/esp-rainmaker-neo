@@ -97,8 +97,8 @@ def test_gva_discovery(user_with_1_dev_each_in_2_groups):
     test_user1.get_aws_credentials()
 
     # Ignore initial messages arrived on MQTT topic
-    message = device1.wait_for_cloud_message(timeout=2)
-    message = device2.wait_for_cloud_message(timeout=2)
+    device1.wait_for_cloud_message(timeout=2)
+    device2.wait_for_cloud_message(timeout=2)
 
     discovery_response = test_user1.gva_discover_devices()
     print("GVA discovery_response is ", discovery_response)
@@ -493,8 +493,8 @@ def test_gva_comprehensive_discovery(user_with_1_dev_each_in_2_groups):
     test_user1.get_aws_credentials()
 
     # Clear any initial messages
-    message = device1.wait_for_cloud_message(timeout=2)
-    message = device2.wait_for_cloud_message(timeout=2)
+    device1.wait_for_cloud_message(timeout=2)
+    device2.wait_for_cloud_message(timeout=2)
 
     # Perform discovery
     discovery_response = test_user1.gva_discover_devices()

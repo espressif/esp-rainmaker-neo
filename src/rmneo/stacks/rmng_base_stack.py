@@ -14,12 +14,9 @@ from aws_cdk import (
     aws_iam as iam,
     CfnOutput,
     CfnParameter,
-    CustomResource,
     custom_resources as cr,
     aws_iot as iot,
-    aws_lambda as lambda_,
-    aws_ssm as ssm,
-    Duration
+    aws_ssm as ssm
 )
 
 from constructs import Construct
@@ -30,7 +27,7 @@ from src.rmneo.handlers.group.base import GroupBase
 from src.rmneo.handlers.file.base import FileBase
 from src.rmneo.handlers.node.base import NodeBase
 from src.rmneo.handlers.nodeadmin.base import NodeAdminBase
-from gsi_infra import GsiInfraCore, ManagedTable, GsiReadinessGate
+from gsi_infra import GsiInfraCore, GsiReadinessGate
 from src.rmneo.handlers.timeseries.base import ServiceBase
 from src.rmneo.handlers.notification.base import NotificationBase
 from src.rmneo.handlers.integration.base import IntegrationBase
@@ -543,7 +540,7 @@ class RMNGBaseStack(Stack):
         self.device_file_role = device_file_role
 
         # Create IoT Role Alias for Device File Role — maps device certificate auth to IAM role
-        device_file_role_alias = create_iot_role_alias(
+        create_iot_role_alias(
             self, "DeviceFileRoleAlias",
             role_alias=IOT_RESOURCES['DEVICE_FILE_ROLE_ALIAS'],
             role_arn=device_file_role.role_arn,
@@ -662,7 +659,7 @@ class RMNGBaseStack(Stack):
         self.device_video_role = device_video_role
 
         # Create IoT Role Alias for Device Video Role — maps device certificate auth to IAM role
-        device_video_role_alias = create_iot_role_alias(
+        create_iot_role_alias(
             self, "DeviceVideoRoleAlias",
             role_alias=IOT_RESOURCES['DEVICE_VIDEO_ROLE_ALIAS'],
             role_arn=device_video_role.role_arn,

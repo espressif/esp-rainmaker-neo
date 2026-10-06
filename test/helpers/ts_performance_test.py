@@ -3,17 +3,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import boto3
 import json
 import time
 import uuid
 import random
-import datetime
 import argparse
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Dict, Any
 
 # Add project root to Python path
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

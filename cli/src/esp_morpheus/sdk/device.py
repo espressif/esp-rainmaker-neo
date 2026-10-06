@@ -13,7 +13,6 @@ from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from cryptography.hazmat.primitives.asymmetric import utils as crypto_utils
 from cryptography import x509
 from cryptography.x509.oid import NameOID
-from cryptography.hazmat.primitives import hashes
 import datetime
 
 import time
@@ -22,8 +21,6 @@ import os
 import sys
 import subprocess
 import logging
-import ssl
-import socket
 import requests
 from botocore.exceptions import ClientError
 from awscrt import io, mqtt

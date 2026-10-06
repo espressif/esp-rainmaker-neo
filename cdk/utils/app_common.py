@@ -7,7 +7,6 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
 
 # This module lives at <repo>/cdk/utils/, so every repo-relative path below is anchored here rather than counted out at each use.
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -24,13 +23,10 @@ from aws_cdk import (
     Aws,
     Stack,
     Duration,
-    Token,
-    CfnCondition,
     CustomResource,
     IResolvable,
     Fn,
     Tags,
-    aws_dynamodb as dynamodb,
     aws_lambda as lambda_,
     aws_apigateway as apigateway,
     aws_iam as iam,
@@ -44,16 +40,13 @@ from aws_cdk import (
     aws_ec2 as ec2,
     aws_logs as logs,
     aws_s3_assets as s3_assets,
-    aws_dynamodb as dynamodb,
     aws_ssm as ssm,
     aws_cognito as cognito,
     aws_apigatewayv2 as apigwv2,
     aws_cloudfront as cloudfront,
-    custom_resources as cr,
 )
 from constructs import Construct
 from dataclasses import dataclass
-import os
 import re
 from arn_utils import get_lambda_integration_uri, get_api_gateway_invoke_arn, get_user_pool_arn, get_ssm_parameter_arn, get_table_arn
 
@@ -113,7 +106,7 @@ def apply_common_tags(app) -> None:
         Tags.of(app).add("AppRegion", os.environ.get("AWS_REGION", "unknown"))
 
 
-from gsi_infra import ManagedTable, GSI_MANAGED_BY_TAG_KEY, GSI_MANAGED_BY_TAG_VALUE 
+from gsi_infra import ManagedTable as ManagedTable
 
 class CommonResources:
     def __init__(self, api_gateway_id: str = None, api_gateway_root_resource_id: str = None, admin_api_resource_id: str = None, cognito_authorizer_id: str = None, prefix: str = ""):

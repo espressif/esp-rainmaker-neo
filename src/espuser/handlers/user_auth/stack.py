@@ -31,7 +31,6 @@ class UserAuthAPI(Construct):
         super().__init__(scope, id, **kwargs)
 
         region = Stack.of(self).region
-        account = Stack.of(self).account
         function_name = "user_auth"
         role = create_base_lambda_role(self, function_name, common_resources)
 

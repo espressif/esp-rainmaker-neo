@@ -5,7 +5,6 @@
 from constructs import Construct
 from app_common import CommonResources
 from src.rmneo.handlers.node.node_assoc.stack import AssociateNodeAPI
-from src.rmneo.handlers.node.node_reset.stack import NodeDataResetLambda
 from src.rmneo.handlers.node.node_conn.stack import PresenceEventHandlerAPI
 from src.rmneo.handlers.node.node_to_cloud.stack import PublishInputEventHandlerAPI
 from src.rmneo.handlers.node.node_indexed_params.stack import NodeShadowUpdateToDB

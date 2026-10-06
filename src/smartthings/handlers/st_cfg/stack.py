@@ -3,8 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from aws_cdk import (
-    aws_lambda,
-    aws_apigateway as apigateway,
     aws_iam as iam,
     Stack
 )

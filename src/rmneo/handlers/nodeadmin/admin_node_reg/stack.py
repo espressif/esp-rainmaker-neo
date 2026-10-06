@@ -4,8 +4,6 @@
 
 from aws_cdk import (
     Aws,
-    aws_lambda as lambda_,
-    aws_apigateway as apigateway,
     aws_iam as iam,
     Stack,
 )

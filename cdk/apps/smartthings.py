@@ -6,7 +6,6 @@
 import _bootstrap  # noqa: F401 — sys.path setup; must precede every repo-local import
 
 import os
-import json
 import aws_cdk as cdk
 from aws_cdk import Tags
 from src.smartthings.stacks.st_stack import STStack

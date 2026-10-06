@@ -6,7 +6,6 @@ from aws_cdk import (
     aws_iam as iam,
     Stack,
 )
-from aws_cdk import aws_ssm as ssm
 from constructs import Construct
 from app_common import (
     CommonResources,
@@ -16,7 +15,7 @@ from app_common import (
     get_or_create_api_resource,
     add_cors_options
 )
-from src.espuser.stacks.base_res_constants import USER_TABLE_NAMES, USER_SSM_PARAMETERS
+from src.espuser.stacks.base_res_constants import USER_TABLE_NAMES
 from arn_utils import get_table_arn
 
 class UserCommonAPI(Construct):

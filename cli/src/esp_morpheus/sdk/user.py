@@ -27,7 +27,7 @@ import queue
 import uuid
 import os
 import time
-from urllib.parse import urlencode, quote
+from urllib.parse import urlencode
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography import x509

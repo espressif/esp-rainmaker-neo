@@ -15,7 +15,7 @@ from app_common import (
     get_or_create_api_resource,
     add_cors_options
 )
-from src.rmneo.stacks.base_res_constants import TABLE_NAMES, IOT_RESOURCES
+from src.rmneo.stacks.base_res_constants import IOT_RESOURCES
 from arn_utils import get_table_arn
 from src.espuser.stacks.base_res_constants import USER_TABLE_NAMES
 

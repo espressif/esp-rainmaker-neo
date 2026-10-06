@@ -2,13 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from aws_cdk import (
-    Duration,
-    aws_lambda as lambda_,
-    aws_apigateway as apigateway,
-    aws_iam as iam,
-    aws_s3 as s3,
-)
 from constructs import Construct
 from app_common import CommonResources, create_lambda_function, create_cfn_api_method, get_or_create_api_resource, add_cors_options
 

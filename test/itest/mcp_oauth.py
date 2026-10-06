@@ -19,7 +19,7 @@ the flow is expensive. The token exchange yields both an ID token (carries
 covered.
 """
 from test.itest.conftest import MCP_API_URL, launch_chromium
-from urllib.parse import urlparse, parse_qs, urljoin
+from urllib.parse import urlparse, parse_qs
 import threading
 import time
 import hashlib

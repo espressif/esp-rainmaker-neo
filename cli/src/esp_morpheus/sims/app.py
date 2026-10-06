@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import threading
 import os
 from .. import paths
 from ..outputs import TEST_CONFIG_PATH, RmngSettings
@@ -14,7 +13,6 @@ from . import prov_ble
 from prompt_toolkit import PromptSession
 from queue import Queue, Empty
 import pathlib
-import os
 import time
 import asyncio
 import datetime
@@ -148,9 +146,6 @@ class AppSim:
             payload = shadow_to_unstructured(payload)
 
             thing_name = topic_parts[2]  # Device name is the third part (index 2)
-
-            # Determine if this is a response to a GET or an UPDATE
-            is_get_response = topic.endswith('/get/accepted')
 
             # Extract shadow state from the payload
             shadow_state = payload["state"]

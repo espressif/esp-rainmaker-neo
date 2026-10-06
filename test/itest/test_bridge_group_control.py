@@ -124,8 +124,7 @@ def test_dispatch_targets_pure():
     _spec = importlib.util.spec_from_file_location("bridge_sim", _sim_path)
     _bridge_sim = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(_bridge_sim)
-    BridgeMQTT, BridgeSim, ChildState = (
-        _bridge_sim.BridgeMQTT,
+    BridgeSim, ChildState = (
         _bridge_sim.BridgeSim,
         _bridge_sim.ChildState,
     )

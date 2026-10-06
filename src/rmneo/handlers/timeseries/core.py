@@ -3,8 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from aws_cdk import (
-    aws_lambda as lambda_,
-    aws_apigateway as apigateway,
     aws_iam as iam,
     Stack,
 )
@@ -84,9 +82,6 @@ class ServiceCore(Construct):
             lambda_role=service_lambda_role,
         )
 
-        # Add API Gateway integration
-        service_integration = apigateway.LambdaIntegration(self.service_function)
-        
         # Create nested API Gateway resources using CFn to avoid cyclic dependencies
         # Create the nested resource path: /v1/groups/{groupId}/nodes/{nodeId}/{serviceName}
         

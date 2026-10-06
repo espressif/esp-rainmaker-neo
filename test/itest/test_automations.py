@@ -338,7 +338,6 @@ def test_automation_shared_group_access(test_user1, test_user2):
     """
     # Create a group for testing with test_user1
     user1_group_api = Group(test_user1)
-    user2_group_api = Group(test_user2)
     group_id = user1_group_api.create_group("Automation Shared Access Test Group")
 
     # Create a sample automation with test_user1

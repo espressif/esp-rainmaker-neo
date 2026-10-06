@@ -6,5 +6,8 @@
 #
 # F821 is the rule that matters most: py_compile and ast.parse accept a call to a function nobody defined, so a rename that misses a call site ships as a NameError.
 
+# esp-cloud-common is another repo's code, and CI lints without the submodule checked out.
+extend-exclude = ["src/esp-cloud-common"]
+
 [lint]
-select = ["E711", "E712", "E714", "F541", "F821"]
+select = ["E711", "E712", "E714", "F401", "F541", "F811", "F821", "F841"]

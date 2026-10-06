@@ -3,10 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from aws_cdk import (
-    aws_lambda,
-    aws_apigateway as apigateway,
     aws_iam as iam,
-    Duration,
     Stack
 )
 from constructs import Construct
@@ -20,8 +17,7 @@ from app_common import (
 )
 from src.rmneo.stacks.base_res_constants import TABLE_NAMES
 from arn_utils import (
-    get_table_arn, get_index_arn,
-    get_ssm_parameter_prefix_arn
+    get_table_arn, get_ssm_parameter_prefix_arn
 )
 from src.espuser.stacks.base_res_constants import USER_TABLE_NAMES
 

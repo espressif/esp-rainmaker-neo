@@ -66,7 +66,6 @@ def test_presence_cascade_marks_children_offline(bridge_in_group, aws_clients, s
       - the Lambda handler logic (both shadow writes, disconnect_info)
     in a single end-to-end flow. See docs/en/specs/bridge.md §3.7 / §5.9."""
     bridge = bridge_in_group["bridge"]
-    parent = bridge.node_thing_name
     group_id = bridge_in_group["group_id"]
     named_shadow = f"params-{group_id}"
 
@@ -89,7 +88,6 @@ def test_presence_cascade_marks_children_offline(bridge_in_group, aws_clients, s
         assert _read_shadow_online(iot_data, child, "iparams") is True
         assert _read_shadow_online(iot_data, child, named_shadow) is True
 
-    disconnect_ts_before = int(time.time() * 1000)
     bridge.disconnect()
 
     # Real disconnect → presence event → rule → Lambda → shadow updates.

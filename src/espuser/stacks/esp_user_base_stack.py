@@ -9,15 +9,10 @@ from aws_cdk import RemovalPolicy
 from aws_cdk import CfnOutput
 from aws_cdk import aws_cognito as cognito
 from aws_cdk import aws_iam as iam
-from aws_cdk import aws_apigateway as apigateway
 from aws_cdk import aws_dynamodb
-from aws_cdk import aws_ssm as ssm
 from aws_cdk import aws_s3 as s3
-from aws_cdk import aws_ses as ses
 from aws_cdk import aws_kms as kms
 from aws_cdk import aws_lambda as lambda_
-from aws_cdk import custom_resources as cr
-from aws_cdk import aws_logs as logs
 from aws_cdk import CustomResource
 import sys
 import os
@@ -469,7 +464,6 @@ class CreateAdminBaseResources(Construct):
         super().__init__(scope, id, **kwargs)
 
         self.config = config or {}
-        token_config = self.config.get('token_validity', {})
 
         admin_user_pool = create_cognito_user_pool(
             self, "AdminUserPool",

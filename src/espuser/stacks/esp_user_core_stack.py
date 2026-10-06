@@ -8,7 +8,6 @@ from aws_cdk import (
     CustomResource,
     Duration,
     Stack,
-    aws_apigateway as apigateway,
     aws_iam as iam,
     aws_lambda as lambda_,
 )
