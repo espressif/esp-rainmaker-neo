@@ -8,16 +8,6 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-# This module lives at <repo>/cdk/utils/, so every repo-relative path below is anchored here rather than counted out at each use.
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
-# The submodule's cdk_go/ (ManagedTable, GSI_MANAGED_BY_TAG_*, gsi_infra) is put on sys.path by
-# cdk/apps/_bootstrap.py, which every CDK entry point imports before any repo-local module --
-# so it is already there by the time this file loads. There used to be a second insert here
-# pointing at <repo>/esp-cloud-common/cdk_go; the submodule is at src/esp-cloud-common, so that
-# path never existed and the line only ever added a no-op sys.path entry. _bootstrap is the one
-# place that sets this up; a second copy here would be a second place to get the path wrong.
-
 from aws_cdk import (
     ArnFormat,
     Aws,
@@ -49,6 +39,16 @@ from constructs import Construct
 from dataclasses import dataclass
 import re
 from arn_utils import get_lambda_integration_uri, get_api_gateway_invoke_arn, get_user_pool_arn, get_ssm_parameter_arn, get_table_arn
+# The submodule's cdk_go/ (ManagedTable, GSI_MANAGED_BY_TAG_*, gsi_infra) is put on sys.path by
+# cdk/apps/_bootstrap.py, which every CDK entry point imports before any repo-local module --
+# so it is already there by the time this file loads. There used to be a second insert here
+# pointing at <repo>/esp-cloud-common/cdk_go; the submodule is at src/esp-cloud-common, so that
+# path never existed and the line only ever added a no-op sys.path entry. _bootstrap is the one
+# place that sets this up; a second copy here would be a second place to get the path wrong.
+from gsi_infra import ManagedTable as ManagedTable
+
+# This module lives at <repo>/cdk/utils/, so every repo-relative path below is anchored here rather than counted out at each use.
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def get_rmng_inputs() -> dict:
@@ -105,8 +105,6 @@ def apply_common_tags(app) -> None:
     if os.environ.get("CDK_PUBLISH") != "true":
         Tags.of(app).add("AppRegion", os.environ.get("AWS_REGION", "unknown"))
 
-
-from gsi_infra import ManagedTable as ManagedTable
 
 class CommonResources:
     def __init__(self, api_gateway_id: str = None, api_gateway_root_resource_id: str = None, admin_api_resource_id: str = None, cognito_authorizer_id: str = None, prefix: str = ""):

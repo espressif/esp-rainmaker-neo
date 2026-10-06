@@ -878,7 +878,7 @@ class AWSDeployCleanup:
                 try:
                     # This might not work for all cases, but we'll try
                     self.sns.list_endpoints_by_platform_application(PlatformApplicationArn='dummy')
-                except:
+                except Exception:
                     # If we can't list all endpoints, we'll skip email endpoint cleanup
                     self.console.print("[yellow]⚠ Warning: Could not list email endpoints (this is normal)[/yellow]")
                     email_endpoints = []

@@ -628,7 +628,7 @@ def test_gva_comprehensive_control(user_with_1_dev_each_in_2_groups):
     # Clear any residual messages from previous tests
     try:
         device1.wait_for_params_message(timeout=0.5)
-    except:
+    except Exception:
         pass  # No message to clear
 
     # Test OnOff control commands

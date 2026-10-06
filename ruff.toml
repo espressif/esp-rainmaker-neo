@@ -2,12 +2,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Every selected rule blocks CI, so a rule joins `select` only once the tree passes it. Report one that is not gated yet with `ruff check --select <rule>`.
-#
-# F821 is the rule that matters most: py_compile and ast.parse accept a call to a function nobody defined, so a rename that misses a call site ships as a NameError.
+# Ruff's default rule set, and every selected rule blocks CI. A rule joins `select` only once the tree passes it; report one that is not gated yet with `ruff check --select <rule>`.
 
 # esp-cloud-common is another repo's code, and CI lints without the submodule checked out.
 extend-exclude = ["src/esp-cloud-common"]
 
 [lint]
-select = ["E711", "E712", "E714", "F401", "F541", "F811", "F821", "F841"]
+select = ["E4", "E7", "E9", "F"]
+
+[lint.per-file-ignores]
+# Sphinx configs inherit their settings by star import.
+"docs/**/conf*.py" = ["F403", "F405"]

@@ -1538,11 +1538,11 @@ def test_device_new():
     # Cleanup after the test
     try:
         device.disconnect()
-    except:
+    except Exception:
         pass  # Ignore disconnect errors
     try:
         device.destroy_test_node()
-    except:
+    except Exception:
         pass  # Ignore cleanup errors
 
 

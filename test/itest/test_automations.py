@@ -706,7 +706,7 @@ def test_automation_end_to_end_execution(associated_device, basic_ingest):
     print("Cleaning up existing triggers...")
     try:
         test_user1.delete_node_trigger(group_id, device.node_thing_name)
-    except:
+    except Exception:
         pass  # Ignore errors if no triggers exist
 
     # Clean up any stale subgroup associations from previous tests
@@ -883,7 +883,7 @@ def test_automation_end_to_end_execution(associated_device, basic_ingest):
     try:
         message = device.wait_for_params_message(timeout=2)
         assert message is None, "No actions should be executed with partial condition satisfaction"
-    except:
+    except Exception:
         pass  # No message is expected, which is correct
 
     # Step 4: Send trigger notifications that DO satisfy conditions (full match)
@@ -1034,7 +1034,7 @@ def test_automation_end_to_end_execution(associated_device, basic_ingest):
     try:
         message = device.wait_for_params_message(timeout=2)
         assert message is None, "No new actions should be executed after trigger reset"
-    except:
+    except Exception:
         pass  # No message is expected
 
     # Step 7: Test OR condition automation

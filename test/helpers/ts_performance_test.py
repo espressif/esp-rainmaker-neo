@@ -18,10 +18,10 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 # Now we can import our test modules
-from scripts.rmng_outputs import TEST_CONFIG_PATH, RmngSettings
-from py_sdk.test_device import Device, generate_key_and_cert, device_log
-from py_sdk.test_user import User
-from py_sdk.test_group import Group
+from scripts.rmng_outputs import TEST_CONFIG_PATH, RmngSettings  # noqa: E402
+from py_sdk.test_device import Device, generate_key_and_cert, device_log  # noqa: E402
+from py_sdk.test_user import User  # noqa: E402
+from py_sdk.test_group import Group  # noqa: E402
 
 # Hardcoded AWS root CA certificate
 CA_CERT = """-----BEGIN CERTIFICATE-----
