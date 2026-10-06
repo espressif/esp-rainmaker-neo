@@ -4,6 +4,7 @@
 
 import hashlib
 import json
+import pytest
 
 from test.itest.conftest import (
     CA_CERT, IOT_ENDPOINT, REGION, DEBUG, accept_sharing_request_for,
@@ -264,14 +265,8 @@ def test_remove_node_unauthorized(test_user1, test_user2, valid_device):
     assert result is None, f"Association failed with error: {result}"
     
     # User2 should not be able to remove node from user1's group
-    try:
+    with pytest.raises(AssertionError, match="Expected 200, but got"):
         user2_group_api.remove_node_from_group(group_id, valid_device.node_thing_name)
-        assert False, "Unauthorized user should not be able to remove node from group"
-    except AssertionError as e:
-        if "Expected 200, but got" in str(e):
-            pass  # Expected failure
-        else:
-            raise e
     
     # Verify node is still in group
     expected_structure = {
@@ -345,14 +340,8 @@ def test_remove_nonexistent_node_from_group(test_user1):
     group_id = user1_group_api.create_group("Nonexistent Node Test")
     
     # Try to remove non-existent node
-    try:
+    with pytest.raises(AssertionError, match="Expected 200, but got"):
         user1_group_api.remove_node_from_group(group_id, "nonexistent-node-id")
-        assert False, "Removing non-existent node should fail"
-    except AssertionError as e:
-        if "Expected 200, but got" in str(e):
-            pass  # Expected failure
-        else:
-            raise e
 
     user1_group_api.delete_group(group_id)
 
@@ -580,7 +569,7 @@ def test_ncfg_ver_drives_app_config_cache(associated_device):
             if device.set_node_config(config):
                 return hashlib.sha256(
                     json.dumps(config, sort_keys=True).encode()).hexdigest()
-        assert False, f"set_node_config never acknowledged for {node_id}"
+        raise AssertionError(f"set_node_config never acknowledged for {node_id}")
 
     def app_launch(cache):
         """One app launch. Returns (config_in_use, fetched), where `fetched` says

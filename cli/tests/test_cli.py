@@ -235,7 +235,7 @@ def test_unreadable_outputs_fail_the_command_not_the_process(monkeypatch):
     monkeypatch.setattr('esp_morpheus.cli.context.RmngSettings.from_source',
                         lambda source: (_ for _ in ()).throw(OutputsError('missing StackRegion')))
     with pytest.raises(output.CommandError):
-        Session(outputs_source='rmng-outputs.json').settings
+        _ = Session(outputs_source='rmng-outputs.json').settings
 
 
 # --- the admin context banner -----------------------------------------------

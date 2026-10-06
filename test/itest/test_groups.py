@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import pytest
 import time
 import boto3
 from py_sdk.test_group import Group
@@ -209,18 +210,12 @@ def test_list_groups_create_subgroups_and_add_nodes_from_different_user(test_use
     assert not any(g["group_id"] == other_group_id for g in list_groups_data["groups"]), f"Other user's group {other_group_id} should not be visible"
 
     # Try to create a subgroup in the other user's group
-    try:
+    with pytest.raises(AssertionError, match="but got 500"):
         user1_group_api.create_subgroup(other_group_id, "Unauthorized Subgroup")
-        assert False, "Creating a subgroup in another user's group should fail"
-    except Exception as e:
-        assert "but got 500" in str(e), f"Unexpected error message: {str(e)}"
 
     # Try to add a node to the subgroup in the other user's group
-    try:
+    with pytest.raises(AssertionError, match="but got 500"):
         user1_group_api.add_node_to_subgroup(other_group_id, other_subgroup_id, "test-node-id")
-        assert False, "Adding a node to a subgroup in another user's group should fail"
-    except Exception as e:
-        assert "but got 500" in str(e), f"Unexpected error message: {str(e)}"
 
     # Verify that the node was not added to the other user's group or subgroup
     other_list_groups_data = user2_group_api.list_groups()

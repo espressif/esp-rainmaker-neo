@@ -679,7 +679,7 @@ def _reset_associated_device(resource):
         new_group_id = associate_device_with_group(device, user, user1_group_api)
         resource[1] = new_group_id
     except Exception as e:
-        raise RuntimeError(f"Reset failed: could not rebuild associated device environment: {e}")
+        raise RuntimeError(f"Reset failed: could not rebuild associated device environment: {e}") from e
 
     # We never return the user and device to their original device/user pools
 
@@ -1504,7 +1504,7 @@ def user_with_multi_capability_device(test_user1, session_valid_device_rsa):
     }
     # Same retry rationale as user_with_1_dev_each_in_2_groups: the 5s ack window is
     # sometimes missed on a cold node-config lambda and the call is idempotent.
-    for attempt in range(3):
+    for _attempt in range(3):
         if device.set_node_config(config):
             break
     else:
@@ -1609,7 +1609,7 @@ def accept_sharing_request_for(user, group_id, subgroup_id):
             if attempt < max_retries - 1:
                 time.sleep(retry_delay)
                 continue
-            assert False, "Failed to retrieve sharing requests"
+            raise AssertionError("Failed to retrieve sharing requests")
 
         user_log(f"Retrieved sharing requests: {sharing_requests}")
 
@@ -1635,7 +1635,7 @@ def accept_sharing_request_for(user, group_id, subgroup_id):
             user_log(f"Sharing request not found, waiting {retry_delay} seconds before retry")
             time.sleep(retry_delay)
 
-    assert False, f"Sharing request for group {group_id} and subgroup {subgroup_id} not found after {max_retries} attempts"
+    raise AssertionError(f"Sharing request for group {group_id} and subgroup {subgroup_id} not found after {max_retries} attempts")
 
 
 def assert_subgroup_in_group(groups, group_id, subgroup_id):
@@ -1643,7 +1643,7 @@ def assert_subgroup_in_group(groups, group_id, subgroup_id):
         if group['group_id'] == group_id:
             assert any(subgroup['subgroup_id'] == subgroup_id for subgroup in group['subgroups']), f"Shared subgroup {subgroup_id} not found in group {group_id}"
             return
-    assert False, f"Group {group_id} not found in user's groups"
+    raise AssertionError(f"Group {group_id} not found in user's groups")
 
 
 def validate_user_group_dynamodb_entry(user_id, group_id, expected_item):
@@ -2296,7 +2296,7 @@ def _reset_bridge_in_group(resource):
         new_group_id = _bridge_associate_and_ready(bridge, user, group_api)
         resource[1] = new_group_id
     except Exception as e:
-        raise RuntimeError(f"Reset failed: could not rebuild bridge environment: {e}")
+        raise RuntimeError(f"Reset failed: could not rebuild bridge environment: {e}") from e
 
 
 def _destroy_bridge_in_group(resource):

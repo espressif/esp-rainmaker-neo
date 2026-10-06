@@ -976,7 +976,7 @@ def main(profile, access_key, secret_key, session_token, region, service):
             progress.update(task, completed=100)
         except Exception as e:
             progress.update(task, completed=0)
-            raise click.ClickException(str(e))
+            raise click.ClickException(str(e)) from e
 
 if __name__ == '__main__':
     main() 

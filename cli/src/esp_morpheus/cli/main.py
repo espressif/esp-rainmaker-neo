@@ -152,14 +152,14 @@ def main():
     except NoCredentialsError:
         error = output.missing_credentials()
         error.show()
-        raise SystemExit(error.exit_code)
+        raise SystemExit(error.exit_code) from None
     except NotReadyError as e:
         output.err(f"Failed: {e}")
-        raise SystemExit(output.EXIT_FAILURE)
+        raise SystemExit(output.EXIT_FAILURE) from None
     except Exception as e:  # noqa: BLE001
         output.err(f"{type(e).__name__}: {e}")
         output.debug(traceback.format_exc())
-        raise SystemExit(output.EXIT_FAILURE)
+        raise SystemExit(output.EXIT_FAILURE) from None
 
 
 if __name__ == '__main__':

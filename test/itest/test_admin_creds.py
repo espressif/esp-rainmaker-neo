@@ -46,7 +46,7 @@ def _assert_denied(call, description):
         assert code in ("AccessDeniedException", "AccessDenied", "AuthorizationError"), \
             f"expected AccessDenied for {description}, got {e.response['Error']}"
         return
-    assert False, f"out-of-scope {description} must be denied"
+    raise AssertionError(f"out-of-scope {description} must be denied")
 
 
 # ─── rmng stack (Lambda + service quotas) ─────────────────────────────────────

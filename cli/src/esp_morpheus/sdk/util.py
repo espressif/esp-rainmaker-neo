@@ -42,7 +42,7 @@ def wait_until(predicate, description, retries=10, interval=2):
         if predicate():
             return
         time.sleep(interval)
-    assert False, f"Timed out waiting for: {description}"
+    raise AssertionError(f"Timed out waiting for: {description}")
 
 
 def seed_node_data(user, group_id, node_id):

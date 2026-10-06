@@ -491,18 +491,14 @@ def test_timeseries_comprehensive(associated_device, basic_ingest):
     test_user2.register_user_via_lambda(email=test_user2.username, password=test_user2.password)
     test_user2.get_aws_credentials()
 
-    try:
-        # This should fail with unauthorized error
+    with pytest.raises(Exception, match=r"(?i)unauthorized|401|403"):
         test_user2.get_timeseries_data(
             group_id=group_id,
             node_id=device_thing_name,
             key="temperature",
             data_type="float"
         )
-        assert False, "Unauthorized user should not be able to access timeseries data"
-    except Exception as e:
-        assert "unauthorized" in str(e).lower() or "403" in str(e) or "401" in str(e), f"Should get unauthorized error, got: {str(e)}"
-        print("✅ Unauthorized access properly blocked")
+    print("✅ Unauthorized access properly blocked")
 
     # Cleanup
     device.disconnect()

@@ -331,7 +331,7 @@ def test_user_multiple_devices(test_user1):
             s3_dev.put_object(Bucket=FILES_BUCKET_NAME, Key=key, Body=f"data-{device.node_thing_name}".encode())
 
         # User assumes a fresh role for each node (services mode is single-node).
-        for device, gid, (s3_dev, key) in zip(devices, group_ids, keys_to_clean):
+        for device, gid, (_s3_dev, key) in zip(devices, group_ids, keys_to_clean, strict=True):
             s3_user = user.get_s3_client(group_id=gid, node_id=device.node_thing_name)
             resp = s3_user.get_object(Bucket=FILES_BUCKET_NAME, Key=key)
             assert resp["Body"].read() is not None, f"User could not download {key}"

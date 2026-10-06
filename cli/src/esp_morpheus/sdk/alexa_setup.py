@@ -205,7 +205,7 @@ def sigv4_post(url, body, region):
         with urllib.request.urlopen(req, timeout=30) as r:
             print(f"config API HTTP {r.status}: {r.read().decode()}")
     except urllib.error.HTTPError as e:
-        raise SystemExit(f"config API HTTP {e.code}: {e.read().decode()}")
+        raise SystemExit(f"config API HTTP {e.code}: {e.read().decode()}") from e
 
 
 def sigv4_config_poster(api_url, region, manufacturer_name=None):

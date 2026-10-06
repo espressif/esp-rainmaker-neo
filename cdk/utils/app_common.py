@@ -1022,7 +1022,7 @@ def add_http_api_routes(
     logical ID using `<path>-<method>`. Wraps `http_api.add_routes(...)`.
     """
     routes = http_api.add_routes(path=path, methods=methods, integration=integration)
-    for method, route in zip(methods, routes):
+    for method, route in zip(methods, routes, strict=True):
         route.node.default_child.override_logical_id(
             stable_logical_id("ApiGwV2Route", f"{path}-{method.value}")
         )

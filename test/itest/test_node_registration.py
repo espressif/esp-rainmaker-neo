@@ -646,7 +646,7 @@ def test_failed_nodes_presigned_csv_retry(admin_user):
         # Poll until completed.
         max_attempts = 20
         status = None
-        for attempt in range(max_attempts):
+        for _attempt in range(max_attempts):
             time.sleep(5)
             status = admin_user.get_bulk_register_status(request_id)
             if status and status.get("status") == "completed":
@@ -723,7 +723,7 @@ def test_failed_nodes_presigned_csv_retry(admin_user):
         retry_request_id = retry_resp["request_id"]
 
         retry_status = None
-        for attempt in range(max_attempts):
+        for _attempt in range(max_attempts):
             time.sleep(5)
             retry_status = admin_user.get_bulk_register_status(retry_request_id)
             if retry_status and retry_status.get("status") == "completed":

@@ -160,7 +160,7 @@ module_ctx = ModuleContext(
     inputs=rmng_inputs,
     common_resources=make_common_resources,
 )
-for name, register in discover_optional_modules():
+for _name, register in discover_optional_modules():
     register(module_ctx)
 
 if not os.environ.get("DASHBOARD_SKIP"):

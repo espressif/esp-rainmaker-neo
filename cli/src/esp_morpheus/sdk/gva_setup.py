@@ -74,10 +74,10 @@ def get_access_token():
         return out.stdout.strip()
     except FileNotFoundError:
         raise SystemExit("gcloud not found: install the Google Cloud CLI and run "
-                         "'gcloud auth login', or set GOOGLE_ACCESS_TOKEN")
+                         "'gcloud auth login', or set GOOGLE_ACCESS_TOKEN") from None
     except subprocess.CalledProcessError as e:
         raise SystemExit(f"gcloud auth print-access-token failed: {e.stderr.strip()}\n"
-                         "Run 'gcloud auth login' first, or set GOOGLE_ACCESS_TOKEN")
+                         "Run 'gcloud auth login' first, or set GOOGLE_ACCESS_TOKEN") from e
 
 
 def api(token, method, url, body=None):
@@ -94,7 +94,7 @@ def api(token, method, url, body=None):
             detail = json.loads(detail).get("error", {}).get("message", detail)
         except (ValueError, AttributeError):
             pass
-        raise ApiError(e.code, detail)
+        raise ApiError(e.code, detail) from e
 
 
 # --------------------------------------------------------------------------- steps

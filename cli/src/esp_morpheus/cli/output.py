@@ -256,7 +256,7 @@ def _emit_fields(title, mapping, width):
 
 def emit_table(columns, rows, title=None):
     if structured():
-        emit_json([dict(zip(columns, row)) for row in rows])
+        emit_json([dict(zip(columns, row, strict=True)) for row in rows])
         return
     # No rules or borders: a table sits beside the key/value blocks, and box drawing next to them
     # reads as a different tool's output. Two spaces of padding matches their key column.

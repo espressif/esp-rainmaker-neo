@@ -605,7 +605,7 @@ def test_automation_id_format(test_user1):
         automation_ids.append(result["automation_id"])
 
     # Verify the format of each automation ID
-    for i, automation_id in enumerate(automation_ids):
+    for automation_id in automation_ids:
         # Automation IDs should be 3 characters long
         assert len(automation_id) == 3, f"Automation ID {automation_id} should be 3 characters long"
 
@@ -880,11 +880,8 @@ def test_automation_end_to_end_execution(associated_device, basic_ingest):
     print("Verified partial condition satisfaction doesn't execute actions")
 
     # Check that no params message was received (no actions executed)
-    try:
-        message = device.wait_for_params_message(timeout=2)
-        assert message is None, "No actions should be executed with partial condition satisfaction"
-    except Exception:
-        pass  # No message is expected, which is correct
+    message = device.wait_for_params_message(timeout=2)
+    assert message is None, "No actions should be executed with partial condition satisfaction"
 
     # Step 4: Send trigger notifications that DO satisfy conditions (full match)
     print("Testing full condition satisfaction (should execute actions)")
@@ -956,7 +953,7 @@ def test_automation_end_to_end_execution(associated_device, basic_ingest):
 
     # Collect remaining action messages (up to expected_actions - 1 more)
     messages_received = 1
-    for i in range(expected_actions - 1):
+    for _i in range(expected_actions - 1):
         message = device.wait_for_params_message(timeout=5)  # Shorter timeout for subsequent messages
         if message is not None:
             messages_received += 1
@@ -1025,17 +1022,16 @@ def test_automation_end_to_end_execution(associated_device, basic_ingest):
         }
     }
 
+    # Step 5 can leave late action messages behind; only messages caused by the reset count here.
+    device.clear_queues()
     assert device.send_direct_notification(trigger_reset, basic_ingest=basic_ingest), "Failed to send trigger reset notification"
 
     # Wait a bit - no new actions should be executed
     time.sleep(3)
 
     # Verify no new actions (since AND condition is no longer satisfied)
-    try:
-        message = device.wait_for_params_message(timeout=2)
-        assert message is None, "No new actions should be executed after trigger reset"
-    except Exception:
-        pass  # No message is expected
+    message = device.wait_for_params_message(timeout=2)
+    assert message is None, "No new actions should be executed after trigger reset"
 
     # Step 7: Test OR condition automation
     print("Testing OR condition automation...")

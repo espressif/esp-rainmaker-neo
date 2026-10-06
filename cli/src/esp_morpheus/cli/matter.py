@@ -72,7 +72,7 @@ def verify(user, group_id, nocsr_elements_hex, attestation_challenge_hex,
         blobs = [bytes.fromhex(value) for value in
                  (nocsr_elements_hex, attestation_challenge_hex, attestation_signature_hex)]
     except ValueError as e:
-        raise click.BadParameter(f"not valid hex: {e}")
+        raise click.BadParameter(f"not valid hex: {e}") from e
 
     result, error = do_verify_with_nocsr_elements(user, group_id, request_id, *blobs)
     if error:

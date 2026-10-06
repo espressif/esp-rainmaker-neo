@@ -2,13 +2,17 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Ruff's default rule set, and every selected rule blocks CI. A rule joins `select` only once the tree passes it; report one that is not gated yet with `ruff check --select <rule>`.
+# Ruff's defaults plus bugbear; every selected rule blocks CI. A rule joins `select` only once the tree passes it; report one that is not gated yet with `ruff check --select <rule>`.
 
 # esp-cloud-common is another repo's code, and CI lints without the submodule checked out.
 extend-exclude = ["src/esp-cloud-common"]
 
 [lint]
-select = ["E4", "E7", "E9", "F"]
+select = ["B", "E4", "E7", "E9", "F"]
+
+[lint.flake8-bugbear]
+# CDK Durations are immutable, so one shared default is safe.
+extend-immutable-calls = ["aws_cdk.Duration.days", "aws_cdk.Duration.seconds"]
 
 [lint.per-file-ignores]
 # Sphinx configs inherit their settings by star import.

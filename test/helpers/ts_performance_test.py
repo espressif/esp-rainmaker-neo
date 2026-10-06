@@ -175,7 +175,7 @@ class TSPerformanceTester:
                 start_time = time.time()
                 success_count = 0
                 
-                for i in range(data_points_per_device):
+                for _i in range(data_points_per_device):
                     # Generate test data
                     value = random.uniform(20.0, 30.0)  # Random temperature between 20-30°C
                     timestamp = int(time.time() * 1000)  # Current time in milliseconds

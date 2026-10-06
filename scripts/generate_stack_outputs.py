@@ -143,7 +143,7 @@ def main():
     regions_by_name: dict = {}
     # Path into output_data per private output, e.g. ["espuser-base", "EspMcpClientSecret"]. Rebuilt every run so an output that stops being private cannot linger.
     private_paths: list = []
-    for (name, stack_region), result in zip(queries, fetched):
+    for (name, stack_region), result in zip(queries, fetched, strict=True):
         outputs, private_keys = result if result is not None else (None, [])
         if name in multi_region_names:
             if outputs is not None:

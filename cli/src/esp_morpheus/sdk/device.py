@@ -567,7 +567,7 @@ class Device:
             else:
                 return None
         except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON data: {e}")
+            raise ValueError(f"Invalid JSON data: {e}") from e
 
     @requires('shadow', blocked=False)
     def update_shadow(self, state_json, shadow_name=None):

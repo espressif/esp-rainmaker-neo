@@ -94,7 +94,7 @@ module_ctx = EspUserModuleContext(
     deploy_timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     common_resources=make_common_resources,
 )
-for name, register_espuser in discover_espuser_modules():
+for _name, register_espuser in discover_espuser_modules():
     register_espuser(module_ctx)
 
 app.synth()
