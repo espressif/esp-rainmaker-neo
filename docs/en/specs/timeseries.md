@@ -269,7 +269,6 @@ a concurrent Lambda invocation.
 - **Partition key:** `node_key_dt` (String).
 - **Sort key:** `ts` (Number).
 - **Stream:** `NEW_AND_OLD_IMAGES` — this is what feeds aggregation.
-- Point-in-time recovery enabled.
 - The stream ARN is published to SSM Parameter Store
   (`RAW_TS_DATA_STREAM_ARN`) because a stream ARN embeds a
   creation-time suffix and cannot be hardcoded; the stream-processor stack
@@ -348,7 +347,7 @@ aggregate *consumption* — the delta between successive readings:
 - **Sort key:** `interval_key` (String) — `"current"` for the live rollup, or
   a window key like `hourly#2025-01-04T14` / `daily#2025-01-04` /
   `weekly#2025-01-04` / `monthly#2025-01` for archived windows.
-- Point-in-time recovery enabled. **No stream** — this is a terminal
+- **No stream** — this is a terminal
   destination table, not a trigger for further processing.
 
 Two row shapes share the table:
@@ -500,7 +499,7 @@ start through the processor and the range query) is listed under Future work.
 ### 5.1 Timeseries stack
 
 - **Raw and processed DynamoDB tables** (`raw_ts_data`, `processed_ts_data`)
-  — the raw table has a `NEW_AND_OLD_IMAGES` stream, both have PITR.
+  — the raw table has a `NEW_AND_OLD_IMAGES` stream; neither has PITR.
 - **`RAW_TS_DATA_STREAM_ARN`** — SSM string parameter carrying the raw
   table's stream ARN for cross-stack consumption.
 - **`node_ts_rule`** — the IoT topic rule (§3.1), with:

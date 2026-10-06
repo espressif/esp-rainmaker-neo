@@ -3207,6 +3207,12 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "409":
+          description: 'A CA is published but was not signed by the current signing key (typically left over from a previous install); re-mint with `{"force": true}`'
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIStatusMessage"
         "500":
           $ref: "#/components/responses/InternalServerError"
     get:

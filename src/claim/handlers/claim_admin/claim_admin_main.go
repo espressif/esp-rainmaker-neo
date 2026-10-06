@@ -26,6 +26,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/ssmutil"
@@ -151,6 +152,10 @@ func handleCA(ctx context.Context, request events.APIGatewayProxyRequest) (int, 
 			ValidityYears: cc.CAValidityYears,
 			Force:         req.Force,
 		})
+		if errors.Is(err, ca_bootstrap.ErrCAKeyMismatch) {
+			return http.StatusConflict, utils.NewAPIStatus("The published claiming CA does not match the current signing key; " +
+				"re-mint it with {\"force\": true}"), err
+		}
 		if err != nil {
 			return http.StatusInternalServerError, utils.NewAPIStatus("failed to mint the claiming CA"), err
 		}
