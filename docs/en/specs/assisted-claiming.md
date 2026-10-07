@@ -115,7 +115,7 @@ The CSR must be PEM, ECDSA P-256, at most 8 KB, and its self-signature is
 verified. `capabilities` must be re-supplied on a re-claim, since they are
 applied to the new certificate. Tags are **not** accepted from the request.
 
-Errors: `400` bad body or CSR, `403` no reservation for this caller, `404`
+Errors: `400` bad body or CSR, or a requested capability this deployment cannot provide (`bridge` without the optional bridge stack), `403` no reservation for this caller, `404`
 claiming disabled, `405` non-POST, `500` lookup/signing/binding failure.
 
 ### 3.2 MAC normalization

@@ -32,7 +32,7 @@ from py_sdk.test_group import Group
 from py_sdk.test_user import User
 from test.itest.conftest import (
     CA_CERT, CREDENTIAL_PROVIDER_ENDPOINT, DEBUG, DEVICE_VIDEO_ROLE_ALIAS, IOT_ENDPOINT, REGION,
-    connect_device_with_retry,
+    connect_device_with_retry, rmng_outputs,
 )
 
 # Claiming configuration the suite bootstraps with, via the admin admin API
@@ -322,6 +322,21 @@ def test_reclaim_with_bridge_upgrades_a_plain_node(_bridge_stack_deployed, test_
 
     assert BRIDGE_POLICY_NAME in _attached_cert_policies(node_id)
     assert _node_type(node_id) == "bridge", "presence cascade filters on node_type"
+
+
+def test_claim_with_bridge_without_the_bridge_stack_is_rejected(test_user1):
+    if "rmng-bridge-core" in rmng_outputs:
+        pytest.skip("bridge stacks deployed; this checks a deployment without them")
+    mac = _random_mac()
+    init = _initiate(test_user1, mac)
+    assert init.status_code in (200, 201), init.text
+
+    csr_pem, _key_pem = _make_csr()
+    resp = _verify(test_user1, mac, csr_pem, capabilities=["bridge"])
+    assert resp.status_code == 400, resp.text
+    body = resp.json()
+    assert body["message"] == 'capability "bridge" is not available on this deployment'
+    assert "certificate" not in body
 
 
 def test_claimed_certificate_authenticates_the_user_node_mapping(test_user1, claimed_nodes):

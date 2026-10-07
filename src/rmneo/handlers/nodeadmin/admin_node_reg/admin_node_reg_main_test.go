@@ -484,6 +484,21 @@ var _ = Describe("Admin Nodes Registration", func() {
 			verifyCertificateRegistration(nodeCert, offset)
 		})
 
+		It("returns 400 when the bridge capability is not available on this deployment", func() {
+			getIoTClientMock().MissingPolicies = map[string]bool{"rmng-bridge-policy": true}
+			reqBodyBytes, err := json.Marshal(map[string]interface{}{
+				"cert":         nodeCert,
+				"capabilities": []string{"bridge"},
+			})
+			Expect(err).To(BeNil())
+
+			request.Body = string(reqBodyBytes)
+			response, err := handleRequest(ctx.Context, request)
+			Expect(err).To(BeNil())
+			Expect(response.StatusCode).To(Equal(http.StatusBadRequest), response.Body)
+			Expect(response.Body).To(ContainSubstring(`capability \"bridge\" is not available on this deployment`))
+		})
+
 		It("should reject invalid JSON in request body", func() {
 			request.Body = `{"cert": "test", INVALID_JSON}`
 			response, err := handleRequest(ctx.Context, request)

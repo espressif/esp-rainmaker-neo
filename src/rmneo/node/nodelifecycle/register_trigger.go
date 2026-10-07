@@ -5,8 +5,24 @@
 package nodelifecycle
 
 import (
+	"fmt"
+
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )
+
+// CapabilityUnavailableError reports a requested capability whose optional stack is not deployed; handlers answer it with 400, not 500.
+type CapabilityUnavailableError struct {
+	Capability string
+	Err        error
+}
+
+func (e *CapabilityUnavailableError) Error() string {
+	return fmt.Sprintf("capability %q is not available on this deployment", e.Capability)
+}
+
+func (e *CapabilityUnavailableError) Unwrap() error {
+	return e.Err
+}
 
 // NodeRegisterHook runs capability-specific work during registration — e.g.
 // attaching an IoT policy that a capability owns — and optionally classifies the

@@ -4179,8 +4179,9 @@ components:
             type: string
           description: |
             Optional capabilities to apply to the issued certificate's policy
-            (e.g. ["s3"]). Must be re-supplied on a re-claim, since they are
-            applied to the new certificate.
+            ("s3", "kvs", "bridge"). Must be re-supplied on a re-claim, since they are
+            applied to the new certificate. "bridge" is rejected with 400 when the
+            optional bridge stack is not deployed.
           example: ["s3"]
 
     ClaimVerifyResponse:
@@ -5782,11 +5783,12 @@ components:
           type: array
           items:
             type: string
-            enum: [s3, kvs]
+            enum: [s3, kvs, bridge]
           description: |
             Optional list of device capabilities to enable during registration.
             - "s3": Attaches DeviceFilePolicy for S3 file access via IoT Credential Provider.
             - "kvs": Attaches DeviceVideoPolicy for KVS streaming via IoT Credential Provider.
+            - "bridge": Attaches the bridge policy and marks the node as a bridge; returns 400 when the optional bridge stack is not deployed.
             If omitted, only the DefaultThingPolicy (MQTT/shadow) is attached.
 
     RegisterSingleNodeResponse:
@@ -5826,11 +5828,12 @@ components:
           type: array
           items:
             type: string
-            enum: [s3, kvs]
+            enum: [s3, kvs, bridge]
           description: |
             Optional list of device capabilities to enable for ALL nodes.
             - "s3": Attaches DeviceFilePolicy for S3 file access via IoT Credential Provider.
             - "kvs": Attaches DeviceVideoPolicy for KVS streaming via IoT Credential Provider.
+            - "bridge": Attaches the bridge policy and marks the node as a bridge; a node fails registration when the optional bridge stack is not deployed.
             If omitted, only the DefaultThingPolicy (MQTT/shadow) is attached.
 
     RegisterBulkNodesResponse:

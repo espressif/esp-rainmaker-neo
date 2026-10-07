@@ -57,6 +57,8 @@ type IoTClientMock struct {
 	ForceGroupCreationError    bool
 	ForceCertificateError      bool
 	ForceCertAttachmentError   bool
+	// Policy names AttachPolicy reports as ResourceNotFoundException, as for an undeployed optional stack.
+	MissingPolicies map[string]bool
 }
 
 func NewIoTClientMock() *IoTClientMock {
@@ -476,6 +478,12 @@ func (m *IoTClientMock) AttachPolicy(ctx context.Context, params *iot.AttachPoli
 	// Track which policies are attached to which targets
 	target := *params.Target
 	policyName := *params.PolicyName
+	if m.MissingPolicies[policyName] {
+		return nil, &smithy.GenericAPIError{
+			Code:    "ResourceNotFoundException",
+			Message: "Policy not found: " + policyName,
+		}
+	}
 	m.mutex.Lock()
 	if m.AttachedPolicies == nil {
 		m.AttachedPolicies = make(map[string][]string)

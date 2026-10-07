@@ -345,6 +345,16 @@ var _ = Describe("Claim Verify", func() {
 		})
 	})
 
+	Describe("bridge capability without the bridge stack", func() {
+		It("returns 400 and no certificate", func() {
+			iotMock.MissingPolicies = map[string]bool{"rmng-bridge-policy": true}
+			resp := verifyFor(callerA, testMac, map[string]interface{}{"capabilities": []string{"bridge"}})
+			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest), resp.Body)
+			Expect(resp.Body).To(ContainSubstring(`capability \"bridge\" is not available on this deployment`))
+			Expect(resp.Body).NotTo(ContainSubstring("BEGIN CERTIFICATE"))
+		})
+	})
+
 	Describe("CSR validation", func() {
 		DescribeTable("rejects an unusable CSR with 400",
 			func(csr string) {

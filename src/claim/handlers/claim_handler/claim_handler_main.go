@@ -43,6 +43,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/claim/ca_bootstrap"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_id_reservation_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node/nodelifecycle"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/certissuer"
@@ -357,6 +358,11 @@ func verify(ctx context.Context, request events.APIGatewayProxyRequest) (int, in
 		// The certificate was signed but never bound, so it is not returned:
 		// handing back key material for an unbound Thing would leave the
 		// caller holding a credential the cloud does not recognize.
+		var unavailable *nodelifecycle.CapabilityUnavailableError
+		if errors.As(err, &unavailable) {
+			rlog.Warn(rctx).Err(err).Send()
+			return http.StatusBadRequest, utils.NewAPIStatus(unavailable.Error()), nil
+		}
 		return http.StatusInternalServerError, utils.NewAPIStatus("Failed to register certificate"), err
 	}
 
