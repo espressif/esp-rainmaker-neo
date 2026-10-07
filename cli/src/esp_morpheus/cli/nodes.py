@@ -77,3 +77,30 @@ def claim(user, mac_addr, capabilities, out_dir):
 
     output.ok(f"Claimed node {node_id} (mac {result['mac_addr']})")
     output.emit_kv(None, {'node_id': node_id, 'mac_addr': result['mac_addr'], **written})
+
+
+@node.command('camera-stream')
+@click.argument('node_id')
+@click.option('--group', 'group_id', help="The node's group; defaults to the group holding it.")
+@click.option('--channel', help='KVS signaling channel; defaults to rmng-v1-<node_id>.')
+@click.option('--duration', type=click.IntRange(min=1), help='Stop after this many seconds.')
+@click.option('--stats-only', is_flag=True, help='Print stream statistics instead of opening a video window.')
+@click.option('--save', 'save_path', type=click.Path(dir_okay=False),
+              help='Record the video to this file.')
+@pass_user
+def camera_stream(user, node_id, group_id, channel, duration, stats_only, save_path):
+    """View NODE_ID's live video over KVS WebRTC, as a viewer like the phone app."""
+    import asyncio
+
+    from ..sdk import kvs_viewer
+
+    assumed = user.get_node_service_credentials(node_id, ['kvs'], group_id=group_id)
+    credentials = kvs_viewer.AWSCredentials(assumed['access_key'], assumed['secret_key'],
+                                            assumed['session_token'], user.region, assumed.get('expiration'))
+    channel = channel or f"rmng-v1-{node_id}"
+    output.info(f"Viewing {channel} ({user.region})")
+    try:
+        asyncio.run(kvs_viewer.start_kvs_streaming(credentials, channel, save_path=save_path,
+                                                   duration=duration, stats_only=stats_only))
+    except KeyboardInterrupt:
+        output.info("Stream stopped")

@@ -214,6 +214,7 @@ group list                                 # groups, with their nodes and subgro
 group create My Home                       # create a group
 group create --matter My Home              # create it as a Matter fabric
 node assoc node_rsa <group_id>             # associate a device into a group
+node camera-stream <node_id> --stats-only  # view a camera's live video over KVS WebRTC
 api get v1/user/nodes                      # raw GET against the user API
 connect                                    # assume role, then connect to MQTT
 subscribe node_rsa params local            # subscribe to a node's named shadows
