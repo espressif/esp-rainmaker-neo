@@ -352,8 +352,8 @@ $(RMNG_LINT): $(LINT_SRCS)
 lint: $(RMNG_LINT)  ## Run the rmng-lint static analysers over ./src/... and ./test/...
 	$(RMNG_LINT) ./src/... ./test/...
 
-# Scope lives in ruff.toml: F821 only, because a name nothing defines is a NameError that compiling the file does not catch. Ruff skips what .gitignore skips, so the vendored venv is not scanned.
-py-lint:  ## Fail on a Python name nothing defines
+# The gated rules live in ruff.toml. Ruff skips what .gitignore skips, so the vendored venv is not scanned.
+py-lint:  ## Fail on the Ruff rules gated in ruff.toml
 	ruff check .
 
 # govulncheck analyses one module at a time and does not cross go.work boundaries

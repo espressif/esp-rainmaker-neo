@@ -10,11 +10,9 @@ Usage:
 """
 import json
 import sys
-import os
-import requests
-from botocore.auth import SigV4Auth
-from botocore.awsrequest import AWSRequest
+
 import boto3
+import requests
 
 from scripts.rmng_outputs import RmngSettings
 from test.test_user import _admin_cognito_auth
@@ -30,7 +28,7 @@ ADMIN_USER_POOL_CLIENT_ID = _settings.admin_client_id
 USER_API_GATEWAY_URL = _settings.user_api_gateway_url
 
 # Read test config
-with open('test_config.json', 'r') as f:
+with open('test_config.json') as f:
     config = json.load(f)
 
 # Find admin user
@@ -76,7 +74,7 @@ def get_credentials(id_token):
 
 def call_list_things(creds):
     """Call AWS IoT ListThings using the IoT control plane API."""
-    print(f"\nAttempting ListThings via IoT control plane API...")
+    print("\nAttempting ListThings via IoT control plane API...")
 
     session = boto3.Session(
         aws_access_key_id=creds['access_key_id'],

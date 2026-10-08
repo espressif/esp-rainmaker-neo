@@ -2,17 +2,20 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from py_sdk.test_user import user_log
+import time
+import uuid
+
+import boto3
+import pytest
+from botocore.exceptions import ClientError
+
 from py_sdk.test_group import Group
+from py_sdk.test_user import user_log
 from test.itest.conftest import (
-    REGION,
     IOT_USER_ROLE_ARN,
+    REGION,
     USER_API_GATEWAY_URL,
 )
-import pytest
-import boto3
-import uuid
-import time
 
 
 def test_ensure_privilege_escalation_not_possible(test_user1):
@@ -26,7 +29,6 @@ def test_ensure_privilege_escalation_not_possible(test_user1):
 
     Prevents the attack pattern where users could bypass access controls by directly assuming IoT roles.
     """
-    user1_group_api = Group(test_user1)
     user_log("🔐 Ensuring privilege escalation is not possible...")
 
     # Step 1: Get user's Cognito credentials and AWS credentials from identity pool
@@ -45,28 +47,14 @@ def test_ensure_privilege_escalation_not_possible(test_user1):
         aws_session_token=user_credentials['SessionToken']
     )
 
-    privilege_escalation_blocked = False
-    try:
-        # Attempt to directly assume the IoTUserRole - this is the attack from attack.py
-        response = sts_client.assume_role(
+    # Attempt to directly assume the IoTUserRole - this is the attack from attack.py
+    with pytest.raises(ClientError) as exc_info:
+        sts_client.assume_role(
             RoleArn=IOT_USER_ROLE_ARN,
             RoleSessionName="DirectPrivilegeEscalationAttempt"
         )
-        user_log("🚨 SECURITY ISSUE: Direct role assumption succeeded - vulnerability still exists!")
-        assert False, "CRITICAL: Privilege escalation vulnerability still exists! Direct IoTUserRole assumption should be blocked."
-
-    except Exception as e:
-        # This is expected - the privilege escalation should be blocked
-        error_str = str(e)
-        if "is not authorized to perform: sts:AssumeRole" in error_str or "AccessDenied" in error_str or "User" in error_str and "is not authorized" in error_str:
-            user_log("✅ SUCCESS: Direct privilege escalation blocked as expected")
-            privilege_escalation_blocked = True
-        else:
-            user_log(f"⚠️  Unexpected error during privilege escalation attempt: {error_str}")
-            # Still consider it blocked if any error occurred
-            privilege_escalation_blocked = True
-
-    assert privilege_escalation_blocked, "Direct privilege escalation should be blocked"
+    assert exc_info.value.response["Error"]["Code"] == "AccessDenied", f"Expected AccessDenied, got {exc_info.value.response['Error']}"
+    user_log("✅ SUCCESS: Direct privilege escalation blocked as expected")
 
     user_log("🔐 Security validation completed successfully!")
     user_log("✅ System properly prevents privilege escalation")
@@ -310,7 +298,7 @@ def test_admin_assume_role_subgroup_mqtt_access(admin_user, device_with_2_subgro
         admin_user.mqtt_connect(credentials=assumed_credentials)
     admin_user.disable_reconnect = True
 
-    with pytest.raises(Exception):
+    with pytest.raises(Exception):  # noqa: B017 - the disconnect asserted below is the outcome; the CRT error type is not pinned
         admin_user.subscribe_to_named_shadows(device.node_thing_name, [shadow_ab])
 
     connection_status = admin_user.read_connection_queue()

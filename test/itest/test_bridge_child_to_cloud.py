@@ -30,7 +30,6 @@ import time
 from queue import Empty
 
 import boto3
-import pytest
 from awscrt import mqtt as awscrt_mqtt
 
 RX_TIMEOUT_S = 8.0

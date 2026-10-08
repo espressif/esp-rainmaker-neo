@@ -3,17 +3,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import boto3
+import argparse
 import json
+import os
+import random
+import sys
 import time
 import uuid
-import random
-import datetime
-import argparse
-import os
-import sys
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Dict, Any
 
 # Add project root to Python path
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -21,10 +18,10 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 # Now we can import our test modules
-from scripts.rmng_outputs import TEST_CONFIG_PATH, RmngSettings
-from py_sdk.test_device import Device, generate_key_and_cert, device_log
-from py_sdk.test_user import User
-from py_sdk.test_group import Group
+from py_sdk.test_device import Device, device_log, generate_key_and_cert  # noqa: E402
+from py_sdk.test_group import Group  # noqa: E402
+from py_sdk.test_user import User  # noqa: E402
+from scripts.rmng_outputs import TEST_CONFIG_PATH, RmngSettings  # noqa: E402
 
 # Hardcoded AWS root CA certificate
 CA_CERT = """-----BEGIN CERTIFICATE-----
@@ -146,7 +143,7 @@ class TSPerformanceTester:
     def run_performance_test(self, num_devices: int = 1, data_points_per_device: int = 100,
                            concurrent_devices: int = 1, delay_between_points: float = 0.1):
         """Run a performance test with multiple devices publishing data points."""
-        print(f"Starting performance test with:")
+        print("Starting performance test with:")
         print(f"- Number of devices: {num_devices}")
         print(f"- Data points per device: {data_points_per_device}")
         print(f"- Concurrent devices: {concurrent_devices}")
@@ -178,7 +175,7 @@ class TSPerformanceTester:
                 start_time = time.time()
                 success_count = 0
                 
-                for i in range(data_points_per_device):
+                for _i in range(data_points_per_device):
                     # Generate test data
                     value = random.uniform(20.0, 30.0)  # Random temperature between 20-30°C
                     timestamp = int(time.time() * 1000)  # Current time in milliseconds

@@ -19,9 +19,16 @@ from botocore.exceptions import NoCredentialsError
 
 from .. import __version__, paths
 from ..sdk.errors import NotReadyError
-from . import device as device_commands
-from . import groups, matter, nodes, output, sharing, sims
-from . import user as user_commands
+from . import (
+    device as device_commands,
+    groups,
+    matter,
+    nodes,
+    output,
+    sharing,
+    sims,
+    user as user_commands,
+)
 from .admin import admin
 from .context import Session
 from .shell import ContextGroup
@@ -152,14 +159,14 @@ def main():
     except NoCredentialsError:
         error = output.missing_credentials()
         error.show()
-        raise SystemExit(error.exit_code)
+        raise SystemExit(error.exit_code) from None
     except NotReadyError as e:
         output.err(f"Failed: {e}")
-        raise SystemExit(output.EXIT_FAILURE)
+        raise SystemExit(output.EXIT_FAILURE) from None
     except Exception as e:  # noqa: BLE001
         output.err(f"{type(e).__name__}: {e}")
         output.debug(traceback.format_exc())
-        raise SystemExit(output.EXIT_FAILURE)
+        raise SystemExit(output.EXIT_FAILURE) from None
 
 
 if __name__ == '__main__':

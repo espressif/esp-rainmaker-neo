@@ -2,20 +2,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from py_sdk.test_user import User
-from test.itest.conftest import (
-    USER_API_GATEWAY_URL,
-    REGION,
-    IDENTITY_POOL_ID,
-    API_GATEWAY_URL,
-    IOT_ENDPOINT,
-    ADMIN_USER_POOL_ID,
-    ADMIN_CLIENT_ID,
-    END_USER_POOL_ID,
-    complete_federation_login,
-    decode_jwt_claims,
-    requires_espuser,
-)
+import base64
+import json
+import uuid
+from urllib.parse import parse_qs, urlparse
+
+import boto3
+import pytest
+import requests
+
 from py_sdk.espuser_oauth import (
     Browser,
     WebClient,
@@ -24,19 +19,24 @@ from py_sdk.espuser_oauth import (
     sids_in,
     sign_out_destination,
 )
+from py_sdk.test_user import User
+from test.itest.conftest import (
+    ADMIN_CLIENT_ID,
+    ADMIN_USER_POOL_ID,
+    API_GATEWAY_URL,
+    END_USER_POOL_ID,
+    IDENTITY_POOL_ID,
+    IOT_ENDPOINT,
+    REGION,
+    USER_API_GATEWAY_URL,
+    complete_federation_login,
+    decode_jwt_claims,
+    requires_espuser,
+)
 from test.itest.email_utils import (
     generate_random_email,
     generate_test_password,
 )
-from urllib.parse import parse_qs, urlparse
-import base64
-import boto3
-import json
-import pytest
-import requests
-import uuid
-
-
 
 
 def _new_user(email):

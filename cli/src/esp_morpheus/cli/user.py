@@ -8,7 +8,7 @@ import click
 
 from ..sdk.group import Group
 from . import output
-from .context import pass_user, pass_unverified_user
+from .context import pass_unverified_user, pass_user
 
 
 @click.command()

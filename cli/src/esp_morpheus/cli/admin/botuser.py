@@ -37,7 +37,7 @@ def _credentials_owner():
     if not path.is_file():
         return None
     try:
-        with open(path, 'r', encoding='utf-8') as handle:
+        with open(path, encoding='utf-8') as handle:
             return json.load(handle).get('user_name') or None
     except (OSError, ValueError):
         return None

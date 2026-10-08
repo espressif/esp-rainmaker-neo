@@ -192,7 +192,7 @@ class Session:
     def _read_config(self):
         path = paths.test_config_path()
         try:
-            with open(path, 'r') as handle:
+            with open(path) as handle:
                 return json.load(handle)
         except FileNotFoundError:
             output.debug(f"No test_config.json at {path}; run `morpheus admin test-data setup` "

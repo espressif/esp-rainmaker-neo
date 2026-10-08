@@ -32,7 +32,6 @@ from py_sdk.test_group import Group
 from py_sdk.test_smartthings import cookie_for, st_external_device_id
 from test.itest.conftest import REGION, accept_sharing_request_for, rmng_outputs
 
-
 # ---------------------------------------------------------------------------
 # SmartThings Schema App Lambda ARN lookup (mirrors conftest._get_alexa_region_arns).
 #
@@ -165,12 +164,12 @@ def test_smartthings_discovery(user_with_1_dev_each_in_2_groups, st_region_arn):
     message1 = device1.wait_for_cloud_message(timeout=5)
     assert message1 is not None, "Timeout waiting for getSTEn message for device1"
     assert "event" in message1 and "getSTEn" in message1["event"], "getSTEn event not found in message for device1"
-    assert message1["getSTEn"]["enabled"] == True, "getSTEn enabled not set to true for device1"
+    assert message1["getSTEn"]["enabled"] is True, "getSTEn enabled not set to true for device1"
 
     message2 = device2.wait_for_cloud_message(timeout=5)
     assert message2 is not None, "Timeout waiting for getSTEn message for device2"
     assert "event" in message2 and "getSTEn" in message2["event"], "getSTEn event not found in message for device2"
-    assert message2["getSTEn"]["enabled"] == True, "getSTEn enabled not set to true for device2"
+    assert message2["getSTEn"]["enabled"] is True, "getSTEn enabled not set to true for device2"
 
     # With esp.param.name set in the shadow, discovery uses it as the friendly name.
     shadow_name = f"params-{group1_id}"

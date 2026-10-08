@@ -2,33 +2,33 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import boto3
-import json
-import hashlib
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import ec, rsa, padding
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.utils import Prehashed
-from cryptography.hazmat.primitives.serialization import load_pem_private_key
-from cryptography.hazmat.primitives.asymmetric import utils as crypto_utils
-from cryptography import x509
-from cryptography.x509.oid import NameOID
-from cryptography.hazmat.primitives import hashes
 import datetime
-
-import time
-import tempfile
-import os
-import sys
-import subprocess
+import hashlib
+import json
 import logging
-import ssl
-import socket
+import os
+import subprocess
+import sys
+import tempfile
+import time
+from queue import Empty, Queue
+
+import boto3
 import requests
-from botocore.exceptions import ClientError
 from awscrt import io, mqtt
 from awsiot import iotshadow, mqtt_connection_builder
-from queue import Queue, Empty
+from botocore.exceptions import ClientError
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import (
+    ec,
+    padding,
+    rsa,
+    utils as crypto_utils,
+)
+from cryptography.hazmat.primitives.asymmetric.utils import Prehashed
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
+from cryptography.x509.oid import NameOID
 
 from .errors import block, requires
 from .util import shadow_to_unstructured
@@ -525,7 +525,7 @@ class Device:
                 device_event(f"Desired State: {response.state.desired}")
 
     def on_update_shadow_rejected(self, error):
-        device_event(f"Shadow update rejected:")
+        device_event("Shadow update rejected:")
         device_event(f"Error code: {error.code}")
         device_event(f"Error message: {error.message}")
 
@@ -570,7 +570,7 @@ class Device:
             else:
                 return None
         except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON data: {e}")
+            raise ValueError(f"Invalid JSON data: {e}") from e
 
     @requires('shadow', blocked=False)
     def update_shadow(self, state_json, shadow_name=None):
@@ -1432,11 +1432,11 @@ def _generate_key_and_cert(thing_name, key_type='ec', node_key=None, node_validi
 
     # Create self-signed CA certificate
     ca_subject = issuer = x509.Name([
-        x509.NameAttribute(NameOID.COUNTRY_NAME, u"US"),
-        x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, u"California"),
-        x509.NameAttribute(NameOID.LOCALITY_NAME, u"San Francisco"),
-        x509.NameAttribute(NameOID.ORGANIZATION_NAME, u"Test CA"),
-        x509.NameAttribute(NameOID.COMMON_NAME, u"Test CA"),
+        x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
+        x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, "California"),
+        x509.NameAttribute(NameOID.LOCALITY_NAME, "San Francisco"),
+        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Test CA"),
+        x509.NameAttribute(NameOID.COMMON_NAME, "Test CA"),
     ])
     ca_cert = x509.CertificateBuilder().subject_name(
         ca_subject
@@ -1466,10 +1466,10 @@ def _generate_key_and_cert(thing_name, key_type='ec', node_key=None, node_validi
 
     # Create node certificate signed by CA
     node_subject = x509.Name([
-        x509.NameAttribute(NameOID.COUNTRY_NAME, u"US"),
-        x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, u"California"),
-        x509.NameAttribute(NameOID.LOCALITY_NAME, u"San Francisco"),
-        x509.NameAttribute(NameOID.ORGANIZATION_NAME, u"Test Organization"),
+        x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
+        x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, "California"),
+        x509.NameAttribute(NameOID.LOCALITY_NAME, "San Francisco"),
+        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Test Organization"),
         x509.NameAttribute(NameOID.COMMON_NAME, thing_name),
     ])
     node_cert = x509.CertificateBuilder().subject_name(

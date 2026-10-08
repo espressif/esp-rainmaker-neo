@@ -25,7 +25,6 @@ import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
 
-
 RMNG_OUTPUTS_PATH = Path("rmng-outputs.json")
 TEST_CONFIG_PATH = Path("test_config.json")
 BRIDGES_DIR = Path(".bridges")

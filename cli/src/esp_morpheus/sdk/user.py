@@ -2,35 +2,35 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import boto3
+import base64
 import hashlib
+import json
+import os
+import queue
+import random
+import string
+import time
+import uuid
+from urllib.parse import urlencode
+
+import boto3
+import jwt
 import requests
+from awscrt import auth
+from awsiot import iotshadow, mqtt, mqtt_connection_builder
+from boto3.dynamodb.conditions import Key
 from botocore import UNSIGNED
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 from botocore.config import Config as BotocoreConfig
-from boto3.dynamodb.conditions import Key
-import json
-import base64
-from awscrt import auth
-from awsiot import mqtt_connection_builder
-import jwt
-from awsiot import mqtt
-from awsiot import iotshadow
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+
 from ..outputs import DEFAULT_ESP_USER_CLIENT_ID, RmngSettings
+from . import smartthings
 from .errors import requires
 from .util import shadow_to_unstructured
-from . import smartthings
-import random
-import string
-import queue
-import uuid
-import os
-import time
-from urllib.parse import urlencode, quote
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography import x509
 
 blue = "\033[94m"
 cyan = "\033[96m"
@@ -708,11 +708,11 @@ class User:
         if request_logging:
             # ===== DETAILED REQUEST LOGGING =====
             print(f"\n{'='*80}")
-            print(f"🚀 API REQUEST:")
+            print("🚀 API REQUEST:")
             print(f"Method: {method}")
             print(f"URL: {url}")
             if params:
-                print(f"Query Parameters:")
+                print("Query Parameters:")
                 for key, value in params.items():
                     print(f"  {key}: {value}")
             if data:
@@ -745,15 +745,15 @@ class User:
 
         if request_logging:
             # ===== DETAILED RESPONSE LOGGING =====
-            print(f"📥 API RESPONSE:")
+            print("📥 API RESPONSE:")
             print(f"Status Code: {response.status_code}")
-            print(f"Response Headers:")
+            print("Response Headers:")
             for key, value in response.headers.items():
                 print(f"  {key}: {value}")
 
             try:
                 response_json = response.json()
-                print(f"Response Body (JSON):")
+                print("Response Body (JSON):")
                 print(json.dumps(response_json, indent=2))
             except (ValueError, json.JSONDecodeError):
                 print(f"Response Body (Text): {response.text}")
@@ -862,14 +862,14 @@ class User:
             if confirm_response.status_code not in (200, 201):
                 return f"ERROR_CONFIRM_FAILED_{confirm_response.status_code}"
 
-            user_log(f"Matter association successful")
+            user_log("Matter association successful")
             return {
                 "noc": verify_result.get("noc"),
                 "matter_node_id": verify_result.get("matter_node_id"),
                 "request_id": request_id
             }
 
-        user_log(f"Association successful")
+        user_log("Association successful")
         return None
 
     def initiate_node_assoc(self, group_id):
@@ -1248,7 +1248,7 @@ class User:
             self.disconnect_future = None
 
         if time.time() - self.previous_disconnect_time < 6:
-            user_log(f"Waiting for 6 seconds before reconnecting")
+            user_log("Waiting for 6 seconds before reconnecting")
             time.sleep(6)
 
         self.previous_disconnect_time = 0

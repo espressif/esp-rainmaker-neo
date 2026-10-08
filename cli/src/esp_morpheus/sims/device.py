@@ -2,16 +2,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
+import threading
+from queue import Empty, Queue
+
 from .. import paths
 from ..outputs import TEST_CONFIG_PATH, RmngSettings
 from ..sdk.device import Device
-import time
-from queue import Queue, Empty
-import threading
-import hashlib
-import os
-import pathlib
+
 
 class DeviceSim:
     def __init__(self, device_id, config_path=TEST_CONFIG_PATH, rmng_outputs_path=None):
@@ -97,7 +96,7 @@ class DeviceSim:
         # which resolves against the checkout when there is one and against the packaged data
         # directory when there is not.
         file_path = paths.resolve_data(file_path)
-        with open(file_path, 'r') as config_file:
+        with open(file_path) as config_file:
             return json.load(config_file)
 
     def _get_node_config(self, device_id):
@@ -137,7 +136,7 @@ class DeviceSim:
         """Read the cached checksum from the cache file"""
         try:
             if self.cache_file.exists():
-                with open(self.cache_file, 'r') as f:
+                with open(self.cache_file) as f:
                     return f.read().strip()
             return None
         except Exception as e:
@@ -155,7 +154,7 @@ class DeviceSim:
             return False
 
     def on_params_message(self, topic, payload, **kwargs):
-        print(f"Received message on params topic:")
+        print("Received message on params topic:")
         print(f"Topic: {topic}")
         try:
             # Handle both string and dict payloads
@@ -188,7 +187,7 @@ class DeviceSim:
                 print(f"Raw payload: {payload}")
 
     def on_from_cloud_message(self, topic, message):
-        print(f"Received message from cloud:")
+        print("Received message from cloud:")
         print(f"Payload: {json.dumps(message, indent=2)}")
         self.message_queue.put(('from_cloud', message))
 
@@ -633,7 +632,7 @@ class DeviceSim:
             # Only update with ncfg_ver when configuration has changed
             if self.device.group_id:
                 if self.write_default_params(include_ncfg_ver=True):
-                    print(f"Successfully updated device shadows with default parameters and new ncfg_ver")
+                    print("Successfully updated device shadows with default parameters and new ncfg_ver")
                 else:
                     print("Failed to write default parameters to shadow")
                     return False
@@ -646,7 +645,7 @@ class DeviceSim:
             # For unchanged config, still update shadows but don't update the ncfg_ver
             if self.device.group_id:
                 if self.write_default_params(include_ncfg_ver=False):
-                    print(f"Successfully updated device shadows with default parameters (preserved ncfg_ver)")
+                    print("Successfully updated device shadows with default parameters (preserved ncfg_ver)")
                 else:
                     print("Failed to write default parameters to shadow")
                     return False

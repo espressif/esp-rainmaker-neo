@@ -2,23 +2,25 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from py_sdk.test_device import Device, generate_key_and_cert, validate_tags, split_combined_cert_pem
-from test.itest.conftest import (
-    connect_device_with_retry,
-    request_from_cloud,
-    REGION,
-    CA_CERT,
-    IOT_ENDPOINT,
-    DEBUG,
-)
-import boto3
 import csv
 import datetime
 import io
-import time
 import os
+import time
+
+import boto3
 import pytest
 import requests
+
+from py_sdk.test_device import Device, generate_key_and_cert, split_combined_cert_pem
+from test.itest.conftest import (
+    CA_CERT,
+    DEBUG,
+    IOT_ENDPOINT,
+    REGION,
+    connect_device_with_retry,
+    request_from_cloud,
+)
 
 
 def test_register_node_basic(admin_user, test_device_new):
@@ -177,7 +179,7 @@ def test_register_node_parent_exists_child_created(admin_user, test_device_new):
                 break
             time.sleep(2 ** attempt)
         assert test_device_new.node_thing_name in things['things'], \
-            f"Node not found in child group after retries"
+            "Node not found in child group after retries"
 
     finally:
         for group in [child_group, parent_group]:
@@ -218,7 +220,7 @@ def test_register_node_parent_child_both_exist(admin_user, test_device_new):
                 break
             time.sleep(2 ** attempt)
         assert test_device_new.node_thing_name in things['things'], \
-            f"Node not found in child group after retries"
+            "Node not found in child group after retries"
 
     finally:
         for group in [child_group, parent_group]:
@@ -388,7 +390,6 @@ def test_list_registration_jobs(admin_user, node_csv_uploader):
     initial_response = admin_user.list_registration_jobs()
     assert initial_response is not None, "List registration jobs returned None"
     assert "jobs" in initial_response, "Response missing 'jobs' key"
-    initial_count = len(initial_response["jobs"])
 
     # Create a bulk registration to ensure at least one job exists
     nodes = [
@@ -647,7 +648,7 @@ def test_failed_nodes_presigned_csv_retry(admin_user):
         # Poll until completed.
         max_attempts = 20
         status = None
-        for attempt in range(max_attempts):
+        for _attempt in range(max_attempts):
             time.sleep(5)
             status = admin_user.get_bulk_register_status(request_id)
             if status and status.get("status") == "completed":
@@ -724,7 +725,7 @@ def test_failed_nodes_presigned_csv_retry(admin_user):
         retry_request_id = retry_resp["request_id"]
 
         retry_status = None
-        for attempt in range(max_attempts):
+        for _attempt in range(max_attempts):
             time.sleep(5)
             retry_status = admin_user.get_bulk_register_status(retry_request_id)
             if retry_status and retry_status.get("status") == "completed":

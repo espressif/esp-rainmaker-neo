@@ -12,7 +12,6 @@ import base64
 import re
 import time
 from datetime import datetime
-from typing import Optional
 
 import requests
 
@@ -52,8 +51,8 @@ def server_reachable(server_id: str, api_key: str) -> bool:
     return False
 
 
-def fetch_messages(server_id: str, api_key: str, recipient_email: Optional[str] = None,
-                   since_timestamp: Optional[float] = None) -> list:
+def fetch_messages(server_id: str, api_key: str, recipient_email: str | None = None,
+                   since_timestamp: float | None = None) -> list:
     """Return hydrated (full) messages for a server, newest first, filtered by recipient and arrival
     time. One poll, no retry — callers that wait for delivery loop over this. Returns [] on any API
     error.
@@ -111,7 +110,7 @@ def message_body_text(data: dict) -> str:
     return body
 
 
-def extract_verification_code(body_text: str) -> Optional[str]:
+def extract_verification_code(body_text: str) -> str | None:
     """Extract a numeric verification code from email body text.
 
     Codes are not all six digits. This repo's own sign-up template sends six, but
@@ -149,8 +148,8 @@ def extract_verification_code(body_text: str) -> Optional[str]:
 
 
 def find_link(server_id: str, api_key: str, link_pattern: str,
-              recipient_email: Optional[str] = None, since_timestamp: Optional[float] = None,
-              max_retries: int = 8, retry_delay: float = 3.0) -> Optional[str]:
+              recipient_email: str | None = None, since_timestamp: float | None = None,
+              max_retries: int = 8, retry_delay: float = 3.0) -> str | None:
     """Read the latest matching link out of an inbox.
 
     Returns the first URL whose text matches link_pattern (a regex, searched against both the parsed
@@ -174,8 +173,8 @@ def find_link(server_id: str, api_key: str, link_pattern: str,
 
 
 def follow_link(server_id: str, api_key: str, link_pattern: str,
-                recipient_email: Optional[str] = None,
-                since_timestamp: Optional[float] = None) -> bool:
+                recipient_email: str | None = None,
+                since_timestamp: float | None = None) -> bool:
     """Find a link in an inbox and GET it, the way a recipient would click it."""
     link = find_link(server_id, api_key, link_pattern,
                      recipient_email=recipient_email, since_timestamp=since_timestamp)
@@ -191,8 +190,8 @@ def follow_link(server_id: str, api_key: str, link_pattern: str,
 
 def read_verification_code(server_id: str, api_key: str, max_retries: int = 5,
                            retry_delay: float = 3.0, timeout: float = 60.0,
-                           since_timestamp: Optional[float] = None,
-                           recipient_email: Optional[str] = None) -> Optional[str]:
+                           since_timestamp: float | None = None,
+                           recipient_email: str | None = None) -> str | None:
     """Wait for an email carrying a numeric code and return the code, or None on timeout."""
     start_time = time.time()
     for attempt in range(max_retries):

@@ -11,7 +11,6 @@ fixture in conftest.py. See docs/en/specs/bridge.md §4.2 / §4.3 for the
 addChild/removeChild protocol.
 """
 
-import json
 import time
 import uuid
 from queue import Empty

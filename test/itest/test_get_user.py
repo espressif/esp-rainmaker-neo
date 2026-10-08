@@ -7,7 +7,6 @@
 The endpoint resolves `me` to the authenticated caller and accepts the
 caller's own user_id literally. Other user_ids return 403.
 """
-import json
 
 import requests
 

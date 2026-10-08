@@ -3,15 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from aws_cdk import (
-    aws_dynamodb,
-    Aws,
     RemovalPolicy,
+    aws_dynamodb,
 )
 from constructs import Construct
+
 from app_common import CommonResources, ManagedTable
-from src.rmneo.handlers.user.assume_role.stack import AssumeRoleAPI
-from src.rmneo.handlers.user.user_client.stack import RegisterClient
-from src.rmneo.stacks.base_res_constants import TABLE_NAMES, INDEX_NAMES
+from src.rmneo.stacks.base_res_constants import INDEX_NAMES, TABLE_NAMES
+
 
 class UserBase(Construct):
     """Base/infrastructure resources for User service - DynamoDB tables"""

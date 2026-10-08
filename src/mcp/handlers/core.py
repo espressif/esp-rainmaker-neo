@@ -5,14 +5,22 @@
 from aws_cdk import (
     Duration,
     Stack,
+    aws_apigatewayv2 as apigwv2,
+    aws_apigatewayv2_integrations as apigwv2_integ,
     aws_iam as iam,
     aws_lambda as lambda_,
     aws_secretsmanager as secretsmanager,
-    aws_apigatewayv2 as apigwv2,
-    aws_apigatewayv2_integrations as apigwv2_integ,
 )
 from constructs import Construct
-from app_common import stable_logical_id, add_http_api_routes, create_http_api, discover_api_custom_domain, create_lambda_log_group, lambda_log_group_arn
+
+from app_common import (
+    add_http_api_routes,
+    create_http_api,
+    create_lambda_log_group,
+    discover_api_custom_domain,
+    lambda_log_group_arn,
+    stable_logical_id,
+)
 
 
 class McpOAuthConfig:

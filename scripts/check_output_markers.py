@@ -71,7 +71,7 @@ def main():
     templates = [t for d in out_dirs for t in sorted(d.glob("*.template.json"))]
     if not templates:
         print(f"[ERROR] No *.template.json found in: {', '.join(str(d) for d in out_dirs) or '(none)'}")
-        print(f"[ERROR] Synthesize first, e.g. CDK_OUTDIR=cdk.out.rmng python3 cdk/apps/rmng.py")
+        print("[ERROR] Synthesize first, e.g. CDK_OUTDIR=cdk.out.rmng python3 cdk/apps/rmng.py")
         sys.exit(1)
 
     near_miss, unmarked, marked = [], [], 0
@@ -86,7 +86,7 @@ def main():
     if near_miss:
         print()
         print(f"[ERROR] {len(near_miss)} output description(s) look like a redaction marker but do not match.")
-        print(f"[ERROR] These outputs ARE published to the public rmng-public-assets bucket.")
+        print("[ERROR] These outputs ARE published to the public rmng-public-assets bucket.")
         print(f"[ERROR] Use the exact string {PRIVATE_MARKER} to redact, or reword to drop the hint:")
         for stack, key, description in near_miss:
             print(f'    {stack} > {key}: "{description}"')
@@ -102,7 +102,7 @@ def main():
     if near_miss or unmarked:
         sys.exit(1)
 
-    print(f"[INFO] No near-miss markers, no unmarked secret-sounding outputs.")
+    print("[INFO] No near-miss markers, no unmarked secret-sounding outputs.")
 
 
 if __name__ == "__main__":

@@ -2,13 +2,31 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Only undefined names are gated, and the gate blocks.
-#
-# F821 is a NameError waiting on whichever branch reaches that line. Compiling a file proves it parses, not that every name it uses exists: py_compile and ast.parse both accept a call to a function nobody defined or imported, so a rename that misses a call site ships and raises at run time. In a repo whose Python is simulators, deploy scripts and integration tests, that is often a nightly rather than a unit test.
-#
-# Ruff's default rules report 287 findings here, almost all unused imports, f-strings without placeholders and unused locals. Those are style, they would need a large cleanup before anything could block, and a job nobody can make green is a job that gets switched off. Add rules to `select` as the tree is cleaned up; everything stays reportable with an explicit `ruff check --select`.
-#
-# A file using `from x import *` defeats the analysis, so F403 reports where that blind spot is; it is listed here but not selected, to be run on demand.
+# Ruff's defaults plus bugbear, pyupgrade and isort; every selected rule blocks CI. A rule joins `select` only once the tree passes it; report one that is not gated yet with `ruff check --select <rule>`.
+
+# esp-cloud-common is another repo's code, and CI lints without the submodule checked out. Generated protobuf modules stay as protoc writes them.
+extend-exclude = ["src/esp-cloud-common", "*_pb2.py"]
+
+# The CI image, the CLI's requires-python and the Python Lambdas are all 3.12.
+target-version = "py312"
 
 [lint]
-select = ["F821"]
+select = ["B", "E4", "E7", "E9", "F", "I", "UP"]
+
+[lint.flake8-bugbear]
+# CDK Durations are immutable, so one shared default is safe.
+extend-immutable-calls = ["aws_cdk.Duration.days", "aws_cdk.Duration.seconds"]
+
+[lint.per-file-ignores]
+# Sphinx configs inherit their settings by star import.
+"docs/**/conf*.py" = ["F403", "F405"]
+
+[lint.isort]
+combine-as-imports = true
+# Repo-local modules reached through _bootstrap's sys.path, which ruff cannot see; named so CI without the submodule sorts gsi_infra the same.
+known-first-party = ["app_common", "arn_utils", "gsi_infra"]
+section-order = ["future", "bootstrap", "standard-library", "third-party", "first-party", "local-folder"]
+
+[lint.isort.sections]
+# cdk/apps/_bootstrap.py sets sys.path, so it must be imported before anything repo-local.
+bootstrap = ["_bootstrap"]

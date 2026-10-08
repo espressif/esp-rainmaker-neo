@@ -7,16 +7,16 @@
 Merge CDK outputs from all cdk-outputs*.json files into a single file.
 Remove duplicate output values while preserving all stack structures.
 """
+import glob
 import json
 import sys
-import glob
 from collections import OrderedDict
 
 
 def load_json_file(filepath):
     """Load JSON file and return its contents."""
     try:
-        with open(filepath, 'r') as f:
+        with open(filepath) as f:
             return json.load(f)
     except FileNotFoundError:
         print(f"Warning: {filepath} not found, skipping.", file=sys.stderr)

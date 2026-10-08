@@ -4,6 +4,7 @@
 
 from aws_cdk import Stack
 from constructs import Construct
+
 from app_common import CommonResources
 from src.claim.handlers.base import ClaimBase
 

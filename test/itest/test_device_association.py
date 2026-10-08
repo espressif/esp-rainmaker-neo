@@ -5,15 +5,27 @@
 import hashlib
 import json
 
-from test.itest.conftest import (
-    CA_CERT, IOT_ENDPOINT, REGION, DEBUG, accept_sharing_request_for,
-    reported_state, wait_for_shadow_absent,
-)
+import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+
 from py_sdk.test_device import Device
 from py_sdk.test_group import Group
-from py_sdk.test_util import wait_until, seed_node_data, assert_node_data_deleted, describe_thing_attributes
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives import serialization
+from py_sdk.test_util import (
+    assert_node_data_deleted,
+    describe_thing_attributes,
+    seed_node_data,
+    wait_until,
+)
+from test.itest.conftest import (
+    CA_CERT,
+    DEBUG,
+    IOT_ENDPOINT,
+    REGION,
+    accept_sharing_request_for,
+    reported_state,
+    wait_for_shadow_absent,
+)
 
 
 def _test_user_node_assoc_valid_device(test_user1, device):
@@ -40,7 +52,7 @@ def _test_user_node_assoc_valid_device(test_user1, device):
 
     # Associate the node with the first group
     result = test_user1.do_user_node_assoc(device, group_id_1)
-    assert result == None, f"Association failed with error: {result}"
+    assert result is None, f"Association failed with error: {result}"
 
     shadow_1 = f"params-{group_id_1}"
     if started_ungrouped:
@@ -71,7 +83,7 @@ def _test_user_node_assoc_valid_device(test_user1, device):
 
     # Now associate the same node with the second group
     result = test_user1.do_user_node_assoc(device, group_id_2)
-    assert result == None, f"Association failed with error: {result}"
+    assert result is None, f"Association failed with error: {result}"
 
     # Same contract across a group-to-group move, where it also stops one owner's
     # reported state reaching the next.
@@ -92,7 +104,7 @@ def _test_user_node_assoc_valid_device(test_user1, device):
     # Verify that the node is no longer in the first group
     group_1 = next((group for group in list_groups_data["groups"] if group["group_id"] == group_id_1), None)
     assert group_1 is not None, f"Created group {group_id_1} not found in the list of groups"
-    assert "node_ids" not in group_1, f"node_ids should not be in the group"
+    assert "node_ids" not in group_1, "node_ids should not be in the group"
     user1_group_api.delete_group(group_id_1)
     user1_group_api.delete_group(group_id_2)
 
@@ -132,7 +144,7 @@ def test_user_node_assoc_invalid_device(test_user1, valid_device):
     list_groups_data = user1_group_api.list_groups()
     group = next((group for group in list_groups_data["groups"] if group["group_id"] == group_id), None)
     assert group is not None, f"Group {group_id} not found in the list of groups"
-    assert "node_ids" not in group, f"node_ids should not be in the group"
+    assert "node_ids" not in group, "node_ids should not be in the group"
     user1_group_api.delete_group(group_id)
 
 def test_user_node_assoc_on_different_user_group(test_user1, test_user2, valid_device):
@@ -217,7 +229,7 @@ def test_remove_node_from_group_with_subgroups(test_user1, valid_device):
     
     # Associate node with group and add to subgroups
     result = test_user1.do_user_node_assoc(valid_device, group_id)
-    assert result == None, f"Association failed with error: {result}"
+    assert result is None, f"Association failed with error: {result}"
     user1_group_api.add_node_to_subgroup(group_id, subgroup1_id, valid_device.node_thing_name)
     user1_group_api.add_node_to_subgroup(group_id, subgroup2_id, valid_device.node_thing_name)
     
@@ -261,17 +273,11 @@ def test_remove_node_unauthorized(test_user1, test_user2, valid_device):
     
     # User1 associates node with their group
     result = test_user1.do_user_node_assoc(valid_device, group_id)
-    assert result == None, f"Association failed with error: {result}"
+    assert result is None, f"Association failed with error: {result}"
     
     # User2 should not be able to remove node from user1's group
-    try:
+    with pytest.raises(AssertionError, match="Expected 200, but got"):
         user2_group_api.remove_node_from_group(group_id, valid_device.node_thing_name)
-        assert False, "Unauthorized user should not be able to remove node from group"
-    except AssertionError as e:
-        if "Expected 200, but got" in str(e):
-            pass  # Expected failure
-        else:
-            raise e
     
     # Verify node is still in group
     expected_structure = {
@@ -345,14 +351,8 @@ def test_remove_nonexistent_node_from_group(test_user1):
     group_id = user1_group_api.create_group("Nonexistent Node Test")
     
     # Try to remove non-existent node
-    try:
+    with pytest.raises(AssertionError, match="Expected 200, but got"):
         user1_group_api.remove_node_from_group(group_id, "nonexistent-node-id")
-        assert False, "Removing non-existent node should fail"
-    except AssertionError as e:
-        if "Expected 200, but got" in str(e):
-            pass  # Expected failure
-        else:
-            raise e
 
     user1_group_api.delete_group(group_id)
 
@@ -580,7 +580,7 @@ def test_ncfg_ver_drives_app_config_cache(associated_device):
             if device.set_node_config(config):
                 return hashlib.sha256(
                     json.dumps(config, sort_keys=True).encode()).hexdigest()
-        assert False, f"set_node_config never acknowledged for {node_id}"
+        raise AssertionError(f"set_node_config never acknowledged for {node_id}")
 
     def app_launch(cache):
         """One app launch. Returns (config_in_use, fetched), where `fetched` says

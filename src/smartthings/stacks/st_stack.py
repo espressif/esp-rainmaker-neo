@@ -2,26 +2,27 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from constructs import Construct
-from aws_cdk import Aws, CfnOutput, Fn
 from aws_cdk import (
-    Stack,
+    Aws,
+    CfnOutput,
     CfnParameter,
+    Fn,
+    Stack,
     aws_iam as iam,
 )
-from src.rmneo.stacks.base_res_constants import TABLE_NAMES
+from constructs import Construct
 
-from app_common import CommonResources, create_lambda_function, create_base_lambda_role
-
+from app_common import CommonResources, create_base_lambda_role, create_lambda_function
 from arn_utils import (
-    get_table_arn,
-    get_index_arn,
     get_identity_pool_arn,
-    get_topic_arn,
+    get_index_arn,
     get_iot_thing_arn,
     get_ssm_parameter_prefix_arn,
+    get_table_arn,
+    get_topic_arn,
     get_user_pool_arn,
 )
+from src.rmneo.stacks.base_res_constants import TABLE_NAMES
 
 
 class STStack(Stack):

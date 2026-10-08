@@ -5,7 +5,7 @@
 import time
 
 from py_sdk.test_group import Group
-from py_sdk.test_util import seed_node_data, assert_node_data_deleted
+from py_sdk.test_util import assert_node_data_deleted, seed_node_data
 from test.itest.conftest import connect_device_with_retry
 
 

@@ -3,7 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from constructs import Construct
+
 from app_common import CommonResources
+
 
 class NotificationBase(Construct):
     """Base/infrastructure resources for Notification service - placeholder for future infrastructure"""

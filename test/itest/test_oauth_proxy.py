@@ -2,6 +2,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+from urllib.parse import parse_qs, urlparse
+
+import pytest
+import requests
+
+from py_sdk.test_mcp import assert_matches_catalogue
+from py_sdk.test_user import User
 from test.itest.conftest import (
     API_GATEWAY_URL,
     END_USER_POOL_ID,
@@ -21,13 +29,6 @@ from test.itest.mcp_oauth import (
     generate_pkce_pair,
     initiate_authorize,
 )
-from py_sdk.test_mcp import assert_matches_catalogue
-from py_sdk.test_user import User
-from urllib.parse import urlparse, parse_qs
-import json
-import pytest
-import requests
-
 
 # The OAuth proxy brokers to the ESP User OIDC issuer instead of the Cognito hosted UI.
 # ESPUSER_ISSUER on the proxy Lambda is wired (src/rmng_core_stack.py) from the same SSM
@@ -397,6 +398,7 @@ def test_fastmcp_client_oauth_interop(enable_test_cimd, request):
     code + state back to the SDK, which then exchanges tokens like any real client.
     """
     import asyncio
+
     from fastmcp import Client
     from mcp.client.auth import OAuthClientProvider
     from mcp.shared.auth import OAuthClientMetadata

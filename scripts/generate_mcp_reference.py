@@ -882,6 +882,9 @@ def render(catalog: dict) -> str:
         </p>
         <p>
           The tools divide in two, <strong>Read</strong> and <strong>Write</strong>.
+        <nav class="toc">
+{nav}
+        </nav>
       </section>
 
 {chr(10).join(groups)}

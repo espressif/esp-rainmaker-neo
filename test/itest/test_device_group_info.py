@@ -2,8 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 from test.itest.conftest import run_device_with_2_subgroups_stages
+
 
 def test_device_get_group_info(associated_device):
     device, expected_group_id, test_user1, user1_group_api = associated_device

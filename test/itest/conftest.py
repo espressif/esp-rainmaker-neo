@@ -10,54 +10,38 @@ Trace every API request and response: add --request-log
 Run a specific test: pytest test/itest/ -v -s -k "test_name"
 If some tests start failing due to mqtt connections, try running: pytest test/itest/ -v -s -m "not unsafe"
 """
-import pytest
+import csv
+import datetime
 import json
-import requests
-from urllib.parse import urlparse
-from scripts.rmng_outputs import find_outputs
-from scripts.rmng_outputs import load as load_rmng_outputs
-from py_sdk import test_user as user_sdk
-from py_sdk.test_user import User, user_log
+import os
+import subprocess
+import sys
+import threading
+import time
+import uuid
+from queue import Empty
+from types import SimpleNamespace
 
-from py_sdk.test_device import Device, generate_key_and_cert, split_combined_cert_pem, validate_tags
+import boto3
+import pytest
+import requests
+from botocore.exceptions import ClientError
+from cryptography import x509
+from cryptography.hazmat.primitives.asymmetric import ec
+
+from py_sdk import espuser_oauth, test_user as user_sdk
+from py_sdk.espuser_oauth import cognito_hosted_login, pkce_pair
+from py_sdk.test_device import Device, generate_key_and_cert, split_combined_cert_pem
 from py_sdk.test_group import Group
-from py_sdk import espuser_oauth
-from py_sdk.espuser_oauth import pkce_pair, cognito_hosted_login
+from py_sdk.test_user import User, user_log
+from scripts.rmng_outputs import find_outputs, load as load_rmng_outputs
 from test.itest.config_sources import describe_sources, load_json_config, repo_path
 from test.itest.email_utils import (
     ITEST_CONFIG_ENV_VAR,
     ITEST_CONFIG_REL_PATH,
-    generate_mailosaur_email,
     generate_random_email,
     generate_test_password,
 )
-from py_sdk.test_matter import (
-    build_nocsr_elements_tlv,
-    sign_attestation_data,
-    do_initiate,
-    do_verify_with_nocsr_elements,
-    do_confirm,
-    do_matter_dev_assoc,
-)
-from cryptography.hazmat.primitives.asymmetric import ec, rsa
-from cryptography.hazmat.primitives import serialization, hashes
-from cryptography import x509
-import uuid
-import time
-from types import SimpleNamespace
-from queue import Empty
-
-import boto3
-from botocore.exceptions import ClientError
-import subprocess
-import sys
-import os
-import csv
-import datetime
-import tempfile
-import random
-import threading
-
 
 # Read configuration from rmng-outputs.json (merged CDK outputs)
 rmng_outputs = load_rmng_outputs()
@@ -388,9 +372,9 @@ def _init_user():
                 if creds:
                     return user
                 else:
-                    print(f"[User] Failed to get credentials for existing user, will create new user")
+                    print("[User] Failed to get credentials for existing user, will create new user")
             else:
-                print(f"[User] Signin succeeded but no token received, will create new user")
+                print("[User] Signin succeeded but no token received, will create new user")
     except Exception as e:
         print(f"[User] Authentication failed (user may not exist): {e}")
 
@@ -475,9 +459,9 @@ def _init_admin_user():
                 if creds:
                     return user
                 else:
-                    print(f"[User] Failed to get credentials for existing admin user, will create new user")
+                    print("[User] Failed to get credentials for existing admin user, will create new user")
             else:
-                print(f"[User] Admin signin succeeded but no token received, will create new user")
+                print("[User] Admin signin succeeded but no token received, will create new user")
     except Exception as e:
         print(f"[User] Admin authentication failed (user may not exist): {e}")
 
@@ -692,7 +676,7 @@ def _reset_associated_device(resource):
         new_group_id = associate_device_with_group(device, user, user1_group_api)
         resource[1] = new_group_id
     except Exception as e:
-        raise RuntimeError(f"Reset failed: could not rebuild associated device environment: {e}")
+        raise RuntimeError(f"Reset failed: could not rebuild associated device environment: {e}") from e
 
     # We never return the user and device to their original device/user pools
 
@@ -996,7 +980,7 @@ def verified_email_sender():
     verified Mailosaur sender, then restores the prior row (or deletes it) on teardown. Mutates
     shared account config, so callers must carry @pytest.mark.xdist_group("env_mut").
     """
-    from test.itest.email_utils import generate_mailosaur_email, ensure_ses_verified
+    from test.itest.email_utils import ensure_ses_verified, generate_mailosaur_email
     sender = generate_mailosaur_email(user_index="sender")
     if not sender or not ensure_ses_verified(sender):
         pytest.skip("no SES-verifiable Mailosaur sender available")
@@ -1452,9 +1436,9 @@ def user_with_1_dev_each_in_2_groups(test_user1, session_valid_device_rsa, sessi
 
     # Associate devices with groups
     result = test_user1.do_user_node_assoc(device1, group1_id)
-    assert result == None, f"Association failed with error: {result}"
+    assert result is None, f"Association failed with error: {result}"
     result = test_user1.do_user_node_assoc(device2, group2_id)
-    assert result == None, f"Association failed with error: {result}"
+    assert result is None, f"Association failed with error: {result}"
     yield device1, device2, group1_id, group2_id, test_user1
     # Cleanup. Both devices are pooled — their fixtures reset+release them, so
     # only the groups are torn down here (which also removes the associations).
@@ -1517,7 +1501,7 @@ def user_with_multi_capability_device(test_user1, session_valid_device_rsa):
     }
     # Same retry rationale as user_with_1_dev_each_in_2_groups: the 5s ack window is
     # sometimes missed on a cold node-config lambda and the call is idempotent.
-    for attempt in range(3):
+    for _attempt in range(3):
         if device.set_node_config(config):
             break
     else:
@@ -1551,11 +1535,11 @@ def test_device_new():
     # Cleanup after the test
     try:
         device.disconnect()
-    except:
+    except Exception:
         pass  # Ignore disconnect errors
     try:
         device.destroy_test_node()
-    except:
+    except Exception:
         pass  # Ignore cleanup errors
 
 
@@ -1622,7 +1606,7 @@ def accept_sharing_request_for(user, group_id, subgroup_id):
             if attempt < max_retries - 1:
                 time.sleep(retry_delay)
                 continue
-            assert False, "Failed to retrieve sharing requests"
+            raise AssertionError("Failed to retrieve sharing requests")
 
         user_log(f"Retrieved sharing requests: {sharing_requests}")
 
@@ -1648,7 +1632,7 @@ def accept_sharing_request_for(user, group_id, subgroup_id):
             user_log(f"Sharing request not found, waiting {retry_delay} seconds before retry")
             time.sleep(retry_delay)
 
-    assert False, f"Sharing request for group {group_id} and subgroup {subgroup_id} not found after {max_retries} attempts"
+    raise AssertionError(f"Sharing request for group {group_id} and subgroup {subgroup_id} not found after {max_retries} attempts")
 
 
 def assert_subgroup_in_group(groups, group_id, subgroup_id):
@@ -1656,7 +1640,7 @@ def assert_subgroup_in_group(groups, group_id, subgroup_id):
         if group['group_id'] == group_id:
             assert any(subgroup['subgroup_id'] == subgroup_id for subgroup in group['subgroups']), f"Shared subgroup {subgroup_id} not found in group {group_id}"
             return
-    assert False, f"Group {group_id} not found in user's groups"
+    raise AssertionError(f"Group {group_id} not found in user's groups")
 
 
 def validate_user_group_dynamodb_entry(user_id, group_id, expected_item):
@@ -2032,8 +2016,9 @@ def complete_federation_login(client_id, redirect_uri, username, password, scope
     endpoint — "basic" (HTTP Basic, what Alexa sends) or "post" (form-body credentials, what Google
     account linking sends).
     """
+    from urllib.parse import parse_qs as _parse_qs, urlparse as _urlparse
+
     import requests as _requests
-    from urllib.parse import urlparse as _urlparse, parse_qs as _parse_qs
 
     verifier, challenge = pkce_pair()
     session = _requests.Session()
@@ -2309,7 +2294,7 @@ def _reset_bridge_in_group(resource):
         new_group_id = _bridge_associate_and_ready(bridge, user, group_api)
         resource[1] = new_group_id
     except Exception as e:
-        raise RuntimeError(f"Reset failed: could not rebuild bridge environment: {e}")
+        raise RuntimeError(f"Reset failed: could not rebuild bridge environment: {e}") from e
 
 
 def _destroy_bridge_in_group(resource):
@@ -2378,6 +2363,7 @@ def bridge_in_group(_bridge_stack_deployed):
         }
     """
     from queue import Queue
+
     from awscrt import mqtt as awscrt_mqtt
 
     resource = bridge_in_group_pool.acquire()

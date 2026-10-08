@@ -18,15 +18,16 @@ the flow is expensive. The token exchange yields both an ID token (carries
 ``custom:user_id`` → AdminGetUser fallback path), so both authorizer paths stay
 covered.
 """
-from test.itest.conftest import MCP_API_URL, launch_chromium
-from urllib.parse import urlparse, parse_qs, urljoin
-import threading
-import time
+import base64
 import hashlib
 import secrets
-import base64
+import threading
+import time
+from urllib.parse import parse_qs, urlparse
+
 import requests
 
+from test.itest.conftest import MCP_API_URL, launch_chromium
 
 # ---------------------------------------------------------------------------
 # OAuth flow steps

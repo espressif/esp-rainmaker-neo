@@ -2,32 +2,52 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from constructs import Construct
-from aws_cdk import Stack
-from aws_cdk import Duration
-from aws_cdk import RemovalPolicy
-from aws_cdk import CfnOutput
-from aws_cdk import aws_cognito as cognito
-from aws_cdk import aws_iam as iam
-from aws_cdk import aws_apigateway as apigateway
-from aws_cdk import aws_dynamodb
-from aws_cdk import aws_ssm as ssm
-from aws_cdk import aws_s3 as s3
-from aws_cdk import aws_ses as ses
-from aws_cdk import aws_kms as kms
-from aws_cdk import aws_lambda as lambda_
-from aws_cdk import custom_resources as cr
-from aws_cdk import aws_logs as logs
-from aws_cdk import CustomResource
-import sys
-import os
-import json
 import hashlib
+import json
+import os
+import sys
+
+from aws_cdk import (
+    CfnOutput,
+    CustomResource,
+    Duration,
+    RemovalPolicy,
+    Stack,
+    aws_cognito as cognito,
+    aws_dynamodb,
+    aws_iam as iam,
+    aws_kms as kms,
+    aws_lambda as lambda_,
+    aws_s3 as s3,
+)
+from constructs import Construct
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from app_common import CommonResources, discover_cognito_custom_domain, discover_cognito_email_configuration, discover_api_custom_domain, create_rest_api, create_ssm_string_parameter, create_cognito_user_pool, create_cognito_user_pool_client, create_cognito_user_pool_domain, create_cognito_authorizer, create_s3_bucket, create_kms_signing_key
-from gsi_infra import GsiInfraCore, ManagedTable, GsiReadinessGate
-from .base_res_constants import USER_TABLE_NAMES, USER_INDEX_NAMES, USER_SSM_PARAMETERS, USER_COGNITO_DOMAIN_PREFIXES, SEEDED_OAUTH_CLIENTS
+from app_common import (
+    CommonResources,
+    create_cognito_authorizer,
+    create_cognito_user_pool,
+    create_cognito_user_pool_client,
+    create_cognito_user_pool_domain,
+    create_kms_signing_key,
+    create_rest_api,
+    create_s3_bucket,
+    create_ssm_string_parameter,
+    discover_api_custom_domain,
+    discover_cognito_custom_domain,
+    discover_cognito_email_configuration,
+)
+from gsi_infra import GsiInfraCore, GsiReadinessGate, ManagedTable
+
 from ..handlers.publish_discovery.stack import PublishDiscovery
+from .base_res_constants import (
+    SEEDED_OAUTH_CLIENTS,
+    USER_COGNITO_DOMAIN_PREFIXES,
+    USER_INDEX_NAMES,
+    USER_SSM_PARAMETERS,
+    USER_TABLE_NAMES,
+)
+
 
 class CreateCommonBaseResources(Construct):
     """Creates common resources"""
@@ -260,7 +280,7 @@ def handler(event, context):
     except Exception as e:
         print("seed error:", e)
         send(event, context, "FAILED")
-""" % (table_name,)),
+""" % (table_name,)),  # noqa: UP031 - the handler source is full of braces, so .format would need every one escaped
         )
         seed_fn.add_to_role_policy(iam.PolicyStatement(
             actions=["dynamodb:PutItem", "dynamodb:GetItem"],
@@ -317,7 +337,7 @@ def handler(event, context):
     except Exception as e:
         print("seed refresh secret error:", e)
         send(event, context, "FAILED")
-""" % (param_name,)),
+""" % (param_name,)),  # noqa: UP031 - the handler source is full of braces, so .format would need every one escaped
         )
         seed_fn.add_to_role_policy(iam.PolicyStatement(
             actions=["ssm:GetParameter", "ssm:PutParameter"],
@@ -469,7 +489,6 @@ class CreateAdminBaseResources(Construct):
         super().__init__(scope, id, **kwargs)
 
         self.config = config or {}
-        token_config = self.config.get('token_validity', {})
 
         admin_user_pool = create_cognito_user_pool(
             self, "AdminUserPool",

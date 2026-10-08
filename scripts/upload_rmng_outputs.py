@@ -14,13 +14,14 @@ Usage
 Uses AWS_REGION from the environment (default us-east-1 if unset).
 """
 
-import boto3
+import copy
 import glob
 import io
+import json
 import os
 import sys
-import json
-import copy
+
+import boto3
 import segno
 from botocore.exceptions import ClientError
 
@@ -31,6 +32,7 @@ PUBLIC_BUCKET_REGION  = "us-east-1"
 
 # Redaction is driven entirely by the [visibility:private] marker generate_stack_outputs.py records under PRIVATE_PATHS_KEY; no list of secrets here to fall out of sync with it, which is how EspMcpClientSecret stayed tagged-but-published.
 from generate_stack_outputs import PRIVATE_MARKER, PRIVATE_PATHS_KEY  # noqa: E402
+
 
 def get_user_account_id(session):
     sts = session.client('sts')
@@ -145,7 +147,7 @@ def ensure_bucket_exists(session, bucket_name):
                 return False
         if error_code == "403":
             print(f"[ERROR] ACCESS DENIED: {bucket_name}")
-            print(f"        Bucket exists, but you do not have permission to access it.")
+            print("        Bucket exists, but you do not have permission to access it.")
         else:
             print(f"[ERROR] Error checking bucket: {e}")
         return False
@@ -157,8 +159,8 @@ def private_paths(data):
     """
     if PRIVATE_PATHS_KEY not in data:
         print(f"[ERROR] {RMNG_OUTPUTS} has no {PRIVATE_PATHS_KEY} key, so no output can be")
-        print(f"[ERROR] confirmed safe to publish. Regenerate it first:")
-        print(f"[ERROR]     python3 scripts/generate_stack_outputs.py")
+        print("[ERROR] confirmed safe to publish. Regenerate it first:")
+        print("[ERROR]     python3 scripts/generate_stack_outputs.py")
         sys.exit(1)
 
     paths = data[PRIVATE_PATHS_KEY]
@@ -166,8 +168,8 @@ def private_paths(data):
         isinstance(p, list) and all(isinstance(part, str) for part in p) for p in paths
     ):
         print(f"[ERROR] {PRIVATE_PATHS_KEY} in {RMNG_OUTPUTS} is malformed; expected a list of")
-        print(f"[ERROR] string paths. Refusing to publish. Regenerate it first:")
-        print(f"[ERROR]     python3 scripts/generate_stack_outputs.py")
+        print("[ERROR] string paths. Refusing to publish. Regenerate it first:")
+        print("[ERROR]     python3 scripts/generate_stack_outputs.py")
         sys.exit(1)
 
     return paths
@@ -203,7 +205,7 @@ def upload_to_s3(session, rmng_outputs_path, bucket_name, region):
         sys.exit(1)
 
     try:
-        with open(rmng_outputs_path, 'r') as f:
+        with open(rmng_outputs_path) as f:
             raw_data = json.load(f)
 
         paths_to_remove = private_paths(raw_data)
@@ -281,7 +283,7 @@ def upload_swagger_to_s3(session, bucket_name, region):
         filename = os.path.basename(path)
         key = f"{region}/swagger/{filename}"
         try:
-            with open(path, "r") as f:
+            with open(path) as f:
                 body = f.read()
             s3_client.put_object(
                 Bucket=bucket_name,

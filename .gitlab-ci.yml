@@ -110,10 +110,7 @@ npm_audit:
 # ships no musllinux wheel and no sdist, so on Alpine that resolution dies with
 # "No matching distribution found" before anything is audited. python:3.12 is glibc,
 # matching the "Python 3.12.3 compatible versions" contract atop requirements.txt.
-# Undefined names only, which is a NameError waiting on whichever branch reaches that
-# line: py_compile and ast.parse both accept a call to a function nobody defined, so a
-# rename that misses a call site ships. ruff.toml holds the scope and the reasoning for
-# why the rest of ruff's defaults are reported but not gated.
+# Blocks on the Ruff rules gated in ruff.toml.
 py_lint:
   stage: lint
   # ruff is baked into this image, so the linter is not resolved from PyPI per run.

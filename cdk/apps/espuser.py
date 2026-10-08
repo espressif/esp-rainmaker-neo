@@ -4,16 +4,17 @@
 
 import _bootstrap  # noqa: F401 — sys.path setup; must precede every repo-local import
 
-import os
 import importlib
+import os
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Callable
+from datetime import UTC, datetime
 
 import aws_cdk as cdk
+
+from app_common import CommonResources, apply_common_tags, get_rmng_inputs
 from src.espuser.stacks.esp_user_base_stack import EspUserBaseStack
 from src.espuser.stacks.esp_user_core_stack import EspUserCoreStack
-from app_common import apply_common_tags, get_rmng_inputs, CommonResources
 
 OPTIONAL_MODULES_DIR = "addon_modules"
 
@@ -91,10 +92,10 @@ module_ctx = EspUserModuleContext(
     base_stack=esp_user_base_stack,
     core_stack=esp_user_core_stack,
     inputs=rmng_inputs,
-    deploy_timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    deploy_timestamp=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
     common_resources=make_common_resources,
 )
-for name, register_espuser in discover_espuser_modules():
+for _name, register_espuser in discover_espuser_modules():
     register_espuser(module_ctx)
 
 app.synth()

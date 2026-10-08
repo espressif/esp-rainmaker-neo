@@ -11,10 +11,14 @@ whenever required, reducing hardcoded constants.
 """
 
 from aws_cdk import Aws
+
 from src.rmneo.stacks.base_res_constants import (
-    TABLE_NAMES, INDEX_NAMES, INDEX_TO_TABLE, 
-    IOT_RESOURCES, SSM_PARAMETER_PREFIXES, S3_BUCKETS
+    INDEX_NAMES,
+    INDEX_TO_TABLE,
+    SSM_PARAMETER_PREFIXES,
+    TABLE_NAMES,
 )
+
 
 def get_table_arn(table_name: str, region: str) -> str:
     """Generate DynamoDB table ARN."""

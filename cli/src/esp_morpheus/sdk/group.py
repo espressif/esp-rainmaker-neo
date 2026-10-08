@@ -4,7 +4,9 @@
 
 import json
 import warnings
+
 from .user import User
+
 
 class Group:
     def __init__(self, user: User):
@@ -62,7 +64,7 @@ class Group:
         delete_group_response = self.user.make_api_request('DELETE', f'/v1/groups/{group_id}')
         if warn_error:
             if delete_group_response.status_code != 200:
-                warnings.warn(f"Expected 2xx, but got {delete_group_response.status_code} while deleting group {group_id}")
+                warnings.warn(f"Expected 2xx, but got {delete_group_response.status_code} while deleting group {group_id}", stacklevel=2)
         else:
             assert delete_group_response.status_code == 200, f"Expected 200, but got {delete_group_response.status_code} while deleting group {group_id}"
 

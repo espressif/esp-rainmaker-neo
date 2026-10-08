@@ -5,17 +5,17 @@
 
 import argparse
 import json
+import logging
 import os
 import re
-import sys
-import logging
 import shutil
-from pathlib import Path
+import sys
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 import boto3
 from botocore.exceptions import ClientError
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # -----------------------------
 # Constants
@@ -195,7 +195,7 @@ def rewrite_template(template_path, asset_key_map, bucket):
                                     join_parts[1][i] = part.replace(old_key, new_key)
 
             # Recurse into child values
-            for k, v in obj.items():
+            for v in obj.values():
                 rewrite_obj(v)
 
         elif isinstance(obj, list):
@@ -229,7 +229,7 @@ def upload_assets(
 
     existing_keys = list_existing_keys(s3, bucket, f"{version}/assets/")
 
-    for asset_id, asset_data in files_assets.items():
+    for _asset_id, asset_data in files_assets.items():
 
         source = asset_data.get("source", {})
         source_path = source.get("path")
@@ -430,7 +430,7 @@ def collect_file_assets(manifest, assembly_dir):
     all_files_assets = manifest.get("files", {})
     artifacts = manifest.get("artifacts", {})
 
-    for art_id, art_data in artifacts.items():
+    for _art_id, art_data in artifacts.items():
         if art_data.get("type") == "cdk:asset-manifest":
             asset_manifest_file = art_data.get("properties", {}).get("file")
             if asset_manifest_file:

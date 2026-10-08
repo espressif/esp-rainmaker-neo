@@ -8,8 +8,14 @@ from aws_cdk import (
     aws_kms as kms,
 )
 from constructs import Construct
-from app_common import CommonResources, ManagedTable, create_ssm_string_parameter, stable_logical_id
-from src.rmneo.stacks.base_res_constants import TABLE_NAMES, SSM_PARAMETERS
+
+from app_common import (
+    CommonResources,
+    ManagedTable,
+    create_ssm_string_parameter,
+    stable_logical_id,
+)
+from src.rmneo.stacks.base_res_constants import SSM_PARAMETERS, TABLE_NAMES
 
 
 class ClaimBase(Construct):

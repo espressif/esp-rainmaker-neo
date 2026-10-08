@@ -2,20 +2,19 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import base64
 import json
-import time
-import subprocess
 import sys
-import uuid
-import os
-import boto3
-import requests
 import tempfile
-from py_sdk.test_device import Device, generate_key_and_cert
-from py_sdk.test_group import Group
-from test.itest.conftest import accept_sharing_request_for, REGION, rmng_outputs, connect_device_with_retry, CA_CERT, IOT_ENDPOINT, DEBUG, FILES_BUCKET_NAME
+import time
+import uuid
+
+import boto3
+import pytest
+import requests
+
+from test.itest.conftest import FILES_BUCKET_NAME, REGION, accept_sharing_request_for
+
 
 @pytest.mark.xdist_group("env_mut")
 def test_webhook_notification(test_user2, test_user3, test_user4, associated_device, webhook_mock):
@@ -217,6 +216,7 @@ def test_webhook_notification(test_user2, test_user3, test_user4, associated_dev
             # Compare with informative error message if they don't match
             if notification_data != expected_data:
                 import json
+
                 import pytest
                 pytest.fail(f"Incorrect alexa notification data for user {user.sub}:\n" +
                           f"ACTUAL:\n{json.dumps(notification_data, indent=2)}\n\n" +
@@ -251,10 +251,10 @@ def test_webhook_notification(test_user2, test_user3, test_user4, associated_dev
 
             # Verify report state structure
             assert "payload" in notification_data, (
-                f"Missing payload in GVA notification")
+                "Missing payload in GVA notification")
             payload = notification_data["payload"]
             assert "devices" in payload, (
-                f"Missing devices in GVA payload")
+                "Missing devices in GVA payload")
             states = payload["devices"]["states"]
 
             for dev_id, expected in expected_device_states.items():
@@ -463,9 +463,9 @@ def test_register_client_put_is_idempotent(test_user1):
 @pytest.mark.xdist_group("env_mut")
 def test_mobile_push_notification(test_user2, associated_device, admin_user):
     """Test mobile push notifications using SQS queue for validation."""
+    import os
     import subprocess
     import uuid
-    import os
 
     # Create SQS queue for capturing push notifications
     sqs = boto3.client('sqs', region_name=REGION)
@@ -701,7 +701,7 @@ def test_mobile_push_notification(test_user2, associated_device, admin_user):
             """Upload custom push text configuration using the file API instead of direct S3 upload."""
             # Create a temporary file with the custom configuration
             config_body = json.dumps(custom_config, indent=2)
-            print(f"Uploading custom push text configuration via API:")
+            print("Uploading custom push text configuration via API:")
             print(config_body)
 
             # Create a temporary file
@@ -916,7 +916,6 @@ def test_update_and_list_mobile_platforms(
     ios_config = apns_credentials
     android_config = firebase_service_account
 
-    sns_client = boto3.client('sns', region_name=REGION)
     created_platform_arns = []
 
     try:
@@ -1030,7 +1029,6 @@ def test_delete_mobile_platform(admin_user, apns_credentials, firebase_service_a
     ios_config = apns_credentials
     android_config = firebase_service_account
 
-    sns_client = boto3.client('sns', region_name=REGION)
 
     # Test iOS platform deletion
     ios_result = admin_user.register_ios_platform(

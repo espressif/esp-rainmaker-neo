@@ -53,10 +53,10 @@ from ..outputs import (
     alexa_region_arns,
     default_alexa_arn,
     find_output,
+    load as rmng_outputs_load,
     oidc_endpoints,
     resolve_source,
 )
-from ..outputs import load as rmng_outputs_load
 
 SMAPI_BASE = os.environ.get("SMAPI_BASE", "https://api.amazonalexa.com")
 
@@ -205,7 +205,7 @@ def sigv4_post(url, body, region):
         with urllib.request.urlopen(req, timeout=30) as r:
             print(f"config API HTTP {r.status}: {r.read().decode()}")
     except urllib.error.HTTPError as e:
-        raise SystemExit(f"config API HTTP {e.code}: {e.read().decode()}")
+        raise SystemExit(f"config API HTTP {e.code}: {e.read().decode()}") from e
 
 
 def sigv4_config_poster(api_url, region, manufacturer_name=None):
@@ -261,21 +261,27 @@ def build_manifest(cfgd, include_endpoint=False, include_events=False):
     """The endpoint is set only AFTER the backend config API has granted the Lambda(s)
     the alexa-connectedhome.amazon.com invoke permission -- otherwise Alexa rejects the
     endpoint ARN at manifest-build time."""
+    from ask_smapi_model.v1.skill.manifest.distribution_mode import DistributionMode
+    from ask_smapi_model.v1.skill.manifest.permission_items import PermissionItems
+    from ask_smapi_model.v1.skill.manifest.region import Region
     from ask_smapi_model.v1.skill.manifest.skill_manifest import SkillManifest
     from ask_smapi_model.v1.skill.manifest.skill_manifest_apis import SkillManifestApis
-    from ask_smapi_model.v1.skill.manifest.smart_home_apis import SmartHomeApis
-    from ask_smapi_model.v1.skill.manifest.skill_manifest_endpoint import SkillManifestEndpoint
-    from ask_smapi_model.v1.skill.manifest.region import Region
-    from ask_smapi_model.v1.skill.manifest.skill_manifest_publishing_information import (
-        SkillManifestPublishingInformation)
-    from ask_smapi_model.v1.skill.manifest.skill_manifest_localized_publishing_information import (
-        SkillManifestLocalizedPublishingInformation)
-    from ask_smapi_model.v1.skill.manifest.skill_manifest_privacy_and_compliance import (
-        SkillManifestPrivacyAndCompliance)
+    from ask_smapi_model.v1.skill.manifest.skill_manifest_endpoint import (
+        SkillManifestEndpoint,
+    )
     from ask_smapi_model.v1.skill.manifest.skill_manifest_localized_privacy_and_compliance import (
-        SkillManifestLocalizedPrivacyAndCompliance)
-    from ask_smapi_model.v1.skill.manifest.permission_items import PermissionItems
-    from ask_smapi_model.v1.skill.manifest.distribution_mode import DistributionMode
+        SkillManifestLocalizedPrivacyAndCompliance,
+    )
+    from ask_smapi_model.v1.skill.manifest.skill_manifest_localized_publishing_information import (
+        SkillManifestLocalizedPublishingInformation,
+    )
+    from ask_smapi_model.v1.skill.manifest.skill_manifest_privacy_and_compliance import (
+        SkillManifestPrivacyAndCompliance,
+    )
+    from ask_smapi_model.v1.skill.manifest.skill_manifest_publishing_information import (
+        SkillManifestPublishingInformation,
+    )
+    from ask_smapi_model.v1.skill.manifest.smart_home_apis import SmartHomeApis
 
     publishing = SkillManifestPublishingInformation(
         locales={"en-US": SkillManifestLocalizedPublishingInformation(
@@ -321,10 +327,15 @@ def build_manifest(cfgd, include_endpoint=False, include_events=False):
 
 
 def build_account_linking(cfgd):
-    from ask_smapi_model.v1.skill.account_linking.account_linking_request import AccountLinkingRequest
+    from ask_smapi_model.v1.skill.account_linking.account_linking_request import (
+        AccountLinkingRequest,
+    )
     from ask_smapi_model.v1.skill.account_linking.account_linking_request_payload import (
-        AccountLinkingRequestPayload)
-    from ask_smapi_model.v1.skill.account_linking.account_linking_type import AccountLinkingType
+        AccountLinkingRequestPayload,
+    )
+    from ask_smapi_model.v1.skill.account_linking.account_linking_type import (
+        AccountLinkingType,
+    )
     return AccountLinkingRequest(account_linking_request=AccountLinkingRequestPayload(
         object_type=AccountLinkingType.AUTH_CODE.value,
         authorization_url=cfgd["auth_url"],
@@ -414,7 +425,9 @@ def run_setup(client, cfgd, vendor_id, skill_id, post_config_fn):
     redirect_uris) performs the backend config-API POST -- SigV4 for the CLI, the
     admin user's session for morpheus.py. Returns the skill_id."""
     from ask_smapi_model.v1.skill.create_skill_request import CreateSkillRequest
-    from ask_smapi_model.v1.skill.manifest.skill_manifest_envelope import SkillManifestEnvelope
+    from ask_smapi_model.v1.skill.manifest.skill_manifest_envelope import (
+        SkillManifestEnvelope,
+    )
 
     if skill_id:
         print(f"1. reusing existing skill {skill_id}")

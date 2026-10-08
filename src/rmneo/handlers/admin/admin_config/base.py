@@ -3,10 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from aws_cdk import (
-    aws_dynamodb as dynamodb,
     RemovalPolicy,
+    aws_dynamodb as dynamodb,
 )
 from constructs import Construct
+
 from app_common import CommonResources
 from gsi_infra import ManagedTable
 from src.rmneo.stacks.base_res_constants import TABLE_NAMES

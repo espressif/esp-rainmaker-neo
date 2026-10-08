@@ -5,14 +5,13 @@
 # A Program called Dr X that is used to inspect and correct an rmng deployment
 # For displaying logs: aws logs tail /aws/lambda/function_name --follow
 
+import argparse
+import json
+import logging
 import os
 import sys
-import json
-import requests
+
 import boto3
-import argparse
-import logging
-from typing import Dict, List, Optional
 from botocore.exceptions import ClientError
 
 logging.basicConfig(level=logging.INFO)
@@ -44,7 +43,7 @@ class DrX:
             logger.error(f"Error listing functions: {str(e)}")
             sys.exit(1)
 
-    def update_function_env(self, function_name: str, env_updates: Dict[str, str]) -> None:
+    def update_function_env(self, function_name: str, env_updates: dict[str, str]) -> None:
         """Update environment variables for a specific Lambda function.
         
         Args:
@@ -75,7 +74,7 @@ class DrX:
             logger.error(f"Error updating function environment: {str(e)}")
             sys.exit(1)
 
-    def set_log_config(self, function_name: str, log_level: Optional[str] = None, allow_dict: Optional[Dict[str, str]] = None, reset: bool = False) -> None:
+    def set_log_config(self, function_name: str, log_level: str | None = None, allow_dict: dict[str, str] | None = None, reset: bool = False) -> None:
         """Set logging configuration for a Lambda function.
 
         Dual-writes to SSM (persistent across deploys) and the Lambda env var
@@ -116,7 +115,7 @@ class DrX:
             logger.error(f"Error setting log configuration: {str(e)}")
             sys.exit(1)
 
-    def set_log_config_all(self, log_level: Optional[str] = None, allow_dict: Optional[Dict[str, str]] = None, reset: bool = False) -> None:
+    def set_log_config_all(self, log_level: str | None = None, allow_dict: dict[str, str] | None = None, reset: bool = False) -> None:
         """Set logging configuration for all Lambda functions.
 
         Writes to the global SSM parameter /rmng/rlog/global (persistent) and
@@ -163,7 +162,7 @@ class DrX:
             logger.error(f"Error setting log configuration: {str(e)}")
             sys.exit(1)
 
-    def get_log_config(self, function_name: Optional[str] = None, show_all: bool = False) -> None:
+    def get_log_config(self, function_name: str | None = None, show_all: bool = False) -> None:
         """Display persisted RLOG configuration from SSM.
 
         Args:
@@ -198,7 +197,7 @@ class DrX:
         )
         logger.info(f"SSM parameter {name} set")
 
-    def _get_ssm_parameter(self, name: str) -> Optional[str]:
+    def _get_ssm_parameter(self, name: str) -> str | None:
         try:
             result = self.ssm_client.get_parameter(Name=name)
             return result['Parameter']['Value']
@@ -217,7 +216,7 @@ def main():
     subparsers = parser.add_subparsers(dest='command', help='Commands')
 
     # List functions command
-    list_parser = subparsers.add_parser('list', help='List all Lambda functions')
+    subparsers.add_parser('list', help='List all Lambda functions')
 
     # Update environment variable command
     update_parser = subparsers.add_parser('update-env', help='Update Lambda function environment variables')

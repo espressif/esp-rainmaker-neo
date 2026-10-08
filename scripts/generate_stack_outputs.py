@@ -44,7 +44,10 @@ _REPO_ROOT = _SCRIPT_DIR.parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-from cfn_stack_parser import load_stackfile, resolve_stack_name
+from cfn_stack_parser import (  # noqa: E402 - needs the sys.path insert above
+    load_stackfile,
+    resolve_stack_name,
+)
 
 
 def get_stack_outputs(cf_client, stack_name):
@@ -101,7 +104,7 @@ def main():
     output_data = {}
     if output_path.exists():
         try:
-            with open(output_path, "r") as f:
+            with open(output_path) as f:
                 output_data = json.load(f)
             print(f"Loaded existing data from {output_path}")
         except json.JSONDecodeError:
@@ -143,7 +146,7 @@ def main():
     regions_by_name: dict = {}
     # Path into output_data per private output, e.g. ["espuser-base", "EspMcpClientSecret"]. Rebuilt every run so an output that stops being private cannot linger.
     private_paths: list = []
-    for (name, stack_region), result in zip(queries, fetched):
+    for (name, stack_region), result in zip(queries, fetched, strict=True):
         outputs, private_keys = result if result is not None else (None, [])
         if name in multi_region_names:
             if outputs is not None:

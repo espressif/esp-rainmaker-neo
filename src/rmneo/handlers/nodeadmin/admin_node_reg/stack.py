@@ -4,24 +4,24 @@
 
 from aws_cdk import (
     Aws,
-    aws_lambda as lambda_,
-    aws_apigateway as apigateway,
-    aws_iam as iam,
     Stack,
+    aws_iam as iam,
 )
 from constructs import Construct
+
 from app_common import (
     CommonResources,
-    create_lambda_function,
+    add_cors_options,
     create_base_lambda_role,
     create_cfn_api_method,
+    create_lambda_function,
     get_or_create_api_resource,
-    add_cors_options
 )
+from arn_utils import get_kvs_channel_arn, get_table_arn, get_table_index_arn
 from src.bridge.stacks.base_res_constants import BRIDGE_RESOURCES
-from src.rmneo.stacks.base_res_constants import TABLE_NAMES, INDEX_NAMES, IOT_RESOURCES
-from arn_utils import get_table_arn, get_table_index_arn, get_kvs_channel_arn
 from src.espuser.stacks.base_res_constants import USER_TABLE_NAMES
+from src.rmneo.stacks.base_res_constants import INDEX_NAMES, IOT_RESOURCES, TABLE_NAMES
+
 
 class RegisterAPI(Construct):
     def __init__(self, scope: Construct, id: str, common_resources: CommonResources, node_register_policy: iam.Policy = None, container_params: dict = None, **kwargs) -> None:

@@ -3,7 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import requests
+
 from test.itest.conftest import API_GATEWAY_URL
+
 
 def test_get_hello(test_user1):
     response = test_user1.make_api_request('GET', '/v1/hello')

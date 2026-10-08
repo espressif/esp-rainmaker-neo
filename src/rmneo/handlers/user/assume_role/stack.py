@@ -3,24 +3,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from aws_cdk import (
-    aws_lambda as lambda_,
-    aws_iam as iam,
-    custom_resources as cr,
-    Stack
-)
+
+from aws_cdk import Stack, aws_iam as iam, custom_resources as cr
 from constructs import Construct
+
 from app_common import (
     CommonResources,
-    create_lambda_function,
+    add_cors_options,
     create_base_lambda_role,
     create_cfn_api_method,
+    create_lambda_function,
     get_or_create_api_resource,
-    add_cors_options,
     stable_logical_id,
 )
-from src.rmneo.stacks.base_res_constants import TABLE_NAMES, IOT_RESOURCES, S3_BUCKETS
-from arn_utils import get_table_arn, get_iam_role_arn, get_s3_bucket_resolved_name
+from arn_utils import get_iam_role_arn, get_s3_bucket_resolved_name, get_table_arn
+from src.rmneo.stacks.base_res_constants import IOT_RESOURCES, S3_BUCKETS, TABLE_NAMES
+
 
 class AssumeRoleAPI(Construct):
     def __init__(self, scope: Construct, id: str, common_resources: CommonResources, **kwargs) -> None:

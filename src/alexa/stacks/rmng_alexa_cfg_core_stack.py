@@ -8,9 +8,10 @@ from aws_cdk import (
     aws_ssm as ssm,
 )
 from constructs import Construct
+
 from app_common import CommonResources, create_api_deployment
-from src.rmneo.stacks.base_res_constants import SSM_PARAMETERS
 from src.alexa.handlers.alexa_cfg.stack import AlexaCfgAPI
+from src.rmneo.stacks.base_res_constants import SSM_PARAMETERS
 
 
 class RMNGAlexaCfgCoreStack(Stack):

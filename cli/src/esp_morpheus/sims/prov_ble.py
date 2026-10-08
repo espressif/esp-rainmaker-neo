@@ -16,8 +16,8 @@ sessions never touch IDF or the network.
 """
 
 import os
-import sys
 import pathlib
+import sys
 
 from .. import paths
 from .sparse_dep import SparseDependency
@@ -84,8 +84,9 @@ def ensure_esp_prov():
         sys.path.insert(0, str(chal_resp_proto_path))
 
     import esp_prov as _esp_prov
-    from utils import str_to_bytes as _str_to_bytes
     import esp_rmaker_chal_resp_pb2 as _ch_resp_pb
+
+    from utils import str_to_bytes as _str_to_bytes
 
     esp_prov = _esp_prov
     str_to_bytes = _str_to_bytes

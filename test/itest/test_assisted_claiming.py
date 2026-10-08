@@ -31,8 +31,14 @@ from py_sdk.test_device import Device
 from py_sdk.test_group import Group
 from py_sdk.test_user import User
 from test.itest.conftest import (
-    CA_CERT, CREDENTIAL_PROVIDER_ENDPOINT, DEBUG, DEVICE_VIDEO_ROLE_ALIAS, IOT_ENDPOINT, REGION,
-    connect_device_with_retry, rmng_outputs,
+    CA_CERT,
+    CREDENTIAL_PROVIDER_ENDPOINT,
+    DEBUG,
+    DEVICE_VIDEO_ROLE_ALIAS,
+    IOT_ENDPOINT,
+    REGION,
+    connect_device_with_retry,
+    rmng_outputs,
 )
 
 # Claiming configuration the suite bootstraps with, via the admin admin API
@@ -484,7 +490,7 @@ def test_reclaim_invalidates_the_previous_certificate(test_user1, claimed_nodes)
 
     # The superseded one must not. Allow a little time for deactivation to
     # propagate rather than asserting on the first attempt.
-    for attempt in range(6):
+    for _attempt in range(6):
         stale = Device(node_id, old_key, old_cert, CA_CERT, IOT_ENDPOINT, REGION, DEBUG)
         if not stale.mqtt_connect():
             break

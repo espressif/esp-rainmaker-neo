@@ -139,7 +139,7 @@ def test_cross_parent_shadow_write_denied(bridge_in_group, iot_data):
     AWS IoT may close the MQTT session as a side effect — assert by
     reading the target shadow afterwards."""
     bridge = bridge_in_group["bridge"]
-    foreign = f"rmng-other-bridge-99--child_pwn"
+    foreign = "rmng-other-bridge-99--child_pwn"
     shadow_name = "params-anything"
 
     publish_raised = None

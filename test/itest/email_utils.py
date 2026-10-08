@@ -12,7 +12,6 @@ credentials and the pytest-xdist address scheme that neither of them knows about
 import os
 import threading
 import uuid
-from typing import Dict, Optional
 
 from esp_morpheus.sdk import mailosaur, ses
 
@@ -26,7 +25,7 @@ ITEST_CONFIG_ENV_VAR = "RMNG_ITEST_CONFIG_JSON"
 # Per-(worker, role) auto-incrementing counters for deterministic Mailosaur addresses. Deterministic
 # addresses let a user be reused across runs (fast re-auth vs. re-creation); keying by role keeps the
 # admin and regular-user sequences disjoint so a regular signup never inherits an admin's stale record.
-_user_email_counters: Dict[str, int] = {}
+_user_email_counters: dict[str, int] = {}
 _user_email_lock = threading.Lock()
 
 
@@ -34,7 +33,7 @@ def _load_itest_config() -> dict:
     return load_json_config(ITEST_CONFIG_REL_PATH, ITEST_CONFIG_ENV_VAR)
 
 
-def _get_mailosaur_credentials() -> Optional[tuple[str, str]]:
+def _get_mailosaur_credentials() -> tuple[str, str] | None:
     """Mailosaur server ID + API key; None when no source supplies both."""
     cfg = _load_itest_config()
     server_id = cfg.get("mailosaur_server_id", "")
@@ -51,7 +50,7 @@ def is_email_service_available() -> bool:
     return bool(credentials) and mailosaur.server_reachable(*credentials)
 
 
-def generate_mailosaur_email(user_index: Optional[int] = None, is_admin: bool = False) -> Optional[str]:
+def generate_mailosaur_email(user_index: int | None = None, is_admin: bool = False) -> str | None:
     """
     Generate a deterministic Mailosaur email address, namespaced by role.
 
@@ -89,7 +88,7 @@ def generate_mailosaur_email(user_index: Optional[int] = None, is_admin: bool = 
     return server_email
 
 
-def generate_mailosaur_email_specific(email_prefix: str) -> Optional[str]:
+def generate_mailosaur_email_specific(email_prefix: str) -> str | None:
     """Build a fixed, caller-chosen Mailosaur address `<email_prefix>@<server_id>.mailosaur.net`.
 
     Unlike generate_mailosaur_email(), which auto-increments a fresh inbox, this returns a stable
@@ -113,7 +112,7 @@ def generate_otp_recipient_email(user_index=None, is_admin=False):
     return email
 
 
-def ensure_ses_verified(email: str, region: Optional[str] = None) -> bool:
+def ensure_ses_verified(email: str, region: str | None = None) -> bool:
     """Make sure sandbox SES can deliver to `email`, following the verification link out of the
     Mailosaur inbox so no one has to click it."""
     credentials = _get_mailosaur_credentials()
@@ -150,9 +149,9 @@ def generate_random_email() -> str:
     return f"test-{worker_id}-{token}@example.com"
 
 
-def get_link_from_server(link_pattern: str, recipient_email: Optional[str] = None,
-                         since_timestamp: Optional[float] = None, max_retries: int = 8,
-                         retry_delay: float = 3.0) -> Optional[str]:
+def get_link_from_server(link_pattern: str, recipient_email: str | None = None,
+                         since_timestamp: float | None = None, max_retries: int = 8,
+                         retry_delay: float = 3.0) -> str | None:
     """Read the latest link matching `link_pattern` out of the Mailosaur inbox."""
     credentials = _get_mailosaur_credentials()
     if not credentials:
@@ -164,8 +163,8 @@ def get_link_from_server(link_pattern: str, recipient_email: Optional[str] = Non
 
 def get_verification_code_from_server(max_retries: int = 5, retry_delay: float = 3.0,
                                       timeout: float = 60.0,
-                                      since_timestamp: Optional[float] = None,
-                                      recipient_email: Optional[str] = None) -> Optional[str]:
+                                      since_timestamp: float | None = None,
+                                      recipient_email: str | None = None) -> str | None:
     """Wait for the emailed numeric code and return it, or None on timeout.
 
     Args:

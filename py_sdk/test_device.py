@@ -10,7 +10,7 @@ module: one class object, so isinstance holds across them, and private names sta
 
 import sys
 
-from esp_morpheus.sdk.device import *  # noqa: F401,F403
 import esp_morpheus.sdk.device as _target
+from esp_morpheus.sdk.device import *  # noqa: F401,F403
 
 sys.modules[__name__] = _target

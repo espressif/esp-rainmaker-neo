@@ -28,8 +28,8 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable, List, Optional, Union
 
 from .. import paths
 
@@ -63,16 +63,16 @@ class SparseDependency:
     def __init__(
         self,
         repo: str,
-        subdir: Union[str, Iterable[str]],
+        subdir: str | Iterable[str],
         ref: str = "main",
         *,
-        dest: Optional[Union[str, Path]] = None,
-        import_subdir: Optional[str] = None,
+        dest: str | Path | None = None,
+        import_subdir: str | None = None,
         depth: int = 1,
         git: str = "git",
     ) -> None:
         self.repo = repo
-        self.subdirs: List[str] = [subdir] if isinstance(subdir, str) else list(subdir)
+        self.subdirs: list[str] = [subdir] if isinstance(subdir, str) else list(subdir)
         if not self.subdirs:
             raise ValueError("at least one subdir is required")
         self.ref = ref
@@ -156,7 +156,7 @@ class SparseDependency:
             sys.path.append(s)
         return path
 
-    def current_commit(self) -> Optional[str]:
+    def current_commit(self) -> str | None:
         """Return the checked-out commit SHA, or None if not yet synced."""
         if not (self.dest / ".git").exists():
             return None
@@ -176,10 +176,10 @@ class SparseDependency:
         else:
             self._git("remote", "add", "origin", self.repo)
 
-    def _git(self, *args: str, capture: bool = False) -> Optional[str]:
+    def _git(self, *args: str, capture: bool = False) -> str | None:
         return self._run(*args, cwd=self.dest, capture=capture)
 
-    def _run(self, *args: str, cwd: Optional[Path], capture: bool = False) -> Optional[str]:
+    def _run(self, *args: str, cwd: Path | None, capture: bool = False) -> str | None:
         cmd = [self.git]
         if cwd is not None:
             cmd += ["-C", str(cwd)]

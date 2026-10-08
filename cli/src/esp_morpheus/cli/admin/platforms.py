@@ -19,7 +19,7 @@ def platforms():
 
 def _read_text(path, what):
     try:
-        with open(path, 'r') as handle:
+        with open(path) as handle:
             return handle.read()
     except OSError as e:
         output.fail(f"Could not read the {what}: {e}")

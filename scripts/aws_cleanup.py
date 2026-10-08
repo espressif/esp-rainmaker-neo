@@ -5,10 +5,9 @@
 
 import boto3
 import click
+from botocore.exceptions import ClientError
 from rich.console import Console
 from rich.progress import Progress
-from botocore.exceptions import ClientError
-import time
 
 console = Console()
 
@@ -497,8 +496,8 @@ class AWSDeployCleanup:
                                 StackName=stack_name,
                                 WaiterConfig={'Delay': 30, 'MaxAttempts': 240}  # 30 seconds * 240 attempts = 2 hours
                             )
-                        except ClientError as e:
-                            self.console.print(f"Regular deletion failed, attempting force delete...")
+                        except ClientError:
+                            self.console.print("Regular deletion failed, attempting force delete...")
                             self.cloudformation.delete_stack(StackName=stack_name, DeletionMode='FORCE_DELETE_STACK')
                             waiter = self.cloudformation.get_waiter('stack_delete_complete')
                             waiter.wait(
@@ -878,8 +877,8 @@ class AWSDeployCleanup:
                 # We'll try to list all endpoints and filter for email ones
                 try:
                     # This might not work for all cases, but we'll try
-                    response = self.sns.list_endpoints_by_platform_application(PlatformApplicationArn='dummy')
-                except:
+                    self.sns.list_endpoints_by_platform_application(PlatformApplicationArn='dummy')
+                except Exception:
                     # If we can't list all endpoints, we'll skip email endpoint cleanup
                     self.console.print("[yellow]⚠ Warning: Could not list email endpoints (this is normal)[/yellow]")
                     email_endpoints = []
@@ -977,7 +976,7 @@ def main(profile, access_key, secret_key, session_token, region, service):
             progress.update(task, completed=100)
         except Exception as e:
             progress.update(task, completed=0)
-            raise click.ClickException(str(e))
+            raise click.ClickException(str(e)) from e
 
 if __name__ == '__main__':
     main() 

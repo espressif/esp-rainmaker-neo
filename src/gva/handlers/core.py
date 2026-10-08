@@ -3,22 +3,34 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from aws_cdk import (
-    aws_iam as iam,
-    aws_apigateway as apigateway,
-    aws_ssm as ssm,
-    Duration,
     Stack,
+    aws_apigateway as apigateway,
+    aws_iam as iam,
 )
 from constructs import Construct
-from app_common import CommonResources, create_lambda_function, create_base_lambda_role, get_or_create_api_resource, add_cors_options
-from src.gva.handlers.gva_cfg.stack import GVACfgAPI
-from src.rmneo.stacks.base_res_constants import TABLE_NAMES, SSM_PARAMETERS
-from src.espuser.stacks.base_res_constants import USER_SSM_PARAMETERS
-from arn_utils import (
-    get_table_arn, get_index_arn, get_user_pool_arn, get_identity_pool_arn,
-    get_api_gateway_invoke_arn, get_lambda_integration_uri,
-    get_topic_arn, get_iot_thing_arn, get_ssm_parameter_prefix_arn, get_ssm_parameter_arn
+
+from app_common import (
+    CommonResources,
+    add_cors_options,
+    create_base_lambda_role,
+    create_lambda_function,
+    get_or_create_api_resource,
 )
+from arn_utils import (
+    get_api_gateway_invoke_arn,
+    get_identity_pool_arn,
+    get_index_arn,
+    get_iot_thing_arn,
+    get_lambda_integration_uri,
+    get_ssm_parameter_arn,
+    get_ssm_parameter_prefix_arn,
+    get_table_arn,
+    get_topic_arn,
+)
+from src.espuser.stacks.base_res_constants import USER_SSM_PARAMETERS
+from src.gva.handlers.gva_cfg.stack import GVACfgAPI
+from src.rmneo.stacks.base_res_constants import TABLE_NAMES
+
 
 class GVAActionCore(Construct):
     """Core/compute resources for GVA Action - Lambda function and API integration"""
@@ -154,7 +166,7 @@ class GVAActionCore(Construct):
         integration_uri = get_lambda_integration_uri(self.gva_action_function.function_arn, region)
 
         # Create POST method for GVA webhook using CFn constructs
-        gva_post_method = apigateway.CfnMethod(
+        apigateway.CfnMethod(
             self, "GVAPostMethod",
             rest_api_id=common_resources.api_gateway_id,
             resource_id=gva_parent_id,

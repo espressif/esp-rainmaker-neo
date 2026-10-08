@@ -3,8 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from constructs import Construct
-from src.rmneo.handlers.group.group.stack import GroupAPI
+
 from app_common import CommonResources
+from src.rmneo.handlers.group.group.stack import GroupAPI
+
 
 class GroupCore(Construct):
     """Core/compute resources for Group service - Lambda functions and API integrations"""

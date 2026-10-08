@@ -2,22 +2,23 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from py_sdk.test_user import User
-from test.itest.email_utils import generate_random_email, generate_test_password
-from test.itest.conftest import (
-    connect_device_with_retry,
-    REGION,
-    IDENTITY_POOL_ID,
-    API_GATEWAY_URL,
-    USER_API_GATEWAY_URL,
-    IOT_ENDPOINT,
-)
 import calendar
 import os
+import time
 
 import boto3
 import pytest
-import time
+
+from py_sdk.test_user import User
+from test.itest.conftest import (
+    API_GATEWAY_URL,
+    IDENTITY_POOL_ID,
+    IOT_ENDPOINT,
+    REGION,
+    USER_API_GATEWAY_URL,
+    connect_device_with_retry,
+)
+from test.itest.email_utils import generate_random_email, generate_test_password
 
 
 @pytest.mark.parametrize("basic_ingest", [True, False], ids=["basic_ingest", "direct_topic"])
@@ -198,10 +199,10 @@ def test_timeseries_comprehensive(associated_device, basic_ingest):
             latest_entry = data_entries[0]
 
             # Validate the data
-            assert latest_entry["key"] == path, f"Path should match"
-            assert latest_entry["dt"] == data_type, f"Data type should match"
+            assert latest_entry["key"] == path, "Path should match"
+            assert latest_entry["dt"] == data_type, "Data type should match"
             assert latest_entry["value"] == expected_value, f"Value should match for {path}"
-            assert latest_entry["cumulative"] == data_point["cumulative"], f"Cumulative flag should match"
+            assert latest_entry["cumulative"] == data_point["cumulative"], "Cumulative flag should match"
 
             # Validate timestamp is recent (within last 30 seconds for basic data)
             entry_timestamp = latest_entry["ts"]
@@ -429,7 +430,7 @@ def test_timeseries_comprehensive(associated_device, basic_ingest):
                 start_key = response["next_key"]
                 assert page_count < 20, "Too many pages - possible infinite loop"
             else:
-                assert "next_key" not in response or response.get("next_key") == "", f"Last page should not have next_key"
+                assert "next_key" not in response or response.get("next_key") == "", "Last page should not have next_key"
                 break
 
         print(f"✅ Collected {len(all_collected_data)} items across {page_count} pages")
@@ -441,7 +442,7 @@ def test_timeseries_comprehensive(associated_device, basic_ingest):
         for i in range(len(all_collected_data) - 1):
             current_timestamp = all_collected_data[i]["ts"]
             next_timestamp = all_collected_data[i + 1]["ts"]
-            assert current_timestamp > next_timestamp, f"Data should be in descending timestamp order"
+            assert current_timestamp > next_timestamp, "Data should be in descending timestamp order"
 
         # Verify no duplicate entries
         timestamps = [item["ts"] for item in all_collected_data]
@@ -470,7 +471,7 @@ def test_timeseries_comprehensive(associated_device, basic_ingest):
                 else:
                     raise e
 
-    collected_pagination_data = retry_pagination_test()
+    retry_pagination_test()
     print("✅ Comprehensive pagination testing completed")
 
     # Test pagination with historical aggregates
@@ -491,18 +492,14 @@ def test_timeseries_comprehensive(associated_device, basic_ingest):
     test_user2.register_user_via_lambda(email=test_user2.username, password=test_user2.password)
     test_user2.get_aws_credentials()
 
-    try:
-        # This should fail with unauthorized error
-        unauthorized_response = test_user2.get_timeseries_data(
+    with pytest.raises(Exception, match=r"(?i)unauthorized|401|403"):
+        test_user2.get_timeseries_data(
             group_id=group_id,
             node_id=device_thing_name,
             key="temperature",
             data_type="float"
         )
-        assert False, "Unauthorized user should not be able to access timeseries data"
-    except Exception as e:
-        assert "unauthorized" in str(e).lower() or "403" in str(e) or "401" in str(e), f"Should get unauthorized error, got: {str(e)}"
-        print("✅ Unauthorized access properly blocked")
+    print("✅ Unauthorized access properly blocked")
 
     # Cleanup
     device.disconnect()

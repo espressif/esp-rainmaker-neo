@@ -12,7 +12,7 @@ read.
 
 import os
 import time
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import boto3
 
@@ -22,7 +22,7 @@ VERIFICATION_LINK_PATTERN = r"https://[^\s\"'>]*amazonaws\.com[^\s\"'>]*[Vv]erif
 _verified: set = set()
 
 
-def resolve_region(region: Optional[str] = None) -> Optional[str]:
+def resolve_region(region: str | None = None) -> str | None:
     """The region to act in. Identities are per region, so a wrong one verifies nothing useful."""
     return (region or os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
             or (boto3.DEFAULT_SESSION.region_name if boto3.DEFAULT_SESSION else None))
@@ -65,8 +65,8 @@ def wait_verified(email: str, region: str, timeout: float = 30.0, poll: float = 
         time.sleep(poll)
 
 
-def ensure_verified(email: str, region: Optional[str] = None,
-                    confirm: Optional[Callable[[float], bool]] = None,
+def ensure_verified(email: str, region: str | None = None,
+                    confirm: Callable[[float], bool] | None = None,
                     timeout: float = 30.0) -> bool:
     """Make sure SES can send from `email`, requesting verification when it cannot.
 

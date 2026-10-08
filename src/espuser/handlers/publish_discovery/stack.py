@@ -3,17 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from aws_cdk import (
-    Stack,
     CustomResource,
+    Stack,
     aws_iam as iam,
 )
 from constructs import Construct
+
 from app_common import (
     CommonResources,
-    create_lambda_function,
     create_base_lambda_role,
+    create_lambda_function,
 )
-from arn_utils import get_ssm_parameter_arn, get_s3_object_arn
+from arn_utils import get_s3_object_arn, get_ssm_parameter_arn
 from src.espuser.stacks.base_res_constants import USER_SSM_PARAMETERS
 
 

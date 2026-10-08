@@ -2,28 +2,28 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+import os
+import uuid
+
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+
 from py_sdk.test_group import Group
 from py_sdk.test_matter import (
     build_nocsr_elements_tlv,
-    sign_attestation_data,
     do_initiate,
-    do_verify_with_nocsr_elements,
-    do_confirm,
     do_matter_dev_assoc,
+    do_verify_with_nocsr_elements,
+    sign_attestation_data,
 )
 from test.itest.conftest import (
     accept_sharing_request_for,
+    connect_device_with_retry,
     extract_matter_oids,
     verify_certificate_signed_by,
-    connect_device_with_retry,
 )
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography import x509
-import pytest
-import json
-import uuid
-import os
 
 
 def test_create_matter_group(test_user1):
@@ -330,7 +330,6 @@ def test_matter_node_remove_from_grp(matter_group, session_valid_device_ec):
     user = matter_group["user"]
     device = session_valid_device_ec
     group_id = matter_group["group_id"]
-    root_ca = matter_group["root_ca"]
     group_api = matter_group["group_api"]
 
     assert connect_device_with_retry(device), "Failed to connect the device"
@@ -480,7 +479,7 @@ def test_matter_dev_assoc_pure_rm_node(matter_group, session_valid_device_ec):
     assert connect_device_with_retry(device), "Failed to connect the device"
 
     # Associate using challenge_response (should succeed - adds node to group without NOC)
-    assert user.do_user_node_assoc(device, group_id) == None, "Failed to associate device with group"# Uses challenge_response flow
+    assert user.do_user_node_assoc(device, group_id) is None, "Failed to associate device with group"# Uses challenge_response flow
 
     # Verify node appears in group listing
     assert device.wait_for_group_info(), "Device failed to receive group info"

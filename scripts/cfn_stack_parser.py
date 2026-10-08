@@ -21,14 +21,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import re
 import sys
-import logging
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Set
 
 import yaml
 
@@ -51,7 +50,7 @@ SUPPORTED_SCHEMA_VERSIONS = {"1.0.0"}
 
 # Supported variables for ${VAR} substitution in stack_name.
 # To add a new variable, add an entry here and supply its value at resolution time.
-SUPPORTED_VARIABLES: Dict[str, str] = {
+SUPPORTED_VARIABLES: dict[str, str] = {
     "APP_REGION": "The AWS region selected by the user for deployment",
 }
 
@@ -68,7 +67,7 @@ class StackfileError(ValueError):
 class CyclicDependencyError(StackfileError):
     """Raised when a dependency cycle is detected among stacks."""
 
-    def __init__(self, nodes: List[str], message: Optional[str] = None) -> None:
+    def __init__(self, nodes: list[str], message: str | None = None) -> None:
         self.nodes = nodes
         # The default message describes a cycle *path* through stacks. group_waves detects a
         # cycle in the group projection instead, where the nodes are an unordered set of
@@ -87,7 +86,7 @@ def has_name_variables(name: str) -> bool:
     return bool(VARIABLE_PATTERN.search(name))
 
 
-def resolve_stack_name(name: str, variables: Dict[str, str]) -> str:
+def resolve_stack_name(name: str, variables: dict[str, str]) -> str:
     """Replace every ``${VAR}`` in *name* with the value from *variables*."""
     def _replace(m: re.Match) -> str:
         var = m.group("var")
@@ -128,7 +127,7 @@ class ParameterDef:
     description: str = ""
     configurable: bool = False
     # Resolved at parse time when value is a single ${stack.(outputs|inputs).Key} ref.
-    cross_stack_ref: Optional[Dict[str, str]] = None
+    cross_stack_ref: dict[str, str] | None = None
 
     def to_dict(self) -> dict:
         parameter_dict = {
@@ -149,7 +148,7 @@ class RegionConfig:
     """Region deployment configuration for a stack."""
 
     mode: str = "all"  # "all" | "explicit"
-    explicit: Dict[str, str] = field(default_factory=dict)  # region -> mandatory|optional
+    explicit: dict[str, str] = field(default_factory=dict)  # region -> mandatory|optional
 
     def to_dict(self) -> dict:
         region_dict: dict = {"mode": self.mode}
@@ -166,9 +165,9 @@ class StackDef:
     stack_name: str
     template: str
     group: str = ""  # Derived from the `groups:` layer; display/CLI-only, no deploy semantics.
-    depends_on: List[str] = field(default_factory=list)
+    depends_on: list[str] = field(default_factory=list)
     regions: RegionConfig = field(default_factory=RegionConfig)
-    parameters: List[ParameterDef] = field(default_factory=list)
+    parameters: list[ParameterDef] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -188,7 +187,7 @@ class DeploymentStage:
     """A group of stacks at the same dependency depth (can run in parallel)."""
 
     stage: int
-    stacks: List[StackDef] = field(default_factory=list)
+    stacks: list[StackDef] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -228,7 +227,7 @@ def _parse_parameter(name: str, raw: dict) -> ParameterDef:
     return param
 
 
-def _parse_regions(raw: Optional[dict], default_mode: str) -> RegionConfig:
+def _parse_regions(raw: dict | None, default_mode: str) -> RegionConfig:
     """Parse the regions block, falling back to global defaults."""
     if raw is None:
         return RegionConfig(mode=default_mode)
@@ -236,7 +235,7 @@ def _parse_regions(raw: Optional[dict], default_mode: str) -> RegionConfig:
     mode = raw.get("mode", default_mode)
     explicit_raw = raw.get("explicit", {})
 
-    explicit: Dict[str, str] = {}
+    explicit: dict[str, str] = {}
     if isinstance(explicit_raw, dict):
         explicit = {str(k): str(v) for k, v in explicit_raw.items()}
     elif isinstance(explicit_raw, list):
@@ -287,7 +286,7 @@ def _merge_addon_stackfiles(doc: dict, core_stackfile: Path) -> None:
         log.info("Merged addon Stackfile: %s", fragment_path)
 
 
-def load_stackfile(path: str | Path) -> List[StackDef]:
+def load_stackfile(path: str | Path) -> list[StackDef]:
     """
     Parse a cdk/Stackfile.yaml and return a list of StackDef objects.
     Applies global defaults where per-stack values are absent, and derives each
@@ -323,7 +322,7 @@ def load_stackfile(path: str | Path) -> List[StackDef]:
     if not stacks_raw or not isinstance(stacks_raw, dict):
         raise StackfileError("Stackfile must contain a non-empty 'stacks' mapping")
 
-    stacks: List[StackDef] = []
+    stacks: list[StackDef] = []
 
     for stack_id, stack_raw in stacks_raw.items():
         if not isinstance(stack_raw, dict):
@@ -371,7 +370,7 @@ def load_stackfile(path: str | Path) -> List[StackDef]:
     return stacks
 
 
-def _assign_groups(stacks: List[StackDef], groups_raw: dict) -> None:
+def _assign_groups(stacks: list[StackDef], groups_raw: dict) -> None:
     """Derive each stack's group by reverse lookup from the `groups:` layer.
 
     Group membership is declared top-down under `groups.<id>.stacks`; a stack
@@ -389,15 +388,15 @@ def _assign_groups(stacks: List[StackDef], groups_raw: dict) -> None:
 # Validation
 # ---------------------------------------------------------------------------
 
-def validate_references(stacks: List[StackDef]) -> None:
+def validate_references(stacks: list[StackDef]) -> None:
     """
     Verify that every depends_on entry and every ${stack.(outputs|inputs).X}
     reference names a stack that actually exists in the Stackfile.
 
     Raises StackfileError with a descriptive message on failure.
     """
-    known_ids: Set[str] = {s.stack_id for s in stacks}
-    errors: List[str] = []
+    known_ids: set[str] = {s.stack_id for s in stacks}
+    errors: list[str] = []
 
     for stack in stacks:
         # Check depends_on targets
@@ -428,18 +427,18 @@ def validate_references(stacks: List[StackDef]) -> None:
 # Cycle Detection (Kahn's Algorithm -- BFS Topological Sort)
 # ---------------------------------------------------------------------------
 
-def detect_cycles(stacks: List[StackDef]) -> List[str]:
+def detect_cycles(stacks: list[StackDef]) -> list[str]:
     """
     Perform a topological sort using Kahn's algorithm (BFS).
 
     Returns the sorted list of stack IDs.
     Raises CyclicDependencyError listing the offending nodes if a cycle exists.
     """
-    id_set: Set[str] = {s.stack_id for s in stacks}
+    id_set: set[str] = {s.stack_id for s in stacks}
 
     # Build adjacency list and in-degree map
-    adjacency: Dict[str, List[str]] = {s.stack_id: [] for s in stacks}
-    in_degree: Dict[str, int] = {s.stack_id: 0 for s in stacks}
+    adjacency: dict[str, list[str]] = {s.stack_id: [] for s in stacks}
+    in_degree: dict[str, int] = {s.stack_id: 0 for s in stacks}
 
     for stack in stacks:
         for dep in stack.depends_on:
@@ -453,7 +452,7 @@ def detect_cycles(stacks: List[StackDef]) -> List[str]:
         if in_degree[sid] == 0:
             queue.append(sid)
 
-    sorted_order: List[str] = []
+    sorted_order: list[str] = []
 
     while queue:
         node = queue.popleft()
@@ -477,9 +476,9 @@ def detect_cycles(stacks: List[StackDef]) -> List[str]:
 # ---------------------------------------------------------------------------
 
 def resolve_stacks(
-    all_stacks: List[StackDef],
-    requested: List[str],
-) -> List[StackDef]:
+    all_stacks: list[StackDef],
+    requested: list[str],
+) -> list[StackDef]:
     """
     Given the full list of stacks from the Stackfile and a list of requested
     stack names (stack_name, not stack_id), resolve the minimal subset that
@@ -488,8 +487,8 @@ def resolve_stacks(
     Accepts stack_name values (e.g. 'rmng-core').  Raises StackfileError if
     a requested name does not match any stack in the Stackfile.
     """
-    name_to_id: Dict[str, str] = {s.stack_name: s.stack_id for s in all_stacks}
-    id_to_stack: Dict[str, StackDef] = {s.stack_id: s for s in all_stacks}
+    name_to_id: dict[str, str] = {s.stack_name: s.stack_id for s in all_stacks}
+    id_to_stack: dict[str, StackDef] = {s.stack_id: s for s in all_stacks}
 
     # Validate that every requested name exists
     unknown = [n for n in requested if n not in name_to_id]
@@ -499,7 +498,7 @@ def resolve_stacks(
         )
 
     # BFS backwards through depends_on to collect all required stack IDs
-    needed: Set[str] = set()
+    needed: set[str] = set()
     queue: deque[str] = deque(name_to_id[n] for n in requested)
 
     while queue:
@@ -520,7 +519,7 @@ def resolve_stacks(
 # Deployment Plan
 # ---------------------------------------------------------------------------
 
-def _longest_path_depths(prerequisites: Dict[str, List[str]]) -> Dict[str, int]:
+def _longest_path_depths(prerequisites: dict[str, list[str]]) -> dict[str, int]:
     """Longest-path depth per node (Kahn), given node -> list of prerequisite nodes.
 
     Nodes sharing a depth have no path between them, so they can run concurrently.
@@ -529,15 +528,15 @@ def _longest_path_depths(prerequisites: Dict[str, List[str]]) -> Dict[str, int]:
     have run detect_cycles first; a node left without a depth means the graph handed
     in still had a cycle, and the caller decides how to report that.
     """
-    adjacency: Dict[str, List[str]] = {node: [] for node in prerequisites}
-    in_degree: Dict[str, int] = {node: 0 for node in prerequisites}
+    adjacency: dict[str, list[str]] = {node: [] for node in prerequisites}
+    in_degree: dict[str, int] = {node: 0 for node in prerequisites}
 
     for node, prereqs in prerequisites.items():
         for prereq in prereqs:
             adjacency[prereq].append(node)
             in_degree[node] += 1
 
-    depth: Dict[str, int] = {}
+    depth: dict[str, int] = {}
     queue: deque[str] = deque()
     for node, deg in in_degree.items():
         if deg == 0:
@@ -555,7 +554,7 @@ def _longest_path_depths(prerequisites: Dict[str, List[str]]) -> Dict[str, int]:
     return depth
 
 
-def deployment_plan(stacks: List[StackDef]) -> List[DeploymentStage]:
+def deployment_plan(stacks: list[StackDef]) -> list[DeploymentStage]:
     """
     Group stacks by dependency depth into DeploymentStage objects.
     Stacks at the same depth can be deployed in parallel.
@@ -565,13 +564,13 @@ def deployment_plan(stacks: List[StackDef]) -> List[DeploymentStage]:
     validate_references(stacks)
     detect_cycles(stacks)
 
-    id_to_stack: Dict[str, StackDef] = {s.stack_id: s for s in stacks}
+    id_to_stack: dict[str, StackDef] = {s.stack_id: s for s in stacks}
 
     depth = _longest_path_depths({s.stack_id: s.depends_on for s in stacks})
 
     # Group by depth
     max_depth = max(depth.values()) if depth else 0
-    stages: List[DeploymentStage] = []
+    stages: list[DeploymentStage] = []
 
     for d in range(max_depth + 1):
         stage_stacks = [
@@ -585,7 +584,7 @@ def deployment_plan(stacks: List[StackDef]) -> List[DeploymentStage]:
     return stages
 
 
-def group_waves(stacks: List[StackDef]) -> List[List[str]]:
+def group_waves(stacks: list[StackDef]) -> list[list[str]]:
     """Bucket CDK groups into waves; every group in a wave can deploy concurrently.
 
     deployment_plan() works at stack granularity, but the Makefile's unit of work is a
@@ -600,11 +599,11 @@ def group_waves(stacks: List[StackDef]) -> List[List[str]]:
     validate_references(stacks)
     detect_cycles(stacks)
 
-    id_to_group: Dict[str, str] = {s.stack_id: s.group for s in stacks if s.group}
+    id_to_group: dict[str, str] = {s.stack_id: s.group for s in stacks if s.group}
 
     # A group with no stacks (presentation-only entries such as `support`) never reaches
     # the deploy engine, so it is not a node here -- matching _print_groups.
-    prerequisites: Dict[str, Set[str]] = {}
+    prerequisites: dict[str, set[str]] = {}
     for stack in stacks:
         if not stack.group:
             continue
@@ -640,7 +639,7 @@ def group_waves(stacks: List[StackDef]) -> List[List[str]]:
 # Serialisation (Frontend-Consumable)
 # ---------------------------------------------------------------------------
 
-def plan_to_dict(stages: List[DeploymentStage]) -> dict:
+def plan_to_dict(stages: list[DeploymentStage]) -> dict:
     """
     Convert the deployment plan into a plain dict ready for JSON serialisation.
     Designed to be returned directly from an API Gateway / Lambda response.
@@ -689,7 +688,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _print_text_plan(stages: List[DeploymentStage]) -> None:
+def _print_text_plan(stages: list[DeploymentStage]) -> None:
     """Pretty-print the deployment plan in human-readable form."""
     print(f"\nDeployment Plan ({len(stages)} stages)")
     print("=" * 50)
@@ -705,10 +704,10 @@ def _print_text_plan(stages: List[DeploymentStage]) -> None:
     print()
 
 
-def _ordered_groups(stages: List[DeploymentStage]) -> List[str]:
+def _ordered_groups(stages: list[DeploymentStage]) -> list[str]:
     """Unique CDK group names in deployment order."""
-    seen: Set[str] = set()
-    ordered: List[str] = []
+    seen: set[str] = set()
+    ordered: list[str] = []
     for stage in stages:
         for stack in stage.stacks:
             if stack.group and stack.group not in seen:
@@ -717,7 +716,7 @@ def _ordered_groups(stages: List[DeploymentStage]) -> List[str]:
     return ordered
 
 
-def _print_groups(stages: List[DeploymentStage]) -> None:
+def _print_groups(stages: list[DeploymentStage]) -> None:
     """Print unique CDK group names in deployment order (space-separated).
 
     Feeds the Makefile's serial sweeps (destroy, and the up-front input gathering).
@@ -725,7 +724,7 @@ def _print_groups(stages: List[DeploymentStage]) -> None:
     print(" ".join(_ordered_groups(stages)))
 
 
-def _print_waves(stacks: List[StackDef]) -> None:
+def _print_waves(stacks: list[StackDef]) -> None:
     """Print one wave per line, groups space-separated.
 
     Feeds the Makefile's parallel deploy sweep: every group on a line can run at once,

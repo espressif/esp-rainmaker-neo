@@ -3,20 +3,32 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from aws_cdk import (
-    aws_lambda as lambda_,
+    CfnOutput,
+    Duration,
+    Stack,
     aws_iam as iam,
     aws_iot as iot,
-    Duration,
-    CfnOutput,
-    Stack,
 )
 from constructs import Construct
-from app_common import CommonResources, create_lambda_function, create_base_lambda_role, create_iot_topic_rule, stable_logical_id, create_iot_rule_log_group
-from src.rmneo.stacks.base_res_constants import TABLE_NAMES, S3_BUCKETS, SSM_PARAMETER_PREFIXES, FUNCTION_NAMES
-from arn_utils import (
-    get_s3_bucket_arn, get_s3_object_arn, get_table_arn,
-    get_index_arn, get_s3_bucket_resolved_name, get_ssm_parameter_prefix_arn
+
+from app_common import (
+    CommonResources,
+    create_base_lambda_role,
+    create_iot_rule_log_group,
+    create_iot_topic_rule,
+    create_lambda_function,
+    stable_logical_id,
 )
+from arn_utils import (
+    get_index_arn,
+    get_s3_bucket_arn,
+    get_s3_bucket_resolved_name,
+    get_s3_object_arn,
+    get_ssm_parameter_prefix_arn,
+    get_table_arn,
+)
+from src.rmneo.stacks.base_res_constants import FUNCTION_NAMES, S3_BUCKETS, TABLE_NAMES
+
 
 class NotificationCore(Construct):
     """Core/compute resources for Notification service - Lambda functions and IoT rules"""
@@ -202,7 +214,7 @@ class NotificationCore(Construct):
             rule_name="shadow_notify_rule",
             topic_rule_payload=iot.CfnTopicRule.TopicRulePayloadProperty(
                 # Dot paths, not nested get(): get() on an undefined value logs a rules-engine "Undefined result" ERROR on every update without params.notify
-                sql=f"""
+                sql="""
                 SELECT
                     topic(3) as node_id,
                     topic(6) as topic_name,
@@ -254,7 +266,7 @@ class NotificationCore(Construct):
             self, "NodeNotifyRule",
             rule_name="node_notify_rule",
             topic_rule_payload=iot.CfnTopicRule.TopicRulePayloadProperty(
-                sql=f"""
+                sql="""
                 SELECT 
                     topic(3) as node_id,
                     topic(5) as topic_name,

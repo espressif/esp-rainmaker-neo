@@ -3,12 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from constructs import Construct
+
 from app_common import CommonResources
-from src.rmneo.handlers.nodeadmin.admin_node_reg.stack import RegisterAPI
-from src.rmneo.handlers.nodeadmin.admin_nodes_update.stack import UpdateAPI
 from src.rmneo.handlers.nodeadmin.admin_node_groups.stack import NodeGroupsAPI
+from src.rmneo.handlers.nodeadmin.admin_node_reg.stack import RegisterAPI
 from src.rmneo.handlers.nodeadmin.admin_node_tags.stack import AdminNodeTagsAPI
+from src.rmneo.handlers.nodeadmin.admin_nodes_update.stack import UpdateAPI
 from src.rmneo.handlers.nodeadmin.bulk_container.stack import RegisterContainer
+
 
 class NodeAdminCore(Construct):
     """Core/compute resources for NodeAdmin service - ECS container and Lambda API"""

@@ -27,13 +27,12 @@ import pytest
 
 from py_sdk.test_device import Device, generate_key_and_cert, split_combined_cert_pem
 from test.itest.conftest import (
-    connect_device_with_retry,
-    REGION,
     CA_CERT,
-    IOT_ENDPOINT,
     DEBUG,
+    IOT_ENDPOINT,
+    REGION,
+    connect_device_with_retry,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -92,7 +91,7 @@ def _poll_until_completed(user, request_id, status_fn, max_attempts=20, sleep_se
     Returns the terminal status dict on success; fails the test on timeout.
     """
     last_status = None
-    for attempt in range(max_attempts):
+    for _attempt in range(max_attempts):
         time.sleep(sleep_seconds)
         last_status = status_fn(request_id)
         if last_status is None:

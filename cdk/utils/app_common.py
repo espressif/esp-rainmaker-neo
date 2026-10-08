@@ -5,12 +5,47 @@
 
 import json
 import os
-from datetime import datetime, timezone
+import re
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Optional
 
-# This module lives at <repo>/cdk/utils/, so every repo-relative path below is anchored here rather than counted out at each use.
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from aws_cdk import (
+    ArnFormat,
+    Aws,
+    CustomResource,
+    Duration,
+    Fn,
+    IResolvable,
+    RemovalPolicy,
+    Stack,
+    Tags,
+    aws_apigateway as apigateway,
+    aws_apigatewayv2 as apigwv2,
+    aws_cloudfront as cloudfront,
+    aws_cognito as cognito,
+    aws_ec2 as ec2,
+    aws_ecs as ecs,
+    aws_iam as iam,
+    aws_iot as iot,
+    aws_kms as kms,
+    aws_lambda as lambda_,
+    aws_lambda_event_sources as event_sources,
+    aws_logs as logs,
+    aws_s3 as s3,
+    aws_s3_assets as s3_assets,
+    aws_sqs as sqs,
+    aws_ssm as ssm,
+)
+from constructs import Construct
+
+from arn_utils import (
+    get_api_gateway_invoke_arn,
+    get_lambda_integration_uri,
+    get_ssm_parameter_arn,
+    get_table_arn,
+    get_user_pool_arn,
+)
 
 # The submodule's cdk_go/ (ManagedTable, GSI_MANAGED_BY_TAG_*, gsi_infra) is put on sys.path by
 # cdk/apps/_bootstrap.py, which every CDK entry point imports before any repo-local module --
@@ -18,44 +53,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # pointing at <repo>/esp-cloud-common/cdk_go; the submodule is at src/esp-cloud-common, so that
 # path never existed and the line only ever added a no-op sys.path entry. _bootstrap is the one
 # place that sets this up; a second copy here would be a second place to get the path wrong.
+from gsi_infra import ManagedTable as ManagedTable
 
-from aws_cdk import (
-    ArnFormat,
-    Aws,
-    Stack,
-    Duration,
-    Token,
-    CfnCondition,
-    CustomResource,
-    IResolvable,
-    Fn,
-    Tags,
-    aws_dynamodb as dynamodb,
-    aws_lambda as lambda_,
-    aws_apigateway as apigateway,
-    aws_iam as iam,
-    aws_iot as iot,
-    aws_kms as kms,
-    aws_lambda_event_sources as event_sources,
-    aws_s3 as s3,
-    aws_sqs as sqs,
-    RemovalPolicy,
-    aws_ecs as ecs,
-    aws_ec2 as ec2,
-    aws_logs as logs,
-    aws_s3_assets as s3_assets,
-    aws_dynamodb as dynamodb,
-    aws_ssm as ssm,
-    aws_cognito as cognito,
-    aws_apigatewayv2 as apigwv2,
-    aws_cloudfront as cloudfront,
-    custom_resources as cr,
-)
-from constructs import Construct
-from dataclasses import dataclass
-import os
-import re
-from arn_utils import get_lambda_integration_uri, get_api_gateway_invoke_arn, get_user_pool_arn, get_ssm_parameter_arn, get_table_arn
+# This module lives at <repo>/cdk/utils/, so every repo-relative path below is anchored here rather than counted out at each use.
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def get_rmng_inputs() -> dict:
@@ -65,7 +66,7 @@ def get_rmng_inputs() -> dict:
     file is absent or unreadable, so a CDK app falls back to its own defaults.
     """
     try:
-        with open('rmng-inputs.json', 'r') as f:
+        with open('rmng-inputs.json') as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
@@ -112,8 +113,6 @@ def apply_common_tags(app) -> None:
     if os.environ.get("CDK_PUBLISH") != "true":
         Tags.of(app).add("AppRegion", os.environ.get("AWS_REGION", "unknown"))
 
-
-from gsi_infra import ManagedTable, GSI_MANAGED_BY_TAG_KEY, GSI_MANAGED_BY_TAG_VALUE 
 
 class CommonResources:
     def __init__(self, api_gateway_id: str = None, api_gateway_root_resource_id: str = None, admin_api_resource_id: str = None, cognito_authorizer_id: str = None, prefix: str = ""):
@@ -1031,7 +1030,7 @@ def add_http_api_routes(
     logical ID using `<path>-<method>`. Wraps `http_api.add_routes(...)`.
     """
     routes = http_api.add_routes(path=path, methods=methods, integration=integration)
-    for method, route in zip(methods, routes):
+    for method, route in zip(methods, routes, strict=True):
         route.node.default_child.override_logical_id(
             stable_logical_id("ApiGwV2Route", f"{path}-{method.value}")
         )
@@ -1066,7 +1065,7 @@ def create_ssm_string_parameter(
 # per-synth salt in every discovery resource's properties turns each deploy into an
 # Update, so the handlers re-run and stale hostnames/URLs cannot survive a redeploy.
 # The handlers ignore the property itself.
-_DISCOVERY_SALT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+_DISCOVERY_SALT = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 _API_DEPLOYMENT_CODE = """

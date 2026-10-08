@@ -3,20 +3,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from aws_cdk import (
-    aws_iam as iam,
     Stack,
+    aws_iam as iam,
 )
 from constructs import Construct
+
 from app_common import (
     CommonResources,
-    create_lambda_function,
+    add_cors_options,
     create_base_lambda_role,
     create_cfn_api_method,
+    create_lambda_function,
     get_or_create_api_resource,
-    add_cors_options,
 )
-from arn_utils import get_table_arn, get_table_index_arn, get_ssm_parameter_arn
-from src.espuser.stacks.base_res_constants import USER_TABLE_NAMES, USER_INDEX_NAMES, USER_SSM_PARAMETERS
+from arn_utils import get_ssm_parameter_arn, get_table_arn, get_table_index_arn
+from src.espuser.stacks.base_res_constants import (
+    USER_INDEX_NAMES,
+    USER_SSM_PARAMETERS,
+    USER_TABLE_NAMES,
+)
 
 
 class UserAuthAPI(Construct):
@@ -31,7 +36,6 @@ class UserAuthAPI(Construct):
         super().__init__(scope, id, **kwargs)
 
         region = Stack.of(self).region
-        account = Stack.of(self).account
         function_name = "user_auth"
         role = create_base_lambda_role(self, function_name, common_resources)
 

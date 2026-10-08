@@ -82,7 +82,7 @@ def load(source=None):
         response = requests.get(source, timeout=30)
         response.raise_for_status()
         return response.json()
-    with open(source, 'r') as f:
+    with open(source) as f:
         return json.load(f)
 
 
@@ -225,7 +225,7 @@ class RmngSettings:
                 'default_thing_policy': rmng_base['DefaultThingPolicyName'],
             }
         except KeyError as e:
-            raise OutputsError(f"{source} is missing required rmng-base output {e}")
+            raise OutputsError(f"{source} is missing required rmng-base output {e}") from e
 
         return cls(
             source=source,
@@ -269,9 +269,9 @@ def verify_aws_identity(settings):
             "configure credentials (AWS_PROFILE, aws sso login, ~/.aws/credentials, or environment "
             f"variables) for account {settings.account_id} in {settings.region}. Commands that only "
             "use the deployment's own API, such as `user` and `device`, need none."
-        )
+        ) from None
     except (ClientError, BotoCoreError) as e:
-        raise OutputsError(f"could not verify AWS identity via STS: {e}")
+        raise OutputsError(f"could not verify AWS identity via STS: {e}") from e
 
     if caller['Account'] != settings.account_id:
         raise OutputsError(

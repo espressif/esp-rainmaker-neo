@@ -10,8 +10,8 @@ Tests the following endpoints:
 """
 
 import time
+
 from py_sdk.test_user import user_log
-from py_sdk.test_group import Group
 
 
 def test_admin_get_tags_empty(admin_user, associated_device):

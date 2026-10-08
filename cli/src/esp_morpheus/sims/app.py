@@ -2,22 +2,22 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import json
-import threading
-import os
-from .. import paths
-from ..outputs import TEST_CONFIG_PATH, RmngSettings
-from ..sdk.user import User
-from ..sdk.group import Group
-from ..sdk.util import shadow_to_unstructured
-from . import prov_ble
-from prompt_toolkit import PromptSession
-from queue import Queue, Empty
-import pathlib
-import os
-import time
 import asyncio
 import datetime
+import json
+import os
+import pathlib
+import time
+from queue import Empty, Queue
+
+from prompt_toolkit import PromptSession
+
+from .. import paths
+from ..outputs import TEST_CONFIG_PATH, RmngSettings
+from ..sdk.group import Group
+from ..sdk.user import User
+from ..sdk.util import shadow_to_unstructured
+from . import prov_ble
 
 # Never CWD-anchored: a cache that looks empty from a new directory would re-fetch every node
 # config the app already had.
@@ -50,7 +50,7 @@ class AppSim:
         self.config = {}
         self.user = user
         if self.user is None:
-            with open(config_path, 'r') as f:
+            with open(config_path) as f:
                 self.config = json.load(f)
             self.user = self._get_user_config(user_id)
             if not self.user:
@@ -149,9 +149,6 @@ class AppSim:
 
             thing_name = topic_parts[2]  # Device name is the third part (index 2)
 
-            # Determine if this is a response to a GET or an UPDATE
-            is_get_response = topic.endswith('/get/accepted')
-
             # Extract shadow state from the payload
             shadow_state = payload["state"]
 
@@ -196,7 +193,7 @@ class AppSim:
         config_cache = {}
         try:
             if os.path.exists(cache_file):
-                with open(cache_file, 'r') as f:
+                with open(cache_file) as f:
                     config_cache = json.load(f)
                     print(f"Loaded cached configurations for {len(config_cache)} devices")
         except Exception as e:
@@ -1215,7 +1212,7 @@ class AppSim:
             self.http_api_count += 1
             self._print_stats()
 
-            if not schedule is None:
+            if schedule is not None:
                 print(f"Schedule details for device {device}:")
                 print(json.dumps(schedule, indent=2))
             else:
@@ -1297,9 +1294,9 @@ class AppSim:
             return None
 
         print("\n==== Discovered devices ====")
-        print('{0: >4} {1: <33} {2}'.format('S.N.', 'Name', 'Address'))
+        print('{: >4} {: <33} {}'.format('S.N.', 'Name', 'Address'))
         for i, (name, addr) in enumerate(devices):
-            print('[{0: >2}] {1: <33} {2}'.format(i + 1, name, addr))
+            print(f'[{i + 1: >2}] {name: <33} {addr}')
 
         while True:
             try:

@@ -3,9 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from constructs import Construct
+
 from app_common import CommonResources
 from src.rmneo.handlers.timeseries.timeseries_stack import TimeseriesBase
-from src.rmneo.handlers.timeseries.ts_stream_processor.stack import TimeseriesStreamProcessorBase
+from src.rmneo.handlers.timeseries.ts_stream_processor.stack import (
+    TimeseriesStreamProcessorBase,
+)
+
 
 class ServiceBase(Construct):
     """Base/infrastructure resources for Service - includes timeseries infrastructure"""

@@ -19,7 +19,7 @@ from esp_morpheus import paths as _paths
 
 _paths.set_repo_root(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from esp_morpheus.outputs import *  # noqa: E402,F401,F403
 import esp_morpheus.outputs as _target  # noqa: E402
+from esp_morpheus.outputs import *  # noqa: E402,F401,F403
 
 sys.modules[__name__] = _target

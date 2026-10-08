@@ -3,24 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import uuid
 import time
+import uuid
+
 import pytest
+
+from py_sdk.test_group import Group
 from test.itest.conftest import (
     accept_sharing_request_for,
     assert_subgroup_in_group,
-    validate_user_group_dynamodb_entry,
     run_shared_group_stages,
     run_shared_subgroup_stages,
-    CA_CERT,
-    IOT_ENDPOINT,
-    REGION,
-    DEBUG,
-    IDENTITY_POOL_ID,
-    API_GATEWAY_URL,
+    validate_user_group_dynamodb_entry,
 )
-from py_sdk.test_device import Device, generate_key_and_cert
-from py_sdk.test_group import Group
+
 
 def assert_sharing_request_has_primary_user_info(user, group_id, subgroup_id=""):
     """Assert that a sharing request for the given group contains primary user info."""
@@ -33,7 +29,7 @@ def assert_sharing_request_has_primary_user_info(user, group_id, subgroup_id="")
             assert req.get('primary_email') or req.get('primary_phone_number'), \
                 f"primary_email or primary_phone_number missing in sharing request {req['sharing_request_id']}"
             return
-    assert False, f"Sharing request for group {group_id} subgroup '{subgroup_id}' not found"
+    raise AssertionError(f"Sharing request for group {group_id} subgroup '{subgroup_id}' not found")
 
 def test_group_sharing_group_access(shared_group, subtests):
     def body(stage, data):
@@ -84,7 +80,7 @@ def test_share_group_with_secondary_access(test_user1, test_user2, test_user3):
     accept_sharing_request_for(test_user2, group_id, "")
 
     # Attempt to share the group from test_user2 to test_user3 (should fail)
-    with pytest.raises(Exception):  # Adjust the exception type as needed
+    with pytest.raises(AssertionError, match="Expected 201, but got"):
         user2_group_api.share_group(group_id, test_user3.username, "secondary")
 
     # Share the group with test_user2 with primary access
@@ -138,7 +134,7 @@ def _test_shadow_access_after_sharing(sharing_details):
         device.update_named_shadow(shadow_name, online_status)
 
         # Create a dummy group for user2 - assume role requires all users to have a group
-        user2_group_id = user2_group_api.create_group("Test Group")
+        user2_group_api.create_group("Test Group")
 
         # First verify that user2 cannot access the shadow
         # mqtt connect is going to assume_role everytime
@@ -218,7 +214,6 @@ def _test_get_node_config(sharing_details):
     """
     device = sharing_details["device"]
     group_id = sharing_details["group_id"]
-    user1_group_api = sharing_details["user1_group_api"]
     test_user1 = sharing_details["test_user1"]
     test_user2 = sharing_details["test_user2"]
     if sharing_details.get('subgroup_id'):
@@ -359,8 +354,8 @@ def test_multi_subgroup_remove_in_grp_dynamodb_validation(test_user2, associated
             # Verify the entry is still present with a single subgroup
             validate_user_group_dynamodb_entry(test_user2.sub, group_id, expected_dynamodb_item)
         else:
-            with pytest.raises(Exception):
-                # The entry should be deleted and hence an exception should be thrown
+            # A deleted entry has no 'Item', so the lookup raises KeyError.
+            with pytest.raises(KeyError):
                 validate_user_group_dynamodb_entry(test_user2.sub, group_id, expected_dynamodb_item)
 
     # Cleanup
@@ -434,11 +429,11 @@ def test_multi_group_subgroup_shadow_access(test_user1, test_user2, bare_device)
             shadow_name += f"-{subgroup_id}"
 
         if not should_succeed:
-            with pytest.raises(Exception):
+            with pytest.raises(Exception):  # noqa: B017 - the disconnect asserted below is the outcome; the CRT error type is not pinned
                 test_user2.subscribe_to_named_shadows(node.node_thing_name, [shadow_name])
 
             connection_status = test_user2.read_connection_queue()
-            assert connection_status == "interrupted", f"User2 should get disconnected when trying to subscribe to unauthorized shadow"
+            assert connection_status == "interrupted", "User2 should get disconnected when trying to subscribe to unauthorized shadow"
         else:
             test_user2.subscribe_to_named_shadows(node.node_thing_name, [shadow_name])
             test_user2.read_shadow(node.node_thing_name, shadow_name)
