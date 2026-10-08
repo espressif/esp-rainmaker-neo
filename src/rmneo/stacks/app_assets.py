@@ -11,6 +11,7 @@ second CDK app the operator has to deploy separately.
 Bucket layout served by the distribution:
     web/<env>/<region>/<version>/   one immutable folder per web build; SPA routes
                                     within it resolve to its index.html
+    web/<env>/<region>/latest/      deploy-maintained pointer to the newest build; /, /global and /cn redirect here
     ota/                            Expo OTA tree (fingerprint model); this
                                     distribution serves it but does not rewrite it
 """
@@ -51,6 +52,10 @@ PERMISSIONS_POLICY_HEADER = (
 # Root prefix of the web SPA within the bucket; `ota/` is the other tree and is
 # left untouched by this function.
 WEB_PREFIX = "web"
+
+# Region folders the web deploy script writes under web/prod/; each is also a short path at the root.
+WEB_REGIONS = ("global", "cn")
+WEB_DEFAULT_REGION = "global"
 
 OTA_PREFIX = "ota"
 
@@ -129,6 +134,17 @@ function handler(event) {{
   // path ever reaches the default behavior it must pass through untouched.
   if (uri.startsWith("/{OTA_PREFIX}/")) {{
     return request;
+  }}
+
+  // A redirect, not a rewrite: each build's Expo Router baseUrl is its own version folder, so it cannot render at "/". "/index.html" too: the default root object can rewrite "/" before this runs.
+  var regionMatch = uri.match(/^\\/({"|".join(WEB_REGIONS)})\\/?$/);
+  if (regionMatch || uri === "/" || uri === "/index.html") {{
+    var region = regionMatch ? regionMatch[1] : "{WEB_DEFAULT_REGION}";
+    return {{
+      statusCode: 302,
+      statusDescription: "Found",
+      headers: {{ location: {{ value: "/{WEB_PREFIX}/prod/" + region + "/latest/" }} }},
+    }};
   }}
 
   var buildMatch = uri.match(/^\\/{WEB_PREFIX}\\/([^/]+)\\/([^/]+)\\/([^/]+)(\\/.*)?$/);
