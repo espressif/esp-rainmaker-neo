@@ -614,6 +614,20 @@ var _ = Describe("Assume Role Main", func() {
 			Expect(response.Body).To(ContainSubstring("too many accessible groups"))
 		})
 	})
+
+	Describe("User with no groups", func() {
+		// Used to reach STS with an empty Resource list and fail as a 500 (GitHub #7).
+		It("should return 409 without calling STS once the user has left their only group", func() {
+			Expect(group.DeleteGroup(rmng_context, testGroup.GroupID)).To(Succeed())
+			before := stsMock.GetLastAssumeRoleInput()
+
+			response := callRaw(ctx, testUser.GetID(), Request{})
+
+			Expect(response.StatusCode).To(Equal(http.StatusConflict))
+			Expect(response.Body).To(ContainSubstring("User has no groups"))
+			Expect(stsMock.GetLastAssumeRoleInput()).To(BeIdenticalTo(before))
+		})
+	})
 })
 
 // End users federate through the OIDC provider ("<issuer>:<sub>"); Cognito admins keep the "CognitoSignIn:<sub>" marker.
