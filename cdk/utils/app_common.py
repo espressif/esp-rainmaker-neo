@@ -27,6 +27,7 @@ from aws_cdk import (
     Token,
     CfnCondition,
     CustomResource,
+    IResolvable,
     Fn,
     Tags,
     aws_dynamodb as dynamodb,
@@ -1552,6 +1553,102 @@ def discover_cognito_custom_domain(
         stable_logical_id("CustomResource", name))
     return (resource.get_att_string("DomainName"),
             resource.get_att_string("OAuthHost"))
+
+
+_COGNITO_EMAIL_DISCOVERY_CODE = """
+import json
+import boto3
+import cfnresponse
+from botocore.exceptions import ClientError
+
+FIELDS = ['EmailSendingAccount', 'SourceArn', 'From', 'ReplyToEmailAddress', 'ConfigurationSet']
+
+def find_pool_id(stack_id, logical_id):
+    try:
+        return boto3.client('cloudformation').describe_stack_resource(
+            StackName=stack_id, LogicalResourceId=logical_id)['StackResourceDetail']['PhysicalResourceId']
+    except ClientError as e:
+        if 'does not exist' in e.response['Error'].get('Message', ''):
+            return None
+        raise
+
+def handler(event, context):
+    # Log the raw event first - carries ResponseURL, which unstick_custom_resource.py needs if this hangs.
+    print("CR_EVENT " + json.dumps(event))
+    physical_id = event.get('PhysicalResourceId')
+    try:
+        if event['RequestType'] in ['Create', 'Update']:
+            pool_id = find_pool_id(event['StackId'], event['ResourceProperties']['UserPoolLogicalId'])
+            config = {}
+            if pool_id:
+                config = boto3.client('cognito-idp').describe_user_pool(UserPoolId=pool_id)['UserPool'].get('EmailConfiguration', {})
+            # One object holding only the fields that are set: Cognito rejects "" for SourceArn, ReplyToEmailAddress and ConfigurationSet.
+            email_configuration = {f: config[f] for f in FIELDS if config.get(f)}
+            email_configuration.setdefault('EmailSendingAccount', 'COGNITO_DEFAULT')
+            print('Discovered email configuration=' + json.dumps(email_configuration))
+            cfnresponse.send(event, context, cfnresponse.SUCCESS, {'EmailConfiguration': email_configuration}, physical_id)
+        else:
+            cfnresponse.send(event, context, cfnresponse.SUCCESS, {}, physical_id)
+    except Exception as e:
+        print('Error: ' + str(e))
+        cfnresponse.send(event, context, cfnresponse.FAILED, {}, physical_id)
+"""
+
+
+def discover_cognito_email_configuration(
+    scope: Construct,
+    id: str,
+    *,
+    name: str,
+    user_pool_logical_id: str,
+) -> IResolvable:
+    """Return the email configuration the pool has in AWS right now, resolved at deploy time, as one object to assign to CfnUserPool.email_configuration.
+
+    UpdateUserPool resets every omitted setting, so a sender switched to SES outside CDK would revert to COGNITO_DEFAULT on the next pool update. The pool is found through the stack's own resource record, not Ref (the pool itself consumes the result) nor its name (names are not unique); no pool yet (first deploy) yields COGNITO_DEFAULT.
+    """
+    purpose = "cognito_email_discovery"
+    stack = Stack.of(scope)
+    fn = stack.node.try_find_child(purpose)
+    if fn is None:
+        aws_function_name = f"{stack.stack_name}-{purpose.replace('_', '-')}"
+        role = create_base_lambda_role(stack, purpose)
+        role.add_to_policy(iam.PolicyStatement(
+            actions=["logs:CreateLogStream", "logs:PutLogEvents"],
+            resources=[lambda_log_group_arn(stack, aws_function_name)],
+        ))
+        role.add_to_policy(iam.PolicyStatement(
+            actions=["cognito-idp:DescribeUserPool"],
+            resources=["*"],
+        ))
+        role.add_to_policy(iam.PolicyStatement(
+            actions=["cloudformation:DescribeStackResource"],
+            resources=[stack.stack_id],
+        ))
+        fn = lambda_.Function(
+            stack, purpose,
+            function_name=aws_function_name,
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            handler="index.handler",
+            role=role,
+            code=lambda_.Code.from_inline(_COGNITO_EMAIL_DISCOVERY_CODE),
+            timeout=Duration.seconds(120),
+            log_group=create_lambda_log_group(
+                stack, f"{purpose}_log_group",
+                purpose=purpose,
+                aws_function_name=aws_function_name,
+            ),
+        )
+        fn.node.default_child.override_logical_id(stable_logical_id("LambdaFunc", purpose))
+
+    resource = CustomResource(
+        scope, id,
+        service_token=fn.function_arn,
+        properties={"UserPoolLogicalId": user_pool_logical_id, "RediscoverOn": _DISCOVERY_SALT},
+    )
+    resource.node.default_child.override_logical_id(
+        stable_logical_id("CustomResource", name))
+    # A whole-object attribute, not one GetAtt per field, so unset fields are absent rather than "".
+    return resource.get_att("EmailConfiguration")
 
 
 _CLOUDFRONT_DOMAIN_DISCOVERY_CODE = """
