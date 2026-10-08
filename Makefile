@@ -288,6 +288,15 @@ destroy: destroy-all    ## Destroy every stack group, reverse dependency order
 synth: synth-all        ## cdk synth every stack group
 publish: publish-all    ## Synth and publish templates/assets for every stack group
 
+# Rebuild rmng-outputs.json without deploying. deploy-% runs the same command after each
+# wave; this target runs it alone, for a checkout that didn't do the deploy itself (e.g. a CI
+# job that only runs the itests against an existing stack).
+# AWS_PROFILE is deliberately not forced: a runner often has no profile, only boto3's
+# default credential chain, and an exported AWS_PROFILE still reaches the script.
+GENERATE_OUTPUTS = $(if $(REGION),AWS_REGION=$(REGION)) python3 ./scripts/generate_stack_outputs.py
+outputs:  ## Rebuild rmng-outputs.json from the stacks already deployed, deploying nothing
+	$(GENERATE_OUTPUTS)
+
 # Prerequisites are second-expanded so needs_dashboard can see the pattern stem. Placed after the
 # generated lambda rules above, which must keep single-expansion semantics.
 .SECONDEXPANSION:
@@ -296,7 +305,7 @@ deploy-%: SWEEP_WAVES = $(call waves_for,$*,$(DEPLOY_SKIP_GROUPS))
 # Once per wave, not once per group: alexa/smartthings read rmng-outputs.json at *synth*
 # time, so the file has to be refreshed after the rmng wave and before the wave that needs
 # it. Per-group it re-queried all 17 stacks 8 times for the same answer.
-deploy-%: SWEEP_POST = AWS_REGION=$(REGION) AWS_PROFILE=$(PROFILE) python3 ./scripts/generate_stack_outputs.py
+deploy-%: SWEEP_POST = $(GENERATE_OUTPUTS)
 # The gather loop deliberately uses no skip list: prompts for every group are collected up front, claim included, so a long sweep never pauses to ask.
 deploy-%: go_build $$(call needs_dashboard,$$*)
 	@set -e; for g in $(call groups_for,$*); do \
@@ -433,7 +442,7 @@ githooks:  ## Point git at .githooks so the pre-commit secret scan runs
 # Pattern targets are deliberately absent: `%` is a literal filename in .PHONY, so listing
 # `deploy-%` there did nothing. They are phony in practice because no such file is produced.
 .PHONY: all help go_build optional-build admin-dashboard-build \
-	deploy setup diff destroy synth publish \
+	deploy setup diff destroy synth publish outputs \
 	lint py-lint vulncheck test itest itest-setup test-infra-destroy plantuml clean githooks \
 	update-mcp-schema \
 	$(TEST_SUBMODULES:%=%-test)
