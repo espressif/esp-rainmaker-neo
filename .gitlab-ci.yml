@@ -25,7 +25,7 @@ default:
   # Built from deployment/docker/Dockerfile with GO_VERSION pinned to go.mod's toolchain,
   # and carrying the toolchains every job here needs. :latest on a stock image silently
   # follows new Go releases, so a jump to the next minor would land in CI unannounced.
-  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.9_node24
   tags:
     - rmng
   # A newer push to the same ref cancels superseded unfinished jobs, freeing the
@@ -48,7 +48,7 @@ stages:
 # so nothing is resolved from npm at job time and neither validator floats with upstream.
 validate_api_docs:
   stage: lint
-  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.9_node24
   variables:
     GIT_SUBMODULE_STRATEGY: none
   rules:
@@ -83,7 +83,7 @@ go_lint:
 secrets:
   stage: lint
   # gitleaks is baked into this image -- see GITLEAKS_VERSION in deployment/docker/Dockerfile.
-  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.9_node24
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
   script:
@@ -91,7 +91,7 @@ secrets:
 
 npm_audit:
   stage: lint
-  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.9_node24
   # node 24 for npm 11: npm 10 (node 22) audits through
   # /-/npm/v1/security/audits/quick, which the registry is retiring and now answers
   # with a 400 whose body reads "Invalid package tree, run npm install" — nothing to
@@ -114,7 +114,7 @@ npm_audit:
 py_lint:
   stage: lint
   # ruff is baked into this image, so the linter is not resolved from PyPI per run.
-  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.9_node24
   variables:
     GIT_SUBMODULE_STRATEGY: none
   rules:
@@ -128,7 +128,7 @@ py_lint:
 pip_audit:
   stage: lint
   # pip-audit is baked into this image, so the scanner is not resolved from PyPI per run.
-  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.9_node24
   variables:
     GIT_SUBMODULE_STRATEGY: none
   rules:
@@ -143,7 +143,7 @@ pip_audit:
 # -------------------------
 license_headers:
   stage: lint
-  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.9_node24
   variables:
     GIT_SUBMODULE_STRATEGY: none
     GIT_DEPTH: 0
@@ -164,7 +164,7 @@ license_headers:
 cdk_synth:
   stage: lint
   # Registry path from the predefined project variable; only the tag is pinned here.
-  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.9_node24
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
@@ -214,7 +214,7 @@ cdk_synth:
 # -------------------------
 dashboard_check:
   stage: lint
-  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.9_node24
   # npm-only build (see DASHBOARD_STAMP in the Makefile) — no submodule needed.
   variables:
     GIT_SUBMODULE_STRATEGY: none
@@ -237,8 +237,8 @@ go_vulncheck:
   stage: security
   # Depends on nothing the lint stage produces
   needs: []
-  # Same Go 1.26.6 as the stock image, with govulncheck and the module cache already in it.
-  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
+  # Same Go 1.26.9 as the stock image, with govulncheck and the module cache already in it.
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.9_node24
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
@@ -259,7 +259,7 @@ unittest:
   # versions must be bumped together in deployment/docker/Dockerfile — which is why that file
   # is in the changes: list below. Only build_docker (schedule/web pipelines) rebuilds this
   # image, so without that trigger a bump would silently keep running the stale CLI.
-  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.9_node24
   # The longest job in the pipeline (~10 min)
   needs: []
   rules:
@@ -289,7 +289,7 @@ unittest:
 # -------------------------
 cli_test:
   stage: unittest
-  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.9_node24
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
@@ -308,7 +308,7 @@ cli_test:
 # -------------------------
 publish_cli:
   stage: deploy
-  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.9_node24
   # A cancelled twine upload half-publishes the release, and the retry fails with
   # "File name has already been taken" — the version has to be bumped to recover.
   interruptible: false
@@ -336,7 +336,7 @@ publish_cli:
   # stacks and a leaked resource-pool lease.
   interruptible: false
   # Registry path from the predefined project variable; only the tag is pinned here.
-  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.9_node24
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       when: manual
@@ -414,7 +414,7 @@ deploy_eu-west-1:
     - if: $CI_PIPELINE_SOURCE == "api"
   variables:
     NODE_VERSION: "24"
-    GO_VERSION: "1.26.6"
+    GO_VERSION: "1.26.9"
     DOCKER_IMAGE_REGISTRY: "$CI_REGISTRY"
     DOCKER_IMAGE_VERSION: "go${GO_VERSION}_node${NODE_VERSION}"
     DOCKER_IMAGE_NAME: "${CI_REGISTRY_IMAGE}/rmng:${DOCKER_IMAGE_VERSION}"
@@ -457,7 +457,7 @@ sync_swagger:
   # the job waits out the whole pipeline and gets skipped when an unrelated docker
   # or deploy job fails, so a swagger change silently never reaches S3.
   needs: []
-  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.9_node24
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       when: never
@@ -502,7 +502,7 @@ sync_mcp:
   interruptible: false
   # Same reasoning as sync_swagger -- no dependency on the build or deploy stages.
   needs: []
-  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.9_node24
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       when: never
@@ -543,7 +543,7 @@ sync_asyncapi:
   interruptible: false
   # Same reasoning as sync_swagger — no dependency on the build or deploy stages.
   needs: []
-  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.9_node24
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       when: never
@@ -631,7 +631,7 @@ sync_asyncapi:
 build_docs:
   extends: .docs_template
   # docs/requirements.txt is installed in the image; the job's own pip install is the delta.
-  image: $CI_REGISTRY_IMAGE/rmng:go1.26.6_node24
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.9_node24
   interruptible: true
   needs: []
   rules:

@@ -1,6 +1,6 @@
 module mcp-server
 
-go 1.26.6
+go 1.26.9
 
 require (
 	github.com/aws/aws-lambda-go v1.54.0
