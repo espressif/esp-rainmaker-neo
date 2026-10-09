@@ -412,6 +412,7 @@ deploy_eu-west-1:
     - if: $CI_PIPELINE_SOURCE == "schedule"
     - if: $CI_PIPELINE_SOURCE == "web"
     - if: $CI_PIPELINE_SOURCE == "api"
+  needs: []
   variables:
     NODE_VERSION: "24"
     GO_VERSION: "1.26.9"
