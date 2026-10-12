@@ -114,7 +114,7 @@ Each channel registered in the registry is one of two kinds:
 | `automation`   | generic       | Internal automation triggers.                                                            |
 | `gva`          | user-specific | Google HomeGraph Report State. See [gva.md](gva.md).                                     |
 | `push`         | user-specific | Mobile push via SNS. See [notifications-push.md](notifications-push.md).                 |
-| `node_reset`   | generic       | Server-side action, not a delivery channel: a node reporting a self factory-reset is disassociated and its data cleaned up. Valid only as a direct notification. |
+| `node_reset`   | generic       | Server-side action, not a delivery channel: a node reporting a self factory-reset is disassociated, its data cleaned up and the node-left-group hook fired. Valid only as a direct notification. |
 | `webhook_mock` | generic       | Registered **only** when `webhook_mock_base_url` is set, which the integration-test fixture does to route Alexa/GVA traffic at an in-cloud mock. Absent in production. |
 
 Each service supplies its own marshal step that converts the channel-agnostic event into a channel-specific payload (a push message, a ChangeReport, a HomeGraph request, …). See the per-channel specs for those shapes.

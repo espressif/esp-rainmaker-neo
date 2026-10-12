@@ -11,8 +11,8 @@ import (
 )
 
 // main starts the Lambda in direct-invocation mode. The cascade-delete
-// Lambda is async-invoked by node.shadow_node when a bridge is removed
-// from its group (DELETE API) or moved to a new group (assoc+disassoc).
+// Lambda is async-invoked when a bridge is removed from its group (DELETE
+// API or node_reset) or moved to a new group (assoc+disassoc).
 // See docs/en/specs/bridge.md §5.8.
 // Build: go build -o handler ./src/bridge/cascade_delete/
 func main() {

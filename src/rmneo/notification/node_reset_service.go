@@ -10,6 +10,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node/nodelifecycle"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
@@ -82,6 +83,8 @@ func (s *NodeResetService) Send(ctx context.Context, notificationData interface{
 	if err := node.ShadowNodeRemoveFromGroupAuthorized(rmngCtx, nodeID, groupID); err != nil {
 		return rmerror.NewRMError(err, "Failed to remove reset node from group")
 	}
+	// A reset is a removal, so downstream cleanup that the user-flow remove triggers (e.g. the bridge child cascade) must run here too.
+	nodelifecycle.OnNodeLeftGroup(rmngCtx, nodeID, groupID)
 
 	rlog.Info(rmngCtx).Msgf("Successfully processed node_reset for node %s in group %s", nodeID, groupID)
 	return nil

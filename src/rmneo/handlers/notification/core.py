@@ -27,7 +27,12 @@ from arn_utils import (
     get_ssm_parameter_prefix_arn,
     get_table_arn,
 )
-from src.rmneo.stacks.base_res_constants import FUNCTION_NAMES, S3_BUCKETS, TABLE_NAMES
+from src.rmneo.stacks.base_res_constants import (
+    FUNCTION_NAMES,
+    NODE_LIFECYCLE_HOOKS,
+    S3_BUCKETS,
+    TABLE_NAMES,
+)
 
 
 class NotificationCore(Construct):
@@ -152,6 +157,8 @@ class NotificationCore(Construct):
         # (node.EmitGroupMembershipChangeAsync) so Alexa/GVA drop the node. The
         # self-invoke permission is granted after the function is created below.
         environment["NOTIFICATIONS_FUNCTION_NAME"] = FUNCTION_NAMES["NOTIFICATIONS"]
+        # node_reset fires the node-left-group hook, as the user-flow remove does.
+        environment["NODE_LEFT_GROUP_HOOK_FUNCTION_NAME"] = NODE_LIFECYCLE_HOOKS["NODE_LEFT_GROUP"]
 
         self.notifications_function = create_lambda_function(
             self,
@@ -176,6 +183,15 @@ class NotificationCore(Construct):
             resources=[
                 f"arn:aws:lambda:{region}:{Stack.of(self).account}:function:"
                 f"{FUNCTION_NAMES['NOTIFICATIONS']}"
+            ],
+        ))
+
+        # The hook Lambda is deployed by a downstream module; if absent, the invoke no-ops.
+        notifications_lambda_role.add_to_policy(iam.PolicyStatement(
+            actions=["lambda:InvokeFunction"],
+            resources=[
+                f"arn:aws:lambda:{region}:{Stack.of(self).account}:function:"
+                f"{NODE_LIFECYCLE_HOOKS['NODE_LEFT_GROUP']}"
             ],
         ))
 
