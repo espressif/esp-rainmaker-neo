@@ -119,13 +119,12 @@ jobs:
             build/tests/
           if-no-files-found: ignore
 
-  # Static analysis via the rmng-lint tooling. Non-blocking, same as GitLab's go_lint.
+  # Static analysis via the rmng-lint tooling. Blocking, same as GitLab's go_lint.
   go_lint:
     name: Go lint
     needs: changes
     if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
         with:
