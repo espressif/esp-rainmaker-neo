@@ -1550,7 +1550,9 @@ func RegisterNodeInRmng(rmngCtx *rmngctx.RmngContext, cert string, caCert string
 	// Read scoped to this one node: the callers hold nodeadmin:*, which does not
 	// cover node:get, and granting it deployment-wide would be far wider than the
 	// check needs.
-	rmngCtx.SetAllow(utils.NodeGet, nodeId)
+	if err := rmngCtx.SetAllow(utils.NodeGet, nodeId); err != nil {
+		return "", rmerror.NewRMError(err, "failed to grant permissions")
+	}
 
 	detailsDB := node_details_db.NewNodeDetailsDB(rmngCtx)
 	if existing, err := detailsDB.GetNodeDetails(nodeId); err != nil {

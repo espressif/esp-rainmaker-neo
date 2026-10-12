@@ -125,8 +125,7 @@ var _ = Describe("ConfigService", func() {
 			Expect(nodeCfg.Info.FWVersion).To(Equal("1.0.0"))
 
 			// Verify ToMap conversion
-			convertedMap := nodeCfg.ToMap()
-			Expect(convertedMap).To(Equal(testConfig))
+			Expect(nodeCfg.ToMap()).To(Equal(testConfig))
 		})
 
 		It("should handle Matter data model config with nested endpoints, clusters, and attributes", func() {
@@ -286,8 +285,7 @@ var _ = Describe("ConfigService", func() {
 			Expect(cluster1dVal.ConfigOnly).To(HaveKeyWithValue("0x0", float64(7)))
 
 			// Verify ToMap conversion
-			convertedMap := nodeCfg.ToMap()
-			Expect(convertedMap).To(Equal(matterConfig))
+			Expect(nodeCfg.ToMap()).To(Equal(matterConfig))
 		})
 
 		It("should return error when user is not authorized", func() {

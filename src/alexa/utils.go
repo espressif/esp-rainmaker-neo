@@ -70,7 +70,9 @@ func StoreAlexaManufacturerName(ctx context.Context, manufacturerName string) er
 	if manufacturerName == "" {
 		// Reads are cached, so clear before deleting: a cached value would otherwise outlive the
 		// parameter it came from and keep being served.
-		ssmutil.ClearCachedParameter(AlexaSSMManufacturerNameParam)
+		if err := ssmutil.ClearCachedParameter(AlexaSSMManufacturerNameParam); err != nil {
+			return rmerror.NewRMError(err, "Failed to clear cached manufacturer name")
+		}
 		if err := ssmutil.DeleteParameter(ctx, AlexaSSMManufacturerNameParam); err != nil {
 			// Nothing to clear is the expected state for a deployment that never set a brand.
 			if !isParameterNotFound(err) {
@@ -88,7 +90,9 @@ func StoreAlexaManufacturerName(ctx context.Context, manufacturerName string) er
 
 	// Reads are cached, so drop the old value: otherwise a GET served by the same warm container
 	// would keep reporting the brand this call just replaced.
-	ssmutil.ClearCachedParameter(AlexaSSMManufacturerNameParam)
+	if err := ssmutil.ClearCachedParameter(AlexaSSMManufacturerNameParam); err != nil {
+		return rmerror.NewRMError(err, "Failed to clear cached manufacturer name")
+	}
 
 	return nil
 }

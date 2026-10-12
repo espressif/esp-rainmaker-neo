@@ -63,14 +63,16 @@ func handleCascadeDelete(ctx context.Context, event nodelifecycle.NodeLeftGroupE
 	// (An empty oldGroup is tolerated by the bulk helper below; only the
 	// bridge-specific teardown runs in that case.)
 	if oldGroup != "" {
-		rmngCtx.SetAllowMultiple(
+		if err := rmngCtx.SetAllowMultiple(
 			[]string{
 				utils.GroupGet.String(),
 				utils.GroupListSubEntities.String(),
 				utils.GroupEditNodes.String(),
 			},
 			oldGroup,
-		)
+		); err != nil {
+			return rmerror.NewRMError(err, "failed to grant permissions")
+		}
 	}
 
 	childNames := make([]string, len(children))

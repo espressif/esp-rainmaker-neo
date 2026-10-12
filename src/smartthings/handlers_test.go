@@ -111,7 +111,9 @@ func stToken(userID string) string {
 // seedNodeConfig stores a NodeCfg as the node's "config" service data.
 func seedNodeConfig(nodeID string, cfg config.NodeCfg) {
 	rmngNodeCtx := rmngctx.NewRmngContext(node.NewNode(nodeID))
-	err := node_details_db.NewNodeDetailsDB(rmngNodeCtx).UpdateServiceData("config", cfg.ToMap())
+	cfgMap, err := cfg.ToMap()
+	Expect(err).To(BeNil())
+	err = node_details_db.NewNodeDetailsDB(rmngNodeCtx).UpdateServiceData("config", cfgMap)
 	Expect(err).To(BeNil())
 }
 

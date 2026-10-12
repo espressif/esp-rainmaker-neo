@@ -116,10 +116,12 @@ func ToNodeCfg(source any) (NodeCfg, error) {
 }
 
 // ToMap converts NodeCfg struct to map[string]interface{} for database storage
-func (nc NodeCfg) ToMap() map[string]interface{} {
+func (nc NodeCfg) ToMap() (map[string]interface{}, error) {
 	var result map[string]interface{}
-	utils.ConvertAnyToAny(nc, &result)
-	return result
+	if err := utils.ConvertAnyToAny(nc, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 // ConfigService implements the NodeService interface for config functionality

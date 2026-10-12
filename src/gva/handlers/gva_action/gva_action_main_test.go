@@ -99,17 +99,23 @@ var _ = Describe("GVA Action", func() {
 		// Store node configurations
 		rmngNodeContext := rmngctx.NewRmngContext(testNode1)
 		nodeDetailsDB := node_details_db.NewNodeDetailsDB(rmngNodeContext)
-		err = nodeDetailsDB.UpdateServiceData("config", node_cfg_simple_switch_test_data.ToMap())
+		cfgMap, err := node_cfg_simple_switch_test_data.ToMap()
+		Expect(err).To(BeNil())
+		err = nodeDetailsDB.UpdateServiceData("config", cfgMap)
 		Expect(err).To(BeNil())
 
 		rmngNodeContext = rmngctx.NewRmngContext(testNode2)
 		nodeDetailsDB = node_details_db.NewNodeDetailsDB(rmngNodeContext)
-		err = nodeDetailsDB.UpdateServiceData("config", node_cfg_simple_light_test_data.ToMap())
+		cfgMap, err = node_cfg_simple_light_test_data.ToMap()
+		Expect(err).To(BeNil())
+		err = nodeDetailsDB.UpdateServiceData("config", cfgMap)
 		Expect(err).To(BeNil())
 
 		rmngNodeContext = rmngctx.NewRmngContext(testNode3)
 		nodeDetailsDB = node_details_db.NewNodeDetailsDB(rmngNodeContext)
-		err = nodeDetailsDB.UpdateServiceData("config", node_cfg_color_light_test_data.ToMap())
+		cfgMap, err = node_cfg_color_light_test_data.ToMap()
+		Expect(err).To(BeNil())
+		err = nodeDetailsDB.UpdateServiceData("config", cfgMap)
 		Expect(err).To(BeNil())
 
 		// Setup mock HTTP client
@@ -1089,7 +1095,9 @@ var _ = Describe("GVA Action", func() {
 				// Store a color light node config for these tests
 				rmngNodeContext := rmngctx.NewRmngContext(testNode)
 				nodeDetailsDB := node_details_db.NewNodeDetailsDB(rmngNodeContext)
-				err := nodeDetailsDB.UpdateServiceData("config", node_cfg_color_light_test_data.ToMap())
+				cfgMap, err := node_cfg_color_light_test_data.ToMap()
+				Expect(err).To(BeNil())
+				err = nodeDetailsDB.UpdateServiceData("config", cfgMap)
 				Expect(err).To(BeNil())
 
 				// Set up initial shadow state

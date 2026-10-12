@@ -765,7 +765,11 @@ func ApproveSharingRequest(ctx *rmngctx.RmngContext, sharingRequestID string) er
 	// overwritten before the group/user_group mapping is created.
 	sharingRequest.UserID = ctx.Accessor.GetID()
 
-	defer deleteClaimedSharingRequest(sharingRequestDB, sharingRequestID, unclaimed)
+	defer func() {
+		if err := deleteClaimedSharingRequest(sharingRequestDB, sharingRequestID, unclaimed); err != nil {
+			rlog.Warn(ctx).Err(err).Str("sharing_request_id", sharingRequestID).Msg("failed to delete the claimed sharing request")
+		}
+	}()
 
 	userGroupDB := user_group_db.NewUserGroupDB(ctx)
 	err = userGroupDB.ConfirmSharingRequest(sharingRequest)

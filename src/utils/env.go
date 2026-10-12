@@ -8,12 +8,16 @@ import "os"
 
 func SetTestEnvVars(envVars map[string]string) {
 	for key, value := range envVars {
-		os.Setenv(key, value)
+		if err := os.Setenv(key, value); err != nil {
+			panic(err)
+		}
 	}
 }
 
 func ResetTestEnvVars(envVars map[string]string) {
 	for key := range envVars {
-		os.Unsetenv(key)
+		if err := os.Unsetenv(key); err != nil {
+			panic(err)
+		}
 	}
 }

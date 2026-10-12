@@ -57,9 +57,9 @@ func handleBulkUpdateNodes(rctx *rmngctx.RmngContext, request events.APIGatewayP
 	var req BulkUpdateNodesRequest
 
 	// TODO: Once we figure out rbac for admins, remove this
-	rctx.SetAllow(utils.NodeAdminAll, "*")
-	rctx.SetAllow(utils.NodeWriteShadow, "*")
-	rctx.SetAllow(utils.NodeAll, "*")
+	if err := rctx.SetAllowMultiple([]string{utils.NodeAdminAll.String(), utils.NodeWriteShadow.String(), utils.NodeAll.String()}, "*"); err != nil {
+		return BulkUpdateNodesResponse{}, rmerror.NewRMError(err, "failed to grant permissions")
+	}
 
 	if err := rmngrequest.ExtractRequestStruct(request, &req); err != nil {
 		return BulkUpdateNodesResponse{}, rmerror.NewRMError(err, "failed to extract request")

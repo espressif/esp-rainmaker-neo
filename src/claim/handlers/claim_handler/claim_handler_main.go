@@ -167,9 +167,13 @@ func initiate(ctx context.Context, request events.APIGatewayProxyRequest) (int, 
 
 	// Scoped, not "*": initiate reserves and reads this one device's reservation
 	// (keyed by MAC) and counts this caller's quota (keyed by claimant).
-	rctx.SetAllow(utils.NodeAdminReserveID, key.MacAddr)
-	rctx.SetAllow(utils.NodeAdminGetReservation, key.MacAddr)
-	rctx.SetAllow(utils.NodeAdminCountReservations, key.ClaimantID)
+	if err := errors.Join(
+		rctx.SetAllow(utils.NodeAdminReserveID, key.MacAddr),
+		rctx.SetAllow(utils.NodeAdminGetReservation, key.MacAddr),
+		rctx.SetAllow(utils.NodeAdminCountReservations, key.ClaimantID),
+	); err != nil {
+		return http.StatusInternalServerError, utils.NewAPIStatus("Failed to authorize request"), err
+	}
 
 	nodeID, created, err := reserveNodeID(rctx, variant, key)
 	if err != nil {
@@ -307,8 +311,9 @@ func verify(ctx context.Context, request events.APIGatewayProxyRequest) (int, in
 	// Reservation-table access is keyed on the caller's own MAC, so scope these
 	// grants to it rather than every device. GetReservation needs the read
 	// grant now; SetCAID (after a successful bind) needs the reserve grant.
-	rctx.SetAllow(utils.NodeAdminGetReservation, key.MacAddr)
-	rctx.SetAllow(utils.NodeAdminReserveID, key.MacAddr)
+	if err := rctx.SetAllowMultiple([]string{utils.NodeAdminGetReservation.String(), utils.NodeAdminReserveID.String()}, key.MacAddr); err != nil {
+		return http.StatusInternalServerError, utils.NewAPIStatus("Failed to authorize request"), err
+	}
 
 	reservationDB := node_id_reservation_db.NewNodeIDReservationsDB(rctx)
 	reservation, err := reservationDB.GetReservation(key.MacAddr, key.ClaimantID)
@@ -326,9 +331,9 @@ func verify(ctx context.Context, request events.APIGatewayProxyRequest) (int, in
 	// node ID — never "*". Only the reserved node ID reaches the bind path, so
 	// this confines the request to the caller's own device and keeps the RBAC
 	// layer a real backstop rather than a rubber stamp.
-	rctx.SetAllow(utils.NodeAdminAll, reservation.NodeID)
-	rctx.SetAllow(utils.NodeAll, reservation.NodeID)
-	rctx.SetAllow(utils.NodeWriteShadow, reservation.NodeID)
+	if err := rctx.SetAllowMultiple([]string{utils.NodeAdminAll.String(), utils.NodeAll.String(), utils.NodeWriteShadow.String()}, reservation.NodeID); err != nil {
+		return http.StatusInternalServerError, utils.NewAPIStatus("Failed to authorize request"), err
+	}
 
 	issuer, caID, err := buildIssuer(ctx)
 	if err != nil {

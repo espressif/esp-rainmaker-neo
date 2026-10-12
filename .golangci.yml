@@ -11,6 +11,7 @@ linters:
     - bodyclose
     - copyloopvar
     - durationcheck
+    - errcheck
     - errorlint
     - govet
     - ineffassign
@@ -22,9 +23,18 @@ linters:
     - usestdlibvars
     - wastedassign
   settings:
+    errcheck:
+      # Closing a response body that has been read cannot fail in a way the caller can act on.
+      exclude-functions:
+        - (io.ReadCloser).Close
     staticcheck:
       # Bug checks only; the S1/ST/QF style checks are not gated yet.
       checks: ["SA*"]
+  exclusions:
+    rules:
+      # Not gated in tests yet; production code is.
+      - path: (_test\.go|^src/test/|^test/)
+        linters: [errcheck]
 
 formatters:
   enable:

@@ -103,10 +103,12 @@ func (db *BridgeChildrenDB) AddChild(parent, child, childLocalID string) error {
 	if err := db.DbCreateItem(BridgeChildrenTable, &entry); err != nil {
 		return rmerror.NewRMError(err, "failed to insert bridge_children row")
 	}
-	db.Ctx.SetAllowMultiple(
+	if err := db.Ctx.SetAllowMultiple(
 		[]string{utils.NodeGet.String(), utils.NodeEditGroups.String()},
 		child,
-	)
+	); err != nil {
+		return rmerror.NewRMError(err, "failed to grant permissions")
+	}
 	return nil
 }
 
@@ -133,10 +135,12 @@ func (db *BridgeChildrenDB) GetChild(parent, child string) (*ChildEntry, error) 
 	if out.ParentNodeID == "" || out.ChildNodeID == "" {
 		return nil, nil
 	}
-	db.Ctx.SetAllowMultiple(
+	if err := db.Ctx.SetAllowMultiple(
 		[]string{utils.NodeGet.String(), utils.NodeEditGroups.String()},
 		out.ChildNodeID,
-	)
+	); err != nil {
+		return nil, rmerror.NewRMError(err, "failed to grant permissions")
+	}
 	return &out, nil
 }
 
@@ -163,14 +167,16 @@ func (db *BridgeChildrenDB) GetMyGroup() (group_node_db.NodesGroups, error) {
 		return group_node_db.NodesGroups{}, err
 	}
 	if ng.Group != "" {
-		db.Ctx.SetAllowMultiple(
+		if err := db.Ctx.SetAllowMultiple(
 			[]string{
 				utils.GroupGet.String(),
 				utils.GroupListSubEntities.String(),
 				utils.GroupEditNodes.String(),
 			},
 			ng.Group,
-		)
+		); err != nil {
+			return group_node_db.NodesGroups{}, rmerror.NewRMError(err, "failed to grant permissions")
+		}
 	}
 	return ng, nil
 }
@@ -205,7 +211,9 @@ func (db *BridgeChildrenDB) GetChildrenByParent(parent string) ([]ChildEntry, er
 		return nil, rmerror.NewRMError(err, "failed to query bridge_children")
 	}
 	for i := range entries {
-		db.Ctx.SetAllow(utils.NodeEditGroups, entries[i].ChildNodeID)
+		if err := db.Ctx.SetAllow(utils.NodeEditGroups, entries[i].ChildNodeID); err != nil {
+			return nil, rmerror.NewRMError(err, "failed to grant permissions")
+		}
 	}
 	return entries, nil
 }

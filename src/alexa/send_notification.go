@@ -255,7 +255,10 @@ func (a *AlexaNotification) Marshal(notif *notification.Notification) (interface
 		deltaDevState, ok := shadowUpdate.Delta.Params[device.ID]
 		if ok {
 			// Generate the Change Report from the delta state of the device
-			ConvertCurrentStateToCtxProperty(deltaDevState.(map[string]interface{}), cookie, &changeProperties)
+			if err := ConvertCurrentStateToCtxProperty(deltaDevState.(map[string]interface{}), cookie, &changeProperties); err != nil {
+				rlog.Error(rmngCtx).Err(err).Msgf("Failed to generate change report for device %s", device.ID)
+				return nil, rmerror.NewRMError(err, "Failed to generate change report")
+			}
 		} else {
 			rlog.Error(rmngCtx).Msgf("Device %s not found in delta, skipping", device.ID)
 			continue

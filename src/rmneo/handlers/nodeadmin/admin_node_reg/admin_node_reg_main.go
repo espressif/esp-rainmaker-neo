@@ -73,8 +73,9 @@ func handleRegisterSingleNode(rctx *rmngctx.RmngContext, request events.APIGatew
 	var req RegisterSingleNodeRequest
 
 	// TODO: Once we figure out rbac for admins, remove this
-	rctx.SetAllow(utils.NodeAdminAll, "*")
-	rctx.SetAllow(utils.NodeWriteShadow, "*")
+	if err := rctx.SetAllowMultiple([]string{utils.NodeAdminAll.String(), utils.NodeWriteShadow.String()}, "*"); err != nil {
+		return RegisterSingleNodeResponse{}, rmerror.NewRMError(err, "failed to grant permissions")
+	}
 
 	if err := rmngrequest.ExtractRequestStruct(request, &req); err != nil {
 		return RegisterSingleNodeResponse{}, rmerror.NewRMError(err, "failed to extract request")
@@ -105,8 +106,9 @@ func handleRegisterBulkNodes(rctx *rmngctx.RmngContext, request events.APIGatewa
 	var req RegisterBulkNodesRequest
 
 	// TODO: Once we figure out rbac for admins, remove this
-	rctx.SetAllow(utils.NodeAdminAll, "*")
-	rctx.SetAllow(utils.NodeWriteShadow, "*")
+	if err := rctx.SetAllowMultiple([]string{utils.NodeAdminAll.String(), utils.NodeWriteShadow.String()}, "*"); err != nil {
+		return RegisterBulkNodesResponse{}, rmerror.NewRMError(err, "failed to grant permissions")
+	}
 
 	if err := rmngrequest.ExtractRequestStruct(request, &req); err != nil {
 		return RegisterBulkNodesResponse{}, rmerror.NewRMError(err, "failed to extract request")
