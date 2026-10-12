@@ -217,7 +217,7 @@ func validateGSA(sa googleServiceAccount) ([]byte, error) {
 			"All Google service-account fields are required for GCM (type, project_id, private_key_id, private_key, client_email, client_id, auth_uri, token_uri, auth_provider_x509_cert_url, client_x509_cert_url, universe_domain)")
 	}
 
-	jsonBytes, err := json.Marshal(sa)
+	jsonBytes, err := json.Marshal(sa) //nolint:gosec // G117: the key is the SNS platform credential, which is the point of this payload
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "Failed to marshal Google service-account JSON")
 	}

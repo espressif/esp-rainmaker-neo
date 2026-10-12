@@ -10,12 +10,11 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/automation_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"math/rand"
 	"strings"
-	"time"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/ids"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )
@@ -32,27 +31,6 @@ var ErrConditionNodeNotInGroup = errors.New("condition trigger node is not a mem
 // AutomationService handles automation configurations for groups.
 type AutomationService struct {
 	service.BaseService
-}
-
-const (
-	automationIDCharset         = "abcdefghijklmnopqrstuvwxyz0123456789"
-	automationIDAlphabetCharset = "abcdefghijklmnopqrstuvwxyz"
-	automationIDLength          = 3
-)
-
-func generateAutomationID() string {
-	seededRand := rand.New(rand.NewSource(time.Now().UnixNano()))
-	b := make([]byte, automationIDLength)
-
-	// Ensure the first character is an alphabet
-	b[0] = automationIDAlphabetCharset[seededRand.Intn(len(automationIDAlphabetCharset))]
-
-	// Generate the rest of the characters
-	for i := 1; i < automationIDLength; i++ {
-		b[i] = automationIDCharset[seededRand.Intn(len(automationIDCharset))]
-	}
-
-	return string(b)
 }
 
 // NewAutomationService creates a new instance of AutomationService.
@@ -140,7 +118,7 @@ func (s *AutomationService) Put(rmngCtx *rmngctx.RmngContext, groupID string, da
 	rlog.Info(rmngCtx).Msgf("AutomationService Put called for group %s with data: %+v", groupID, data)
 
 	// Generate a new automation ID for the new automation
-	automationID := generateAutomationID()
+	automationID := ids.GenerateAutomationID()
 	rlog.Info(rmngCtx).Msgf("Generated new automation ID: %s", automationID)
 
 	// Persist through the shared write path. The create response echoes the

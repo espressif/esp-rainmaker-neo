@@ -131,7 +131,7 @@ var _ = Describe("AutomationService", func() {
 		Expect(resultMap).To(HaveKey("message"))
 		Expect(resultMap["message"]).To(Equal("success"))
 		automationID := resultMap["automation_id"]
-		Expect(automationID).To(HaveLen(3)) // Based on automationIDLength = 3
+		Expect(automationID).To(MatchRegexp("^[a-z][a-z0-9]{2}$"))
 
 		// Create an automation item for testing
 		automation := automation_db.AutomationItem{

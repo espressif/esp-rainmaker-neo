@@ -453,7 +453,7 @@ func DbQueryWithLoop[T any](input QueryWithLoopInput[T]) ([]T, map[string]types.
 	}
 
 	if input.Limit != 0 {
-		queryInput.Limit = utils.Ptr(int32(input.Limit))
+		queryInput.Limit = utils.Ptr(utils.ClampInt32(input.Limit))
 	}
 
 	if input.StartKey != nil {

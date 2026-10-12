@@ -13,6 +13,7 @@ linters:
     - durationcheck
     - errcheck
     - errorlint
+    - gosec
     - govet
     - ineffassign
     - makezero
@@ -27,6 +28,12 @@ linters:
       # Closing a response body that has been read cannot fail in a way the caller can act on.
       exclude-functions:
         - (io.ReadCloser).Close
+    gosec:
+      excludes:
+        # Matches names like "token" and "secret" on URLs, SSM paths and env-var names; gitleaks scans for real secrets.
+        - G101
+        # Unchecked errors, which errcheck already gates.
+        - G104
     staticcheck:
       # Bug checks only; the S1/ST/QF style checks are not gated yet.
       checks: ["SA*"]
@@ -34,7 +41,7 @@ linters:
     rules:
       # Not gated in tests yet; production code is.
       - path: (_test\.go|^src/test/|^test/)
-        linters: [errcheck]
+        linters: [errcheck, gosec]
 
 formatters:
   enable:

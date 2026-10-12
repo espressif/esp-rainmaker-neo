@@ -87,7 +87,7 @@ func GetTaskArn() (string, error) {
 
 	httpClient := httpclient.Get()
 
-	req, err := http.NewRequest(http.MethodGet, ecsEndpointUrl+"/task", nil)
+	req, err := http.NewRequest(http.MethodGet, ecsEndpointUrl+"/task", nil) //nolint:gosec // G704: the URL is the ECS-provided metadata endpoint, not caller input
 	if err != nil {
 		return "", rmerror.NewRMError(err, "failed to create request")
 	}

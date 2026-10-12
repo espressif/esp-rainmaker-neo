@@ -110,7 +110,7 @@ func (s *TimeseriesService) Get(rmngCtx *rmngctx.RmngContext, nodeID string) (in
 	date := queryParams["date"]
 	startDate := queryParams["start_date"]
 	endDate := queryParams["end_date"]
-	pageSize := int32(rmngrequest.ParsePageSize(queryParams))
+	pageSize := utils.ClampInt32(rmngrequest.ParsePageSize(queryParams))
 	startKey := queryParams["start_key"]
 	startTimeStr := queryParams["start_time"]
 	endTimeStr := queryParams["end_time"]

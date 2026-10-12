@@ -66,12 +66,7 @@ var GenerateChallenge = func() string {
 // GenerateGroupID generates a random group ID of 6 characters.
 // The first character is guaranteed to be a lowercase letter, followed by 5 alphanumeric characters (lowercase letters and digits).
 func GenerateGroupID() string {
-	b := make([]byte, groupIDLength)
-	b[0] = cryptoRandChar(groupIDAlphabetCharset)
-	for i := 1; i < groupIDLength; i++ {
-		b[i] = cryptoRandChar(groupIDCharset)
-	}
-	return string(b)
+	return letterFirstID(groupIDLength)
 }
 
 const scheduleIDLength = 4
@@ -82,6 +77,23 @@ const scheduleIDLength = 4
 var GenerateScheduleID = func() string {
 	b := make([]byte, scheduleIDLength)
 	for i := range b {
+		b[i] = cryptoRandChar(groupIDCharset)
+	}
+	return string(b)
+}
+
+const automationIDLength = 3
+
+// GenerateAutomationID mints an automation ID: a lowercase letter followed by lowercase alphanumerics, e.g. "k3x".
+func GenerateAutomationID() string {
+	return letterFirstID(automationIDLength)
+}
+
+// letterFirstID returns a length-char ID of a lowercase letter followed by lowercase alphanumerics.
+func letterFirstID(length int) string {
+	b := make([]byte, length)
+	b[0] = cryptoRandChar(groupIDAlphabetCharset)
+	for i := 1; i < length; i++ {
 		b[i] = cryptoRandChar(groupIDCharset)
 	}
 	return string(b)

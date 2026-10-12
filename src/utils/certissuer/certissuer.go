@@ -31,7 +31,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec // RFC 5280 §4.2.1.2 subject key identifier, not a security use
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -353,7 +353,7 @@ func subjectKeyID(pub *ecdsa.PublicKey) ([]byte, error) {
 	if _, err := asn1.Unmarshal(spki, &info); err != nil {
 		return nil, rmerror.NewRMError(err, "failed to parse subject public key info")
 	}
-	sum := sha1.Sum(info.PublicKey.Bytes)
+	sum := sha1.Sum(info.PublicKey.Bytes) //nolint:gosec // RFC 5280 §4.2.1.2 subject key identifier, not a security use
 	return sum[:], nil
 }
 

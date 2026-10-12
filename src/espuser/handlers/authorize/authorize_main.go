@@ -212,7 +212,7 @@ func providerViews(ctx context.Context, allows func(string) bool) []providerView
 			// Relative to /oauth2/login, so the API Gateway stage prefix carries over untouched.
 			Href: "federation/start?provider=" + url.QueryEscape(p.ProviderName),
 			// The row's own SVG when it carries one; otherwise the page draws its default.
-			LogoSVG: template.HTML(p.Logo),
+			LogoSVG: template.HTML(p.Logo), //nolint:gosec // G203: operator-set in the identity_providers table, and the page CSP admits only nonced scripts
 		})
 	}
 	return views

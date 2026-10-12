@@ -92,7 +92,7 @@ func ParseNOCSRElements(data []byte) (*NOCSRElementsFields, error) {
 		if pos >= len(data) {
 			return nil, errors.New("unexpected end of TLV data while reading tag")
 		}
-		tag := data[pos]
+		tag := data[pos] //nolint:gosec // G602: bounds checked above
 		pos++
 
 		// Read the length based on element type
@@ -103,14 +103,14 @@ func ParseNOCSRElements(data []byte) (*NOCSRElementsFields, error) {
 			if pos >= len(data) {
 				return nil, errors.New("unexpected end of TLV data while reading length")
 			}
-			length = int(data[pos])
+			length = int(data[pos]) //nolint:gosec // G602: bounds checked above
 			pos++
 		case TLVTypeByteStr2:
 			// 2-byte length (little-endian)
 			if pos+1 >= len(data) {
 				return nil, errors.New("unexpected end of TLV data while reading 2-byte length")
 			}
-			length = int(data[pos]) | (int(data[pos+1]) << 8)
+			length = int(data[pos]) | (int(data[pos+1]) << 8) //nolint:gosec // G602: bounds checked above
 			pos += 2
 		default:
 			return nil, fmt.Errorf("unsupported element type 0x%02X", elementType)
