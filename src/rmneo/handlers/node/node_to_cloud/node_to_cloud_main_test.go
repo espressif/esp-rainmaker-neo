@@ -9,12 +9,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
@@ -30,7 +31,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/schedule"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )
 

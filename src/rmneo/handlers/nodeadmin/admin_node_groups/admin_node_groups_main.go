@@ -6,8 +6,9 @@ package main
 
 import (
 	"context"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"net/http"
+
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"

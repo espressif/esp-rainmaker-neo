@@ -11,12 +11,13 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"html/template"
 	"net/http"
 	"net/url"
 	"sort"
 	"strings"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"

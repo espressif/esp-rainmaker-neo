@@ -7,10 +7,11 @@ package automation
 import (
 	"errors"
 	"fmt"
+	"strings"
+
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/automation_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"strings"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"

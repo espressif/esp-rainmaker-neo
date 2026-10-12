@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
 	"github.com/espressif/esp-rainmaker-neo/src/bridge/hooks"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/nodes_online_db"
 

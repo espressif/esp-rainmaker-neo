@@ -8,11 +8,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
+
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"os"
-	"strings"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 

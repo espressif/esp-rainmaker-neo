@@ -7,6 +7,7 @@ package snsutil
 import (
 	"context"
 	"fmt"
+
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 

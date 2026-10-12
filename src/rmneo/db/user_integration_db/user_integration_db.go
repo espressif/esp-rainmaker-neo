@@ -27,9 +27,10 @@ package user_integration_db
 import (
 	"encoding/base64"
 	"errors"
+	"strings"
+
 	dbcore "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"strings"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 

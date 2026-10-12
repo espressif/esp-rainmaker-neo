@@ -8,12 +8,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"net/http"
 	"os"
 
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
+
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 
 	"github.com/aws/aws-lambda-go/events"
 	. "github.com/onsi/ginkgo/v2"

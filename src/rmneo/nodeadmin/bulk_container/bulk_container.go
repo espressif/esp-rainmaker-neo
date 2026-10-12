@@ -9,13 +9,14 @@ import (
 	"context"
 	"encoding/csv"
 	"errors"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/convert"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/parallel"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"os"
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/convert"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/parallel"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/s3util"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_reg_failed_nodes_db"

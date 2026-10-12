@@ -12,9 +12,10 @@
 package bulk_job
 
 import (
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"os"
 	"strings"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/google/uuid"
 

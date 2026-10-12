@@ -7,12 +7,13 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"strings"
 	"testing"
 
+	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
+
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/user_details_db"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/jwtutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 

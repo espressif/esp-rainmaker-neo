@@ -8,11 +8,12 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"fmt"
+	"strings"
+
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_group_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/collections"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"strings"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"

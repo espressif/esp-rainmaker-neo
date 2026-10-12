@@ -6,6 +6,7 @@ package iotdputil
 
 import (
 	"context"
+
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 

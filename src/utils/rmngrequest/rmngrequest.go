@@ -7,12 +7,13 @@ package rmngrequest
 import (
 	"encoding/base64"
 	"encoding/json"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/ids"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/ids"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/validation"

@@ -7,8 +7,9 @@ package auth_flows_db
 
 import (
 	"errors"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"time"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/espdynamodb"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"

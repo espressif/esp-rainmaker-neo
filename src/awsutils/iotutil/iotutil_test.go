@@ -6,9 +6,10 @@ package iotutil_test
 
 import (
 	"context"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"os"
 	"testing"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/iotutil"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"

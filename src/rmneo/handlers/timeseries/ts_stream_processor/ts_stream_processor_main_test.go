@@ -6,18 +6,19 @@ package main
 
 import (
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/processed_ts_db"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/timeseries_db"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/processed_ts_db"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/timeseries_db"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
+
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/timeseries"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/timeseries/timewindow"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 

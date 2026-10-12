@@ -8,9 +8,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/automation_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"strings"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/automation"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"

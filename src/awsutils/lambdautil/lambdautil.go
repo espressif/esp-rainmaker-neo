@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 
 	"github.com/aws/aws-sdk-go-v2/aws"

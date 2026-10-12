@@ -7,8 +7,9 @@ package kmsutil_test
 import (
 	"context"
 	"encoding/json"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"testing"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/kmsutil"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"

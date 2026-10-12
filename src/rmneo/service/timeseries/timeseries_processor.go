@@ -17,11 +17,12 @@ package timeseries
 
 import (
 	"fmt"
+	"strconv"
+	"time"
+
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/processed_ts_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/timeseries_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"strconv"
-	"time"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/timeseries/timewindow"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"

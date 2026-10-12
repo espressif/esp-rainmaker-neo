@@ -5,8 +5,9 @@
 package scope_test
 
 import (
-	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"testing"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/scope"
 

@@ -5,9 +5,10 @@
 package idp
 
 import (
+	"strings"
+
 	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"strings"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/identity_providers_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/jwtutil"

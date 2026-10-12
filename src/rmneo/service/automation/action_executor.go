@@ -6,6 +6,7 @@ package automation
 
 import (
 	"fmt"
+
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 

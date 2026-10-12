@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/espressif/esp-rainmaker-neo/src/alexa"
+	alexa_skill "github.com/espressif/esp-rainmaker-neo/src/alexa"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification/integrationauth"

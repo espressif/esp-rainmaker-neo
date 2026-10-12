@@ -65,10 +65,11 @@ Lifecycle:
 package assoc_request_db
 
 import (
-	dbcore "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"strconv"
 	"time"
+
+	dbcore "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 

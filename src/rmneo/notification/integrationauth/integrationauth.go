@@ -10,9 +10,10 @@ package integrationauth
 
 import (
 	"fmt"
+	"time"
+
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_integration_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"time"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"

@@ -6,6 +6,7 @@ package db
 
 import (
 	"errors"
+
 	types "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 

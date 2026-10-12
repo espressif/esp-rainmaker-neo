@@ -7,8 +7,9 @@ package main
 import (
 	"context"
 	"errors"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"net/http"
+
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/sharing_request_db"

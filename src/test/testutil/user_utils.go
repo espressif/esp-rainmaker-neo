@@ -6,12 +6,13 @@ package test_utils
 
 import (
 	"context"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/user_details_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"

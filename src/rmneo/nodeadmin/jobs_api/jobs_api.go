@@ -18,8 +18,9 @@ package jobs_api
 
 import (
 	"errors"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"time"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/aws/aws-lambda-go/events"
 

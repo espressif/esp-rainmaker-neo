@@ -7,12 +7,13 @@ package timeseries_test
 import (
 	"context"
 	"encoding/json"
+	"testing"
+	"time"
+
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/processed_ts_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/timeseries_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
-	"testing"
-	"time"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_details_db"
@@ -23,7 +24,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/timeseries/timewindow"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 

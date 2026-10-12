@@ -33,6 +33,7 @@ package automation_db
 
 import (
 	"encoding/json"
+
 	dbcore "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 

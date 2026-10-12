@@ -23,7 +23,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/oauth_clients_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/idp"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/session"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/jwtutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"

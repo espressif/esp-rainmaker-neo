@@ -9,9 +9,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+
 	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"os"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/kmsutil"
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/s3util"

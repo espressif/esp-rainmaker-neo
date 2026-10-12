@@ -4,7 +4,7 @@
 
 package main
 
-import "github.com/espressif/esp-rainmaker-neo/src/alexa"
+import alexa_skill "github.com/espressif/esp-rainmaker-neo/src/alexa"
 
 // This file contains the smaller test data for the discovery tests. Larger test data is in the test_data/ directory.
 

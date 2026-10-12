@@ -13,8 +13,9 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"math/big"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 )
 
 const otpSaltBytes = 16

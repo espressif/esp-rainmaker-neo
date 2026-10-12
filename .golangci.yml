@@ -51,6 +51,7 @@ linters:
 formatters:
   enable:
     - gofmt
+    - goimports
   exclusions:
     # Another repo's code; `golangci-lint fmt` walks directories and would otherwise rewrite the submodule.
     paths:

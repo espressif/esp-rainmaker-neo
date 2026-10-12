@@ -14,6 +14,10 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
+	"time"
+
 	"github.com/espressif/esp-cloud-common/go/rbac/rbac"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
@@ -21,9 +25,6 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/certutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"sort"
-	"strings"
-	"time"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/iotdputil"
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/iotutil"

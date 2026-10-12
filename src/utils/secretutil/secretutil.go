@@ -8,6 +8,7 @@ package secretutil
 import (
 	"crypto/rand"
 	"encoding/base64"
+
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 )
 

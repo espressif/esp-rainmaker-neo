@@ -30,12 +30,13 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	_ "github.com/espressif/esp-rainmaker-neo/src/bridge/hooks"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"net/http"
 	"os"
 	"sync"
 	"time"
+
+	_ "github.com/espressif/esp-rainmaker-neo/src/bridge/hooks"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/kmsutil"
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/ssmutil"

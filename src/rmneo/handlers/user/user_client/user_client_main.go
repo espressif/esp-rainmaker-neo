@@ -7,9 +7,10 @@ package main
 import (
 	"context"
 	"errors"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_integration_db"
 	"net/http"
 	"strings"
+
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_integration_db"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification/push"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"

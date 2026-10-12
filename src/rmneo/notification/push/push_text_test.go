@@ -12,7 +12,7 @@ import (
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/file"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification/push"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"

@@ -18,7 +18,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 )
 
 var timingFile *os.File

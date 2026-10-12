@@ -7,16 +7,17 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_db"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_group_db"
 	"net/http"
 	"testing"
+
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_db"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_group_db"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/automation"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
 	"github.com/aws/aws-lambda-go/events"

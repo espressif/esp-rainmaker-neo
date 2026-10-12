@@ -36,9 +36,10 @@ import (
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/pem"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"math/big"
 	"time"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 )
 
 const (

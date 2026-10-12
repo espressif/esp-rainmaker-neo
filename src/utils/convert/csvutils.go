@@ -7,9 +7,10 @@ package convert
 import (
 	"bytes"
 	"encoding/csv"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"io"
 	"strings"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 )
 
 func ReadCSVToStruct(csvFileContent []byte) ([]map[string]string, error) {

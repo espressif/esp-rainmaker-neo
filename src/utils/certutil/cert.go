@@ -7,8 +7,9 @@ package certutil
 import (
 	"crypto/x509"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/collections"
 	"time"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/collections"
 )
 
 func VerifyCertificateChain(cert, caCert *x509.Certificate) error {

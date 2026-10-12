@@ -72,10 +72,11 @@ package user_group_db
 
 import (
 	"fmt"
+	"slices"
+
 	dbcore "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/sharing_request_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"slices"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"

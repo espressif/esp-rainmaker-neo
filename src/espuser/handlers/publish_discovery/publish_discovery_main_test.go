@@ -7,8 +7,9 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"testing"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/jwtutil"

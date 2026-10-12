@@ -7,8 +7,9 @@ package mcpserver
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"net/http"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 
 	"github.com/aws/aws-lambda-go/events"
 )

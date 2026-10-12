@@ -80,6 +80,7 @@ package group_node_db
 
 import (
 	"fmt"
+
 	dbcore "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 

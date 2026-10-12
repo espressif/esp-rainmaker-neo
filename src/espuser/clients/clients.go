@@ -13,11 +13,12 @@ import (
 	"fmt"
 	"net/url"
 
+	"strings"
+	"time"
+
 	"github.com/espressif/esp-rainmaker-neo/src/utils/collections"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"strings"
-	"time"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/oauth_clients_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"

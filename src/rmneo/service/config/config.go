@@ -6,11 +6,12 @@ package config
 
 import (
 	"errors"
+	"reflect"
+
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/timeseries_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/collections"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"reflect"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_details_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
