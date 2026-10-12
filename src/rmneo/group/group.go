@@ -281,14 +281,14 @@ func CreateSubGroup(ctx *rmngctx.RmngContext, parentGroupID, subGroupName string
 	return subGroup, nil
 }
 
-// ListUserAccessableGroups returns a map of groups and subgroups that the user has access to
+// ListUserAccessibleGroups returns a map of groups and subgroups that the user has access to
 // For example, if user has access to group1 and subgroup2a and subgroup2b, the function will return:
 //
 //	{
 //		"groups": ["group1"],
 //		"subgroups": {"group2":["subgroup2a", "subgroup2b"]}
 //	}
-func ListUserAccessableGroups(ctx *rmngctx.RmngContext) (map[string]interface{}, error) {
+func ListUserAccessibleGroups(ctx *rmngctx.RmngContext) (map[string]interface{}, error) {
 	userGroupDB := user_group_db.NewUserGroupDB(ctx)
 	userGroupEntry, err := userGroupDB.ListGroupsForUser("")
 	if err != nil {

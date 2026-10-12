@@ -1758,7 +1758,7 @@ var _ = Describe("Group Sharing", func() {
 			Expect(groups).To(HaveLen(1))
 			test_utils.AssertNormalizedEqual(expectedGroup, groups[0])
 		})
-		It("should correctly return the appropriate groups and subgroups in ListUserAccessableGroups", func() {
+		It("should correctly return the appropriate groups and subgroups in ListUserAccessibleGroups", func() {
 			// Create a group for testUser2
 			testUser2Group, err := group.CreateGroupForUser(rmngContext2, "Test User 2 Group")
 			Expect(err).To(BeNil())
@@ -1766,7 +1766,7 @@ var _ = Describe("Group Sharing", func() {
 			ShareAndApproveSubGroup(rmngContext1, rmngContext2, parentGroupID, subGroupID)
 
 			// User2's accessible groups
-			group_access, err := group.ListUserAccessableGroups(rmngContext2)
+			group_access, err := group.ListUserAccessibleGroups(rmngContext2)
 			Expect(err).To(BeNil())
 			Expect(group_access).To(Equal(map[string]interface{}{
 				"groups": []string{testUser2Group.GroupID},
@@ -1776,7 +1776,7 @@ var _ = Describe("Group Sharing", func() {
 			}))
 
 			// User1's accessible groups
-			group_access, err = group.ListUserAccessableGroups(rmngContext1)
+			group_access, err = group.ListUserAccessibleGroups(rmngContext1)
 			Expect(err).To(BeNil())
 			test_utils.AssertNormalizedEqual(map[string]interface{}{
 				"groups":    []string{sharedGroupID.GroupID, parentGroupID},

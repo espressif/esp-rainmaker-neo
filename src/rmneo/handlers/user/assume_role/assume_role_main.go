@@ -462,7 +462,7 @@ func resolveAssumeRoleGroupAccess(ctx context.Context, rmng_context *rmngctx.Rmn
 		}, nil
 	}
 
-	rawAccess, err := group.ListUserAccessableGroups(rmng_context)
+	rawAccess, err := group.ListUserAccessibleGroups(rmng_context)
 	if err != nil {
 		rlog.Error(rmng_context).Err(err).Msg("Error fetching groups for user")
 		resp := utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Error fetching user groups"))
@@ -479,7 +479,7 @@ func resolveAssumeRoleGroupAccess(ctx context.Context, rmng_context *rmngctx.Rmn
 	return access, nil
 }
 
-// toGroupAccess converts the untyped map returned by group.ListUserAccessableGroups
+// toGroupAccess converts the untyped map returned by group.ListUserAccessibleGroups
 // into the typed groupAccess. Comma-ok guards each field so a malformed map yields
 // empty slices/maps instead of panicking.
 func toGroupAccess(raw map[string]interface{}) groupAccess {
