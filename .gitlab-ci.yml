@@ -84,6 +84,23 @@ go_lint:
     - make lint
   allow_failure: true
 
+# Blocks on the golangci-lint checks gated in .golangci.yml.
+golangci_lint:
+  stage: lint
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "**/*.go"
+        - "**/go.mod"
+        - "**/go.sum"
+        - go.work
+        - go.work.sum
+        - Makefile
+        - .golangci.yml
+        - src/esp-cloud-common
+  script:
+    - make go-lint
+
 secrets:
   stage: lint
   # gitleaks is baked into this image -- see GITLEAKS_VERSION in deployment/docker/Dockerfile.

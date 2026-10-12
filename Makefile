@@ -358,6 +358,20 @@ $(RMNG_LINT): $(LINT_SRCS)
 lint: $(RMNG_LINT)  ## Run the rmng-lint static analysers over ./src/... and ./test/...
 	$(RMNG_LINT) ./src/... ./test/...
 
+# The gated checks live in .golangci.yml. A ./... pattern stops at a nested go.mod, so src/mcp/proxy is linted from its own directory; esp-cloud-common is another repo's code and is not gated here.
+GOLANGCI_LINT_VERSION ?= v2.14.0
+
+go-lint:  ## Fail on the golangci-lint checks gated in .golangci.yml
+	@command -v golangci-lint >/dev/null 2>&1 || go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	@rc=0; export PATH="$(GOPATH_BIN):$$PATH"; \
+	golangci-lint run ./src/... ./test/... || rc=1; \
+	( cd src/mcp/proxy && golangci-lint run --config $(CURDIR)/.golangci.yml ./... ) || rc=1; \
+	exit $$rc
+
+go-fmt:  ## Rewrite Go files with the formatters gated in .golangci.yml
+	@command -v golangci-lint >/dev/null 2>&1 || go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	PATH="$(GOPATH_BIN):$$PATH" golangci-lint fmt ./src/... ./test/...
+
 # The gated rules live in ruff.toml. Ruff skips what .gitignore skips, so the vendored venv is not scanned.
 py-lint:  ## Fail on the Ruff rules gated in ruff.toml
 	ruff check .
@@ -451,6 +465,6 @@ githooks:  ## Point git at .githooks so the pre-commit secret scan runs
 # `deploy-%` there did nothing. They are phony in practice because no such file is produced.
 .PHONY: all help go_build optional-build admin-dashboard-build \
 	deploy setup diff destroy synth publish outputs \
-	lint py-lint vulncheck test itest itest-setup test-infra-destroy plantuml clean githooks \
+	lint go-lint go-fmt py-lint vulncheck test itest itest-setup test-infra-destroy plantuml clean githooks \
 	update-mcp-schema \
 	$(TEST_SUBMODULES:%=%-test)

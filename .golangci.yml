@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Every enabled linter and formatter blocks CI. A linter joins `enable` only once the tree passes it; report one that is not gated yet with `golangci-lint run --enable-only <linter>`.
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+  settings:
+    staticcheck:
+      # Bug checks only; the S1/ST/QF style checks are not gated yet.
+      checks: ["SA*"]
+
+formatters:
+  enable:
+    - gofmt
+  exclusions:
+    # Another repo's code; `golangci-lint fmt` walks directories and would otherwise rewrite the submodule.
+    paths:
+      - src/esp-cloud-common

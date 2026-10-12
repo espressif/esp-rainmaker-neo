@@ -18,6 +18,6 @@ Fixes #
 ## Checklist
 
 - [ ] The change is focused — one logical change per PR
-- [ ] `make go_build`, `make test`, and `make lint` pass locally
+- [ ] `make go_build`, `make test`, `make lint`, and `make go-lint` pass locally
 - [ ] I have deployed the change and `make itest` pass
 - [ ] Documentation updated where behavior or interfaces changed

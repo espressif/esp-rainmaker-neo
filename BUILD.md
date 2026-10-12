@@ -104,6 +104,7 @@ To understand the backend, start from the [specs and API references](README.md#s
 
 ```shell
 make lint        # rmng-lint over ./src/... and ./test/...
+make go-lint     # golangci-lint checks gated in .golangci.yml (blocks CI); make go-fmt fixes formatting
 make test        # Ginkgo unit tests + coverage, for rmng and its submodules
 
 # Integration tests: one-time setup per environment — deploys the test infra
