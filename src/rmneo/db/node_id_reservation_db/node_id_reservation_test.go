@@ -5,6 +5,7 @@
 package node_id_reservation_db_test
 
 import (
+	"fmt"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -12,8 +13,10 @@ import (
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_id_reservation_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
+	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )
 
@@ -176,20 +179,21 @@ var _ = Describe("NodeIDReservationsDB", func() {
 	// no GSI. The count must span every MAC a claimant holds and must not leak
 	// across claimants.
 	Describe("CountReservationsForClaimant", func() {
-		It("should count a claimant's reservations across MACs, isolated per claimant", func() {
+		It("should count a claimant's reservations across MACs and service pages, isolated per claimant", func() {
+			for i := 1; i <= 5; i++ {
+				Expect(reservationDB.CreateReservation(node_id_reservation_db.ReservationEntry{
+					MacAddr: fmt.Sprintf("AA:BB:CC:00:00:%02d", i), ClaimantID: testClaimantID, NodeID: fmt.Sprintf("rnd-0000000000%02d", i),
+				})).To(Succeed())
+			}
 			Expect(reservationDB.CreateReservation(node_id_reservation_db.ReservationEntry{
-				MacAddr: "AA:BB:CC:00:00:01", ClaimantID: testClaimantID, NodeID: "rnd-000000000001",
+				MacAddr: "AA:BB:CC:00:00:99", ClaimantID: "claimant-user-2", NodeID: "rnd-000000000099",
 			})).To(Succeed())
-			Expect(reservationDB.CreateReservation(node_id_reservation_db.ReservationEntry{
-				MacAddr: "AA:BB:CC:00:00:02", ClaimantID: testClaimantID, NodeID: "rnd-000000000002",
-			})).To(Succeed())
-			Expect(reservationDB.CreateReservation(node_id_reservation_db.ReservationEntry{
-				MacAddr: "AA:BB:CC:00:00:03", ClaimantID: "claimant-user-2", NodeID: "rnd-000000000003",
-			})).To(Succeed())
+			// A count Query is still paged at 1 MB; MaxPageItems stands in for that cap.
+			awscommon.GetDynamoDBClient().(*mock.DynamoDBMock).MaxPageItems = 2
 
 			count, err := reservationDB.CountReservationsForClaimant(testClaimantID)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(count).To(Equal(2))
+			Expect(count).To(Equal(5))
 
 			count, err = reservationDB.CountReservationsForClaimant("claimant-user-2")
 			Expect(err).NotTo(HaveOccurred())

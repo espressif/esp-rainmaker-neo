@@ -43,15 +43,13 @@ package user_details_db
 import (
 	"errors"
 
+	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/ids"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-
-	"github.com/espressif/esp-rainmaker-neo/src/awsutils/espdynamodb"
-	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 const (
@@ -81,11 +79,29 @@ const ProviderOIDC = "OIDC"
 const UserTypeUser = "USER"
 
 type UserDetailsDB struct {
-	espdynamodb.EspDB
+	Ctx      *rmngctx.RmngContext
+	details  *ddbu.Table[UserDetailsEntry]
+	contacts *ddbu.Table[UserContactEntry]
 }
 
 func NewUserDetailsDB(ctx *rmngctx.RmngContext) *UserDetailsDB {
-	return &UserDetailsDB{EspDB: espdynamodb.NewEspDB(ctx)}
+	client := awscommon.GetDynamoDBClient()
+	return &UserDetailsDB{
+		Ctx:      ctx,
+		details:  ddbu.NewTable[UserDetailsEntry](client, userDetailsSchema()),
+		contacts: ddbu.NewTable[UserContactEntry](client, userDetailsSchema()),
+	}
+}
+
+func userDetailsSchema() ddbu.Schema {
+	return ddbu.Schema{
+		Name:    userDetailsTableName,
+		HashKey: userDetailsHashKey,
+		Indexes: map[string]ddbu.IndexKeys{
+			userDetailsEmailIndex:       {HashKey: userDetailsColEmail},
+			userDetailsPhoneNumberIndex: {HashKey: userDetailsColPhoneNumber},
+		},
+	}
 }
 
 type UserDetailsEntry struct {
@@ -101,28 +117,19 @@ type UserDetailsEntry struct {
 	Picture string `dynamodbav:"picture,omitempty"`
 }
 
-func (u *UserDetailsEntry) GetHKey() string {
-	return userDetailsHashKey
-}
-
-func (u *UserDetailsEntry) GetRKey() string {
-	return ""
-}
-
 // CreateUserDetails creates a new user details entry.
 func (udb *UserDetailsDB) CreateUserDetails(entry *UserDetailsEntry) error {
 	// Default the id to the authenticated accessor, but honor a caller-supplied id: a
 	// federated or passwordless login creates the account before any accessor exists.
 	if entry.UserID == "" {
-		entry.UserID = udb.EspDB.Ctx.Accessor.GetID()
+		entry.UserID = udb.Ctx.Accessor.GetID()
 	}
 	// Stored canonical so a lookup by the address resolves whatever case the login
 	// presented it in — the email indexes match the value byte for byte.
 	entry.Email = ids.FormatUsername(entry.Email)
 
-	err := udb.EspDB.DbCreateItem(userDetailsTableName, entry)
-	var exists *types.ConditionalCheckFailedException
-	if errors.As(err, &exists) {
+	err := udb.details.Create(udb.Ctx.Context, *entry)
+	if ddbu.IsConditionFailed(err) {
 		return ErrUserIDTaken
 	}
 	if err != nil {
@@ -134,14 +141,12 @@ func (udb *UserDetailsDB) CreateUserDetails(entry *UserDetailsEntry) error {
 
 // GetUserDetails retrieves user details by user ID
 func (db *UserDetailsDB) GetUserDetails() (*UserDetailsEntry, error) {
-	// Use caller's context for authorization
-	var result UserDetailsEntry
-	err := db.DbGetItem(userDetailsTableName, &UserDetailsEntry{UserID: db.Ctx.Accessor.GetID()}, &result)
+	result, found, err := db.details.Get(db.Ctx.Context, db.details.Key(db.Ctx.Accessor.GetID()))
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to get user details")
 	}
 
-	if result.UserID == "" {
+	if !found {
 		return nil, ErrUserNotFound
 	}
 
@@ -157,29 +162,20 @@ func (db *UserDetailsDB) GetUserDetails() (*UserDetailsEntry, error) {
 // (CreateUserDetails writes the lowercased form); a phone number is already canonical
 // as E.164.
 func (db *UserDetailsDB) queryOneByIndexedAttr(indexName, attrName, value string) (*UserContactEntry, error) {
-	expr, err := expression.NewBuilder().WithKeyCondition(expression.Key(attrName).Equal(expression.Value(value))).Build()
-	if err != nil {
-		return nil, rmerror.NewRMError(err, "failed to build expression")
-	}
-
 	// TODO: Ability to link multiple emails / phone numbers to the same account
-	result, _, err := espdynamodb.DbQueryWithLoop(espdynamodb.QueryWithLoopInput[UserContactEntry]{
-		DBHandle:  &db.EspDB,
-		TableName: userDetailsTableName,
-		IndexName: indexName,
-		Expr:      expr,
-		Limit:     1, // We only need one item
-		GetKey:    getContactLastEvaluatedKey,
+	page, err := db.contacts.Query(db.Ctx.Context, expression.Key(attrName).Equal(expression.Value(value)), ddbu.QueryOpts{
+		Index: indexName,
+		Limit: 1,
 	})
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to query user details by "+attrName)
 	}
 
-	if len(result) == 0 {
+	if len(page.Items) == 0 {
 		return nil, ErrUserNotFound
 	}
 
-	return &result[0], nil
+	return &page.Items[0], nil
 }
 
 // UserContactEntry is everything the contact indexes hold: the account id and both contacts.
@@ -189,23 +185,6 @@ type UserContactEntry struct {
 	UserID      string `dynamodbav:"user_id"`
 	Email       string `dynamodbav:"email,omitempty"`
 	PhoneNumber string `dynamodbav:"phone,omitempty"`
-}
-
-func (u *UserContactEntry) GetHKey() string { return userDetailsHashKey }
-
-func (u *UserContactEntry) GetRKey() string { return "" }
-
-func getContactLastEvaluatedKey(u UserContactEntry, indexName ...string) map[string]types.AttributeValue {
-	key := map[string]types.AttributeValue{
-		userDetailsHashKey: &types.AttributeValueMemberS{Value: u.UserID},
-	}
-	switch utils.GetOptional(indexName) {
-	case userDetailsEmailIndex:
-		key[userDetailsColEmail] = &types.AttributeValueMemberS{Value: u.Email}
-	case userDetailsPhoneNumberIndex:
-		key[userDetailsColPhoneNumber] = &types.AttributeValueMemberS{Value: u.PhoneNumber}
-	}
-	return key
 }
 
 // LookupContactByEmail resolves an email to the account holding it, in the canonical
@@ -251,13 +230,12 @@ func (db *UserDetailsDB) LookupUserIDByPhoneNumber(phoneNumber string) (string, 
 // No per-user IsAuthorized check: this resolves the {userId} path segment and exposes
 // only the user ID — the caller (e.g. unshare) is separately authorized on the target group.
 func (db *UserDetailsDB) GetUserDetailsByUserID(userID string) (*UserDetailsEntry, error) {
-	var result UserDetailsEntry
-	err := db.DbGetItem(userDetailsTableName, &UserDetailsEntry{UserID: userID}, &result)
+	result, found, err := db.details.Get(db.Ctx.Context, db.details.Key(userID))
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to get user details by user id")
 	}
 
-	if result.UserID == "" {
+	if !found {
 		return nil, ErrUserNotFound
 	}
 
@@ -274,29 +252,12 @@ func (db *UserDetailsDB) BatchGetUserDetailsByIDs(userIDs []string) ([]UserDetai
 		return nil, nil
 	}
 
-	keys := make([]map[string]types.AttributeValue, 0, len(userIDs))
+	keys := make([]ddbu.Key, 0, len(userIDs))
 	for _, uid := range userIDs {
-		keys = append(keys, map[string]types.AttributeValue{
-			userDetailsHashKey: &types.AttributeValueMemberS{Value: uid},
-		})
+		keys = append(keys, db.details.Key(uid))
 	}
 
-	proj := expression.NamesList(
-		expression.Name(userDetailsHashKey),
-		expression.Name(userDetailsColEmail),
-		expression.Name(userDetailsColPhoneNumber),
-	)
-	expr, err := expression.NewBuilder().WithProjection(proj).Build()
-	if err != nil {
-		return nil, rmerror.NewRMError(err, "failed to build expression")
-	}
-
-	results, err := espdynamodb.DbBatchGetItemLoop[UserDetailsEntry](espdynamodb.DbBatchGetItemLoopInput{
-		TableName: userDetailsTableName,
-		Expr:      expr,
-		Keys:      keys,
-		DBConn:    &db.EspDB,
-	})
+	results, err := db.details.BatchGet(db.Ctx.Context, keys, ddbu.ReadOpts{Project: []string{userDetailsHashKey, userDetailsColEmail, userDetailsColPhoneNumber}})
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to batch get user details")
 	}
@@ -335,12 +296,7 @@ func (db *UserDetailsDB) RecordVerifiedContacts(userID, email, phone string) err
 	for _, c := range conditions[1:] {
 		condition = condition.And(c)
 	}
-	_, err := db.DbUpdateItem(espdynamodb.DbUpdateItemInput{
-		TableName: userDetailsTableName,
-		Update:    update,
-		Query:     &UserDetailsEntry{UserID: userID},
-		Condition: condition,
-	})
+	_, err := db.details.Update(db.Ctx.Context, db.details.Key(userID), update, ddbu.WriteOpts{If: condition})
 	return err
 }
 

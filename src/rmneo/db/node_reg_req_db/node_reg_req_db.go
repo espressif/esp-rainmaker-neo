@@ -43,18 +43,15 @@ package node_reg_req_db
 
 import (
 	"errors"
-	"strconv"
 	"time"
 
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-
-	"github.com/espressif/esp-rainmaker-neo/src/awsutils/espdynamodb"
-	dbpkg "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
-	"github.com/espressif/esp-rainmaker-neo/src/utils"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
-
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+
+	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )
 
 const (
@@ -65,19 +62,31 @@ const (
 	nodeRegRequestsHashKey = "request_id"
 
 	// GSI for listing all requests
-	NodeRegReqsListIndex = "rmng-node-reg-reqs-list"
-	nodeRegRequestsGSIPK = "ALL" // Fixed partition key for the list GSI
+	NodeRegReqsListIndex       = "rmng-node-reg-reqs-list"
+	nodeRegRequestsGSIHashKey  = "gsi_pk"
+	nodeRegRequestsGSIRangeKey = "created_at"
+	nodeRegRequestsGSIPK       = "ALL" // Fixed partition key for the list GSI
 
 	// Column names
 	nodeRegRequestsUserIDCol = "user_id"
 )
 
 type NodeRegRequestsDB struct {
-	espdynamodb.EspDB
+	Ctx      *rmngctx.RmngContext
+	requests *ddbu.Table[NodeRegRequestsEntry]
 }
 
 func NewNodeRegRequestsDB(ctx *rmngctx.RmngContext) *NodeRegRequestsDB {
-	return &NodeRegRequestsDB{EspDB: espdynamodb.NewEspDB(ctx)}
+	return &NodeRegRequestsDB{
+		Ctx: ctx,
+		requests: ddbu.NewTable[NodeRegRequestsEntry](awscommon.GetDynamoDBClient(), ddbu.Schema{
+			Name:    NodeRegReqsTable,
+			HashKey: nodeRegRequestsHashKey,
+			Indexes: map[string]ddbu.IndexKeys{
+				NodeRegReqsListIndex: {HashKey: nodeRegRequestsGSIHashKey, RangeKey: nodeRegRequestsGSIRangeKey},
+			},
+		}),
+	}
 }
 
 type NodeRegRequestsEntry struct {
@@ -97,14 +106,6 @@ type NodeRegRequestsEntry struct {
 	CreatedAt            int64    `dynamodbav:"created_at,omitempty"`
 	LastUpdatedAt        int64    `dynamodbav:"last_updated_at,omitempty"`
 	Message              string   `dynamodbav:"message,omitempty"`
-}
-
-func (n *NodeRegRequestsEntry) GetHKey() string {
-	return nodeRegRequestsHashKey
-}
-
-func (n *NodeRegRequestsEntry) GetRKey() string {
-	return ""
 }
 
 // bulk node register job status
@@ -148,7 +149,7 @@ func IsValidJobType(jobType string) error {
 
 // CreateNodeRegRequest creates a new node registration request entry
 func (db *NodeRegRequestsDB) CreateNodeRegRequest(entry NodeRegRequestsEntry) error {
-	if err := db.DB.IsAuthorized(utils.NodeAdminAdd, "*"); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodeAdminAdd, "*"); err != nil {
 		return err
 	}
 
@@ -170,8 +171,7 @@ func (db *NodeRegRequestsDB) CreateNodeRegRequest(entry NodeRegRequestsEntry) er
 	entry.CreatedAt = timeNow.Unix()
 	entry.GSIPK = nodeRegRequestsGSIPK
 
-	err := db.DbCreateItem(NodeRegReqsTable, &entry)
-	if err != nil {
+	if err := db.requests.Create(db.Ctx.Context, entry); err != nil {
 		return rmerror.NewRMError(err, "failed to create node registration request")
 	}
 
@@ -191,12 +191,8 @@ func (db *NodeRegRequestsDB) UpdateNodeRegRequest(entry NodeRegRequestsEntry) er
 		}
 	}
 
-	_, err := db.DbUpdateItemStructSet(espdynamodb.DbUpdateItemStructSetInput{
-		TableName: NodeRegReqsTable,
-		Item:      &entry,
-		Condition: expression.Name(nodeRegRequestsUserIDCol).Equal(expression.Value(entry.UserID)),
-	})
-	if err != nil {
+	ownedByCaller := expression.Name(nodeRegRequestsUserIDCol).Equal(expression.Value(entry.UserID))
+	if _, err := db.requests.UpdateFrom(db.Ctx.Context, entry, ddbu.WriteOpts{If: ownedByCaller}); err != nil {
 		return rmerror.NewRMError(err, "failed to update node registration request")
 	}
 
@@ -205,16 +201,16 @@ func (db *NodeRegRequestsDB) UpdateNodeRegRequest(entry NodeRegRequestsEntry) er
 
 // GetNodeRegRequest gets a node registration request entry
 func (db *NodeRegRequestsDB) GetNodeRegRequest(requestId string) (*NodeRegRequestsEntry, error) {
-	if err := db.DB.IsAuthorized(utils.NodeAdminRegisterStatus, "*"); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodeAdminRegisterStatus, "*"); err != nil {
 		return nil, err
 	}
 
-	entry := &NodeRegRequestsEntry{}
-	err := db.DbGetItem(NodeRegReqsTable, &NodeRegRequestsEntry{RequestID: requestId}, entry)
+	// A missing request returns an empty entry, not nil: jobs_api.LoadJob tests RequestID == "".
+	entry, _, err := db.requests.Get(db.Ctx.Context, db.requests.Key(requestId))
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to get node registration request: "+requestId)
 	}
-	return entry, nil
+	return &entry, nil
 }
 
 // ListNodeRegRequestsOutput holds the list result with pagination
@@ -225,65 +221,32 @@ type ListNodeRegRequestsOutput struct {
 
 // ListNodeRegRequests lists bulk-job requests ordered by created_at descending, optionally filtered by status and job_type. Empty jobTypeFilter returns every job. FILTER register matches job_type=register, missing job_type, or empty job_type (legacy rows). FILTER update matches job_type=update only.
 func (db *NodeRegRequestsDB) ListNodeRegRequests(limit int64, startKey string, statusFilter string, jobTypeFilter string) (*ListNodeRegRequestsOutput, error) {
-	if err := db.DB.IsAuthorized(utils.NodeAdminRegisterStatus, "*"); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodeAdminRegisterStatus, "*"); err != nil {
 		return nil, err
-	}
-
-	keyCondition := expression.Key("gsi_pk").Equal(expression.Value(nodeRegRequestsGSIPK))
-	builder := expression.NewBuilder().WithKeyCondition(keyCondition)
-	if filter, ok := listJobsFilter(statusFilter, jobTypeFilter); ok {
-		builder = builder.WithFilter(filter)
-	}
-	expr, err := builder.Build()
-	if err != nil {
-		return nil, rmerror.NewRMError(err, "failed to build list expression")
-	}
-
-	// Parse start key if provided (JSON-encoded last evaluated key)
-	var exclusiveStartKey map[string]types.AttributeValue
-	if startKey != "" {
-		exclusiveStartKey, err = dbpkg.DecodePaginationToken(startKey)
-		if err != nil {
-			return nil, rmerror.NewRMError(err, "invalid start_key")
-		}
 	}
 
 	if limit <= 0 {
 		limit = 20
 	}
 
-	scanForward := false // Descending order by created_at
-	getKey := func(entry NodeRegRequestsEntry, indexNames ...string) map[string]types.AttributeValue {
-		return map[string]types.AttributeValue{
-			"request_id": &types.AttributeValueMemberS{Value: entry.RequestID},
-			"gsi_pk":     &types.AttributeValueMemberS{Value: nodeRegRequestsGSIPK},
-			"created_at": &types.AttributeValueMemberN{Value: strconv.FormatInt(entry.CreatedAt, 10)},
-		}
+	opts := ddbu.QueryOpts{
+		Index:      NodeRegReqsListIndex,
+		Limit:      int(limit),
+		Descending: true,
+		StartToken: startKey,
+	}
+	if filter, ok := listJobsFilter(statusFilter, jobTypeFilter); ok {
+		opts.Filter = filter
 	}
 
-	entries, lastKey, err := espdynamodb.DbQueryWithLoop(espdynamodb.QueryWithLoopInput[NodeRegRequestsEntry]{
-		DBHandle:  &db.EspDB,
-		TableName: NodeRegReqsTable,
-		IndexName: NodeRegReqsListIndex,
-		Limit:     limit,
-		StartKey:  exclusiveStartKey,
-		Expr:      expr,
-		SortOrder: &scanForward,
-		GetKey:    getKey,
-	})
+	page, err := db.requests.Query(db.Ctx.Context, expression.Key(nodeRegRequestsGSIHashKey).Equal(expression.Value(nodeRegRequestsGSIPK)), opts)
+	if errors.Is(err, ddbu.ErrInvalidToken) {
+		return nil, rmerror.NewRMError(err, "invalid start_key")
+	}
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to list node registration requests")
 	}
-
-	output := &ListNodeRegRequestsOutput{Entries: entries}
-	if len(lastKey) > 0 {
-		output.NextKey, err = dbpkg.EncodePaginationToken(lastKey)
-		if err != nil {
-			return nil, rmerror.NewRMError(err, "failed to encode next key")
-		}
-	}
-
-	return output, nil
+	return &ListNodeRegRequestsOutput{Entries: page.Items, NextKey: page.NextToken}, nil
 }
 
 func listJobsFilter(statusFilter, jobTypeFilter string) (expression.ConditionBuilder, bool) {

@@ -26,20 +26,19 @@
 package bridge_children_db
 
 import (
-	"errors"
 	"time"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
-	"github.com/espressif/esp-rainmaker-neo/src/awsutils/espdynamodb"
+	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 const (
@@ -51,15 +50,6 @@ const (
 )
 
 // ChildEntry is one row in the bridge_children table.
-//
-// `omitempty` on non-key fields is load-bearing: DeleteItem in
-// espdynamodb.DbDeleteItem marshals the full struct into the request's
-// Key map, and real DynamoDB rejects keys with attributes outside the
-// table's PK/SK schema ("ValidationException: The provided key element
-// does not match the schema"). Without omitempty, a query-only
-// ChildEntry serializes ChildLocalID="" and CreatedAt=0 into the Key,
-// which fails. (The DynamoDB mock used in unit tests doesn't validate
-// the Key shape strictly, so this bites only in production.)
 type ChildEntry struct {
 	ParentNodeID string `dynamodbav:"parent_node_id"`
 	ChildNodeID  string `dynamodbav:"child_node_id"`
@@ -67,17 +57,19 @@ type ChildEntry struct {
 	CreatedAt    int64  `dynamodbav:"created_at,omitempty"`
 }
 
-// GetHKey / GetRKey satisfy espdynamodb.DBItem.
-func (e *ChildEntry) GetHKey() string { return bridgeChildrenHashKey }
-func (e *ChildEntry) GetRKey() string { return bridgeChildrenRangeKey }
-
 type BridgeChildrenDB struct {
-	espdynamodb.EspDB
+	Ctx      *rmngctx.RmngContext
+	children *ddbu.Table[ChildEntry]
 }
 
 func NewBridgeChildrenDB(ctx *rmngctx.RmngContext) *BridgeChildrenDB {
 	return &BridgeChildrenDB{
-		EspDB: espdynamodb.NewEspDB(ctx),
+		Ctx: ctx,
+		children: ddbu.NewTable[ChildEntry](awscommon.GetDynamoDBClient(), ddbu.Schema{
+			Name:     BridgeChildrenTable,
+			HashKey:  bridgeChildrenHashKey,
+			RangeKey: bridgeChildrenRangeKey,
+		}),
 	}
 }
 
@@ -100,7 +92,7 @@ func (db *BridgeChildrenDB) AddChild(parent, child, childLocalID string) error {
 		ChildLocalID: childLocalID,
 		CreatedAt:    time.Now().Unix(),
 	}
-	if err := db.DbCreateItem(BridgeChildrenTable, &entry); err != nil {
+	if err := db.children.Create(db.Ctx.Context, entry); err != nil {
 		return rmerror.NewRMError(err, "failed to insert bridge_children row")
 	}
 	if err := db.Ctx.SetAllowMultiple(
@@ -122,17 +114,11 @@ func (db *BridgeChildrenDB) GetChild(parent, child string) (*ChildEntry, error) 
 	if err := db.Ctx.IsAuthorized(utils.NodeGet, parent); err != nil {
 		return nil, err
 	}
-	query := &ChildEntry{
-		ParentNodeID: parent,
-		ChildNodeID:  child,
-	}
-	var out ChildEntry
-	if err := db.DbGetItem(BridgeChildrenTable, query, &out); err != nil {
+	out, found, err := db.children.Get(db.Ctx.Context, db.children.Key(parent, child))
+	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to get bridge_children row")
 	}
-	// DbGetItem unmarshals an empty Item into the zero value; key fields
-	// stay empty in that case.
-	if out.ParentNodeID == "" || out.ChildNodeID == "" {
+	if !found {
 		return nil, nil
 	}
 	if err := db.Ctx.SetAllowMultiple(
@@ -188,54 +174,24 @@ func (db *BridgeChildrenDB) GetChildrenByParent(parent string) ([]ChildEntry, er
 	if err := db.Ctx.IsAuthorized(utils.NodeGet, parent); err != nil {
 		return nil, err
 	}
-	keyExpr := expression.Key(bridgeChildrenHashKey).Equal(expression.Value(parent))
-	expr, err := expression.NewBuilder().WithKeyCondition(keyExpr).Build()
-	if err != nil {
-		return nil, rmerror.NewRMError(err, "failed to build query expression")
-	}
-
-	getKey := func(e ChildEntry, _ ...string) map[string]types.AttributeValue {
-		return map[string]types.AttributeValue{
-			bridgeChildrenHashKey:  &types.AttributeValueMemberS{Value: e.ParentNodeID},
-			bridgeChildrenRangeKey: &types.AttributeValueMemberS{Value: e.ChildNodeID},
-		}
-	}
-	entries, _, err := espdynamodb.DbQueryWithLoop(espdynamodb.QueryWithLoopInput[ChildEntry]{
-		DBHandle:  &db.EspDB,
-		TableName: BridgeChildrenTable,
-		Limit:     1000,
-		Expr:      expr,
-		GetKey:    getKey,
-	})
+	page, err := db.children.Query(db.Ctx.Context, expression.Key(bridgeChildrenHashKey).Equal(expression.Value(parent)))
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to query bridge_children")
 	}
-	for i := range entries {
-		if err := db.Ctx.SetAllow(utils.NodeEditGroups, entries[i].ChildNodeID); err != nil {
+	for i := range page.Items {
+		if err := db.Ctx.SetAllow(utils.NodeEditGroups, page.Items[i].ChildNodeID); err != nil {
 			return nil, rmerror.NewRMError(err, "failed to grant permissions")
 		}
 	}
-	return entries, nil
+	return page.Items, nil
 }
 
-// DeleteChild removes the row identified by (parent, child). Idempotent —
-// returns nil when the row doesn't exist. (espdynamodb.DbDeleteItem adds
-// an attribute-exists condition by default which fires
-// ConditionalCheckFailedException on missing rows; that's the case we
-// swallow here so removeChild can be retried safely per spec §5.7 / §4.3.)
+// DeleteChild removes the row identified by (parent, child). Idempotent so removeChild can be retried (spec §5.7 / §4.3).
 func (db *BridgeChildrenDB) DeleteChild(parent, child string) error {
 	if err := db.Ctx.IsAuthorized(utils.NodeUpdate, parent); err != nil {
 		return err
 	}
-	query := &ChildEntry{
-		ParentNodeID: parent,
-		ChildNodeID:  child,
-	}
-	if err := db.DbDeleteItem(BridgeChildrenTable, query); err != nil {
-		var cond *types.ConditionalCheckFailedException
-		if errors.As(err, &cond) {
-			return nil
-		}
+	if err := db.children.DeleteAllowMissing(db.Ctx.Context, db.children.Key(parent, child)); err != nil {
 		return rmerror.NewRMError(err, "failed to delete bridge_children row")
 	}
 	return nil

@@ -15,8 +15,10 @@ import (
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_reg_req_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
+	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )
 
@@ -133,6 +135,11 @@ var _ = Describe("NodeRegRequestsDB", func() {
 			Expect(result.NextKey).NotTo(BeEmpty())
 		})
 
+		It("rejects a start_key that is not a token", func() {
+			_, err := nodeRegRequestDB.ListNodeRegRequests(2, "not-a-valid-base64-token!!!", "", "")
+			Expect(err).To(MatchError("invalid start_key"))
+		})
+
 		It("should paginate with start_key", func() {
 			for i := 0; i < 3; i++ {
 				entry := node_reg_req_db.NodeRegRequestsEntry{
@@ -233,6 +240,57 @@ var _ = Describe("NodeRegRequestsDB", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.Entries).To(HaveLen(1))
 			Expect(result.Entries[0].RequestID).To(Equal("update-completed"))
+		})
+
+		It("fills each filtered page to the limit when matches are sparse, and resumes without skips or duplicates", func() {
+			const (
+				total = 15
+				limit = 2
+			)
+			completed := node_reg_req_db.NODE_REG_STATUS_COMPLETED
+			for i := 0; i < total; i++ {
+				status := node_reg_req_db.NODE_REG_STATUS_STARTED
+				if i%3 == 0 {
+					status = completed
+				}
+				Expect(nodeRegRequestDB.CreateNodeRegRequest(node_reg_req_db.NodeRegRequestsEntry{
+					RequestID: fmt.Sprintf("sparse-%02d", i),
+					UserID:    testUserID,
+					Status:    status,
+				})).To(Succeed())
+			}
+			// Each DynamoDB page now holds at most one match, so a filled page has to span several of them.
+			awscommon.GetDynamoDBClient().(*mock.DynamoDBMock).MaxPageItems = 2
+
+			all, err := nodeRegRequestDB.ListNodeRegRequests(100, "", "", "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(all.Entries).To(HaveLen(total))
+			var want []string
+			for _, e := range all.Entries {
+				if e.Status == completed {
+					want = append(want, e.RequestID)
+				}
+			}
+			Expect(want).To(HaveLen(5))
+
+			var got []string
+			var pageSizes []int
+			for startKey := ""; ; {
+				page, err := nodeRegRequestDB.ListNodeRegRequests(limit, startKey, completed, "")
+				Expect(err).NotTo(HaveOccurred())
+				pageSizes = append(pageSizes, len(page.Entries))
+				for _, e := range page.Entries {
+					Expect(e.Status).To(Equal(completed))
+					got = append(got, e.RequestID)
+				}
+				if page.NextKey == "" {
+					break
+				}
+				Expect(len(pageSizes)).To(BeNumerically("<", total), "pagination did not terminate")
+				startKey = page.NextKey
+			}
+			Expect(pageSizes).To(Equal([]int{2, 2, 1}))
+			Expect(got).To(Equal(want))
 		})
 	})
 

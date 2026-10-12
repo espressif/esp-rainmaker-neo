@@ -10,15 +10,10 @@ package identity_providers_db
 import (
 	"errors"
 
+	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-
-	"github.com/espressif/esp-rainmaker-neo/src/awsutils/espdynamodb"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 const (
@@ -34,11 +29,18 @@ const (
 var ErrProviderNotFound = errors.New("identity provider not found")
 
 type IdentityProvidersDB struct {
-	espdynamodb.EspDB
+	Ctx       *rmngctx.RmngContext
+	providers *ddbu.Table[ProviderEntry]
 }
 
 func NewIdentityProvidersDB(ctx *rmngctx.RmngContext) *IdentityProvidersDB {
-	return &IdentityProvidersDB{EspDB: espdynamodb.NewEspDB(ctx)}
+	return &IdentityProvidersDB{
+		Ctx: ctx,
+		providers: ddbu.NewTable[ProviderEntry](awscommon.GetDynamoDBClient(), ddbu.Schema{
+			Name:    identityProvidersTableName,
+			HashKey: identityProvidersHashKey,
+		}),
+	}
 }
 
 type ProviderEntry struct {
@@ -90,9 +92,6 @@ type ProviderEntry struct {
 	UpdatedAt               int64  `dynamodbav:"updated_at,omitempty"`
 }
 
-func (p *ProviderEntry) GetHKey() string { return identityProvidersHashKey }
-func (p *ProviderEntry) GetRKey() string { return "" }
-
 func (p *ProviderEntry) IsEnabled() bool { return p.Enabled != nil && *p.Enabled }
 
 func (p *ProviderEntry) IsInbuilt() bool { return p.ProviderName == InbuiltProviderName }
@@ -103,27 +102,20 @@ func (p *ProviderEntry) OffersPasswordGrant() bool {
 	return p.PasswordGrant != nil && *p.PasswordGrant && p.ClientID != ""
 }
 
-type providerKey struct {
-	ProviderName string `dynamodbav:"provider_name"`
-}
-
-func (providerKey) GetHKey() string { return identityProvidersHashKey }
-func (providerKey) GetRKey() string { return "" }
-
 func (db *IdentityProvidersDB) GetProvider(name string) (*ProviderEntry, error) {
-	var result ProviderEntry
-	if err := db.DbGetItem(identityProvidersTableName, &providerKey{ProviderName: name}, &result); err != nil {
+	entry, found, err := db.providers.Get(db.Ctx.Context, db.providers.Key(name))
+	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to get identity provider")
 	}
-	if result.ProviderName == "" {
+	if !found {
 		return nil, ErrProviderNotFound
 	}
-	return &result, nil
+	return &entry, nil
 }
 
 // CreateProvider registers a provider, failing if one of that name already exists.
 func (db *IdentityProvidersDB) CreateProvider(entry *ProviderEntry) error {
-	if err := db.DbCreateItem(identityProvidersTableName, entry); err != nil {
+	if err := db.providers.Create(db.Ctx.Context, *entry); err != nil {
 		return rmerror.NewRMError(err, "failed to create identity provider")
 	}
 	return nil
@@ -131,28 +123,14 @@ func (db *IdentityProvidersDB) CreateProvider(entry *ProviderEntry) error {
 
 func (db *IdentityProvidersDB) ListEnabled() ([]ProviderEntry, error) {
 	var enabled []ProviderEntry
-	var startKey map[string]types.AttributeValue
-	for {
-		out, err := db.DB.Scan(db.Ctx.Context, &dynamodb.ScanInput{
-			TableName:         aws.String(identityProvidersTableName),
-			ExclusiveStartKey: startKey,
-		})
-		if err != nil {
-			return nil, rmerror.NewRMError(err, "failed to list identity providers")
+	err := db.providers.ScanEach(db.Ctx.Context, func(p ProviderEntry) error {
+		if p.IsEnabled() {
+			enabled = append(enabled, p)
 		}
-		var page []ProviderEntry
-		if err := attributevalue.UnmarshalListOfMaps(out.Items, &page); err != nil {
-			return nil, rmerror.NewRMError(err, "failed to unmarshal identity providers")
-		}
-		for i := range page {
-			if page[i].IsEnabled() {
-				enabled = append(enabled, page[i])
-			}
-		}
-		if len(out.LastEvaluatedKey) == 0 {
-			break
-		}
-		startKey = out.LastEvaluatedKey
+		return nil
+	})
+	if err != nil {
+		return nil, rmerror.NewRMError(err, "failed to list identity providers")
 	}
 	return enabled, nil
 }
