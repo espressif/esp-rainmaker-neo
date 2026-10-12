@@ -28,6 +28,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 )
 
+// Retry limits for every AWS call; dynamodbutil reuses them for batch items DynamoDB returns as unprocessed.
+const (
+	SDK_MAX_ATTEMPTS = 3
+	SDK_MAX_BACKOFF  = 5 * time.Second
+)
+
 var (
 	dynamoDBClient        DynamoDBClientInterface
 	iotClient             IoTClientInterface
@@ -58,7 +64,7 @@ func init() {
 		// throttling 4xx other than 429 (ConditionalCheckFailed, Validation,
 		// AccessDenied, ...) and ctx cancel are NOT retried.
 		//
-		// MaxAttempts left at the SDK default of 3 (initial + 2 retries). The
+		// MaxAttempts is the SDK default of 3 (initial + 2 retries), set explicitly so batch retries can share it. The
 		// real throttling-smoothing win comes from adaptive mode's client-side
 		// rate limiter, not from raw retry count — a 4th or 5th attempt almost
 		// never recovers something the 3rd didn't, and Change 3's per-step
@@ -75,7 +81,8 @@ func init() {
 				return retry.NewAdaptiveMode(func(o *retry.AdaptiveModeOptions) {
 					o.StandardOptions = []func(*retry.StandardOptions){
 						func(s *retry.StandardOptions) {
-							s.MaxBackoff = 5 * time.Second
+							s.MaxAttempts = SDK_MAX_ATTEMPTS
+							s.MaxBackoff = SDK_MAX_BACKOFF
 						},
 					}
 				})

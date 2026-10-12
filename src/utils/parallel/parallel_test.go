@@ -6,7 +6,9 @@ package parallel
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -198,5 +200,109 @@ var _ = Describe("ProcessParallel", func() {
 			Expect(results[2]).To(Equal(3))
 			Expect(results[4]).To(Equal(5))
 		})
+	})
+})
+
+var _ = Describe("ProcessParallelErr", func() {
+	double := func(_ context.Context, x int) (int, error) { return x * 2, nil }
+
+	It("returns results in input order", func() {
+		results, err := ProcessParallelErr(context.Background(), []int{1, 2, 3, 4, 5}, double, ParallelOptions{MaxRoutines: 3})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(results).To(Equal([]int{2, 4, 6, 8, 10}))
+	})
+
+	It("returns nil for empty input", func() {
+		results, err := ProcessParallelErr(context.Background(), []int{}, double)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(results).To(BeNil())
+	})
+
+	It("returns the error and no results", func() {
+		boom := errors.New("boom")
+		results, err := ProcessParallelErr(context.Background(), []int{1, 2, 3}, func(_ context.Context, x int) (int, error) {
+			if x == 2 {
+				return 0, boom
+			}
+			return x, nil
+		})
+		Expect(err).To(MatchError(boom))
+		Expect(results).To(BeNil())
+	})
+
+	It("starts nothing after a failure when sequential", func() {
+		var mu sync.Mutex
+		var started []int
+		_, err := ProcessParallelErr(context.Background(), []int{1, 2, 3, 4, 5}, func(_ context.Context, x int) (int, error) {
+			mu.Lock()
+			started = append(started, x)
+			mu.Unlock()
+			if x == 2 {
+				return 0, errors.New("boom")
+			}
+			return x, nil
+		}, ParallelOptions{MaxRoutines: 1})
+		Expect(err).To(HaveOccurred())
+		Expect(started).To(Equal([]int{1, 2}))
+	})
+
+	It("cancels in-flight items on failure and returns the first error", func() {
+		started, cancelled := make(chan struct{}), make(chan struct{})
+		_, err := ProcessParallelErr(context.Background(), []int{1, 2}, func(ctx context.Context, x int) (int, error) {
+			if x == 1 {
+				<-started
+				return 0, errors.New("boom")
+			}
+			close(started)
+			select {
+			case <-ctx.Done():
+				close(cancelled)
+				return 0, ctx.Err()
+			case <-time.After(5 * time.Second):
+				return 0, nil
+			}
+		}, ParallelOptions{MaxRoutines: 2})
+		Expect(err).To(MatchError("boom"))
+		Expect(cancelled).To(BeClosed(), "the in-flight item never saw its context cancelled")
+	})
+
+	It("turns a panic into an error", func() {
+		_, err := ProcessParallelErr(context.Background(), []int{1, 2, 3}, func(_ context.Context, x int) (int, error) {
+			if x == 2 {
+				panic("kaboom")
+			}
+			return x, nil
+		})
+		Expect(err).To(MatchError(ContainSubstring("kaboom")))
+	})
+
+	It("caps concurrency at MaxRoutines", func() {
+		var running, peak atomic.Int32
+		_, err := ProcessParallelErr(context.Background(), make([]int, 20), func(_ context.Context, x int) (int, error) {
+			n := running.Add(1)
+			for {
+				p := peak.Load()
+				if n <= p || peak.CompareAndSwap(p, n) {
+					break
+				}
+			}
+			time.Sleep(5 * time.Millisecond)
+			running.Add(-1)
+			return x, nil
+		}, ParallelOptions{MaxRoutines: 3})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(peak.Load()).To(BeNumerically("<=", 3))
+	})
+
+	It("returns the caller's cancellation without running anything", func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		var calls atomic.Int32
+		_, err := ProcessParallelErr(ctx, []int{1, 2, 3}, func(_ context.Context, x int) (int, error) {
+			calls.Add(1)
+			return x, nil
+		})
+		Expect(err).To(MatchError(context.Canceled))
+		Expect(calls.Load()).To(BeZero())
 	})
 })

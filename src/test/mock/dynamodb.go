@@ -178,13 +178,14 @@ type DynamoDBMock struct {
 	// Ordering is always condMx -> mx; nothing takes them the other way.
 	condMx  sync.Mutex
 	profile *Profile
+	// faultMx guards the Next* fault counters, which concurrent batch chunks read and decrement.
+	faultMx sync.Mutex
 
 	// Returned once on the next matching call, then cleared.
 	NextDescribeError error
 	NextUpdateError   error
 	NextGetItemError  error
-	// If > 0, the next BatchGetItem call returns the last N keys as UnprocessedKeys
-	// instead of processing them, then resets to 0.
+	// If > 0, the next BatchGetItem call returns the last N keys (all of them when N covers the batch) as UnprocessedKeys, then decrements by one, matching NextBatchWriteUnprocessedCount.
 	NextBatchGetUnprocessedCount int
 	// If > 0, the next BatchWriteItem call returns the last N requests as UnprocessedItems
 	// instead of applying them, then decrements by one so a caller that retries eventually
@@ -519,17 +520,23 @@ func (m *DynamoDBMock) BatchGetItem(ctx context.Context, params *dynamodb.BatchG
 	output := &dynamodb.BatchGetItemOutput{}
 	output.Responses = make(map[string][]map[string]types.AttributeValue)
 
+	m.faultMx.Lock()
 	unprocessedCount := m.NextBatchGetUnprocessedCount
-	m.NextBatchGetUnprocessedCount = 0
+	if unprocessedCount > 0 {
+		m.NextBatchGetUnprocessedCount--
+	}
+	m.faultMx.Unlock()
 
+	for table, v := range params.RequestItems {
+		if err := m.rejectDuplicateKeys(table, v.Keys); err != nil {
+			return nil, err
+		}
+	}
 	for table, v := range params.RequestItems {
 		keys := v.Keys
 		outitems := make([]map[string]types.AttributeValue, 0)
 
-		processUntil := len(keys)
-		if unprocessedCount > 0 && unprocessedCount < len(keys) {
-			processUntil = len(keys) - unprocessedCount
-		}
+		processUntil := len(keys) - min(unprocessedCount, len(keys))
 
 		projection := NewMexpression(v.ProjectionExpression, v.ExpressionAttributeNames, nil)
 		for _, key := range keys[:processUntil] {
@@ -547,7 +554,7 @@ func (m *DynamoDBMock) BatchGetItem(ctx context.Context, params *dynamodb.BatchG
 		}
 		output.Responses[table] = outitems
 
-		if unprocessedCount > 0 && unprocessedCount < len(keys) {
+		if processUntil < len(keys) {
 			if output.UnprocessedKeys == nil {
 				output.UnprocessedKeys = make(map[string]types.KeysAndAttributes)
 			}
@@ -745,12 +752,31 @@ func (m *DynamoDBMock) DeleteItem(ctx context.Context, params *dynamodb.DeleteIt
 func (m *DynamoDBMock) BatchWriteItem(ctx context.Context, params *dynamodb.BatchWriteItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.BatchWriteItemOutput, error) {
 	var out dynamodb.BatchWriteItemOutput
 
+	for table, requests := range params.RequestItems {
+		keys := make([]map[string]types.AttributeValue, 0, len(requests))
+		for _, request := range requests {
+			if request.PutRequest != nil {
+				keys = append(keys, request.PutRequest.Item)
+			}
+			if request.DeleteRequest != nil {
+				keys = append(keys, request.DeleteRequest.Key)
+			}
+		}
+		if err := m.rejectDuplicateKeys(table, keys); err != nil {
+			return nil, err
+		}
+	}
+
 	// Hold back the tail of each batch as unprocessed, mimicking a partial throttle. Decrement so
 	// a caller that retries makes progress and eventually drains, which is what lets a test tell
 	// "retries until done" apart from "gave up" or "never noticed".
-	if m.NextBatchWriteUnprocessedCount > 0 {
-		holdBack := m.NextBatchWriteUnprocessedCount
+	m.faultMx.Lock()
+	holdBack := m.NextBatchWriteUnprocessedCount
+	if holdBack > 0 {
 		m.NextBatchWriteUnprocessedCount--
+	}
+	m.faultMx.Unlock()
+	if holdBack > 0 {
 		out.UnprocessedItems = make(map[string][]types.WriteRequest)
 		applied := make(map[string][]types.WriteRequest)
 		for table, requests := range params.RequestItems {
@@ -787,9 +813,12 @@ func getProjection(item map[string]types.AttributeValue, projection *Mexpression
 	if projection.Expr == nil {
 		return item
 	}
+	// An attribute the item lacks is left out, as the service does, so a projection matching nothing yields an empty item.
 	output := make(map[string]types.AttributeValue)
 	for _, name := range projection.GetNamesList() {
-		output[name] = item[name]
+		if v, ok := item[name]; ok {
+			output[name] = v
+		}
 	}
 	return output
 }

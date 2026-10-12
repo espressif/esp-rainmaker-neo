@@ -8,12 +8,15 @@ package parallel
 
 import (
 	"context"
+	"fmt"
 	"runtime"
 	"sync"
 	"time"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"github.com/rs/zerolog"
+	"golang.org/x/sync/errgroup"
 )
 
 // ParallelOptions configures the behavior of parallel processing operations.
@@ -158,4 +161,53 @@ func processParallelTest[T, R any](ctx context.Context, items []T, processFunc f
 	//It is not used in the production code
 
 	return results, lastProcessed, nil
+}
+
+// ProcessParallelErr is ProcessParallel for work that can fail: results come back in input order, and the first error, or a panic turned into one, cancels the context in-flight calls hold and starts no further items. Items {1, 2, 3} where 2 fails -> (nil, 2's error). CollectResults does not apply.
+func ProcessParallelErr[T, R any](ctx context.Context, items []T, processFunc func(context.Context, T) (R, error), opts ...ParallelOptions) ([]R, error) {
+	if len(items) == 0 {
+		return nil, nil
+	}
+	var opt ParallelOptions
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+	limit := runtime.NumCPU() * 4
+	if opt.MaxRoutines > 0 {
+		limit = int(min(opt.MaxRoutines, uint(len(items)))) //nolint:gosec // G115: capped at len(items), so it fits an int
+	}
+	if opt.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, opt.Timeout)
+		defer cancel()
+	}
+
+	results := make([]R, len(items))
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(limit)
+	for i, item := range items {
+		if gctx.Err() != nil {
+			break
+		}
+		g.Go(func() (err error) {
+			// Go blocks for a free slot, so an earlier failure can land between the check above and this start.
+			if err := gctx.Err(); err != nil {
+				return err
+			}
+			defer func() {
+				if r := recover(); r != nil {
+					err = rmerror.NewRMError(nil, fmt.Sprintf("parallel worker panicked on item %d: %v", i, r))
+				}
+			}()
+			results[i], err = processFunc(gctx, item)
+			return err
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
 }
