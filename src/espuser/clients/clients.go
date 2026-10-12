@@ -7,6 +7,7 @@
 package clients
 
 import (
+	"context"
 	"crypto/subtle"
 	"errors"
 	"fmt"
@@ -223,7 +224,7 @@ func (s *Service) AuthenticateForOAuth(clientID, clientSecret string) (errCode s
 	default:
 		// An unexpected (non-auth) error — e.g. a DynamoDB failure reading the registry. Log it:
 		// the caller collapses this to a generic server_error, so this is the only record of the cause.
-		rlog.Error(nil).Err(err).Str("client_id", clientID).Msg("Client authentication failed on an internal error")
+		rlog.Error(context.TODO()).Err(err).Str("client_id", clientID).Msg("Client authentication failed on an internal error")
 		return oidc.OAuthErrServerError, true
 	}
 }

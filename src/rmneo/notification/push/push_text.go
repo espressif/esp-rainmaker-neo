@@ -81,7 +81,7 @@ func DoInit() {
 
 	// Load any customisations from S3 on top of the defaults
 	if err := LoadPushTextConfigFromS3(&GPushTextConfig); err != nil {
-		rlog.Warn(nil).Err(err).Msg("Failed to load push text configuration from S3, using default configuration")
+		rlog.Warn(context.TODO()).Err(err).Msg("Failed to load push text configuration from S3, using default configuration")
 	}
 }
 
@@ -128,7 +128,7 @@ func LoadPushTextConfigFromS3(c *PushTextConfig) error {
 		}
 	}
 
-	rlog.Info(nil).Msg("Successfully loaded push text configuration from S3:")
+	rlog.Info(context.TODO()).Msg("Successfully loaded push text configuration from S3:")
 	return nil
 }
 

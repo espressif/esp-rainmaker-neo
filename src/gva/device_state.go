@@ -5,6 +5,7 @@
 package gva
 
 import (
+	"context"
 	"fmt"
 	"math"
 
@@ -27,7 +28,7 @@ func buildDeviceTraitStates(deviceData map[string]interface{}, customData map[st
 			continue
 		}
 		if err := addTraitState(deviceData, traitName, paramName, state); err != nil {
-			rlog.Warn(nil).Err(err).Str("trait", traitName).Str("param", paramName).Msg("failed to add trait state")
+			rlog.Warn(context.TODO()).Err(err).Str("trait", traitName).Str("param", paramName).Msg("failed to add trait state")
 		}
 	}
 

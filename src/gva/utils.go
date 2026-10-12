@@ -10,10 +10,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"strings"
 
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
-	rmngctx "github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )
 
 // groupIDFromCustomData returns the group the device was synced with. customData is echoed
@@ -27,28 +24,13 @@ func groupIDFromCustomData(customData map[string]interface{}) (string, error) {
 	return groupID, nil
 }
 
-func GetUserNodeFromRequest(ctx context.Context, request GVARequest, deviceID string, accessToken string) (*rmngctx.RmngContext, *node.Node, string, error) {
+// parseDeviceID splits a GVA device ID into its node ID and device name: "node123.Light" -> ("node123", "Light").
+func parseDeviceID(deviceID string) (nodeID, deviceName string, err error) {
 	parts := strings.Split(deviceID, ".")
 	if len(parts) != 2 {
-		return nil, nil, "", fmt.Errorf("invalid deviceID: %s", deviceID)
+		return "", "", fmt.Errorf("invalid deviceID: %s", deviceID)
 	}
-	nodeID := parts[0]
-	deviceName := parts[1]
-
-	userID, err := user.GetUserIDFromToken(ctx, accessToken)
-	if err != nil {
-		return nil, nil, "", rmerror.NewRMError(err, "failed to get identity id")
-	}
-	userCtx := rmngctx.NewRmngContextWithCtx(ctx, user.NewUser(userID))
-
-	// Note: For GVA, groupID is stored in device customData
-	// We'll need to extract it from the device during discovery
-	// For now, we'll load permissions for the primary group
-	// TODO: Enhance this to support multiple groups per device
-
-	node := node.NewNode(nodeID)
-
-	return userCtx, node, deviceName, nil
+	return parts[0], parts[1], nil
 }
 
 func GetDeviceId(nodeID, deviceName string) string {
@@ -108,7 +90,7 @@ func GetGVATraits(paramType *string, deviceType *string) []string {
 	case "esp.param.light-mode", "esp.param.mode", "light-mode", "mode":
 		traits = append(traits, TraitModes)
 	default:
-		rlog.Warn(nil).Str("paramType", *paramType).Msg("unsupported parameter type")
+		rlog.Warn(context.TODO()).Str("paramType", *paramType).Msg("unsupported parameter type")
 	}
 
 	return traits

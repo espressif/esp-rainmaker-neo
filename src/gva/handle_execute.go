@@ -42,7 +42,7 @@ func HandleExecute(ctx context.Context, request GVARequest, accessToken string) 
 	for _, command := range executeRequest.Commands {
 		for _, device := range command.Devices {
 			for _, execution := range command.Execution {
-				deviceResult, err := executeDeviceCommand(ctx, rmngCtx, device.ID, device.CustomData, execution, accessToken)
+				deviceResult, err := executeDeviceCommand(ctx, rmngCtx, device.ID, device.CustomData, execution)
 				if err != nil {
 					rlog.Error(rmngCtx).Err(err).Str("deviceID", device.ID).Str("command", execution.Command).Msg("failed to execute device command")
 					// Create error response for this device
@@ -66,22 +66,20 @@ func HandleExecute(ctx context.Context, request GVARequest, accessToken string) 
 	return CreateResponse(request.RequestID, payload), nil
 }
 
-func executeDeviceCommand(ctx context.Context, rmngCtx *rmngctx.RmngContext, deviceID string, customData map[string]interface{}, execution ExecuteExecution, accessToken string) (ExecuteCommand, error) {
+func executeDeviceCommand(ctx context.Context, rmngCtx *rmngctx.RmngContext, deviceID string, customData map[string]interface{}, execution ExecuteExecution) (ExecuteCommand, error) {
 	// Parse device ID to get node ID and device name
-	userCtx, n, deviceName, err := GetUserNodeFromRequest(ctx, GVARequest{}, deviceID, accessToken)
+	nodeID, deviceName, err := parseDeviceID(deviceID)
 	if err != nil {
 		return ExecuteCommand{}, rmerror.NewRMError(err, "failed to parse device ID")
 	}
-
-	// Override userCtx with our authenticated context
-	userCtx = rmngCtx
+	n := node.NewNode(nodeID)
 
 	// Load node permissions using group ID from custom data.
 	groupID, err := groupIDFromCustomData(customData)
 	if err != nil {
 		return ExecuteCommand{}, err
 	}
-	if err := user.LoadNodePermissions(userCtx, groupID, n.GetID()); err != nil {
+	if err := user.LoadNodePermissions(rmngCtx, groupID, n.GetID()); err != nil {
 		return ExecuteCommand{}, rmerror.NewRMError(err, "failed to load node permissions")
 	}
 
@@ -89,7 +87,7 @@ func executeDeviceCommand(ctx context.Context, rmngCtx *rmngctx.RmngContext, dev
 	// report OFFLINE rather than a success the user will not see happen. The
 	// shadow's reported.online is the platform's connectivity source of truth,
 	// the same one QUERY and the proactive Report State use.
-	shadow, err := n.ReadFromReportedShadow(userCtx)
+	shadow, err := n.ReadFromReportedShadow(rmngCtx)
 	if err != nil {
 		return ExecuteCommand{
 			IDs:       []string{deviceID},
@@ -107,7 +105,7 @@ func executeDeviceCommand(ctx context.Context, rmngCtx *rmngctx.RmngContext, dev
 	}
 
 	// Execute the command based on the command type
-	states, err := handleCommand(ctx, userCtx, n, deviceName, execution, customData)
+	states, err := handleCommand(ctx, rmngCtx, n, deviceName, execution, customData)
 	if err != nil {
 		return ExecuteCommand{
 			IDs:       []string{deviceID},

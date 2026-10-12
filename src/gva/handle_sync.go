@@ -360,7 +360,7 @@ func buildModesAttribute(param config.NodeCfgDeviceParam) interface{} {
 		max := *param.Bounds.Max
 
 		if max-min+1 > maxModeSettings {
-			rlog.Warn(nil).Int("min", min).Int("max", max).Msg("mode range too large, skipping modes attribute")
+			rlog.Warn(context.TODO()).Int("min", min).Int("max", max).Msg("mode range too large, skipping modes attribute")
 			return nil
 		}
 

@@ -40,8 +40,6 @@ func isRlogPackage(path string) bool {
 	return path == "github.com/espressif/esp-rainmaker-neo/src/utils/rlog" || strings.HasSuffix(path, "/rlog")
 }
 
-var contextIfacePath = "context.Context"
-
 func implementsContext(t types.Type, ctxIface *types.Interface) bool {
 	return types.Implements(t, ctxIface) || types.Implements(types.NewPointer(t), ctxIface)
 }

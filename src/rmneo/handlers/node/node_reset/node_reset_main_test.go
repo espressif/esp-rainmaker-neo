@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/espressif/esp-cloud-common/go/rbac/rbac"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/automation_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"testing"
@@ -21,7 +20,6 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/trigger"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
-	"github.com/espressif/esp-rainmaker-neo/src/utils"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -33,18 +31,6 @@ import (
 func TestNodeDataReset(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "NodeDataReset Suite")
-}
-
-// buildPerms creates an EntityPermissions granting NodeAll for each node and GroupAll for the group.
-func buildPerms(nodeIDs []string, groupID string) *rbac.EntityPermissions {
-	perms := make(rbac.EntityPermissions)
-	for _, nid := range nodeIDs {
-		perms.SetAllow(utils.NodeAll.String(), nid)
-	}
-	if groupID != "" {
-		perms.SetAllow(utils.GroupAll.String(), groupID)
-	}
-	return &perms
 }
 
 var _ = Describe("handleRequest", func() {

@@ -39,10 +39,6 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jwk"
 )
 
-// errPasswordlessUnsupported is returned by the password-shaped operations that
-// do not apply to passwordless OAuth users (they authenticate via OTP/social).
-var errPasswordlessUnsupported = fmt.Errorf("operation not supported for passwordless oauth users")
-
 // OAuthUserAuthService handles authentication for passwordless OIDC users. issuer and jwks are
 // resolved once at construction. There is intentionally no single client id: this service verifies
 // tokens from every registered client (rm_mobile, va-client, mcp-oauth-client, ...); the per-call

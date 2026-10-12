@@ -38,7 +38,7 @@ func HandleQuery(ctx context.Context, request GVARequest, accessToken string) (G
 	deviceStates := make(map[string]interface{})
 
 	for _, device := range queryRequest.Devices {
-		deviceState, err := getDeviceState(ctx, rmngCtx, device.ID, device.CustomData, accessToken)
+		deviceState, err := getDeviceState(rmngCtx, device.ID, device.CustomData)
 		if err != nil {
 			rlog.Error(rmngCtx).Err(err).Str("deviceID", device.ID).Msg("failed to get device state")
 
@@ -61,26 +61,24 @@ func HandleQuery(ctx context.Context, request GVARequest, accessToken string) (G
 	return CreateResponse(request.RequestID, payload), nil
 }
 
-func getDeviceState(ctx context.Context, rmngCtx *rmngctx.RmngContext, deviceID string, customData map[string]interface{}, accessToken string) (map[string]interface{}, error) {
+func getDeviceState(rmngCtx *rmngctx.RmngContext, deviceID string, customData map[string]interface{}) (map[string]interface{}, error) {
 	// Parse device ID to get node ID and device name
-	userCtx, n, deviceName, err := GetUserNodeFromRequest(ctx, GVARequest{}, deviceID, accessToken)
+	nodeID, deviceName, err := parseDeviceID(deviceID)
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to parse device ID")
 	}
-
-	// Override userCtx with our authenticated context
-	userCtx = rmngCtx
+	n := node.NewNode(nodeID)
 
 	// Load node permissions using group ID from custom data.
 	groupID, err := groupIDFromCustomData(customData)
 	if err != nil {
 		return nil, err
 	}
-	if err := user.LoadNodePermissions(userCtx, groupID, n.GetID()); err != nil {
+	if err := user.LoadNodePermissions(rmngCtx, groupID, n.GetID()); err != nil {
 		return nil, rmerror.NewRMError(err, "failed to load node permissions")
 	}
 
-	shadow, err := n.ReadFromReportedShadow(userCtx)
+	shadow, err := n.ReadFromReportedShadow(rmngCtx)
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to read device shadow")
 	}

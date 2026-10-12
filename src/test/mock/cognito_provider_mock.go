@@ -17,7 +17,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
 	"github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
-	"github.com/golang-jwt/jwt/v5"
 )
 
 // UserState represents the current state of a user in the mock
@@ -913,120 +912,6 @@ func (m *CognitoProviderMock) GetUser(ctx context.Context, params *cognitoidenti
 	// Build user attributes
 	var attributes []types.AttributeType
 	for name, value := range user.Attributes {
-		attributes = append(attributes, types.AttributeType{
-			Name:  aws.String(name),
-			Value: aws.String(value),
-		})
-	}
-
-	return &cognitoidentityprovider.GetUserOutput{
-		Username:       &user.Username,
-		UserAttributes: attributes,
-	}, nil
-}
-
-// getUserFromJWTToken extracts user information from a JWT token
-func (m *CognitoProviderMock) getUserFromJWTToken(tokenString string) (*cognitoidentityprovider.GetUserOutput, error) {
-	// Parse token without verification (for test scenarios)
-	token, _, err := new(jwt.Parser).ParseUnverified(tokenString, jwt.MapClaims{})
-	if err != nil {
-		return nil, fmt.Errorf("invalid access token")
-	}
-
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
-		return nil, fmt.Errorf("invalid access token")
-	}
-
-	// Check if token is expired
-	if exp, ok := claims["exp"].(float64); ok {
-		if time.Now().After(time.Unix(int64(exp), 0)) {
-			return nil, fmt.Errorf("access token expired")
-		}
-	}
-
-	// Extract user identifier from token (try sub or custom:user_id)
-	var userID string
-	if sub, ok := claims["sub"].(string); ok {
-		userID = sub
-	} else if customUserID, ok := claims["custom:user_id"].(string); ok {
-		userID = customUserID
-	} else {
-		return nil, fmt.Errorf("invalid access token: missing user identifier")
-	}
-
-	// Extract user pool ID from issuer
-	var userPoolID string
-	if iss, ok := claims["iss"].(string); ok {
-		// Extract user pool ID from issuer: https://cognito-idp.{region}.amazonaws.com/{userPoolID}
-		parts := strings.Split(iss, "/")
-		if len(parts) > 0 {
-			userPoolID = parts[len(parts)-1]
-		}
-	}
-
-	if userPoolID == "" {
-		// Try to find user in any pool
-		m.usersMutex.RLock()
-		defer m.usersMutex.RUnlock()
-
-		for _, pool := range m.Users {
-			if user, exists := pool[userID]; exists {
-				return m.buildGetUserOutput(user, claims)
-			}
-		}
-		return nil, fmt.Errorf("user not found")
-	}
-
-	// Find user in specific pool
-	m.usersMutex.RLock()
-	defer m.usersMutex.RUnlock()
-
-	userPool, poolExists := m.Users[userPoolID]
-	if !poolExists {
-		return nil, fmt.Errorf("user pool not found")
-	}
-
-	user, exists := userPool[userID]
-	if !exists {
-		return nil, fmt.Errorf("user not found")
-	}
-
-	return m.buildGetUserOutput(user, claims)
-}
-
-// buildGetUserOutput builds GetUserOutput from user state and JWT claims
-func (m *CognitoProviderMock) buildGetUserOutput(user *UserState, claims jwt.MapClaims) (*cognitoidentityprovider.GetUserOutput, error) {
-	// Build user attributes, preferring values from JWT claims if available
-	attributes := []types.AttributeType{}
-
-	// Add all attributes from user state
-	for name, value := range user.Attributes {
-		attributes = append(attributes, types.AttributeType{
-			Name:  aws.String(name),
-			Value: aws.String(value),
-		})
-	}
-
-	// Override with JWT claim values if present
-	attributeMap := make(map[string]string)
-	for _, attr := range attributes {
-		attributeMap[*attr.Name] = *attr.Value
-	}
-
-	if email, ok := claims["email"].(string); ok && email != "" {
-		attributeMap["email"] = email
-	}
-	if phoneNumber, ok := claims["phone_number"].(string); ok && phoneNumber != "" {
-		attributeMap["phone_number"] = phoneNumber
-	}
-	if customUserID, ok := claims["custom:user_id"].(string); ok && customUserID != "" {
-		attributeMap["custom:user_id"] = customUserID
-	}
-
-	// Rebuild attributes list
-	attributes = []types.AttributeType{}
-	for name, value := range attributeMap {
 		attributes = append(attributes, types.AttributeType{
 			Name:  aws.String(name),
 			Value: aws.String(value),

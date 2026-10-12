@@ -146,10 +146,9 @@ type Issuer interface {
 // SigningIssuer signs with any crypto.Signer against a fixed CA certificate.
 // Production wires a KMS-backed signer; tests can supply a local key.
 type SigningIssuer struct {
-	caCert   *x509.Certificate
-	caPEM    string
-	signer   crypto.Signer
-	defaults Profile
+	caCert *x509.Certificate
+	caPEM  string
+	signer crypto.Signer
 }
 
 // NewSigningIssuer builds an issuer from a PEM-encoded CA certificate and the

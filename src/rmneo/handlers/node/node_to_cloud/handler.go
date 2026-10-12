@@ -175,18 +175,3 @@ func handlePublishInputEvent(ctx context.Context, event node.PublishInputEvent) 
 	}
 	return nil
 }
-
-// handleHello is a helper function to handle hello events
-func handleHello(data map[string]interface{}, responseData *node.DataToDevice) error {
-	id, ok := data["id"]
-	if !ok {
-		return rmerror.NewRMError(fmt.Errorf("id is missing in hello data"), "")
-	}
-	response := map[string]interface{}{
-		"id": id,
-	}
-
-	responseData.Event = append(responseData.Event, "hello")
-	responseData.Data["hello"] = response
-	return nil
-}

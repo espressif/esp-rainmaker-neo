@@ -128,7 +128,7 @@ func ExtractRequestStruct(request events.APIGatewayProxyRequest, inputRequest an
 // formatUsernameFields canonicalizes, in place, each string field tagged validate email/email_or_phone.
 func formatUsernameFields(inputRequest any) {
 	v := reflect.ValueOf(inputRequest)
-	if v.Kind() != reflect.Ptr || v.IsNil() {
+	if v.Kind() != reflect.Pointer || v.IsNil() {
 		return
 	}
 	v = v.Elem()

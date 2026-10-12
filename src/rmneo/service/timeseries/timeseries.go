@@ -5,6 +5,7 @@
 package timeseries
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -23,6 +24,23 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngrequest"
 )
+
+type ctxKey int
+
+const (
+	queryParamsKey ctxKey = iota
+	typeKey
+)
+
+// WithQueryParams attaches the request's query string to ctx for Get.
+func WithQueryParams(ctx context.Context, params map[string]string) context.Context {
+	return context.WithValue(ctx, queryParamsKey, params)
+}
+
+// WithType attaches the timeseries sub-path (raw, latest, aggregates) to ctx for Get.
+func WithType(ctx context.Context, timeseriesType string) context.Context {
+	return context.WithValue(ctx, typeKey, timeseriesType)
+}
 
 // TimeseriesService provides timeseries data access functionality
 type TimeseriesService struct {
@@ -75,10 +93,10 @@ type TimeseriesBatchPayload struct {
 // Get retrieves timeseries data for a node
 func (s *TimeseriesService) Get(rmngCtx *rmngctx.RmngContext, nodeID string) (interface{}, error) {
 	// Check for timeseries sub-dataKey (raw, latest, aggregates) from context
-	timeseriesType, _ := rmngCtx.Context.Value("timeseries_type").(string)
+	timeseriesType, _ := rmngCtx.Context.Value(typeKey).(string)
 
 	// Check if query parameters are provided in the context
-	queryParams, ok := rmngCtx.Context.Value("query_params").(map[string]string)
+	queryParams, ok := rmngCtx.Context.Value(queryParamsKey).(map[string]string)
 	if !ok || len(queryParams) == 0 {
 		// No query parameters provided, return service information
 		return s.getServiceInfo(nodeID), nil

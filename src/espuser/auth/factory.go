@@ -47,7 +47,7 @@ func extractCallerIdentity(request events.APIGatewayProxyRequest) (identity stri
 		}
 	}
 
-	rlog.Warn(nil).Msg("missing or invalid cognito authentication provider")
+	rlog.Warn(context.TODO()).Msg("missing or invalid cognito authentication provider")
 	return "", false
 }
 

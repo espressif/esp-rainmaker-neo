@@ -36,9 +36,8 @@ type oidcAuthState struct {
 	jwksParaName string
 	resolver     UserResolver
 
-	mu       sync.Mutex
-	jwks     jwk.Set
-	jwksOnce sync.Once
+	mu   sync.Mutex
+	jwks jwk.Set
 }
 
 // NewOIDCAuthenticator creates an Authenticator that validates ESP User OIDC JWTs (iss==issuer, aud==clientID) against the JWKS in jwksParamName and resolves the token's sub (== opaque user_id) to a user via the provided UserResolver.
