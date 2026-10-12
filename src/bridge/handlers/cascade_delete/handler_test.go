@@ -103,7 +103,7 @@ var _ = Describe("handleCascadeDelete", func() {
 		Expect(err).NotTo(HaveOccurred())
 	}
 
-	expectGroupAssocAbsent := func(child string) {
+	getGroupAssoc := func(child string) map[string]types.AttributeValue {
 		out, err := mockDB.GetItem(ctx, &dynamodb.GetItemInput{
 			TableName: aws.String(group_node_db.GroupDeviceMappingTable),
 			Key: map[string]types.AttributeValue{
@@ -112,7 +112,11 @@ var _ = Describe("handleCascadeDelete", func() {
 			},
 		})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(out.Item).To(BeEmpty())
+		return out.Item
+	}
+
+	expectGroupAssocAbsent := func(child string) {
+		Expect(getGroupAssoc(child)).To(BeEmpty())
 	}
 
 	Describe("happy path", func() {
@@ -192,11 +196,12 @@ var _ = Describe("handleCascadeDelete", func() {
 		})
 	})
 
-	Describe("empty oldGroupID", func() {
-		It("still deletes Things and bridge_children rows, skips group removal", func() {
-			child := bridgeName + "--orphan"
-			Expect(bcDB.AddChild(bridgeName, child, "loc-orphan")).To(Succeed())
+	Describe("empty oldGroupID (first placement)", func() {
+		It("leaves children added after association untouched", func() {
+			child := bridgeName + "--c1"
+			Expect(bcDB.AddChild(bridgeName, child, "loc-c1")).To(Succeed())
 			createIotThing(child)
+			seedGroupAssoc(child)
 
 			Expect(handleCascadeDelete(ctx, nodelifecycle.NodeLeftGroupEvent{
 				NodeID:     bridgeName,
@@ -205,8 +210,10 @@ var _ = Describe("handleCascadeDelete", func() {
 
 			entries, err := bcDB.GetChildrenByParent(bridgeName)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(entries).To(BeEmpty())
-			Expect(iotMock.VerifyThingExists(child)).To(BeFalse())
+			Expect(entries).To(HaveLen(1))
+			Expect(entries[0].ChildNodeID).To(Equal(child))
+			Expect(iotMock.VerifyThingExists(child)).To(BeTrue())
+			Expect(getGroupAssoc(child)).NotTo(BeEmpty())
 		})
 	})
 })
