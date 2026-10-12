@@ -55,16 +55,11 @@ package nodes_online_db
 import (
 	"errors"
 
-	dbcore "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-
+	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 const (
@@ -76,7 +71,8 @@ const (
 var ErrNodeNotFound = errors.New("nodes_online: entry not found")
 
 type NodesOnlineDB struct {
-	dbcore.DB
+	Ctx      *rmngctx.RmngContext
+	sessions *ddbu.Table[NodesOnlineEntry]
 }
 
 type NodesOnlineEntry struct {
@@ -91,7 +87,11 @@ type NodesOnlineEntry struct {
 
 func NewNodesOnlineDB(ctx *rmngctx.RmngContext) *NodesOnlineDB {
 	return &NodesOnlineDB{
-		DB: *dbcore.NewDB(ctx),
+		Ctx: ctx,
+		sessions: ddbu.NewTable[NodesOnlineEntry](awscommon.GetDynamoDBClient(), ddbu.Schema{
+			Name:    NodesOnlineTable,
+			HashKey: "clientId",
+		}),
 	}
 }
 
@@ -100,52 +100,27 @@ func NewNodesOnlineDB(ctx *rmngctx.RmngContext) *NodesOnlineDB {
 // after a wait long enough for DynamoDB to converge (presence_event_handler does this via
 // its post-decision delay).
 func (n *NodesOnlineDB) GetNodeSessionInfo(nodeID string) (NodesOnlineEntry, error) {
-	var entry NodesOnlineEntry
-
-	if err := n.IsAuthorized(utils.NodeGet, nodeID); err != nil {
-		return entry, err
+	if err := n.Ctx.IsAuthorized(utils.NodeGet, nodeID); err != nil {
+		return NodesOnlineEntry{}, err
 	}
 
-	input := &dynamodb.GetItemInput{
-		TableName: aws.String(NodesOnlineTable),
-		Key: map[string]types.AttributeValue{
-			"clientId": &types.AttributeValueMemberS{Value: nodeID},
-		},
-	}
-
-	result, err := n.GetItem(n.Ctx.Context, input)
+	entry, found, err := n.sessions.Get(n.Ctx.Context, n.sessions.Key(nodeID))
 	if err != nil {
-		return entry, rmerror.NewRMError(err, "failed to get node session from DynamoDB")
+		return NodesOnlineEntry{}, rmerror.NewRMError(err, "failed to get node session from DynamoDB")
 	}
-
-	if result.Item == nil {
-		return entry, ErrNodeNotFound
-	}
-
-	if err := attributevalue.UnmarshalMap(result.Item, &entry); err != nil {
-		return NodesOnlineEntry{}, rmerror.NewRMError(err, "failed to unmarshal nodes_online entry")
+	if !found {
+		return NodesOnlineEntry{}, ErrNodeNotFound
 	}
 
 	return entry, nil
 }
 
 func (n *NodesOnlineDB) AddNodeSession(event NodesOnlineEntry) error {
-	if err := n.IsAuthorized(utils.NodeUpdate, event.ClientID); err != nil {
+	if err := n.Ctx.IsAuthorized(utils.NodeUpdate, event.ClientID); err != nil {
 		return err
 	}
 
-	item, err := attributevalue.MarshalMap(event)
-	if err != nil {
-		return rmerror.NewRMError(err, "failed to marshal presence event for client ID: "+event.ClientID)
-	}
-
-	input := &dynamodb.PutItemInput{
-		TableName: aws.String(NodesOnlineTable),
-		Item:      item,
-	}
-
-	_, err = n.PutItem(n.Ctx.Context, input)
-	if err != nil {
+	if err := n.sessions.Put(n.Ctx.Context, event); err != nil {
 		return rmerror.NewRMError(err, "failed to add node session to DynamoDB for client ID: "+event.ClientID)
 	}
 

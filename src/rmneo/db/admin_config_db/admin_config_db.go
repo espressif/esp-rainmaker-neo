@@ -28,7 +28,7 @@ Access Control:
 - Writes require AdminConfigSet on the config_key.
 - Granted only to SystemActor (deploy-time reapply path, full access)
   or to admin callers (after IsAdmin passes at the lambda
-  layer, which then constructs a SystemActor context for dbcore.DB access).
+  layer, which then constructs a SystemActor context for AdminConfigDB access).
 - This table is never reachable from regular user-facing APIs.
 
 See:
@@ -40,18 +40,14 @@ See:
 package admin_config_db
 
 import (
-	"fmt"
 	"time"
 
-	dbcore "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-
+	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )
 
@@ -72,11 +68,18 @@ type IoTEventModeConfig struct {
 }
 
 type AdminConfigDB struct {
-	dbcore.DB
+	Ctx     *rmngctx.RmngContext
+	configs *ddbu.Table[IoTEventModeConfig]
 }
 
 func NewAdminConfigDB(ctx *rmngctx.RmngContext) *AdminConfigDB {
-	return &AdminConfigDB{DB: *dbcore.NewDB(ctx)}
+	return &AdminConfigDB{
+		Ctx: ctx,
+		configs: ddbu.NewTable[IoTEventModeConfig](awscommon.GetDynamoDBClient(), ddbu.Schema{
+			Name:    AdminConfigTableName,
+			HashKey: adminConfigPartitionKey,
+		}),
+	}
 }
 
 // GetIoTEventMode returns the durably-stored IoT-event-mode row. A nil
@@ -84,26 +87,16 @@ func NewAdminConfigDB(ctx *rmngctx.RmngContext) *AdminConfigDB {
 // deployment, never flipped) — callers treat that as "stay on the
 // CFN-synthesized default".
 func (a *AdminConfigDB) GetIoTEventMode() (*IoTEventModeConfig, error) {
-	if err := a.IsAuthorized(utils.AdminConfigGet, IoTEventModeConfigKey); err != nil {
+	if err := a.Ctx.IsAuthorized(utils.AdminConfigGet, IoTEventModeConfigKey); err != nil {
 		return nil, err
 	}
 
-	out, err := a.GetItem(a.Ctx.Context, &dynamodb.GetItemInput{
-		TableName: aws.String(AdminConfigTableName),
-		Key: map[string]types.AttributeValue{
-			adminConfigPartitionKey: &types.AttributeValueMemberS{Value: IoTEventModeConfigKey},
-		},
-	})
+	cfg, found, err := a.configs.Get(a.Ctx.Context, a.configs.Key(IoTEventModeConfigKey))
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to get iot_event_mode admin config")
 	}
-	if out.Item == nil {
+	if !found {
 		return nil, nil
-	}
-
-	var cfg IoTEventModeConfig
-	if err := attributevalue.UnmarshalMap(out.Item, &cfg); err != nil {
-		return nil, rmerror.NewRMError(err, "failed to unmarshal iot_event_mode admin config")
 	}
 	return &cfg, nil
 }
@@ -112,25 +105,16 @@ func (a *AdminConfigDB) GetIoTEventMode() (*IoTEventModeConfig, error) {
 // resource can restore them on the next stack update. updatedBy should be
 // the caller's user id (or utils.SYSTEM_ACTOR for system-driven writes).
 func (a *AdminConfigDB) SetIoTEventMode(presence, publishInput, timeseries, updatedBy string) error {
-	if err := a.IsAuthorized(utils.AdminConfigSet, IoTEventModeConfigKey); err != nil {
+	if err := a.Ctx.IsAuthorized(utils.AdminConfigSet, IoTEventModeConfigKey); err != nil {
 		return err
 	}
 
-	_, err := a.UpdateItem(a.Ctx.Context, &dynamodb.UpdateItemInput{
-		TableName: aws.String(AdminConfigTableName),
-		Key: map[string]types.AttributeValue{
-			adminConfigPartitionKey: &types.AttributeValueMemberS{Value: IoTEventModeConfigKey},
-		},
-		UpdateExpression: aws.String("SET presence = :p, publish_input = :pi, timeseries = :t, updated_at = :ts, updated_by = :ub"),
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":p":  &types.AttributeValueMemberS{Value: presence},
-			":pi": &types.AttributeValueMemberS{Value: publishInput},
-			":t":  &types.AttributeValueMemberS{Value: timeseries},
-			":ts": &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", time.Now().UnixMilli())},
-			":ub": &types.AttributeValueMemberS{Value: updatedBy},
-		},
-	})
-	if err != nil {
+	update := expression.Set(expression.Name("presence"), expression.Value(presence)).
+		Set(expression.Name("publish_input"), expression.Value(publishInput)).
+		Set(expression.Name("timeseries"), expression.Value(timeseries)).
+		Set(expression.Name("updated_at"), expression.Value(time.Now().UnixMilli())).
+		Set(expression.Name("updated_by"), expression.Value(updatedBy))
+	if _, err := a.configs.Upsert(a.Ctx.Context, a.configs.Key(IoTEventModeConfigKey), update); err != nil {
 		return rmerror.NewRMError(err, "failed to write iot_event_mode admin config")
 	}
 	return nil

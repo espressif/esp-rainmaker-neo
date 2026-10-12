@@ -417,9 +417,10 @@ Inside the bulk container:
 #### 3.5.4 `GET .../failed-nodes` — paginated JSON
 
 The handler sources page size from the shared page-size parser — same
-helper, same `page_size=20` default, and same lack of a hard upper
-cap as the existing `GET /v1/admin/nodes/registration-jobs` list. The
-implicit upper bound is the Lambda 6 MB sync-response payload limit:
+helper, same `page_size=20` default, and same cap of 1000 as the
+existing `GET /v1/admin/nodes/registration-jobs` list; a larger value is
+treated as 1000. Below that cap, the practical bound is the Lambda 6 MB
+sync-response payload limit:
 because each failure carries the **untruncated** error text (often
 1–5 KB for wrapped AWS errors with request IDs, retry attempts, etc.),
 the realistic ceiling for `page_size` is in the low hundreds rather

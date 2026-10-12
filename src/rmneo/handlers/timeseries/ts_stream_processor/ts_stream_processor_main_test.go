@@ -61,9 +61,7 @@ var _ = Describe("TSStreamProcessor", func() {
 			It("1.2 should initialize timeseriesDB correctly", func() {
 				Expect(processor.timeseriesDB).To(BeAssignableToTypeOf(&timeseries_db.TimeseriesDB{}))
 
-				// Verify the database connection is valid
-				Expect(processor.timeseriesDB.DB.DBUtil.DynamoDBClientInterface).ToNot(BeNil())
-				Expect(processor.timeseriesDB.DB.Ctx).ToNot(BeNil())
+				Expect(processor.timeseriesDB.Ctx).To(BeIdenticalTo(processor.rmngCtx))
 			})
 
 			It("1.3 should set up rmngCtx with system actor", func() {

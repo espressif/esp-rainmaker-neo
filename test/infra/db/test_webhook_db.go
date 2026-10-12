@@ -53,18 +53,15 @@ package db
 import (
 	"errors"
 	"fmt"
-	"strconv"
 	"sync/atomic"
 	"time"
 
+	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-
-	basedb "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 )
 
 const (
@@ -92,11 +89,29 @@ var ErrNotFound = errors.New("webhook item not found")
 var seqCounter atomic.Uint64
 
 type WebhookDB struct {
-	*basedb.DB
+	Ctx  *rmngctx.RmngContext
+	rows *ddbu.Table[webhookRow]
 }
 
 func NewWebhookDB(ctx *rmngctx.RmngContext) *WebhookDB {
-	return &WebhookDB{DB: basedb.NewDB(ctx)}
+	return &WebhookDB{
+		Ctx: ctx,
+		rows: ddbu.NewTable[webhookRow](awscommon.GetDynamoDBClient(), ddbu.Schema{
+			Name:     WebhookTable,
+			HashKey:  webhookHashKey,
+			RangeKey: webhookSortKey,
+		}),
+	}
+}
+
+// webhookRow covers both item layouts; omitempty keeps each layout to its own attributes.
+type webhookRow struct {
+	PK        string `dynamodbav:"PK"`
+	SK        string `dynamodbav:"SK"`
+	Payload   string `dynamodbav:"payload,omitempty"`
+	Channel   string `dynamodbav:"channel,omitempty"`
+	Record    string `dynamodbav:"record,omitempty"`
+	ExpiresAt int64  `dynamodbav:"expires_at"`
 }
 
 // Blob is a captured payload row.
@@ -114,17 +129,8 @@ func commandPK(endpointID, topic string) string {
 
 // PutBlob writes (overwriting any existing row) the captured payload for a channel/key.
 func (wdb *WebhookDB) PutBlob(channel, key, payload string, expiresAt int64) error {
-	input := &dynamodb.PutItemInput{
-		TableName: aws.String(WebhookTable),
-		Item: map[string]types.AttributeValue{
-			webhookHashKey: &types.AttributeValueMemberS{Value: blobPK(channel, key)},
-			webhookSortKey: &types.AttributeValueMemberS{Value: blobSortValue},
-			"payload":      &types.AttributeValueMemberS{Value: payload},
-			"channel":      &types.AttributeValueMemberS{Value: channel},
-			"expires_at":   &types.AttributeValueMemberN{Value: strconv.FormatInt(expiresAt, 10)},
-		},
-	}
-	if _, err := wdb.PutItem(wdb.Ctx.Context, input); err != nil {
+	row := webhookRow{PK: blobPK(channel, key), SK: blobSortValue, Payload: payload, Channel: channel, ExpiresAt: expiresAt}
+	if err := wdb.rows.Put(wdb.Ctx.Context, row); err != nil {
 		return rmerror.NewRMError(err, "failed to put webhook blob")
 	}
 	return nil
@@ -133,44 +139,21 @@ func (wdb *WebhookDB) PutBlob(channel, key, payload string, expiresAt int64) err
 // GetBlob point-reads a captured payload. Returns ErrNotFound when the row is
 // absent or already past its expires_at (TTL may not have swept it yet).
 func (wdb *WebhookDB) GetBlob(channel, key string) (*Blob, error) {
-	input := &dynamodb.GetItemInput{
-		TableName: aws.String(WebhookTable),
-		Key: map[string]types.AttributeValue{
-			webhookHashKey: &types.AttributeValueMemberS{Value: blobPK(channel, key)},
-			webhookSortKey: &types.AttributeValueMemberS{Value: blobSortValue},
-		},
-	}
-	result, err := wdb.GetItem(wdb.Ctx.Context, input)
+	row, found, err := wdb.rows.Get(wdb.Ctx.Context, wdb.rows.Key(blobPK(channel, key), blobSortValue))
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to get webhook blob")
 	}
-	if result.Item == nil {
+	if !found || isExpired(row.ExpiresAt) {
 		return nil, ErrNotFound
 	}
-
-	expiresAt := attrInt(result.Item, "expires_at")
-	if isExpired(expiresAt) {
-		return nil, ErrNotFound
-	}
-
-	payload, _ := attrString(result.Item, "payload")
-	channelStored, _ := attrString(result.Item, "channel")
-	return &Blob{Payload: payload, Channel: channelStored, ExpiresAt: expiresAt}, nil
+	return &Blob{Payload: row.Payload, Channel: row.Channel, ExpiresAt: row.ExpiresAt}, nil
 }
 
 // EnqueueCommand appends a command to the (endpoint_id, topic) FIFO queue.
 func (wdb *WebhookDB) EnqueueCommand(endpointID, topic, record string, expiresAt int64) error {
 	sk := fmt.Sprintf("%s%020d#%010d", cmdMsgPrefix, time.Now().UnixNano(), seqCounter.Add(1))
-	input := &dynamodb.PutItemInput{
-		TableName: aws.String(WebhookTable),
-		Item: map[string]types.AttributeValue{
-			webhookHashKey: &types.AttributeValueMemberS{Value: commandPK(endpointID, topic)},
-			webhookSortKey: &types.AttributeValueMemberS{Value: sk},
-			"record":       &types.AttributeValueMemberS{Value: record},
-			"expires_at":   &types.AttributeValueMemberN{Value: strconv.FormatInt(expiresAt, 10)},
-		},
-	}
-	if _, err := wdb.PutItem(wdb.Ctx.Context, input); err != nil {
+	row := webhookRow{PK: commandPK(endpointID, topic), SK: sk, Record: record, ExpiresAt: expiresAt}
+	if err := wdb.rows.Put(wdb.Ctx.Context, row); err != nil {
 		return rmerror.NewRMError(err, "failed to enqueue command")
 	}
 	return nil
@@ -183,40 +166,24 @@ func (wdb *WebhookDB) EnqueueCommand(endpointID, topic, record string, expiresAt
 // Returns ErrNotFound when the queue holds no live command.
 func (wdb *WebhookDB) DequeueCommand(endpointID, topic string) (string, error) {
 	pk := commandPK(endpointID, topic)
-	query := &dynamodb.QueryInput{
-		TableName:              aws.String(WebhookTable),
-		KeyConditionExpression: aws.String("PK = :pk AND begins_with(SK, :msg)"),
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":pk":  &types.AttributeValueMemberS{Value: pk},
-			":msg": &types.AttributeValueMemberS{Value: cmdMsgPrefix},
-		},
-		ScanIndexForward: aws.Bool(true),
-		Limit:            aws.Int32(10),
-	}
-	out, err := wdb.Query(wdb.Ctx.Context, query)
+	page, err := wdb.rows.Query(wdb.Ctx.Context, expression.Key(webhookHashKey).Equal(expression.Value(pk)).
+		And(expression.Key(webhookSortKey).BeginsWith(cmdMsgPrefix)), ddbu.QueryOpts{Limit: 10})
 	if err != nil {
 		return "", rmerror.NewRMError(err, "failed to query command queue")
 	}
 
-	for _, item := range out.Items {
-		sk, ok := attrString(item, webhookSortKey)
-		if !ok {
-			continue
-		}
-		record, _ := attrString(item, "record")
-		expired := isExpired(attrInt(item, "expires_at"))
-
-		deleted, err := wdb.deleteCommand(pk, sk)
+	for _, row := range page.Items {
+		deleted, err := wdb.deleteCommand(pk, row.SK)
 		if err != nil {
 			return "", err
 		}
 		if !deleted {
 			continue // Another consumer won the race; try the next.
 		}
-		if expired {
+		if isExpired(row.ExpiresAt) {
 			continue // We swept a stale row; keep looking for a live one.
 		}
-		return record, nil
+		return row.Record, nil
 	}
 
 	return "", ErrNotFound
@@ -225,16 +192,8 @@ func (wdb *WebhookDB) DequeueCommand(endpointID, topic string) (string, error) {
 // deleteCommand conditionally deletes one queue row. Returns false (not an error)
 // when the row was already gone — i.e. another consumer popped it first.
 func (wdb *WebhookDB) deleteCommand(pk, sk string) (bool, error) {
-	input := &dynamodb.DeleteItemInput{
-		TableName: aws.String(WebhookTable),
-		Key: map[string]types.AttributeValue{
-			webhookHashKey: &types.AttributeValueMemberS{Value: pk},
-			webhookSortKey: &types.AttributeValueMemberS{Value: sk},
-		},
-		ConditionExpression: aws.String("attribute_exists(PK)"),
-	}
-	if _, err := wdb.DeleteItem(wdb.Ctx.Context, input); err != nil {
-		if basedb.IsConditionalCheckFailedException(err) {
+	if err := wdb.rows.Delete(wdb.Ctx.Context, wdb.rows.Key(pk, sk)); err != nil {
+		if ddbu.IsConditionFailed(err) {
 			return false, nil
 		}
 		return false, rmerror.NewRMError(err, "failed to delete command")
@@ -244,24 +203,4 @@ func (wdb *WebhookDB) deleteCommand(pk, sk string) (bool, error) {
 
 func isExpired(expiresAt int64) bool {
 	return expiresAt > 0 && time.Now().Unix() >= expiresAt
-}
-
-func attrString(item map[string]types.AttributeValue, key string) (string, bool) {
-	s, ok := item[key].(*types.AttributeValueMemberS)
-	if !ok {
-		return "", false
-	}
-	return s.Value, true
-}
-
-func attrInt(item map[string]types.AttributeValue, key string) int64 {
-	n, ok := item[key].(*types.AttributeValueMemberN)
-	if !ok {
-		return 0
-	}
-	v, err := strconv.ParseInt(n.Value, 10, 64)
-	if err != nil {
-		return 0
-	}
-	return v
 }

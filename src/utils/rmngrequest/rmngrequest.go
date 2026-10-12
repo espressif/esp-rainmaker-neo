@@ -224,7 +224,10 @@ func BasicClientCreds(request events.APIGatewayProxyRequest) (clientID, clientSe
 	return id, secret, true
 }
 
-// ParsePageSize parses the "page_size" query parameter from a query-param map. Returns the parsed value, or the default (20, or the first override if provided) if absent/invalid.
+// MAX_PAGE_SIZE caps page_size so one request cannot read a whole partition, which a filtered listing would otherwise do to fill an oversize page.
+const MAX_PAGE_SIZE = 1000
+
+// ParsePageSize parses the "page_size" query parameter from a query-param map. Returns the parsed value capped at MAX_PAGE_SIZE, or the default (20, or the first override if provided) if absent/invalid.
 func ParsePageSize(params map[string]string, defaultPageSize ...int64) int64 {
 	fallback := utils.GetOptional(defaultPageSize)
 	if fallback == 0 {
@@ -233,7 +236,7 @@ func ParsePageSize(params map[string]string, defaultPageSize ...int64) int64 {
 	pageSizeStr := params["page_size"]
 	if pageSizeStr != "" {
 		if parsed, err := strconv.ParseInt(pageSizeStr, 10, 64); err == nil && parsed > 0 {
-			return parsed
+			return min(parsed, MAX_PAGE_SIZE)
 		}
 	}
 	return fallback

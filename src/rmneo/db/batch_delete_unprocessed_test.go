@@ -65,9 +65,8 @@ var _ = Describe("Batch delete when DynamoDB reports unprocessed items", func() 
 		seed(6)
 		Expect(remaining()).To(Equal(6))
 
-		// Hold back 3 items on the first call, 2 on the next, then 1 — a caller that retries
-		// drains it, a caller that discards the response leaves rows behind.
-		mockDB.NextBatchWriteUnprocessedCount = 3
+		// Hold back one item fewer on each call, finishing on the last allowed attempt: a caller that retries drains it, a caller that discards the response leaves rows behind.
+		mockDB.NextBatchWriteUnprocessedCount = awscommon.SDK_MAX_ATTEMPTS - 1
 
 		Expect(automationDB.DeleteAllGroupAutomations(groupID)).To(Succeed())
 		Expect(remaining()).To(BeZero(), "rows survived a delete that reported success")

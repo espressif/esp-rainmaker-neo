@@ -1658,6 +1658,25 @@ var _ = Describe("Group Main", func() {
 			}))
 		})
 
+		It("returns 409 when the only primary user removes themselves", func() {
+			leaveRequest := events.APIGatewayProxyRequest{
+				HTTPMethod: "DELETE",
+				Resource:   "/v1/groups/{groupId}/users/{userId}",
+				Path:       "/v1/groups/" + groupID + "/users/me",
+				RequestContext: events.APIGatewayProxyRequestContext{
+					Identity: events.APIGatewayRequestIdentity{
+						CognitoIdentityID:             userID,
+						CognitoAuthenticationProvider: "https://issuer.example:" + userID,
+					},
+				},
+				PathParameters: map[string]string{"groupId": groupID, "userId": "me"},
+			}
+
+			response, err := handleDeleteGroupUser(ctx, leaveRequest)
+			Expect(err).To(BeNil())
+			Expect(response.StatusCode).To(Equal(http.StatusConflict))
+		})
+
 		// Removal addresses a member by user ID, never by user name. Emails and
 		// phone numbers stay out of the URL: paths land in access logs, CDN logs
 		// and browser history, and GET .../users already hands callers the IDs.

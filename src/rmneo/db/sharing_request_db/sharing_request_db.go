@@ -85,20 +85,16 @@ package sharing_request_db
 
 import (
 	"errors"
-	"strconv"
 	"time"
 
-	dbcore "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
+	"github.com/google/uuid"
 
+	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	"github.com/google/uuid"
 )
 
 const (
@@ -133,12 +129,18 @@ func unclaimedUserID(sharingRequestID string) string {
 }
 
 type SharingRequestDB struct {
-	dbcore.DB
+	Ctx      *rmngctx.RmngContext
+	requests *ddbu.Table[SharingRequestEntry]
 }
 
 func NewSharingRequestDB(ctx *rmngctx.RmngContext) *SharingRequestDB {
 	return &SharingRequestDB{
-		DB: *dbcore.NewDB(ctx),
+		Ctx: ctx,
+		requests: ddbu.NewTable[SharingRequestEntry](awscommon.GetDynamoDBClient(), ddbu.Schema{
+			Name:     SharingRequestsTable,
+			HashKey:  "user_id",
+			RangeKey: "sharing_request_id",
+		}),
 	}
 }
 
@@ -155,7 +157,7 @@ type SharingRequestEntry struct {
 }
 
 func (db *SharingRequestDB) CreateSharingRequest(userID, groupID, subEntityID, accessType, primaryEmail, primaryPhoneNumber string) (string, error) {
-	if err := db.IsAuthorized(utils.GroupShare, groupID); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.GroupShare, groupID); err != nil {
 		return "", err
 	}
 
@@ -172,22 +174,17 @@ func (db *SharingRequestDB) CreateSharingRequest(userID, groupID, subEntityID, a
 		ttl = unclaimedSharingRequestTTL
 	}
 
-	input := &dynamodb.PutItemInput{
-		TableName: aws.String(SharingRequestsTable),
-		Item: map[string]types.AttributeValue{
-			"user_id":              &types.AttributeValueMemberS{Value: storedUserID},
-			"sharing_request_id":   &types.AttributeValueMemberS{Value: requestID},
-			"expiration_time":      &types.AttributeValueMemberN{Value: strconv.FormatInt(time.Now().Add(ttl).Unix(), 10)},
-			"group_id":             &types.AttributeValueMemberS{Value: groupID},
-			"sub_entity_id":        &types.AttributeValueMemberS{Value: subEntityID},
-			"access_type":          &types.AttributeValueMemberS{Value: accessType},
-			"primary_user_id":      &types.AttributeValueMemberS{Value: db.Ctx.Accessor.GetID()},
-			"primary_email":        &types.AttributeValueMemberS{Value: primaryEmail},
-			"primary_phone_number": &types.AttributeValueMemberS{Value: primaryPhoneNumber},
-		},
-	}
-
-	_, err := db.PutItem(db.Ctx.Context, input)
+	err := db.requests.Put(db.Ctx.Context, SharingRequestEntry{
+		UserID:             storedUserID,
+		SharingRequestID:   requestID,
+		ExpirationTime:     time.Now().Add(ttl).Unix(),
+		GroupID:            groupID,
+		SubEntityID:        subEntityID,
+		AccessType:         accessType,
+		PrimaryUserID:      db.Ctx.Accessor.GetID(),
+		PrimaryEmail:       primaryEmail,
+		PrimaryPhoneNumber: primaryPhoneNumber,
+	})
 	if err != nil {
 		return "", err
 	}
@@ -196,34 +193,18 @@ func (db *SharingRequestDB) CreateSharingRequest(userID, groupID, subEntityID, a
 
 func (db *SharingRequestDB) GetMySharingRequests() ([]*SharingRequestEntry, error) {
 	// Callers context is used, so no need of authorization check
-	input := &dynamodb.QueryInput{
-		TableName:              aws.String(SharingRequestsTable),
-		KeyConditionExpression: aws.String("user_id = :user_id"),
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":user_id": &types.AttributeValueMemberS{Value: db.Ctx.Accessor.GetID()},
-		},
-	}
-
-	entries := []*SharingRequestEntry{}
-	err := db.QueryPaginated(db.Ctx.Context, input, func(item map[string]types.AttributeValue) error {
-		var entry SharingRequestEntry
-		if err := attributevalue.UnmarshalMap(item, &entry); err != nil {
-			return err
-		}
-		entries = append(entries, &entry)
-		return nil
-	})
+	page, err := db.requests.Query(db.Ctx.Context, expression.Key("user_id").Equal(expression.Value(db.Ctx.Accessor.GetID())))
 	if err != nil {
-		return nil, err
+		return nil, rmerror.NewRMError(err, "failed to query items in DynamoDB")
 	}
 
 	// Drop expired requests. DynamoDB's TTL sweep is only "typically within 48 hours", so a row past expiration_time can still be sitting in the table long after its window closed; nothing else compares it against the clock.
-	live := entries[:0]
-	for _, entry := range entries {
-		if entry.IsExpired() {
+	live := make([]*SharingRequestEntry, 0, len(page.Items))
+	for i := range page.Items {
+		if page.Items[i].IsExpired() {
 			continue
 		}
-		live = append(live, entry)
+		live = append(live, &page.Items[i])
 	}
 
 	return live, nil
@@ -239,32 +220,17 @@ func (e *SharingRequestEntry) IsExpired() bool {
 // wrapper below pins the partition key to something the caller is already
 // entitled to — their own user_id, or the request's own placeholder key.
 func (db *SharingRequestDB) getSharingRequestByUserIDAuthorized(userID, sharingRequestID string) (*SharingRequestEntry, error) {
-	input := &dynamodb.GetItemInput{
-		TableName: aws.String(SharingRequestsTable),
-		Key: map[string]types.AttributeValue{
-			"user_id":            &types.AttributeValueMemberS{Value: userID},
-			"sharing_request_id": &types.AttributeValueMemberS{Value: sharingRequestID},
-		},
-	}
-
-	result, err := db.GetItem(db.Ctx.Context, input)
+	entry, found, err := db.requests.Get(db.Ctx.Context, db.requests.Key(userID, sharingRequestID))
 	if err != nil {
 		return nil, err
 	}
-	// UnmarshalMap(nil, ...) succeeds and yields a zero-valued entry, so without this a missing request would be reported as a valid one with empty group/user/access fields.
-	if result.Item == nil {
+	if !found {
 		return nil, rmerror.NewRMError(ErrSharingRequestNotFound, "sharing request not found")
-	}
-
-	entry := &SharingRequestEntry{}
-	err = attributevalue.UnmarshalMap(result.Item, entry)
-	if err != nil {
-		return nil, err
 	}
 	if entry.IsExpired() {
 		return nil, rmerror.NewRMError(ErrSharingRequestExpired, "sharing request has expired")
 	}
-	return entry, nil
+	return &entry, nil
 }
 
 func (db *SharingRequestDB) GetSharingRequestbyID(sharingRequestID string) (*SharingRequestEntry, error) {
@@ -295,14 +261,5 @@ func (db *SharingRequestDB) DeleteUnclaimedSharingRequest(sharingRequestID strin
 // userID. Unexported for the same reason as its Get counterpart above: it trusts
 // the caller to have pinned the key.
 func (db *SharingRequestDB) deleteSharingRequestByUserIDAuthorized(userID, sharingRequestID string) error {
-	input := &dynamodb.DeleteItemInput{
-		TableName: aws.String(SharingRequestsTable),
-		Key: map[string]types.AttributeValue{
-			"user_id":            &types.AttributeValueMemberS{Value: userID},
-			"sharing_request_id": &types.AttributeValueMemberS{Value: sharingRequestID},
-		},
-	}
-
-	_, err := db.DeleteItem(db.Ctx.Context, input)
-	return err
+	return db.requests.DeleteAllowMissing(db.Ctx.Context, db.requests.Key(userID, sharingRequestID))
 }

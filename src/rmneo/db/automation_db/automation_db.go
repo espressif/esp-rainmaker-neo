@@ -34,17 +34,13 @@ package automation_db
 import (
 	"encoding/json"
 
-	dbcore "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-
-	"github.com/espressif/esp-rainmaker-neo/src/utils"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+
+	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )
 
 const (
@@ -65,7 +61,8 @@ func AutomationStatusFromItem(item AutomationItem) string {
 
 // AutomationDB provides database operations for automations
 type AutomationDB struct {
-	dbcore.DB
+	Ctx         *rmngctx.RmngContext
+	automations *ddbu.Table[AutomationItem]
 }
 
 // AutomationItem represents an item in the automations table
@@ -79,13 +76,18 @@ type AutomationItem struct {
 // NewAutomationDB creates a new instance of AutomationDB
 func NewAutomationDB(ctx *rmngctx.RmngContext) *AutomationDB {
 	return &AutomationDB{
-		DB: *dbcore.NewDB(ctx),
+		Ctx: ctx,
+		automations: ddbu.NewTable[AutomationItem](awscommon.GetDynamoDBClient(), ddbu.Schema{
+			Name:     AutomationsTable,
+			HashKey:  "group_id",
+			RangeKey: "automation_id",
+		}),
 	}
 }
 
 // CreateAutomation creates or replaces an automation in DynamoDB.
 func (adb *AutomationDB) CreateAutomation(groupID, automationID string, payload interface{}) error {
-	if err := adb.IsAuthorized(utils.GroupEditAutomation, groupID); err != nil {
+	if err := adb.Ctx.IsAuthorized(utils.GroupEditAutomation, groupID); err != nil {
 		return err
 	}
 
@@ -120,18 +122,7 @@ func (adb *AutomationDB) CreateAutomation(groupID, automationID string, payload 
 		State:        state,
 	}
 
-	av, err := attributevalue.MarshalMap(item)
-	if err != nil {
-		return rmerror.NewRMError(err, "failed to marshal automation item")
-	}
-
-	input := &dynamodb.PutItemInput{
-		TableName: aws.String(AutomationsTable),
-		Item:      av,
-	}
-
-	_, err = adb.PutItem(adb.Ctx.Context, input)
-	if err != nil {
+	if err := adb.automations.Put(adb.Ctx.Context, item); err != nil {
 		return rmerror.NewRMError(err, "failed to create automation in DynamoDB")
 	}
 
@@ -183,40 +174,13 @@ func createTriggerValueMap(triggerIDs []string) map[string]bool {
 // UpdateAutomationState updates only the state of an existing automation in DynamoDB
 func (adb *AutomationDB) UpdateAutomationState(groupID, automationID, state string) error {
 	// Check authorization for updating automations in this group
-	if err := adb.IsAuthorized(utils.GroupEditAutomation, groupID); err != nil {
+	if err := adb.Ctx.IsAuthorized(utils.GroupEditAutomation, groupID); err != nil {
 		return err
 	}
 
-	// Build update and condition expressions using expression builder
-	updateExpr := expression.Set(expression.Name("state"), expression.Value(state))
-	conditionExpr := expression.And(
-		expression.AttributeExists(expression.Name("group_id")),
-		expression.AttributeExists(expression.Name("automation_id")),
-	)
-
-	expr, err := expression.NewBuilder().
-		WithUpdate(updateExpr).
-		WithCondition(conditionExpr).
-		Build()
-	if err != nil {
-		return rmerror.NewRMError(err, "failed to build expressions")
-	}
-
-	input := &dynamodb.UpdateItemInput{
-		TableName: aws.String(AutomationsTable),
-		Key: map[string]types.AttributeValue{
-			"group_id":      &types.AttributeValueMemberS{Value: groupID},
-			"automation_id": &types.AttributeValueMemberS{Value: automationID},
-		},
-		UpdateExpression:          expr.Update(),
-		ConditionExpression:       expr.Condition(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
-	}
-
-	_, err = adb.UpdateItem(adb.Ctx.Context, input)
-	if err != nil {
-		if dbcore.IsConditionalCheckFailedException(err) {
+	update := expression.Set(expression.Name("state"), expression.Value(state))
+	if _, err := adb.automations.Update(adb.Ctx.Context, adb.automations.Key(groupID, automationID), update); err != nil {
+		if ddbu.IsConditionFailed(err) {
 			return rmerror.NewRMError(err, "automation does not exist")
 		}
 		return rmerror.NewRMError(err, "failed to update automation state in DynamoDB")
@@ -230,31 +194,16 @@ func (adb *AutomationDB) GetAutomation(groupID, automationID string) (*Automatio
 	// Check authorization for accessing automations in this group.
 	// Uses the dedicated GroupGetAutomation permission so subgroup-shared users
 	// (who have GroupListSubEntities but not this) cannot read automations.
-	if err := adb.IsAuthorized(utils.GroupGetAutomation, groupID); err != nil {
+	if err := adb.Ctx.IsAuthorized(utils.GroupGetAutomation, groupID); err != nil {
 		return nil, err
 	}
 
-	input := &dynamodb.GetItemInput{
-		TableName: aws.String(AutomationsTable),
-		Key: map[string]types.AttributeValue{
-			"group_id":      &types.AttributeValueMemberS{Value: groupID},
-			"automation_id": &types.AttributeValueMemberS{Value: automationID},
-		},
-	}
-
-	result, err := adb.GetItem(adb.Ctx.Context, input)
+	automation, found, err := adb.automations.Get(adb.Ctx.Context, adb.automations.Key(groupID, automationID))
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to get automation from DynamoDB")
 	}
-
-	if result.Item == nil {
+	if !found {
 		return nil, rmerror.NewRMError(nil, "automation not found")
-	}
-
-	var automation AutomationItem
-	err = attributevalue.UnmarshalMap(result.Item, &automation)
-	if err != nil {
-		return nil, rmerror.NewRMError(err, "failed to unmarshal automation item")
 	}
 
 	return &automation, nil
@@ -265,40 +214,23 @@ func (adb *AutomationDB) ListGroupAutomations(groupID string) ([]AutomationItem,
 	// Check authorization for listing automations in this group.
 	// Uses the dedicated GroupGetAutomation permission so subgroup-shared users
 	// (who have GroupListSubEntities but not this) cannot list automations.
-	if err := adb.IsAuthorized(utils.GroupGetAutomation, groupID); err != nil {
+	if err := adb.Ctx.IsAuthorized(utils.GroupGetAutomation, groupID); err != nil {
 		return nil, err
 	}
 
-	queryInput := &dynamodb.QueryInput{
-		TableName:              aws.String(AutomationsTable),
-		KeyConditionExpression: aws.String("group_id = :gid"),
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":gid": &types.AttributeValueMemberS{Value: groupID},
-		},
-	}
-
-	// Paginated: DeleteNodeFromAutomations walks this list to strip a departing node, so a
-	// truncated page would leave the tail of a group's automations pointing at that node.
-	var automations []AutomationItem
-	err := adb.QueryPaginated(adb.Ctx.Context, queryInput, func(item map[string]types.AttributeValue) error {
-		var automation AutomationItem
-		if err := attributevalue.UnmarshalMap(item, &automation); err != nil {
-			return rmerror.NewRMError(err, "failed to unmarshal automation items")
-		}
-		automations = append(automations, automation)
-		return nil
-	})
+	// Every page, not one: DeleteNodeFromAutomations walks this list to strip a departing node.
+	page, err := adb.automations.Query(adb.Ctx.Context, expression.Key("group_id").Equal(expression.Value(groupID)))
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to query automations in DynamoDB")
 	}
 
-	return automations, nil
+	return page.Items, nil
 }
 
 // DeleteAutomation deletes an automation from DynamoDB
 func (adb *AutomationDB) DeleteAutomation(groupID, automationID string) error {
 	// Check authorization for deleting automations in this group
-	if err := adb.IsAuthorized(utils.GroupDeleteAutomation, groupID); err != nil {
+	if err := adb.Ctx.IsAuthorized(utils.GroupDeleteAutomation, groupID); err != nil {
 		return err
 	}
 
@@ -308,15 +240,7 @@ func (adb *AutomationDB) DeleteAutomation(groupID, automationID string) error {
 		return err // Forward the error, which might be "automation not found"
 	}
 
-	input := &dynamodb.DeleteItemInput{
-		TableName: aws.String(AutomationsTable),
-		Key: map[string]types.AttributeValue{
-			"group_id":      &types.AttributeValueMemberS{Value: groupID},
-			"automation_id": &types.AttributeValueMemberS{Value: automationID},
-		},
-	}
-
-	_, err = adb.DeleteItem(adb.Ctx.Context, input)
+	err = adb.automations.DeleteAllowMissing(adb.Ctx.Context, adb.automations.Key(groupID, automationID))
 	if err != nil {
 		return rmerror.NewRMError(err, "failed to delete automation from DynamoDB")
 	}
@@ -324,20 +248,14 @@ func (adb *AutomationDB) DeleteAutomation(groupID, automationID string) error {
 	return nil
 }
 
-// DeleteAllGroupAutomations deletes all automations for a group using QueryAndBatchDelete
+// DeleteAllGroupAutomations deletes all automations for a group.
 func (adb *AutomationDB) DeleteAllGroupAutomations(groupID string) error {
 	// Check authorization for deleting automations in this group
-	if err := adb.IsAuthorized(utils.GroupDeleteAutomation, groupID); err != nil {
+	if err := adb.Ctx.IsAuthorized(utils.GroupDeleteAutomation, groupID); err != nil {
 		return err
 	}
 
-	queryInput := &dynamodb.QueryInput{
-		TableName:              aws.String(AutomationsTable),
-		KeyConditionExpression: aws.String("group_id = :gid"),
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":gid": &types.AttributeValueMemberS{Value: groupID},
-		},
-	}
-
-	return adb.QueryAndBatchDelete(adb.Ctx.Context, queryInput, AutomationsTable, []string{"group_id", "automation_id"})
+	// Returned unwrapped: an RMError would hide the "unprocessed" detail of a throttled batch behind its own message.
+	err := adb.automations.QueryDelete(adb.Ctx.Context, expression.Key("group_id").Equal(expression.Value(groupID)))
+	return err
 }

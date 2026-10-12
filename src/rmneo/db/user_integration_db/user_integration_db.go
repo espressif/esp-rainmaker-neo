@@ -30,16 +30,12 @@ import (
 	"errors"
 	"strings"
 
-	dbcore "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+
+	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )
 
 const (
@@ -50,11 +46,19 @@ const (
 )
 
 type UserDB struct {
-	dbcore.DB
+	Ctx       *rmngctx.RmngContext
+	endpoints *ddbu.Table[UserIntegrationEntry]
 }
 
 func NewUserDB(ctx *rmngctx.RmngContext) *UserDB {
-	return &UserDB{DB: *dbcore.NewDB(ctx)}
+	return &UserDB{
+		Ctx: ctx,
+		endpoints: ddbu.NewTable[UserIntegrationEntry](awscommon.GetDynamoDBClient(), ddbu.Schema{
+			Name:     UserEndpointsTable,
+			HashKey:  "user_id",
+			RangeKey: "integration_endpoint",
+		}),
+	}
 }
 
 // UserIntegrationEntry is one row in the rmng-user-endpoints table — the (user_id, integration_id, endpoint_id) row that backs notification delivery for a user on one specific endpoint of one integration. Per-type credential fields are populated based on the integration: push integrations use sns_endpoint_arn; alexa / gva / webhook use the OAuth bundle in the nested integration_token attribute. The SK on disk is the composite integration_endpoint = "<integration_id>#<endpoint_id>".
@@ -98,22 +102,9 @@ func DecodeEndpointID(encoded string) string {
 	return string(decoded)
 }
 
-// userEndpointKey is the typed primary key of the rmng-user-endpoints table. Marshal it with attributevalue.MarshalMap to build GetItem / DeleteItem keys instead of hand-writing AttributeValue maps.
-type userEndpointKey struct {
-	UserID              string `dynamodbav:"user_id"`
-	IntegrationEndpoint string `dynamodbav:"integration_endpoint"`
-}
-
-// marshalUserEndpointKey builds the DynamoDB key map for one (user, integration, endpoint) row.
-func (db *UserDB) marshalUserEndpointKey(integrationID, endpointID string) (map[string]types.AttributeValue, error) {
-	key, err := attributevalue.MarshalMap(userEndpointKey{
-		UserID:              db.Ctx.Accessor.GetID(),
-		IntegrationEndpoint: integrationEndpointKey(integrationID, endpointID),
-	})
-	if err != nil {
-		return nil, rmerror.NewRMError(err, "failed to marshal user endpoint key")
-	}
-	return key, nil
+// userEndpointKey is the primary key of the current user's row for one (integration, endpoint) pair.
+func (db *UserDB) userEndpointKey(integrationID, endpointID string) ddbu.Key {
+	return db.endpoints.Key(db.Ctx.Accessor.GetID(), integrationEndpointKey(integrationID, endpointID))
 }
 
 // isPushIntegrationID reports whether an integration_id is a push integration (APNS/GCM, including MOCK_* test fixtures), whose row must carry an sns_endpoint_arn rather than an OAuth bundle.
@@ -153,16 +144,7 @@ func (db *UserDB) RegisterClient(entry UserIntegrationEntry) error {
 	entry.UserID = userID
 	entry.IntegrationEndpoint = integrationEndpointKey(entry.IntegrationID, entry.EndpointID)
 
-	av, err := attributevalue.MarshalMap(entry)
-	if err != nil {
-		return rmerror.NewRMError(err, "failed to marshal user entry")
-	}
-
-	_, err = db.PutItem(db.Ctx.Context, &dynamodb.PutItemInput{
-		TableName: aws.String(UserEndpointsTable),
-		Item:      av,
-	})
-	if err != nil {
+	if err := db.endpoints.Put(db.Ctx.Context, entry); err != nil {
 		return rmerror.NewRMError(err, "failed to register client")
 	}
 
@@ -190,32 +172,17 @@ func (db *UserDB) queryUser(num_entries int32, userID string) ([]UserIntegration
 		targetUserID = db.Ctx.Accessor.GetID()
 	}
 
-	expr, err := expression.NewBuilder().
-		WithKeyCondition(expression.Key("user_id").Equal(expression.Value(targetUserID))).
-		Build()
-	if err != nil {
-		return nil, rmerror.NewRMError(err, "failed to build expression for queryUser")
-	}
-
-	result, err := db.Query(db.Ctx.Context, &dynamodb.QueryInput{
-		TableName:                 aws.String(UserEndpointsTable),
-		KeyConditionExpression:    expr.KeyCondition(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
-		Limit:                     aws.Int32(num_entries),
-	})
+	// Limit is the caller's cap, so NextToken is deliberately ignored.
+	page, err := db.endpoints.Query(db.Ctx.Context, expression.Key("user_id").Equal(expression.Value(targetUserID)), ddbu.QueryOpts{Limit: int(num_entries)})
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to query user entry")
 	}
 
-	if len(result.Items) == 0 {
+	if len(page.Items) == 0 {
 		return nil, rmerror.NewRMError(nil, "user entry not found")
 	}
 
-	var entries []UserIntegrationEntry
-	if err := attributevalue.UnmarshalListOfMaps(result.Items, &entries); err != nil {
-		return nil, rmerror.NewRMError(err, "failed to unmarshal user entries")
-	}
+	entries := page.Items
 
 	// Authorisation: if a row belongs to a different user, strip all attributes except UserID.
 	for i, entry := range entries {
@@ -231,35 +198,17 @@ func (db *UserDB) queryUser(num_entries int32, userID string) ([]UserIntegration
 func (db *UserDB) GetUserEntriesByIntegration(integrationID string) ([]UserIntegrationEntry, error) {
 	keyCondition := expression.Key("user_id").Equal(expression.Value(db.Ctx.Accessor.GetID())).
 		And(expression.Key("integration_endpoint").BeginsWith(integrationID + "#"))
-	expr, err := expression.NewBuilder().WithKeyCondition(keyCondition).Build()
-	if err != nil {
-		return nil, rmerror.NewRMError(err, "failed to build expression for GetUserEntriesByIntegration")
-	}
 
-	// Paginated: the send path fans out to every endpoint returned here, so a truncated page
-	// silently skips some of the user's devices.
-	var entries []UserIntegrationEntry
-	err = db.QueryPaginated(db.Ctx.Context, &dynamodb.QueryInput{
-		TableName:                 aws.String(UserEndpointsTable),
-		KeyConditionExpression:    expr.KeyCondition(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
-	}, func(item map[string]types.AttributeValue) error {
-		var entry UserIntegrationEntry
-		if err := attributevalue.UnmarshalMap(item, &entry); err != nil {
-			return rmerror.NewRMError(err, "failed to unmarshal user entries")
-		}
-		entries = append(entries, entry)
-		return nil
-	})
+	// Every page, not one: the send path fans out to every endpoint returned here.
+	page, err := db.endpoints.Query(db.Ctx.Context, keyCondition)
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to query user entries by integration")
 	}
 
-	if len(entries) == 0 {
+	if len(page.Items) == 0 {
 		return nil, rmerror.NewRMError(nil, "user entry not found")
 	}
-	return entries, nil
+	return page.Items, nil
 }
 
 // ErrUserEntryNotFound distinguishes an absent row from a failed lookup. Test with errors.Is.
@@ -267,24 +216,12 @@ var ErrUserEntryNotFound = errors.New("user entry not found")
 
 // GetUserEntryByEndpoint looks up exactly one endpoint row by its (integration_id, endpoint_id) pair. Returns an error wrapping ErrUserEntryNotFound when the row is absent.
 func (db *UserDB) GetUserEntryByEndpoint(integrationID, endpointID string) (*UserIntegrationEntry, error) {
-	key, err := db.marshalUserEndpointKey(integrationID, endpointID)
-	if err != nil {
-		return nil, err
-	}
-
-	result, err := db.GetItem(db.Ctx.Context, &dynamodb.GetItemInput{
-		TableName: aws.String(UserEndpointsTable),
-		Key:       key,
-	})
+	entry, found, err := db.endpoints.Get(db.Ctx.Context, db.userEndpointKey(integrationID, endpointID))
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to get user entry")
 	}
-	if len(result.Item) == 0 {
+	if !found {
 		return nil, rmerror.NewRMError(ErrUserEntryNotFound, "user entry not found")
-	}
-	var entry UserIntegrationEntry
-	if err := attributevalue.UnmarshalMap(result.Item, &entry); err != nil {
-		return nil, rmerror.NewRMError(err, "failed to unmarshal user entry")
 	}
 	return &entry, nil
 }
@@ -300,16 +237,7 @@ func (db *UserDB) GetUserID(userID string) (string, error) {
 
 // UnregisterClient removes one specific endpoint row for the current user.
 func (db *UserDB) UnregisterClient(integrationID, endpointID string) error {
-	key, err := db.marshalUserEndpointKey(integrationID, endpointID)
-	if err != nil {
-		return err
-	}
-
-	_, err = db.DeleteItem(db.Ctx.Context, &dynamodb.DeleteItemInput{
-		TableName: aws.String(UserEndpointsTable),
-		Key:       key,
-	})
-	if err != nil {
+	if err := db.endpoints.DeleteAllowMissing(db.Ctx.Context, db.userEndpointKey(integrationID, endpointID)); err != nil {
 		return rmerror.NewRMError(err, "failed to unregister client")
 	}
 

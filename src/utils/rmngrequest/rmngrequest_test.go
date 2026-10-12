@@ -113,6 +113,27 @@ var _ = Describe("rmng request", func() {
 	})
 })
 
+var _ = Describe("ParsePageSize", func() {
+	It("defaults to 20 when page_size is absent, invalid or not positive", func() {
+		for _, v := range []string{"", "abc", "0", "-5"} {
+			Expect(ParsePageSize(map[string]string{"page_size": v})).To(Equal(int64(20)), "page_size=%q", v)
+		}
+	})
+
+	It("uses the caller's default when one is given", func() {
+		Expect(ParsePageSize(map[string]string{}, 50)).To(Equal(int64(50)))
+	})
+
+	It("returns a page_size within the cap as is", func() {
+		Expect(ParsePageSize(map[string]string{"page_size": "250"})).To(Equal(int64(250)))
+		Expect(ParsePageSize(map[string]string{"page_size": "1000"})).To(Equal(int64(MAX_PAGE_SIZE)))
+	})
+
+	It("caps an oversize page_size so one request cannot read a whole partition", func() {
+		Expect(ParsePageSize(map[string]string{"page_size": "1000000000"})).To(Equal(int64(MAX_PAGE_SIZE)))
+	})
+})
+
 var _ = Describe("RedactForLog", func() {
 	It("should redact the Authorization header", func() {
 		request := events.APIGatewayProxyRequest{

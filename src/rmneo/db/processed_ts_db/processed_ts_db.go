@@ -106,20 +106,18 @@ Query Patterns:
 package processed_ts_db
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
-	dbcore "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 
+	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/timeseries/timewindow"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
-	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 )
 
 const (
@@ -127,11 +125,19 @@ const (
 )
 
 type ProcessedTsDB struct {
-	dbcore.DB
+	Ctx       *rmngctx.RmngContext
+	processed *ddbu.Table[ProcessedTsEntry]
 }
 
 func NewProcessedTsDB(ctx *rmngctx.RmngContext) *ProcessedTsDB {
-	return &ProcessedTsDB{DB: *dbcore.NewDB(ctx)}
+	return &ProcessedTsDB{
+		Ctx: ctx,
+		processed: ddbu.NewTable[ProcessedTsEntry](awscommon.GetDynamoDBClient(), ddbu.Schema{
+			Name:     ProcessedTSDataTable,
+			HashKey:  "node_key_dt",
+			RangeKey: "interval_key",
+		}),
+	}
 }
 
 // WindowAggregates represents aggregate statistics for a time window (database storage format)
@@ -194,45 +200,18 @@ type ProcessedTsEntry struct {
 // GetCurrentEntry retrieves the current scratchpad entry for a parameter
 func (db *ProcessedTsDB) GetCurrentEntry(nodeID, path, dataType string) (*ProcessedTsEntry, error) {
 	// Access permission check
-	if err := db.IsAuthorized(utils.NodeGet, nodeID); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodeGet, nodeID); err != nil {
 		return nil, rmerror.NewRMError(err, "unauthorized access to node processed timeseries data")
 	}
 
 	nodeKeyDt := fmt.Sprintf("%s.%s.%s", nodeID, path, dataType)
 
-	// Build the key
-	keyMap := map[string]interface{}{
-		"node_key_dt":  nodeKeyDt,
-		"interval_key": "current",
-	}
-
-	// Marshal the key
-	key, err := attributevalue.MarshalMap(keyMap)
-	if err != nil {
-		return nil, rmerror.NewRMError(err, "failed to marshal key")
-	}
-
-	// Build get item input
-	input := &dynamodb.GetItemInput{
-		TableName: aws.String(ProcessedTSDataTable),
-		Key:       key,
-	}
-
-	// Get the item
-	result, err := db.GetItem(db.Ctx.Context, input)
+	entry, found, err := db.processed.Get(db.Ctx.Context, db.processed.Key(nodeKeyDt, "current"))
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to get current processed ts entry")
 	}
-
-	if result.Item == nil {
+	if !found {
 		return nil, nil // No current entry exists
-	}
-
-	// Unmarshal the result
-	var entry ProcessedTsEntry
-	err = attributevalue.UnmarshalMap(result.Item, &entry)
-	if err != nil {
-		return nil, rmerror.NewRMError(err, "failed to unmarshal processed ts entry")
 	}
 
 	return &entry, nil
@@ -241,7 +220,7 @@ func (db *ProcessedTsDB) GetCurrentEntry(nodeID, path, dataType string) (*Proces
 // UpsertCurrentEntry updates or inserts a current entry
 func (db *ProcessedTsDB) UpsertCurrentEntry(entry *ProcessedTsEntry) error {
 	// Access permission check
-	if err := db.IsAuthorized(utils.NodePublishToDevice, entry.NodeID); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodePublishToDevice, entry.NodeID); err != nil {
 		return rmerror.NewRMError(err, "unauthorized access to node processed timeseries data")
 	}
 
@@ -251,18 +230,7 @@ func (db *ProcessedTsDB) UpsertCurrentEntry(entry *ProcessedTsEntry) error {
 	// Note: UpdatedAt should be set by the caller (processor) to maintain proper timestamp semantics
 	// The processor knows whether this is a new entry or an update and sets timestamps appropriately
 
-	// Marshal the entry
-	av, err := attributevalue.MarshalMap(entry)
-	if err != nil {
-		return rmerror.NewRMError(err, "failed to marshal processed ts entry")
-	}
-
-	// Put the item
-	_, err = db.PutItem(db.Ctx.Context, &dynamodb.PutItemInput{
-		TableName: aws.String(ProcessedTSDataTable),
-		Item:      av,
-	})
-	if err != nil {
+	if err := db.processed.Put(db.Ctx.Context, *entry); err != nil {
 		return rmerror.NewRMError(err, "failed to put processed ts entry")
 	}
 
@@ -272,7 +240,7 @@ func (db *ProcessedTsDB) UpsertCurrentEntry(entry *ProcessedTsEntry) error {
 // CreateWindowEntry creates a new window entry when a window boundary is crossed
 func (db *ProcessedTsDB) CreateWindowEntry(entry *ProcessedTsEntry, windowKey string) error {
 	// Access permission check
-	if err := db.IsAuthorized(utils.NodePublishToDevice, entry.NodeID); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodePublishToDevice, entry.NodeID); err != nil {
 		return rmerror.NewRMError(err, "unauthorized access to node processed timeseries data")
 	}
 
@@ -281,25 +249,14 @@ func (db *ProcessedTsDB) CreateWindowEntry(entry *ProcessedTsEntry, windowKey st
 	windowEntry.IntervalKey = windowKey
 	windowEntry.UpdatedAt = time.Now().Unix()
 
-	// Marshal the entry
-	av, err := attributevalue.MarshalMap(&windowEntry)
-	if err != nil {
-		return rmerror.NewRMError(err, "failed to marshal window entry")
-	}
-
-	// Put the item
-	_, err = db.PutItem(db.Ctx.Context, &dynamodb.PutItemInput{
-		TableName: aws.String(ProcessedTSDataTable),
-		Item:      av,
-	})
-	if err != nil {
+	if err := db.processed.Put(db.Ctx.Context, windowEntry); err != nil {
 		return rmerror.NewRMError(err, "failed to put window entry")
 	}
 
 	return nil
 }
 
-// GetWindowEntries retrieves window entries for a given node parameter
+// GetWindowEntries retrieves every window entry for a given node parameter in the range, across all pages.
 func (db *ProcessedTsDB) GetWindowEntries(nodeID, dataKey, dataType string, windowType timewindow.TimeWindow, startTime, endTime time.Time) ([]*ProcessedTsEntry, error) {
 	// Call GetWindowEntriesWithPagination without pagination parameters
 	queryResult, err := db.GetWindowEntriesWithPagination(nodeID, dataKey, dataType, windowType, startTime, endTime, 0, "")
@@ -326,7 +283,7 @@ func lastWindowKeyBefore(endTime time.Time, windowType timewindow.TimeWindow) st
 // startTime is inclusive and endTime is exclusive, matching Go's own half-open time ranges.
 func (db *ProcessedTsDB) GetWindowEntriesWithPagination(nodeID, dataKey, dataType string, windowType timewindow.TimeWindow, startTime, endTime time.Time, limit int32, nextToken string) (*HistoricalAggregatesQueryResult, error) {
 	// Access permission check
-	if err := db.IsAuthorized(utils.NodeGet, nodeID); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodeGet, nodeID); err != nil {
 		return nil, rmerror.NewRMError(err, "unauthorized access to node processed timeseries data")
 	}
 
@@ -353,69 +310,32 @@ func (db *ProcessedTsDB) GetWindowEntriesWithPagination(nodeID, dataKey, dataTyp
 		keyCondition = keyCondition.And(expression.Key("interval_key").BeginsWith(keyPrefix))
 	}
 
-	// Build the expression
-	expr, err := expression.NewBuilder().
-		WithKeyCondition(keyCondition).
-		Build()
-	if err != nil {
-		return nil, rmerror.NewRMError(err, "failed to build query expression")
+	// Limit 0 reads every page.
+	opts := ddbu.QueryOpts{
+		Descending: true, // Latest first
+		StartToken: nextToken,
 	}
-
-	// Build the query input
-	queryInput := &dynamodb.QueryInput{
-		TableName:                 aws.String(ProcessedTSDataTable),
-		KeyConditionExpression:    expr.KeyCondition(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
-		ScanIndexForward:          aws.Bool(false), // Latest first
-	}
-
-	// Add pagination support
 	if limit > 0 {
-		queryInput.Limit = aws.Int32(limit)
+		opts.Limit = int(limit)
 	}
 
-	if nextToken != "" {
-		// Decode the next token (it's base64 encoded JSON)
-		decodedToken, err := dbcore.DecodePaginationToken(nextToken)
-		if err != nil {
-			return nil, rmerror.NewRMError(err, "invalid pagination token")
-		}
-		queryInput.ExclusiveStartKey = decodedToken
+	page, err := db.processed.Query(db.Ctx.Context, keyCondition, opts)
+	if errors.Is(err, ddbu.ErrInvalidToken) {
+		return nil, rmerror.NewRMError(err, "invalid pagination token")
 	}
-
-	// Execute the query
-	result, err := db.Query(db.Ctx.Context, queryInput)
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to query processed ts data")
 	}
 
-	// Convert results
-	entries := make([]*ProcessedTsEntry, len(result.Items))
-	for i, item := range result.Items {
-		var entry ProcessedTsEntry
-		err = attributevalue.UnmarshalMap(item, &entry)
-		if err != nil {
-			return nil, rmerror.NewRMError(err, "failed to unmarshal processed ts entry")
-		}
-		entries[i] = &entry
+	entries := make([]*ProcessedTsEntry, len(page.Items))
+	for i := range page.Items {
+		entries[i] = &page.Items[i]
 	}
 
-	// Prepare pagination result
-	queryResult := &HistoricalAggregatesQueryResult{
-		Entries: entries,
-	}
-
-	// Generate next token if there are more results
-	if result.LastEvaluatedKey != nil {
-		nextToken, err := dbcore.EncodePaginationToken(result.LastEvaluatedKey)
-		if err != nil {
-			return nil, rmerror.NewRMError(err, "failed to encode pagination token")
-		}
-		queryResult.NextToken = nextToken
-	}
-
-	return queryResult, nil
+	return &HistoricalAggregatesQueryResult{
+		Entries:   entries,
+		NextToken: page.NextToken,
+	}, nil
 }
 
 // GetCurrentAggregatesForWindow retrieves current aggregates for a specific window

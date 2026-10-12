@@ -2085,7 +2085,7 @@ paths:
             type: integer
             format: int64
           description: End timestamp in milliseconds (defaults to now).
-        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/TimeseriesPageSize"
         - $ref: "#/components/parameters/StartKey"
       responses:
         "200":
@@ -2211,7 +2211,7 @@ paths:
           description: |
             Range end date (inclusive). Covers the whole period named, so an
             hourly `end_date` written without an hour includes that entire day.
-        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/TimeseriesPageSize"
         - $ref: "#/components/parameters/StartKey"
 
       responses:
@@ -4095,10 +4095,25 @@ components:
       schema:
         type: integer
         minimum: 1
+        maximum: 1000
         default: 20
       description: |
-        Maximum number of items to return in a single page. When omitted
-        or invalid, the server applies an endpoint-specific default.
+        Maximum number of items to return in a single page, at most 1000.
+        A larger value is treated as 1000. When omitted or invalid, 20 is
+        used.
+
+    TimeseriesPageSize:
+      in: query
+      name: page_size
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000
+        default: 20
+      description: |
+        Maximum number of points to return in a single page, at most 1000.
+        A larger value returns 1000 points and a `next_key` for the rest.
+        When omitted or invalid, 20 is used.
 
     StartKey:
       in: query
