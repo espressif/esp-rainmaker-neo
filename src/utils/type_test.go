@@ -322,8 +322,7 @@ var _ = Describe("Type Utilities", func() {
 					Extra: "extra",
 				}
 
-				var dest map[string]interface{}
-				dest = make(map[string]interface{})
+				dest := make(map[string]interface{})
 				dest["extra_in_map"] = "extra_in_map"
 				err := ConvertAnyToAny(source, &dest)
 				Expect(err).NotTo(HaveOccurred())

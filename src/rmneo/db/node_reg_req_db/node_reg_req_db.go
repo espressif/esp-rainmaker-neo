@@ -275,7 +275,7 @@ func (db *NodeRegRequestsDB) ListNodeRegRequests(limit int64, startKey string, s
 	}
 
 	output := &ListNodeRegRequestsOutput{Entries: entries}
-	if lastKey != nil && len(lastKey) > 0 {
+	if len(lastKey) > 0 {
 		output.NextKey, err = dbpkg.EncodePaginationToken(lastKey)
 		if err != nil {
 			return nil, rmerror.NewRMError(err, "failed to encode next key")

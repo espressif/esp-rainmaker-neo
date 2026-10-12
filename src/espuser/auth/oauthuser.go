@@ -54,16 +54,16 @@ func NewOAuthUserAuthService(ctx context.Context) (*OAuthUserAuthService, error)
 	// Fetch JWKS from SSM Parameter Store
 	userPoolJWKS, err := ssmutil.GetParameterWithCaching(ctx, os.Getenv("USER_JWKS_PARA_NAME"), false) // Caching as the info is not expected to change frequently and leads to throttling errors for sign in
 	if err != nil {
-		return nil, rmerror.NewRMError(err, fmt.Sprintf("failed to get JWKS from SSM parameter"))
+		return nil, rmerror.NewRMError(err, "failed to get JWKS from SSM parameter")
 	}
 	if userPoolJWKS == "" {
-		return nil, rmerror.NewRMError(nil, fmt.Sprintf("JWKS value is empty for parameter"))
+		return nil, rmerror.NewRMError(nil, "JWKS value is empty for parameter")
 	}
 
 	// Parse JWKS
 	keySet, err := jwk.Parse([]byte(userPoolJWKS))
 	if err != nil {
-		return nil, rmerror.NewRMError(err, fmt.Sprintf("failed to parse JWKS for parameter"))
+		return nil, rmerror.NewRMError(err, "failed to parse JWKS for parameter")
 	}
 
 	return &OAuthUserAuthService{issuer: os.Getenv("USER_ISSUER"), jwks: keySet}, nil

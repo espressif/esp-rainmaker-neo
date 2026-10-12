@@ -18,7 +18,8 @@ import (
 )
 
 func handlePresenceEvent(ctx context.Context, event node.PresenceEvent) error {
-	if event.EventType == "disconnected" {
+	switch event.EventType {
+	case "disconnected":
 		s := utils.NewSystemActor()
 		rmngContext := rmngctx.NewRmngContextWithNode(ctx, s, event.ClientID)
 
@@ -56,7 +57,7 @@ func handlePresenceEvent(ctx context.Context, event node.PresenceEvent) error {
 		if err := hooks.OnBridgeDisconnect(ctx, event); err != nil {
 			rlog.Error(rmngContext).Err(err).Msg("bridge presence cascade failed")
 		}
-	} else if event.EventType == "connected" {
+	case "connected":
 		// This event will never come from the aws topic: $aws/events/presence/connected/+
 		// Just triggered if the lamdba is invoked directly
 

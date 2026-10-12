@@ -242,7 +242,7 @@ var _ = Describe("Publish Input Event Handler", func() {
 			err = json.Unmarshal(publishInput.Payload, &publishedData)
 			Expect(err).To(BeNil())
 
-			expectedJSON = strings.Replace(expectedJSON, "{{.GroupID}}", groupID, -1)
+			expectedJSON = strings.ReplaceAll(expectedJSON, "{{.GroupID}}", groupID)
 			err = json.Unmarshal([]byte(expectedJSON), &expectedData)
 			Expect(err).To(BeNil())
 

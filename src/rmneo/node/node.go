@@ -414,19 +414,20 @@ func (n *Node) ClearUserTags(rmngCtx *rmngctx.RmngContext) error {
 // writeToShadow is a helper function to write data to a specific shadow
 func (n *Node) writeToShadow(rmngCtx *rmngctx.RmngContext, shadowName string, target string, data ReportedOrDesiredShadow) error {
 	var updatePayload IoTNodeShadow
-	if target == "reported" {
+	switch target {
+	case "reported":
 		updatePayload = IoTNodeShadow{
 			State: &ShadowState{
 				Reported: &data,
 			},
 		}
-	} else if target == "desired" {
+	case "desired":
 		updatePayload = IoTNodeShadow{
 			State: &ShadowState{
 				Desired: &data,
 			},
 		}
-	} else {
+	default:
 		return rmerror.NewRMError(fmt.Errorf("invalid shadow target"), "")
 	}
 

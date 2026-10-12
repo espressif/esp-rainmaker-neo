@@ -29,15 +29,19 @@ linters:
       # Closing a response body that has been read cannot fail in a way the caller can act on.
       exclude-functions:
         - (io.ReadCloser).Close
+    staticcheck:
+      # golangci-lint's defaults, plus QF1008: an explicit embedded-field selector says which embedded struct a field comes from.
+      checks: ["all", "-ST1000", "-ST1003", "-ST1016", "-ST1020", "-ST1021", "-ST1022", "-QF1008"]
+      # Ginkgo/Gomega are written dot-imported, including in the shared test helpers.
+      dot-import-whitelist:
+        - github.com/onsi/ginkgo/v2
+        - github.com/onsi/gomega
     gosec:
       excludes:
         # Matches names like "token" and "secret" on URLs, SSM paths and env-var names; gitleaks scans for real secrets.
         - G101
         # Unchecked errors, which errcheck already gates.
         - G104
-    staticcheck:
-      # Bug checks only; the S1/ST/QF style checks are not gated yet.
-      checks: ["SA*"]
   exclusions:
     rules:
       # Not gated in tests yet; production code is.

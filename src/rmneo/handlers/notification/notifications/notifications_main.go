@@ -194,12 +194,10 @@ func Handler(ctx context.Context, event NotificationEvent) error {
 
 	var notif *notification.Notification
 	var err error
-	var nodeID string
-
-	// Create notification using the generic factory
-	nodeID = event.NodeID
+	nodeID := event.NodeID
 	rlog.Info(ctx).Msgf("Processing %s notification for node: %s, topic: %s", event.NotificationType, nodeID, event.TopicName)
 
+	// Create notification using the generic factory
 	if event.NotificationType == string(notification.NotificationTypeGroupMembership) {
 		// Control-plane membership change: group is supplied directly by the backend.
 		notif, err = notification.NewGroupMembershipNotification(nodeID, event.GroupID, event.SubGroupIDs, event.Action)

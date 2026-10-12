@@ -756,11 +756,9 @@ var _ = Describe("GVA Action", func() {
 				Expect(commandResult.IDs).To(ContainElement(nodeID + "." + deviceSuffix))
 
 				// Verify expected states if provided
-				if expectedStates != nil {
-					for key, expectedValue := range expectedStates {
-						Expect(commandResult.States).To(HaveKey(key))
-						Expect(commandResult.States[key]).To(Equal(expectedValue))
-					}
+				for key, expectedValue := range expectedStates {
+					Expect(commandResult.States).To(HaveKey(key))
+					Expect(commandResult.States[key]).To(Equal(expectedValue))
 				}
 
 				// Verify shadow state was updated correctly (should be different from initial state)

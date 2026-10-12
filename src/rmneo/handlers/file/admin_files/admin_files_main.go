@@ -103,7 +103,7 @@ func handleGetFileTemplate(_ context.Context, request events.APIGatewayProxyRequ
 func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	var err error
 	var response interface{}
-	var statusCode int = http.StatusOK
+	var statusCode = http.StatusOK
 	rctx := user.NewContextWithAPIRequest(ctx, request)
 	isAuthorized := rctx.GetAccessor().(*user.User).IsAdmin(rctx)
 	if !isAuthorized {

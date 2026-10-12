@@ -191,10 +191,7 @@ func tokenClientID(isAdmin bool) string {
 
 // splitIssuer splits an issuer URL to extract the user pool ID
 func splitIssuer(issuer string) []string {
-	// Remove https:// prefix if present
-	if strings.HasPrefix(issuer, "https://") {
-		issuer = strings.TrimPrefix(issuer, "https://")
-	}
+	issuer = strings.TrimPrefix(issuer, "https://")
 	// Split by /
 	return strings.Split(issuer, "/")
 }

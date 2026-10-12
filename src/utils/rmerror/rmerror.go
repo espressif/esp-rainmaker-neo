@@ -43,13 +43,13 @@ func NewRMError(err error, message string) *RMError {
 // LogError logs all wrapped errors
 func logErrorToStr(file string, line int, err error) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("----\n[Error][%s:%d]\n", file, line))
+	fmt.Fprintf(&sb, "----\n[Error][%s:%d]\n", file, line)
 	for err != nil {
 		switch e := err.(type) { //nolint:errorlint // inspects one layer at a time; errors.As would match a deeper RMError
 		case *RMError:
-			sb.WriteString(fmt.Sprintf("  %s:%d: %s\n", e.File, e.Line, e.Message))
+			fmt.Fprintf(&sb, "  %s:%d: %s\n", e.File, e.Line, e.Message)
 		default:
-			sb.WriteString(fmt.Sprintf("  %v\n", err))
+			fmt.Fprintf(&sb, "  %v\n", err)
 		}
 		err = errors.Unwrap(err)
 	}
