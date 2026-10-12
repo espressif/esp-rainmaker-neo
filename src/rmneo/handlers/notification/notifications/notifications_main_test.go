@@ -92,7 +92,7 @@ func (m *MockNotificationService) GetType() notification.NotificationServiceType
 	return m.Type
 }
 
-func (m *MockNotificationService) Send(notif interface{}) error {
+func (m *MockNotificationService) Send(ctx context.Context, notif interface{}) error {
 	notifData, ok := notif.(*notification.Notification)
 	if !ok {
 		return fmt.Errorf("failed to cast notification to Notification")
@@ -101,7 +101,7 @@ func (m *MockNotificationService) Send(notif interface{}) error {
 	return nil
 }
 
-func (m *MockNotificationService) SendTo(notif interface{}, userIDs []string) error {
+func (m *MockNotificationService) SendTo(ctx context.Context, notif interface{}, userIDs []string) error {
 	notifData, ok := notif.(*notification.Notification)
 	if !ok {
 		return fmt.Errorf("failed to cast notification to Notification")
@@ -2111,7 +2111,7 @@ var _ = Describe("Notifications Handler", func() {
 			}}}
 
 			mockHTTPClient.Requests = nil
-			err := gvaService.SendTo(batch, []string{"user-without-gva-link", userID})
+			err := gvaService.SendTo(context.TODO(), batch, []string{"user-without-gva-link", userID})
 			Expect(err).To(BeNil())
 			Expect(gvaDataRequests()).To(Equal([]string{userID}))
 		})
@@ -2122,7 +2122,7 @@ var _ = Describe("Notifications Handler", func() {
 			gvaService := gva.NewGVANotification(ctx, "https://webhook-mock.test")
 
 			mockHTTPClient.Requests = nil
-			err := gvaService.SendTo([]gva.GVARequestSyncRequest{{Async: false}}, []string{"user-without-gva-link", userID})
+			err := gvaService.SendTo(context.TODO(), []gva.GVARequestSyncRequest{{Async: false}}, []string{"user-without-gva-link", userID})
 			Expect(err).To(BeNil())
 			Expect(gvaDataRequests()).To(Equal([]string{userID}))
 		})
@@ -2136,7 +2136,7 @@ var _ = Describe("Notifications Handler", func() {
 			}}}
 
 			mockHTTPClient.Requests = nil
-			err := gvaService.SendTo(batch, []string{"unlinked-1", "unlinked-2"})
+			err := gvaService.SendTo(context.TODO(), batch, []string{"unlinked-1", "unlinked-2"})
 			Expect(err).To(BeNil())
 			Expect(mockHTTPClient.Requests).To(BeEmpty(), "no token fetch or report for zero linked recipients")
 		})
@@ -2442,8 +2442,8 @@ func (r *recordingService) GetName() string { return r.name }
 func (r *recordingService) GetType() notification.NotificationServiceType {
 	return notification.NotificationServiceTypeUserSpecific
 }
-func (r *recordingService) Send(interface{}) error { return nil }
-func (r *recordingService) SendTo(interface{}, []string) error {
+func (r *recordingService) Send(context.Context, interface{}) error { return nil }
+func (r *recordingService) SendTo(context.Context, interface{}, []string) error {
 	r.sendTos++
 	return nil
 }

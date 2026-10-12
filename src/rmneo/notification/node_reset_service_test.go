@@ -5,6 +5,7 @@
 package notification
 
 import (
+	"context"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"os"
 
@@ -102,7 +103,7 @@ var _ = Describe("Node Reset Service", func() {
 			// the service must read the node ID from DirectNotificationData.
 			Expect(notif.ShadowUpdateData).To(BeNil())
 
-			err := service.Send(notif)
+			err := service.Send(context.TODO(), notif)
 			Expect(err).To(BeNil())
 
 			test_utils.AssertNodeNotInGroup(groupID, nodeID)
@@ -113,13 +114,13 @@ var _ = Describe("Node Reset Service", func() {
 			// No push devices / members are set up at all — a generic service
 			// must still act. This is the empty-group case that the user-specific
 			// variant would have skipped.
-			err := service.Send(buildNotification(nodeID, groupID))
+			err := service.Send(context.TODO(), buildNotification(nodeID, groupID))
 			Expect(err).To(BeNil())
 			test_utils.AssertNodeNotInGroup(groupID, nodeID)
 		})
 
 		It("should return an error when the node is not in the named group", func() {
-			err := service.Send(buildNotification(nodeID, "non-existent-group"))
+			err := service.Send(context.TODO(), buildNotification(nodeID, "non-existent-group"))
 			Expect(err).ToNot(BeNil())
 			// Original association is untouched on failure.
 			test_utils.AssertNodeInGroup(groupID, nodeID)
@@ -134,7 +135,7 @@ var _ = Describe("Node Reset Service", func() {
 			)
 			Expect(err).To(BeNil())
 
-			err = service.Send(shadowNotif)
+			err = service.Send(context.TODO(), shadowNotif)
 			Expect(err).To(BeNil())
 			// No action taken: node stays in the group, no cleanup fired.
 			test_utils.AssertNodeInGroup(groupID, nodeID)
@@ -142,7 +143,7 @@ var _ = Describe("Node Reset Service", func() {
 		})
 
 		It("should ignore a payload that is not *Notification", func() {
-			err := service.Send("not-a-notification")
+			err := service.Send(context.TODO(), "not-a-notification")
 			Expect(err).To(BeNil())
 			test_utils.AssertNodeInGroup(groupID, nodeID)
 		})

@@ -53,15 +53,15 @@ func (s *WebhookService) GetType() NotificationServiceType {
 }
 
 // Send sends a webhook notification
-func (s *WebhookService) Send(notif interface{}) error {
+func (s *WebhookService) Send(ctx context.Context, notif interface{}) error {
 
 	// Webhook notifications are user-specific, so this should not be called directly
 	return rmerror.NewRMError(nil, "Webhook notifications must be sent to specific users")
 }
 
 // MakeHTTPPostRequest makes an HTTP POST request with the given body, URI, and header closure
-func MakeHTTPPostRequest(body []byte, uri string, addHeaders func(*http.Request) error) ([]byte, error) {
-	req, err := http.NewRequest(http.MethodPost, uri, bytes.NewBuffer(body))
+func MakeHTTPPostRequest(ctx context.Context, body []byte, uri string, addHeaders func(*http.Request) error) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, uri, bytes.NewBuffer(body))
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "Failed to create HTTP request")
 	}
@@ -97,10 +97,10 @@ func MakeHTTPPostRequest(body []byte, uri string, addHeaders func(*http.Request)
 }
 
 // refreshToken attempts to refresh an expired token
-func (s *WebhookService) refreshToken(refreshToken string) (*integrationauth.TokenResponse, error) {
-	rlog.Info(context.TODO()).Msgf("Refreshing token (refresh token fingerprint: %s)", jwtutil.TokenFingerprint(refreshToken))
+func (s *WebhookService) refreshToken(ctx context.Context, refreshToken string) (*integrationauth.TokenResponse, error) {
+	rlog.Info(ctx).Msgf("Refreshing token (refresh token fingerprint: %s)", jwtutil.TokenFingerprint(refreshToken))
 	body := []byte(fmt.Sprintf(`{"refresh_token": "%s"}`, refreshToken))
-	respBody, err := MakeHTTPPostRequest(body, s.refreshTokenURI, func(req *http.Request) error {
+	respBody, err := MakeHTTPPostRequest(ctx, body, s.refreshTokenURI, func(req *http.Request) error {
 		req.Header.Set("Content-Type", "application/json")
 		return nil
 	})
@@ -117,8 +117,8 @@ func (s *WebhookService) refreshToken(refreshToken string) (*integrationauth.Tok
 }
 
 // SendTo sends a webhook notification to specific users
-func (s *WebhookService) SendTo(notif interface{}, userIDs []string) error {
-	rlog.Info(context.TODO()).Msgf("Sending webhook notification to users: %v\n", userIDs)
+func (s *WebhookService) SendTo(ctx context.Context, notif interface{}, userIDs []string) error {
+	rlog.Info(ctx).Msgf("Sending webhook notification to users: %v\n", userIDs)
 	notification, ok := notif.(map[string]interface{})
 	if !ok {
 		return rmerror.NewRMError(nil, "Failed to cast notification to map[string]interface{}")
@@ -128,41 +128,43 @@ func (s *WebhookService) SendTo(notif interface{}, userIDs []string) error {
 		// Multi-endpoint fan-out: a user may have multiple linked accounts on the same integration (e.g. two Amazon accounts both linked to the same Rainmaker user). Send the notification to each linked endpoint.
 		endpoints, err := integrationauth.GetAllOAuthEndpoints(userID, s.platform)
 		if err != nil {
-			rlog.Error(context.TODO()).Err(err).Msgf("Failed to list endpoints for user %s on platform %s", userID, s.platform)
+			rlog.Error(ctx).Err(err).Msgf("Failed to list endpoints for user %s on platform %s", userID, s.platform)
 			continue
 		}
 
 		for _, endpoint := range endpoints {
-			tokenData, err := integrationauth.UpdateAndGetLatestToken(userID, s.platform, endpoint.EndpointID, s.refreshToken)
+			tokenData, err := integrationauth.UpdateAndGetLatestToken(userID, s.platform, endpoint.EndpointID, func(refreshToken string) (*integrationauth.TokenResponse, error) {
+				return s.refreshToken(ctx, refreshToken)
+			})
 			if err != nil {
-				rlog.Error(context.TODO()).Err(err).Msgf("Failed to get token data for user %s endpoint %s", userID, endpoint.EndpointID)
+				rlog.Error(ctx).Err(err).Msgf("Failed to get token data for user %s endpoint %s", userID, endpoint.EndpointID)
 				continue
 			}
 
 			new_notification, err := s.perUserMarshal(notification, userID, endpoint.EndpointID)
 			if err != nil {
-				rlog.Error(context.TODO()).Err(err).Msgf("Failed to inject user code for user %s", userID)
+				rlog.Error(ctx).Err(err).Msgf("Failed to inject user code for user %s", userID)
 				continue
 			}
 
 			jsonData, err := json.Marshal(new_notification)
 			if err != nil {
-				rlog.Error(context.TODO()).Err(err).Msg("Failed to marshal notification data")
+				rlog.Error(ctx).Err(err).Msg("Failed to marshal notification data")
 				continue
 			}
 
-			_, err = MakeHTTPPostRequest(jsonData, s.uri, func(req *http.Request) error {
+			_, err = MakeHTTPPostRequest(ctx, jsonData, s.uri, func(req *http.Request) error {
 				req.Header.Set("Content-Type", "application/json")
 				req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", tokenData.AccessToken))
 				return nil
 			})
 
 			if err != nil {
-				rlog.Error(context.TODO()).Err(err).Msgf("Failed to send webhook notification to user %s endpoint %s", userID, endpoint.EndpointID)
+				rlog.Error(ctx).Err(err).Msgf("Failed to send webhook notification to user %s endpoint %s", userID, endpoint.EndpointID)
 				continue
 			}
 
-			rlog.Info(context.TODO()).Msgf("Successfully sent webhook notification to user %s endpoint %s on platform %s\n", userID, endpoint.EndpointID, s.platform)
+			rlog.Info(ctx).Msgf("Successfully sent webhook notification to user %s endpoint %s on platform %s\n", userID, endpoint.EndpointID, s.platform)
 		}
 	}
 

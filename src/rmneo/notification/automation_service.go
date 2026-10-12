@@ -216,16 +216,16 @@ func (s *AutomationService) evaluateAndExecuteActions(rmngCtx *rmngctx.RmngConte
 }
 
 // Send sends an automation notification
-func (s *AutomationService) Send(notification interface{}) error {
+func (s *AutomationService) Send(ctx context.Context, notification interface{}) error {
 	notificationData, ok := notification.(*Notification)
 	if !ok {
-		rlog.Error(context.TODO()).Msg("Failed to cast notification to Notification")
+		rlog.Error(ctx).Msg("Failed to cast notification to Notification")
 		return nil
 	}
 
 	// Create system context for database operations (needed for all logging below)
 	s_actor := utils.NewSystemActor()
-	rmngCtx := rmngctx.NewRmngContextWithCtx(context.Background(), s_actor)
+	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, s_actor)
 
 	// Automation service only handles direct notifications
 	if notificationData.NotificationType != NotificationTypeDirect {
@@ -329,9 +329,9 @@ func (s *AutomationService) Send(notification interface{}) error {
 }
 
 // SendTo sends an automation notification to specific users
-func (s *AutomationService) SendTo(notificationData interface{}, userIDs []string) error {
+func (s *AutomationService) SendTo(ctx context.Context, notificationData interface{}, userIDs []string) error {
 	// Automation notifications are not user-specific, so we just call Send
-	return s.Send(notificationData)
+	return s.Send(ctx, notificationData)
 }
 
 // Marshal marshals the notification

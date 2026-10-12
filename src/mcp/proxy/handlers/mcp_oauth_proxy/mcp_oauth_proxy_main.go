@@ -65,7 +65,7 @@ type wrappedRefresh struct {
 
 // fetchCIMD fetches and validates a CIMD document from the given HTTPS URL.
 // It is a var function so tests can replace it.
-var fetchCIMD = func(clientIDURL string) (*CIMDDocument, error) {
+var fetchCIMD = func(ctx context.Context, clientIDURL string) (*CIMDDocument, error) {
 	parsed, err := url.Parse(clientIDURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid client_id URL: %w", err)
@@ -77,12 +77,16 @@ var fetchCIMD = func(clientIDURL string) (*CIMDDocument, error) {
 	// where it can point. Optional MCP_CIMD_ALLOWED_HOSTS pins it to known CIMD hosts; regardless,
 	// hosts that resolve to private/loopback/link-local ranges are refused so the proxy can't be
 	// used to reach internal services or cloud metadata (169.254.169.254).
-	if err := validateCIMDHost(parsed.Hostname()); err != nil {
+	if err := validateCIMDHost(ctx, parsed.Hostname()); err != nil {
 		return nil, err
 	}
 
 	// SSRF-safe client, not the shared one: clientIDURL comes from an unauthenticated query parameter, so redirects must not be followed and non-public addresses must not be dialled.
-	resp, err := httpclient.GetSSRFSafe().Get(clientIDURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, clientIDURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build CIMD request: %w", err)
+	}
+	resp, err := httpclient.GetSSRFSafe().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch CIMD: %w", err)
 	}
@@ -113,7 +117,7 @@ var fetchCIMD = func(clientIDURL string) (*CIMDDocument, error) {
 // separated) is set, host must be one of them. Independently, host must not resolve to any
 // private, loopback, link-local, or unspecified address — blocking internal-service and cloud
 // metadata reach even for an allowed host that later resolves inward.
-func validateCIMDHost(host string) error {
+func validateCIMDHost(ctx context.Context, host string) error {
 	if host == "" {
 		return fmt.Errorf("client_id has no host")
 	}
@@ -129,11 +133,12 @@ func validateCIMDHost(host string) error {
 			return fmt.Errorf("client_id host not allowed")
 		}
 	}
-	ips, err := net.LookupIP(host)
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
 	if err != nil {
 		return fmt.Errorf("client_id host does not resolve: %w", err)
 	}
-	for _, ip := range ips {
+	for _, addr := range addrs {
+		ip := addr.IP
 		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
 			return fmt.Errorf("client_id host resolves to a disallowed address")
 		}
@@ -344,7 +349,7 @@ func localhostRedirectMatch(allowed, actual string) bool {
 	return a.Scheme == b.Scheme && aHost == b.Hostname() && a.Path == b.Path
 }
 
-func handleAuthorize(request events.APIGatewayV2HTTPRequest) events.APIGatewayV2HTTPResponse {
+func handleAuthorize(ctx context.Context, request events.APIGatewayV2HTTPRequest) events.APIGatewayV2HTTPResponse {
 	clientID := request.QueryStringParameters["client_id"]
 	redirectURI := request.QueryStringParameters["redirect_uri"]
 	state := request.QueryStringParameters["state"]
@@ -370,7 +375,7 @@ func handleAuthorize(request events.APIGatewayV2HTTPRequest) events.APIGatewayV2
 	}
 
 	// Fetch and validate CIMD document
-	cimdDoc, err := fetchCIMD(clientID)
+	cimdDoc, err := fetchCIMD(ctx, clientID)
 	if err != nil {
 		return errorResponse(http.StatusBadRequest, "CIMD validation failed: "+err.Error())
 	}
@@ -496,7 +501,7 @@ func handleCallback(request events.APIGatewayV2HTTPRequest) events.APIGatewayV2H
 	}
 }
 
-func handleToken(request events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
+func handleToken(ctx context.Context, request events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
 	// HTTP API Gateway v2 base64-encodes non-text bodies (including form-urlencoded)
 	body := request.Body
 	if request.IsBase64Encoded {
@@ -574,7 +579,7 @@ func handleToken(request events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTT
 		return errorResponse(http.StatusBadRequest, "unsupported grant_type"), nil
 	}
 
-	tokenReq, err := http.NewRequest(http.MethodPost, tokenURL, strings.NewReader(tokenParams.Encode()))
+	tokenReq, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(tokenParams.Encode()))
 	if err != nil {
 		return errorResponse(http.StatusInternalServerError, "failed to build token request"), nil
 	}
@@ -656,7 +661,7 @@ func handleTestCIMD() events.APIGatewayV2HTTPResponse {
 	}
 }
 
-func handleRequest(request events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
+func handleRequest(ctx context.Context, request events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
 	path := request.RawPath
 	method := request.RequestContext.HTTP.Method
 
@@ -672,11 +677,11 @@ func handleRequest(request events.APIGatewayV2HTTPRequest) (events.APIGatewayV2H
 	case path == oidc.OAuthASMetaPath && method == "GET":
 		return handleAuthServerMetadata(), nil
 	case path == "/oauth2/authorize" && method == "GET":
-		return handleAuthorize(request), nil
+		return handleAuthorize(ctx, request), nil
 	case path == "/oauth2/callback" && method == "GET":
 		return handleCallback(request), nil
 	case path == "/oauth2/token" && method == "POST":
-		return handleToken(request)
+		return handleToken(ctx, request)
 	default:
 		return events.APIGatewayV2HTTPResponse{
 			StatusCode: http.StatusNotFound,

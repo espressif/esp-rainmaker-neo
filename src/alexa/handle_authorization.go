@@ -43,7 +43,7 @@ func HandleAcceptGrant(ctx context.Context, request AlexaRequest) (AlexaResponse
 	}
 
 	// Get LWA access token using the auth code
-	tokenResp, err := GetLWAAccessTokenfromAuthCode(payload.Grant.Code, alexaClientID, alexaClientSecret)
+	tokenResp, err := GetLWAAccessTokenfromAuthCode(ctx, payload.Grant.Code, alexaClientID, alexaClientSecret)
 	if err != nil {
 		return AlexaResponse{}, rmerror.NewRMError(err, "failed to get access token")
 	}
@@ -74,7 +74,7 @@ func HandleAcceptGrant(ctx context.Context, request AlexaRequest) (AlexaResponse
 	), nil
 }
 
-func GetLWAAccessTokenfromAuthCode(authCode, alexaClientID, alexaClientSecret string) (AlexaTokenResp, error) {
+func GetLWAAccessTokenfromAuthCode(ctx context.Context, authCode, alexaClientID, alexaClientSecret string) (AlexaTokenResp, error) {
 	if authCode == "" {
 		return AlexaTokenResp{}, fmt.Errorf("authorization code absent")
 	}
@@ -83,9 +83,9 @@ func GetLWAAccessTokenfromAuthCode(authCode, alexaClientID, alexaClientSecret st
 	awsReqqueryString := "grant_type=authorization_code" + "&" + "code" + "=" + authCode + "&" + "client_id" + "=" + alexaClientID + "&" + "client_secret" + "=" + alexaClientSecret + "&" + "redirect_uri" + "=" + ""
 	payload := strings.NewReader(awsReqqueryString)
 
-	rlog.Info(context.TODO()).Str("method", http.MethodPost).Strs("query_params", []string{"grant_type=authorization_code", "client_id=" + alexaClientID}).Str("url", AwsTokenUrl).Send()
+	rlog.Info(ctx).Str("method", http.MethodPost).Strs("query_params", []string{"grant_type=authorization_code", "client_id=" + alexaClientID}).Str("url", AwsTokenUrl).Send()
 
-	req, err := http.NewRequest(http.MethodPost, AwsTokenUrl, payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, AwsTokenUrl, payload)
 	if err != nil {
 		return AlexaTokenResp{}, rmerror.NewRMError(err, "error contacting the AWS server")
 	}

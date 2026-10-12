@@ -39,10 +39,10 @@ type NotificationService interface {
 	GetType() NotificationServiceType
 
 	// Send sends a notification
-	Send(notificationData interface{}) error
+	Send(ctx context.Context, notificationData interface{}) error
 
 	// SendTo sends notification to the user list
-	SendTo(notificationData interface{}, userIDs []string) error
+	SendTo(ctx context.Context, notificationData interface{}, userIDs []string) error
 
 	// Data Marshaling
 	Marshal(notification *Notification) (interface{}, error)

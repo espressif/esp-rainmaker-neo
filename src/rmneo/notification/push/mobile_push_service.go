@@ -45,14 +45,14 @@ func (s *MobilePushService) GetType() notification.NotificationServiceType {
 }
 
 // Send sends a mobile push notification
-func (s *MobilePushService) Send(notification interface{}) error {
-	rlog.Error(context.TODO()).Msg("Mobile push notifications must be sent to specific users")
+func (s *MobilePushService) Send(ctx context.Context, notification interface{}) error {
+	rlog.Error(ctx).Msg("Mobile push notifications must be sent to specific users")
 	return rmerror.NewRMError(nil, "Mobile push notifications must be sent to specific users")
 }
 
 // SendTo sends mobile push notifications to specific users
-func (s *MobilePushService) SendTo(notif interface{}, userIDs []string) error {
-	rlog.Info(context.TODO()).Msgf("Sending mobile push notification to users: %v", userIDs)
+func (s *MobilePushService) SendTo(ctx context.Context, notif interface{}, userIDs []string) error {
+	rlog.Info(ctx).Msgf("Sending mobile push notification to users: %v", userIDs)
 
 	// Test-only: reload the push text config from S3 per invocation so itests see config changes without a cold start. Never set in production.
 	if os.Getenv("test_push_text_config_no_cache") != "" {
@@ -76,11 +76,11 @@ func (s *MobilePushService) SendTo(notif interface{}, userIDs []string) error {
 		// Get user entries for the user
 		err := s.sendToUser(snsClient, pushMessageForEvent, userID)
 		if err != nil {
-			rlog.Error(context.TODO()).Err(err).Msgf("Failed to send push notification to user %s", userID)
+			rlog.Error(ctx).Err(err).Msgf("Failed to send push notification to user %s", userID)
 			continue
 		}
 
-		rlog.Info(context.TODO()).Msgf("Successfully sent push notification to user %s", userID)
+		rlog.Info(ctx).Msgf("Successfully sent push notification to user %s", userID)
 	}
 
 	return nil

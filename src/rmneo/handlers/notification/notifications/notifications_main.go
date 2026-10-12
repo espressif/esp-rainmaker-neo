@@ -309,14 +309,14 @@ func Handler(ctx context.Context, event NotificationEvent) error {
 				continue
 			}
 			rlog.Info(rmngCtx).Msgf("Sending notification to %d users for service %s", len(userIDs), serviceName)
-			err = service.SendTo(notifData, userIDs)
+			err = service.SendTo(ctx, notifData, userIDs)
 			if err != nil {
 				rlog.Error(rmngCtx).Err(err).Msgf("Failed to send notification to users: %s", serviceName)
 				continue
 			}
 		} else {
 			rlog.Info(rmngCtx).Msgf("Sending notification for service %s", serviceName)
-			err = service.Send(notifData)
+			err = service.Send(ctx, notifData)
 			if err != nil {
 				rlog.Error(rmngCtx).Err(err).Msgf("Failed to send notification: %s", serviceName)
 				continue
