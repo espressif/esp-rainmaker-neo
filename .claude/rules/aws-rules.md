@@ -212,7 +212,7 @@ Walk in order — first "yes" wins.
 5. **Construct-tree refs** — if rename forces adjacent resources to rename too, enumerate them in the Aux L1s column.
 
 ## DynamoDB access
-- **A listing reads every page.** Use `DBUtil.QueryPaginated`, never a bare `Query` or `Scan` — DynamoDB caps a single call at 1 MB whether or not a `Limit` is set, so a bare call silently truncates as the data grows. The exceptions and the test coverage a listing needs are in [go-rules.md](go-rules.md).
+- **A listing reads every page.** Use `dynamodbutil` (`Table.Query` with `Limit: 0`, `Table.QueryEach`, `Table.Scan`), never a single raw-client `Query` or `Scan` — DynamoDB caps a single call at 1 MB whether or not a `Limit` is set, so a bare call silently truncates as the data grows. The exceptions and the test coverage a listing needs are in [go-rules.md](go-rules.md).
 
 ## IAM permissions
 - Use `base_res_constants.py` to get the resource names and arns.

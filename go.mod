@@ -29,7 +29,6 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/lestrrat-go/jwx/v2 v2.1.3
 	github.com/lithammer/shortuuid/v4 v4.2.0
-	github.com/luraim/fun v0.0.0-20240427173526-62ed2a5a9acf
 	github.com/onsi/ginkgo/v2 v2.28.3
 	github.com/onsi/gomega v1.40.0
 	github.com/rs/zerolog v1.34.0

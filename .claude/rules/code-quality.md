@@ -39,14 +39,14 @@ for _, n := range nodes {
 
 Delete — narrates the change or the reasoning that belongs in the commit message:
 ```go
-// Refactored this to use QueryPaginated instead of Query, which is safer and avoids the issues we saw earlier with large tables silently truncating results when the data grew past the page size.
-items, err := db.QueryPaginated(ctx, input)
+// Refactored this to use QueryEach instead of a raw client Query, which is safer and avoids the issues we saw earlier with large tables silently truncating results when the data grew past the page size.
+err := nodes.QueryEach(ctx, q, collect)
 ```
 
 Keep — a constraint the reader cannot see from the code:
 ```go
-// DynamoDB caps a single call at 1 MB, so a bare Query truncates silently as the table grows.
-items, err := db.QueryPaginated(ctx, input)
+// DynamoDB caps a single call at 1 MB, so one raw Query call truncates silently as the table grows.
+err := nodes.QueryEach(ctx, q, collect)
 ```
 
 Keep — a reference:

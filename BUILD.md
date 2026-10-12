@@ -25,7 +25,7 @@ esp-rainmaker-neo/
 │   ├── claim/                assisted claiming (its own CDK app)
 │   ├── mcp/                  MCP server + OAuth proxy (proxy is its own Go module)
 │   ├── utils/                cross-domain primitives (rlog, jwtutil, validation, …)
-│   ├── awsutils/             AWS SDK wrappers (kmsutil, sesutil, espdynamodb, …)
+│   ├── awsutils/             AWS SDK wrappers (kmsutil, sesutil, dynamodbutil, …)
 │   ├── test/                 Go test support (mock/, testutil/)
 │   ├── tools/rmng-lint/      repo-specific static analysers
 │   └── esp-cloud-common/     shared Go module (git submodule)
