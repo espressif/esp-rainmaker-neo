@@ -178,7 +178,7 @@ var _ = Describe("Group", func() {
 			groupID := ids.GenerateGroupID()
 			Expect(groupID).To(HaveLen(6))
 			Expect(string(groupID[0])).To(MatchRegexp("[a-z]"))
-			Expect(string(groupID)).To(MatchRegexp("^[a-z][a-z0-9]{5}$"))
+			Expect(groupID).To(MatchRegexp("^[a-z][a-z0-9]{5}$"))
 		})
 	})
 
@@ -1765,7 +1765,7 @@ var _ = Describe("Group Sharing", func() {
 			// Share a subgroup with testUser2
 			ShareAndApproveSubGroup(rmngContext1, rmngContext2, parentGroupID, subGroupID)
 
-			// User2's accessable groups
+			// User2's accessible groups
 			group_access, err := group.ListUserAccessableGroups(rmngContext2)
 			Expect(err).To(BeNil())
 			Expect(group_access).To(Equal(map[string]interface{}{
@@ -1775,7 +1775,7 @@ var _ = Describe("Group Sharing", func() {
 				},
 			}))
 
-			// User1's accessable groups
+			// User1's accessible groups
 			group_access, err = group.ListUserAccessableGroups(rmngContext1)
 			Expect(err).To(BeNil())
 			test_utils.AssertNormalizedEqual(map[string]interface{}{

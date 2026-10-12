@@ -34,7 +34,7 @@ func FormatErrorChain(err error) string {
 	var parts []string
 	cur := err
 	for cur != nil {
-		if rm, ok := cur.(*RMError); ok {
+		if rm, ok := cur.(*RMError); ok { //nolint:errorlint // inspects one layer at a time; errors.As would match a deeper RMError
 			if rm.Message != "" {
 				parts = append(parts, rm.Message)
 			}

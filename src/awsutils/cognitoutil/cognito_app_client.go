@@ -8,6 +8,7 @@ import (
 	"context"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
+	"slices"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
@@ -82,8 +83,7 @@ func UpdateCognitoAppClientURLs(ctx context.Context, userPoolID, appClientID str
 	}
 
 	// Append new logout URIs to existing ones (avoid duplicates)
-	updatedLogoutURLs := make([]string, len(existingLogoutURLs))
-	copy(updatedLogoutURLs, existingLogoutURLs)
+	updatedLogoutURLs := slices.Clone(existingLogoutURLs)
 
 	// Add new logout URIs (avoid duplicates)
 	for _, newURI := range logoutURIs {

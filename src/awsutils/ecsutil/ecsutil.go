@@ -87,7 +87,7 @@ func GetTaskArn() (string, error) {
 
 	httpClient := httpclient.Get()
 
-	req, err := http.NewRequest("GET", ecsEndpointUrl+"/task", nil)
+	req, err := http.NewRequest(http.MethodGet, ecsEndpointUrl+"/task", nil)
 	if err != nil {
 		return "", rmerror.NewRMError(err, "failed to create request")
 	}
@@ -95,6 +95,7 @@ func GetTaskArn() (string, error) {
 	if err != nil {
 		return "", rmerror.NewRMError(err, "failed to get task metadata")
 	}
+	defer response.Body.Close()
 
 	responseBody, err := io.ReadAll(response.Body)
 	if err != nil {

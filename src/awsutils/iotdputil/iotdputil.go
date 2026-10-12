@@ -23,7 +23,7 @@ func UpdateThingShadow(ctx context.Context, thingName, shadowName string, shadow
 	updateInput := &iotdataplane.UpdateThingShadowInput{
 		ThingName:  aws.String(thingName),
 		ShadowName: aws.String(shadowName),
-		Payload:    []byte(shadowDoc),
+		Payload:    shadowDoc,
 	}
 
 	_, err := iotDataClient.UpdateThingShadow(ctx, updateInput)

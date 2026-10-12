@@ -276,7 +276,7 @@ func (db *UserGroupDB) GetUserGroup(groupID string) (*UserGroupEntry, error) {
 		return nil, rmerror.NewRMError(nil, "user group not found")
 	}
 
-	accessType := utils.GroupAccessType(entry.AccessType)
+	accessType := entry.AccessType
 	db.Ctx.SetAllowMultiple(utils.GetGroupPermissions(accessType), groupID)
 	return entry, nil
 }

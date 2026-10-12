@@ -101,7 +101,7 @@ func GetLWAAccessTokenfromAuthCode(authCode, alexaClientID, alexaClientSecret st
 		return AlexaTokenResp{}, rmerror.NewRMError(err, "internal server error")
 	}
 
-	if res.StatusCode != 200 {
+	if res.StatusCode != http.StatusOK {
 		return AlexaTokenResp{}, rmerror.NewRMError(fmt.Errorf("error contacting the AWS server"), "error contacting the AWS server")
 	}
 

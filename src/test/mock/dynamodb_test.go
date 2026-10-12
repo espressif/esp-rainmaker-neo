@@ -334,20 +334,20 @@ var _ = Describe("Dynamodb", func() {
 				dbMock.PutItem(context.TODO(), putvalb)
 			})
 			Context("GetItem", func() {
-				It("should should fail when sortkey is not used", func() {
+				It("should fail when sortkey is not used", func() {
 					getvalb, _ := ToGetItemInput(table2, map[string]string{"name": valb2.Name})
 					_, err := dbMock.GetItem(context.TODO(), getvalb)
 					Expect(err).To(HaveOccurred())
 				})
 			})
 			Context("GetItem", func() {
-				It("should should succeed when primary+sort key is used", func() {
+				It("should succeed when primary+sort key is used", func() {
 					getvalb2, _ := ToGetItemInput(table2, map[string]string{"name": valb2.Name, "count": "102"})
 					av, err := dbMock.GetItem(context.TODO(), getvalb2)
 					Expect(err).To(BeNil())
 					Expect(NewTestValBFromAV(av.Item)).To(Equal(&valb2))
 				})
-				It("should should succeed when a different primary+sort key is used", func() {
+				It("should succeed when a different primary+sort key is used", func() {
 					getvalb1, _ := ToGetItemInput(table2, map[string]string{"name": valb1.Name, "count": "101"})
 					av, err := dbMock.GetItem(context.TODO(), getvalb1)
 					Expect(err).To(BeNil())

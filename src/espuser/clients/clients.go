@@ -176,7 +176,7 @@ func (s *Service) Create(in CreateInput) (*CreateClientResponse, error) {
 func (s *Service) IsRegistered(clientID string) (bool, error) {
 	_, err := s.db.GetClient(clientID)
 	if err != nil {
-		if err == oauth_clients_db.ErrOAuthClientNotFound {
+		if errors.Is(err, oauth_clients_db.ErrOAuthClientNotFound) {
 			return false, nil
 		}
 		return false, err
@@ -191,7 +191,7 @@ func (s *Service) AuthenticateClient(clientID, clientSecret string) error {
 	}
 	entry, err := s.db.GetClient(clientID)
 	if err != nil {
-		if err == oauth_clients_db.ErrOAuthClientNotFound {
+		if errors.Is(err, oauth_clients_db.ErrOAuthClientNotFound) {
 			return ErrClientNotFound
 		}
 		return err
@@ -233,7 +233,7 @@ func (s *Service) AuthenticateForOAuth(clientID, clientSecret string) (errCode s
 func (s *Service) Get(clientID string) (*ClientResponse, error) {
 	entry, err := s.db.GetClient(clientID)
 	if err != nil {
-		if err == oauth_clients_db.ErrOAuthClientNotFound {
+		if errors.Is(err, oauth_clients_db.ErrOAuthClientNotFound) {
 			return nil, ErrClientNotFound
 		}
 		return nil, err

@@ -61,7 +61,7 @@ func (s *WebhookService) Send(notif interface{}) error {
 
 // MakeHTTPPostRequest makes an HTTP POST request with the given body, URI, and header closure
 func MakeHTTPPostRequest(body []byte, uri string, addHeaders func(*http.Request) error) ([]byte, error) {
-	req, err := http.NewRequest("POST", uri, bytes.NewBuffer(body))
+	req, err := http.NewRequest(http.MethodPost, uri, bytes.NewBuffer(body))
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "Failed to create HTTP request")
 	}

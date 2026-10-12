@@ -143,11 +143,11 @@ func (e *Mexpression) Evaluate(av map[string]types.AttributeValue) (bool, error)
 	}
 	node, err := e.condition()
 	if err != nil {
-		return false, fmt.Errorf("ValidationException: %v in expression %q", err, *e.Expr)
+		return false, fmt.Errorf("ValidationException: %w in expression %q", err, *e.Expr)
 	}
 	ok, err := node.eval(e, av)
 	if err != nil {
-		return false, fmt.Errorf("ValidationException: %v in expression %q", err, *e.Expr)
+		return false, fmt.Errorf("ValidationException: %w in expression %q", err, *e.Expr)
 	}
 	return ok, nil
 }

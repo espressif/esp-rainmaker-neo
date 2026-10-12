@@ -450,7 +450,7 @@ var _ = Describe("Alexa Skill", func() {
 				payload := (*response.Event.Payload).(alexa_skill.DiscoveryPayload)
 				for i := range payload.Endpoints {
 					Expect(payload.Endpoints[i].Cookie["groupID"]).To(Equal(testGroup.GroupID))
-					// Set to Nil so that the subsequent comparision works. Since the groupID is dynamic it is not part of the expected response in the static files
+					// Set to Nil so that the subsequent comparison works. Since the groupID is dynamic it is not part of the expected response in the static files
 					delete(payload.Endpoints[i].Cookie, "groupID")
 				}
 
@@ -483,7 +483,7 @@ var _ = Describe("Alexa Skill", func() {
 				payload := (*response.Event.Payload).(alexa_skill.DiscoveryPayload)
 				for i := range payload.Endpoints {
 					Expect(payload.Endpoints[i].Cookie["groupID"]).To(Equal(testGroup.GroupID))
-					// Set to Nil so that the subsequent comparision works. Since the groupID is dynamic it is not part of the expected response in the static files
+					// Set to Nil so that the subsequent comparison works. Since the groupID is dynamic it is not part of the expected response in the static files
 					delete(payload.Endpoints[i].Cookie, "groupID")
 				}
 

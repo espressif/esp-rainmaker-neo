@@ -10,6 +10,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"strings"
@@ -44,7 +45,7 @@ func ValidateRequest(request interface{}, customValidationFuncs ...ValidationFun
 		}
 	}
 	if err := validate.Struct(request); err != nil {
-		if validationErrors, ok := err.(validator.ValidationErrors); ok {
+		if validationErrors, ok := errors.AsType[validator.ValidationErrors](err); ok {
 			var errorMessages []string
 			for _, validationError := range validationErrors {
 				errorMessages = append(errorMessages, fmt.Sprintf("Key: '%s' Error:Field validation for '%s' failed on the '%s' tag", validationError.Namespace(), validationError.Field(), validationError.Tag()))

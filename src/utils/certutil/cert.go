@@ -27,7 +27,7 @@ func VerifyCertificateChain(cert, caCert *x509.Certificate) error {
 	}
 
 	if _, err := cert.Verify(opts); err != nil {
-		return fmt.Errorf("chain verification failed: %v", err)
+		return fmt.Errorf("chain verification failed: %w", err)
 	}
 
 	return nil

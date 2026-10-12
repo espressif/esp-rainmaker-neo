@@ -29,7 +29,7 @@ func handlePresenceEvent(ctx context.Context, event node.PresenceEvent) error {
 			return nil
 		}
 		if err != nil {
-			rlog.Error(rmngContext).Err(fmt.Errorf("error getting current session for node: %v", err)).Send()
+			rlog.Error(rmngContext).Err(fmt.Errorf("error getting current session for node: %w", err)).Send()
 			return nil
 		}
 

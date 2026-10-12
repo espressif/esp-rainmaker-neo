@@ -8,10 +8,19 @@ version: "2"
 linters:
   default: none
   enable:
+    - bodyclose
+    - copyloopvar
+    - durationcheck
+    - errorlint
     - govet
     - ineffassign
+    - makezero
+    - misspell
     - staticcheck
+    - unconvert
     - unused
+    - usestdlibvars
+    - wastedassign
   settings:
     staticcheck:
       # Bug checks only; the S1/ST/QF style checks are not gated yet.
