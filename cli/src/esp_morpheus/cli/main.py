@@ -101,15 +101,16 @@ def device(ctx, node):
 
 # --- simulators -------------------------------------------------------------
 
-@cli.command('app-sim')
+@cli.command('app-sim', context_settings={'ignore_unknown_options': True})
 @click.argument('identity')
 @click.option('--password', help='Password for an identity that test_config.json does not carry. '
                                  'Also read from RMNG_PASSWORD, else prompted for.')
+@click.argument('command', nargs=-1, type=click.UNPROCESSED)
 @click.pass_context
-def app_sim(ctx, identity, password):
+def app_sim(ctx, identity, password, command):
     """Run the sequence of user operations a real phone app performs, as IDENTITY.
 
-    IDENTITY is an end user: an email address, or an index or name in test_config.json.
+    IDENTITY is an end user: an email address, or an index or name in test_config.json. COMMAND runs one shell command and exits, e.g. `app-sim alice prov --group G --device PROV_x --ssid S`.
     """
     from ..sims.app import AppSim
 
@@ -118,9 +119,11 @@ def app_sim(ctx, identity, password):
     session.select_user(identity)
     # The identity resolves the same way `esp-morpheus user` resolves it — prompting for a password and
     # checking it — rather than through the simulator's own copy of the lookup.
-    sims.run(AppSim(identity, user=session.authenticated_user(),
-                    rmng_outputs_path=session.settings.source),
-             sims.app_shell, f"app:{identity}", 'app_sim')
+    simulator = AppSim(identity, user=session.authenticated_user(), rmng_outputs_path=session.settings.source)
+    if command:
+        sims.run_once(simulator, sims.app_shell, command)
+    else:
+        sims.run(simulator, sims.app_shell, f"app:{identity}", 'app_sim')
 
 
 @cli.command('device-sim')

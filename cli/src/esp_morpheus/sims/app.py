@@ -1200,17 +1200,17 @@ class AppSim:
             else:
                 print(f"Failed to delete schedule details for device {device}")
 
-    def handle_prov_command(self, args):
+    def handle_prov_command(self, args, device=None, pop=None, ssid=None, passphrase=None):
         """Provision a BLE device the way the phone app does: discover, open a secure
         session, claim an unclaimed device, prove identity via the `ch_resp` challenge,
         associate to the selected group, push Wi-Fi credentials, then confirm online and
         set the timezone.
 
-        Usage: prov [name_prefix]
+        Usage: prov [name_prefix]. Each of device, pop, ssid and passphrase is prompted for when None. Returns True on success.
         """
         if not self.selected_group:
             print("Error: No group selected. Use 'select' command first.")
-            return
+            return False
 
         # BLE provisioning is opt-in: bootstrap the heavy esp_prov dependency
         # (idf-extra-components clone + IDF_PATH) only now that `prov` was invoked,
@@ -1220,7 +1220,7 @@ class AppSim:
             prov_ble.ensure_esp_prov()
         except Exception as e:
             print(f"BLE provisioning is not available: {e}")
-            return
+            return False
 
         group_id = self.selected_group['group_id']
         name_prefix = args[0] if args else None
@@ -1229,13 +1229,13 @@ class AppSim:
         # loop so the transport/session stays open across them. Cloud calls are
         # synchronous and invoked inline between awaits.
         try:
-            node_id = asyncio.run(self._prov_ble_phase(group_id, name_prefix))
+            node_id = asyncio.run(self._prov_ble_phase(group_id, name_prefix, device, pop, ssid, passphrase))
         except Exception as e:
             print(f"Provisioning failed: {str(e)}")
-            return
+            return False
 
         if not node_id:
-            return
+            return False
 
         # A re-claimed node keeps its node ID, so it can already sit in a subgroup with its own shadow.
         shadow_name = f"params-{group_id}"
@@ -1249,42 +1249,24 @@ class AppSim:
         print(f"\nWaiting for node {node_id} to come online ({shadow_name})...")
         if not self._wait_node_online(node_id, shadow_name):
             print(f"Node {node_id} did not report online in time.")
-            return
+            return False
         print(f"Node {node_id} is online.")
 
         if not self._set_node_timezone(group_id, node_id, shadow_name):
-            return
+            return False
 
         print(f"\nProvisioning complete for node {node_id} in group {group_id}.")
         self._print_stats()
+        return True
 
-    async def _prov_ble_phase(self, group_id, name_prefix):
+    async def _prov_ble_phase(self, group_id, name_prefix, devname=None, pop=None, ssid=None, passphrase=None):
         """Run the BLE-dependent portion of provisioning. Returns the node_id on
         success, or None if discovery/selection was aborted. Raises on hard failure."""
-        # 1. Discover and select
-        print("Discovering BLE devices...")
-        devices = await prov_ble.discover_devices(name_prefix)
-        if not devices:
-            print("No matching BLE devices found.")
-            return None
-
-        print("\n==== Discovered devices ====")
-        print('{: >4} {: <33} {}'.format('S.N.', 'Name', 'Address'))
-        for i, (name, addr) in enumerate(devices):
-            print(f'[{i + 1: >2}] {name: <33} {addr}')
-
-        while True:
-            try:
-                sel = int(input('Select device by number (0 to cancel): '))
-                if sel < 0 or sel > len(devices):
-                    raise ValueError
-                break
-            except ValueError:
-                print('Invalid input! Retry')
-        if sel == 0:
-            print("Cancelled.")
-            return None
-        devname = devices[sel - 1][0]
+        # 1. Discover and select, unless the device is already named
+        if not devname:
+            devname = await self._select_ble_device(name_prefix)
+            if not devname:
+                return None
 
         # 2. Connect and establish session at the auto-detected security version
         print(f"\nConnecting to {devname}...")
@@ -1292,8 +1274,9 @@ class AppSim:
         try:
             secver, sec_patch_ver = await prov_ble.detect_secver(tp)
             print(f"==== Security Scheme: {secver} ====")
-            pop = ''
-            if secver in (1, 2):
+            if secver not in (1, 2):
+                pop = ''
+            elif pop is None:
                 pop = await PromptSession().prompt_async('Proof of Possession required: ', is_password=True)
             sec = prov_ble.make_security(secver, sec_patch_ver, pop)
 
@@ -1304,8 +1287,10 @@ class AppSim:
                 )
 
             # 3. Wi-Fi credentials
-            ssid = (await PromptSession().prompt_async('Wi-Fi SSID: ')).strip()
-            passphrase = await PromptSession().prompt_async('Wi-Fi passphrase: ', is_password=True)
+            if ssid is None:
+                ssid = (await PromptSession().prompt_async('Wi-Fi SSID: ')).strip()
+            if passphrase is None:
+                passphrase = await PromptSession().prompt_async('Wi-Fi passphrase: ', is_password=True)
 
             # 4. Assisted claiming, which must finish before ch_resp since it assigns the node ID
             if await prov_ble.has_claim_capability(tp):
@@ -1339,6 +1324,32 @@ class AppSim:
             return node_id
         finally:
             await prov_ble.disconnect(tp)
+
+    async def _select_ble_device(self, name_prefix):
+        """Scan, list the matches and ask which one to provision. Returns its name, or None when cancelled."""
+        print("Discovering BLE devices...")
+        devices = await prov_ble.discover_devices(name_prefix)
+        if not devices:
+            print("No matching BLE devices found.")
+            return None
+
+        print("\n==== Discovered devices ====")
+        print('{: >4} {: <33} {}'.format('S.N.', 'Name', 'Address'))
+        for i, (name, addr) in enumerate(devices):
+            print(f'[{i + 1: >2}] {name: <33} {addr}')
+
+        while True:
+            try:
+                sel = int(input('Select device by number (0 to cancel): '))
+                if sel < 0 or sel > len(devices):
+                    raise ValueError
+                break
+            except ValueError:
+                print('Invalid input! Retry')
+        if sel == 0:
+            print("Cancelled.")
+            return None
+        return devices[sel - 1][0]
 
     async def _claim_ble_device(self, tp, sec):
         """Relay the device's assisted claim to the cloud: initiate with its MAC, then exchange its CSR for a certificate."""
@@ -1411,13 +1422,13 @@ class AppSim:
         svc = next((s for s in cfg.get('services', [])
                     if s.get('type') == 'esp.service.time'), None)
         if not svc:
-            print("Node has no esp.service.time service; skipping timezone update.")
-            return False
+            print("Warning: Node has no esp.service.time service; skipping timezone update.")
+            return True
         tz_param = next((p for p in svc.get('params', [])
                          if p.get('type') == 'esp.param.tz'), None)
         if not tz_param:
-            print("Time service has no esp.param.tz parameter; skipping timezone update.")
-            return False
+            print("Warning: Time service has no esp.param.tz parameter; skipping timezone update.")
+            return True
 
         svc_name = svc['id']
         param_name = tz_param['id']
