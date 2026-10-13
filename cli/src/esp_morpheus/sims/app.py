@@ -347,20 +347,8 @@ class AppSim:
             if node_id not in devices_in_subgroups:
                 device_shadows[node_id] = base_shadow
 
-        # Process subgroups and add shadow names for devices in subgroups
         for node_id in devices_in_subgroups:
-            # Get all subgroups this device belongs to
-            device_subgroups = []
-            for subgroup in selected_group.get("subgroups", []):
-                if node_id in subgroup.get("node_ids", []):
-                    device_subgroups.append(subgroup["subgroup_id"])
-
-            # Sort subgroups alphabetically
-            device_subgroups.sort()
-
-            # Create shadow name with subgroups
-            shadow_with_subgroups = f"{base_shadow}-{'-'.join(device_subgroups)}"
-            device_shadows[node_id] = shadow_with_subgroups
+            device_shadows[node_id] = self._node_shadow_name(selected_group, node_id)
 
         # Read shadows synchronously for each device
         read_count = 0
@@ -433,6 +421,12 @@ class AppSim:
             print(f"Error listing groups: {str(e)}")
             return False
 
+    @staticmethod
+    def _node_shadow_name(group, node_id):
+        """Name the params shadow a node reports to: "params-<group>", plus its sorted subgroup IDs, e.g. "params-ge5aq6-dpw"."""
+        subgroups = sorted(sg["subgroup_id"] for sg in group.get("subgroups", []) if node_id in sg.get("node_ids", []))
+        return "-".join([f"params-{group['group_id']}", *subgroups])
+
     def select_home(self, group_id=None):
         """Select a home (group) and subscribe to all its devices' shadows"""
         # Get the list of groups
@@ -491,17 +485,8 @@ class AppSim:
                 device_shadows[node_id] = [base_shadow]
                 all_shadows.add(base_shadow)
 
-        # Process subgroups and add shadow names for devices in subgroups
         for node_id in devices_in_subgroups:
-            # Get all subgroups this device belongs to
-            device_subgroups = []
-            for subgroup in selected_group.get("subgroups", []):
-                if node_id in subgroup.get("node_ids", []):
-                    device_subgroups.append(subgroup["subgroup_id"])
-            # Sort subgroups alphabetically
-            device_subgroups.sort()
-            # Create shadow name with subgroups
-            shadow_with_subgroups = f"{base_shadow}-{'-'.join(device_subgroups)}"
+            shadow_with_subgroups = self._node_shadow_name(selected_group, node_id)
             device_shadows[node_id] = [shadow_with_subgroups]
             all_shadows.add(shadow_with_subgroups)
 
@@ -622,32 +607,12 @@ class AppSim:
                 print("Error: No group selected. Use 'select' command first.")
                 return
 
-            # Find the device in the group and its subgroups
-            device_found = False
-            device_subgroups = []
-
-            # Check if device is in any subgroup
-            for subgroup in self.selected_group.get("subgroups", []):
-                if device_name in subgroup.get("node_ids", []):
-                    device_found = True
-                    device_subgroups.append(subgroup["subgroup_id"])
-
-            # If not in subgroups, check if it's in the main group
-            if not device_subgroups and device_name in self.selected_group.get("node_ids", []):
-                device_found = True
-
-            if not device_found:
+            in_subgroup = any(device_name in sg.get("node_ids", []) for sg in self.selected_group.get("subgroups", []))
+            if not in_subgroup and device_name not in self.selected_group.get("node_ids", []):
                 print(f"Error: Device '{device_name}' not found in the selected group or its subgroups")
                 return
 
-            # Construct the topic name based on group and subgroups
-            topic_name = f"params-{self.selected_group['group_id']}"
-            if device_subgroups:
-                # Sort subgroups alphabetically
-                device_subgroups.sort()
-                topic_name = f"{topic_name}-{'-'.join(device_subgroups)}"
-
-            topic_name = f"{topic_name}/params"
+            topic_name = f"{self._node_shadow_name(self.selected_group, device_name)}/params"
 
             success = self.user.mqtt_publish_to_topic(device_name, topic_name, payload)
             if success:
@@ -1270,8 +1235,16 @@ class AppSim:
         if not node_id:
             return
 
-        print(f"\nWaiting for node {node_id} to come online...")
+        # A re-claimed node keeps its node ID, so it can already sit in a subgroup with its own shadow.
         shadow_name = f"params-{group_id}"
+        response = self.user.make_api_request('GET', '/v1/groups')
+        self.http_api_count += 1
+        group = next((g for g in (response.json().get('groups', []) if response else [])
+                      if g['group_id'] == group_id), None)
+        if group:
+            shadow_name = self._node_shadow_name(group, node_id)
+
+        print(f"\nWaiting for node {node_id} to come online ({shadow_name})...")
         if not self._wait_node_online(node_id, shadow_name):
             print(f"Node {node_id} did not report online in time.")
             return
@@ -1411,7 +1384,7 @@ class AppSim:
         payload = {svc_name: {param_name: tz}}
 
         print(f"\nSetting timezone {tz} ({svc_name}.{param_name})...")
-        if not self.user.mqtt_publish_to_topic(node_id, f"params-{group_id}/params", payload):
+        if not self.user.mqtt_publish_to_topic(node_id, f"{shadow_name}/params", payload):
             print("Failed to publish timezone update.")
             return False
         self.shadow_ops_count += 1
