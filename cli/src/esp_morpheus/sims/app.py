@@ -22,6 +22,7 @@ from . import prov_ble
 # Never CWD-anchored: a cache that looks empty from a new directory would re-fetch every node
 # config the app already had.
 APP_CACHE_DIR = str(paths.sim_cache_dir('app'))
+CLAIM_DISABLED_MSG = 'Assisted claiming is not enabled on this deployment. Deploy the stack with claiming enabled'
 
 # ANSI color codes
 blue = "\033[94m"
@@ -1201,8 +1202,9 @@ class AppSim:
 
     def handle_prov_command(self, args):
         """Provision a BLE device the way the phone app does: discover, open a secure
-        session, prove identity via the `ch_resp` challenge, associate to the selected
-        group, push Wi-Fi credentials, then confirm online and set the timezone.
+        session, claim an unclaimed device, prove identity via the `ch_resp` challenge,
+        associate to the selected group, push Wi-Fi credentials, then confirm online and
+        set the timezone.
 
         Usage: prov [name_prefix]
         """
@@ -1305,7 +1307,11 @@ class AppSim:
             ssid = (await PromptSession().prompt_async('Wi-Fi SSID: ')).strip()
             passphrase = await PromptSession().prompt_async('Wi-Fi passphrase: ', is_password=True)
 
-            # 4. Challenge / association
+            # 4. Assisted claiming, which must finish before ch_resp since it assigns the node ID
+            if await prov_ble.has_claim_capability(tp):
+                await self._claim_ble_device(tp, sec)
+
+            # 5. Challenge / association
             print("\nInitiating node association...")
             request_id, challenge = self.user.initiate_node_assoc(group_id)
             self.http_api_count += 1
@@ -1325,7 +1331,7 @@ class AppSim:
                 raise RuntimeError(f'Node association verify failed: {verify_result}')
             print(f"Associated node {node_id} with group {group_id}.")
 
-            # 5. Send Wi-Fi credentials and wait for connection
+            # 6. Send Wi-Fi credentials and wait for connection
             print("\nSending Wi-Fi credentials...")
             if not await prov_ble.send_wifi(tp, sec, ssid, passphrase):
                 raise RuntimeError('Device failed to connect to Wi-Fi')
@@ -1333,6 +1339,41 @@ class AppSim:
             return node_id
         finally:
             await prov_ble.disconnect(tp)
+
+    async def _claim_ble_device(self, tp, sec):
+        """Relay the device's assisted claim to the cloud: initiate with its MAC, then exchange its CSR for a certificate."""
+        print("\nDevice is unclaimed. Running assisted claiming...")
+        try:
+            start = await prov_ble.claim_start(tp, sec)
+            mac_addr = start['mac_addr']
+
+            try:
+                init = self.user.claim_initiate(mac_addr)
+            except AssertionError as e:
+                # The claim routes exist only on a deployment with claiming enabled, so their CORS preflight fails elsewhere.
+                raise RuntimeError(f'{CLAIM_DISABLED_MSG} ({e})') from e
+            self.http_api_count += 1
+            self._print_stats()
+            if init.status_code == 404:
+                raise RuntimeError(f'{CLAIM_DISABLED_MSG} (claim initiate returned 404)')
+            if init.status_code not in (200, 201):
+                raise RuntimeError(f'Claim initiate failed ({init.status_code}): {init.text}')
+            node_id = init.json()['node_id']
+            print(f"Cloud assigned node ID {node_id} to MAC {mac_addr}.")
+
+            csr, capabilities = await prov_ble.claim_init(tp, sec, node_id)
+
+            resp = self.user.claim_verify(mac_addr, csr, capabilities=capabilities)
+            self.http_api_count += 1
+            self._print_stats()
+            if resp.status_code != 201:
+                raise RuntimeError(f'Claim verify failed ({resp.status_code}): {resp.text}')
+
+            await prov_ble.claim_verify(tp, sec, resp.json()['certificate'], self.iot_endpoint)
+        except Exception:
+            await prov_ble.claim_abort(tp, sec)
+            raise
+        print(f"Claimed node {node_id}.")
 
     def _wait_node_online(self, node_id, shadow_name, timeout=60, interval=5):
         """Poll the node's named shadow until its reported state shows online: true."""
