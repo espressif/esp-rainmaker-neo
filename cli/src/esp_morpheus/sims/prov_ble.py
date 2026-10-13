@@ -15,6 +15,7 @@ app_sim does this lazily when the operator actually runs `prov`, so plain app-si
 sessions never touch IDF or the network.
 """
 
+import json
 import os
 import pathlib
 import sys
@@ -138,16 +139,17 @@ async def connect(devname, adapter=DEFAULT_BLE_ADAPTER):
 async def detect_secver(tp):
     """Auto-detect the protocomm security version from device capabilities.
 
-    Mirrors esp_prov's main() logic for ``--sec_ver`` omitted: capabilities must be
-    advertised; ``no_sec`` capability => security 0, otherwise security 1/2. Returns
-    (secver, sec_patch_ver).
+    Reads ``prov.sec_ver`` from proto-ver; firmware without it falls back to esp_prov's ``no_sec`` capability check, which cannot tell sec1 from sec2. Returns (secver, sec_patch_ver).
     """
-    if not await esp_prov.has_capability(tp):
-        raise RuntimeError(
-            'Security capabilities could not be determined from the device; '
-            'cannot auto-detect security version'
-        )
-    secver = int(not await esp_prov.has_capability(tp, 'no_sec'))
+    try:
+        secver = json.loads(await esp_prov.get_version(tp))['prov']['sec_ver']
+    except (ValueError, KeyError, TypeError):
+        if not await esp_prov.has_capability(tp):
+            raise RuntimeError(
+                'Security capabilities could not be determined from the device; '
+                'cannot auto-detect security version'
+            ) from None
+        secver = int(not await esp_prov.has_capability(tp, 'no_sec'))
     sec_patch_ver = 0
     if secver == 2:
         sec_patch_ver = await esp_prov.get_sec_patch_ver(tp)
