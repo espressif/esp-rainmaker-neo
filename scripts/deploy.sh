@@ -160,13 +160,12 @@ elif [ "$command" == "--diff" ]; then
     cdk diff --all --app "python3 $APP_FILE" --output "$(cdk_out_dir "$STACK_GROUP")"
     exit 0
 elif [ "$command" == "--destroy" ]; then
-    # Destroy the test resources (only for rmng stack)
+    # Test nodes, groups and IoT things live in rmng, and cdk destroy does not remove the runtime-created ones.
     if [ "$STACK_GROUP" == "rmng" ]; then
-        morpheus test-data destroy || true
+        morpheus admin test-data destroy || echo "warning: test-data cleanup failed; test IoT things/certs may remain" >&2
     fi
-    # Destroy the stack
-    cdk destroy --all --app "python3 $APP_FILE" --output "$(cdk_out_dir "$STACK_GROUP")"
-    exit 0
+    cdk destroy --all --force --app "python3 $APP_FILE" --output "$(cdk_out_dir "$STACK_GROUP")"
+    exit $?
 elif [ "$command" == "--synth" ]; then
     export CDK_PUBLISH=true
     rm -rf "cdk/cdk.out.$STACK_GROUP"

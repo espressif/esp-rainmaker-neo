@@ -284,7 +284,7 @@ endef
 deploy: deploy-all      ## Deploy every stack group (skips claim)
 setup: setup-all        ## cdk bootstrap every stack group
 diff: diff-all          ## cdk diff every stack group
-destroy: destroy-all    ## Destroy every stack group, reverse dependency order
+destroy: destroy-all    ## Destroy every stack group, reverse dependency order (asks to confirm; CONFIRM=1 skips)
 synth: synth-all        ## cdk synth every stack group
 publish: publish-all    ## Synth and publish templates/assets for every stack group
 
@@ -340,8 +340,14 @@ publish-%: go_build $$(call needs_dashboard,$$*)
 
 destroy-%: SWEEP_WAVES = $(call reverse,$(call groups_for,$*))
 destroy-%: SWEEP_FLAGS = --destroy
+# deploy.sh passes --force to cdk, so this is the only confirmation. CONFIRM=1 skips it for CI.
 destroy-%:
-	morpheus admin test-data destroy || true
+	@account=$$(aws sts get-caller-identity --profile $(PROFILE) --query Account --output text) || exit 1; \
+	echo "About to destroy stack group(s) $(SWEEP_WAVES) in account $$account, $(REGION)."; \
+	if [ "$(CONFIRM)" != 1 ]; then \
+		printf 'Type the region name to confirm: '; read answer || true; \
+		[ "$$answer" = "$(REGION)" ] || { echo "Aborted: nothing destroyed." >&2; exit 1; }; \
+	fi
 	$(sweep)
 
 # --- Lint / vulnerability scanning / tests ------------------------------------
