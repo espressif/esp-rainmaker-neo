@@ -8,11 +8,10 @@ prov_ble.py — esp_prov / protocomm glue for app_sim's interactive `prov` comma
 Keeps the async, esp_prov-specific BLE plumbing out of app_sim.py.
 
 BLE provisioning is opt-in. The esp_prov dependency is heavy — it vendors esp_prov
-from idf-extra-components (a network clone) and needs a full ESP-IDF checkout
-(IDF_PATH) for the protocomm python protobuf files — so it is NOT pulled in when
+from idf-extra-components (a network clone) — so it is NOT pulled in when
 this module is imported. Call ensure_esp_prov() once before using any helper below;
 app_sim does this lazily when the operator actually runs `prov`, so plain app-sim
-sessions never touch IDF or the network.
+sessions never touch the network.
 """
 
 import json
@@ -39,29 +38,21 @@ _bootstrapped = False
 def ensure_esp_prov():
     """Vendor esp_prov and import it, once (idempotent).
 
-    Deferred out of module import because it is network- and IDF-dependent: it
-    fetches esp_prov from idf-extra-components and requires IDF_PATH for the IDF
-    protocomm python files. Only invoked when provisioning is actually requested.
+    Deferred out of module import because it is network-dependent: it fetches
+    esp_prov from idf-extra-components. Only invoked when provisioning is actually requested.
 
     Set ESP_PROV_PATH to an existing esp_prov tool directory to skip the clone
     entirely (e.g. point it at network_provisioning/tool/esp_prov in your own
     idf-extra-components checkout).
 
-    Raises RuntimeError with an actionable message when IDF_PATH is missing.
+    esp_prov reads the protocomm protobuf files from $IDF_PATH; without IDF_PATH, the copies packaged here are used.
     """
     global esp_prov, str_to_bytes, ch_resp_pb, claim_pb, _bootstrapped
     if _bootstrapped:
         return
 
-    # esp_prov requires IDF_PATH to locate the protocomm python protobuf files.
-    # Check first, so we fail with a clear message before any network fetch.
-    if "IDF_PATH" not in os.environ:
-        raise RuntimeError(
-            "BLE provisioning requires IDF_PATH (esp_prov needs the ESP-IDF "
-            "protocomm python files). Re-run with IDF_PATH pointing at your "
-            "ESP-IDF checkout, e.g.:\n"
-            "  IDF_PATH=~/esp/esp-idf esp-morpheus app-sim <user>"
-        )
+    # The packaged tree mirrors components/protocomm/python, the only path esp_prov reads under IDF_PATH.
+    os.environ.setdefault("IDF_PATH", str(pathlib.Path(__file__).parent / "idf_protocomm"))
 
     # Locate the esp_prov tool dir: honour a pre-existing checkout via ESP_PROV_PATH,
     # otherwise vendor network_provisioning from idf-extra-components on demand.

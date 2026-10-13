@@ -290,7 +290,7 @@ select <group_id>                          # choose the active home
 update <node_id> {"Light":{"power":true}}
 automation create Evening lights
 schedule get <node_id>
-prov                                       # BLE provisioning; needs IDF_PATH
+prov                                       # BLE provisioning
 ```
 
 ## 6. Output

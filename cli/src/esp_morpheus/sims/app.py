@@ -1213,8 +1213,8 @@ class AppSim:
             return False
 
         # BLE provisioning is opt-in: bootstrap the heavy esp_prov dependency
-        # (idf-extra-components clone + IDF_PATH) only now that `prov` was invoked,
-        # so plain app-sim sessions never need IDF. Fail with a clear hint if it's
+        # (idf-extra-components clone) only now that `prov` was invoked,
+        # so plain app-sim sessions never fetch it. Fail with a clear hint if it's
         # not set up rather than aborting the whole session at startup.
         try:
             prov_ble.ensure_esp_prov()

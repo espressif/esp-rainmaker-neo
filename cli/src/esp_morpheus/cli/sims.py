@@ -192,7 +192,7 @@ def automation_delete(automation_id):
 def app_prov(ctx, name_prefix, group_id, device, pop, ssid, passphrase):
     """Provision a BLE device into the selected group. Any value not given as an option is prompted for.
 
-    Needs IDF_PATH, and vendors esp_prov on first use.
+    Vendors esp_prov on first use. IDF_PATH, when set, supplies the protocomm protobuf files.
     """
     simulator = _sim()
     if group_id and not simulator.select_home(group_id):
