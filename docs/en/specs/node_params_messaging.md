@@ -197,6 +197,7 @@ abort the batch. Non-string entries are skipped.
 | `getTriggerVer` | Current trigger version | `automations.md` |
 | `getTriggerDetails` | Full trigger payload + version | `automations.md` |
 | `getTimeSync` | Current server time as `{time: <epoch ms>}` — fast coarse clock sync so the node need not wait for SNTP; accuracy bounded by delivery latency | — |
+| `getServerConfig` | The deployment output values that the request tree names — see [`getServerConfig` request tree](#getserverconfig-request-tree) | — |
 
 An unrecognized event name is not fatal: it is logged as a warning — most often
 a firmware typo or an event not yet implemented — and the rest of the batch
@@ -204,6 +205,33 @@ proceeds.
 
 This spec enumerates the events and where they route; the *content* of the
 config/schedule/trigger/voice payloads belongs to those feature specs.
+
+### `getServerConfig` request tree
+
+The node sends `getServerConfig` as an object tree next to the `event` array.
+A member with the value `null` requests that key. A member with an object value
+is a nested level, with the same rules. Names are case-sensitive.
+
+```
+Device → to_cloud   { "event": ["getServerConfig"],
+                      "getServerConfig": { "rmng-base": { "StackRegion": null, "NoSuchKey": null },
+                                           "no-such-level": { "Foo": null } } }
+Lambda → from_cloud { "event": ["getServerConfig"],
+                      "getServerConfig": { "rmng-base": { "StackRegion": "us-east-1" } } }
+```
+
+The handler reads `<region>/rmng-client-outputs.json` from the public-assets
+bucket — the sanitized deployment outputs that `upload_rmng_outputs.py` writes.
+It copies the request tree and replaces each `null` with the string value of
+that key. It omits unknown keys, keys with a non-string value, and levels with
+no known key. If no requested key is known, the reply is `{}`, so the node
+still gets an answer and stops the retries.
+
+- If the `getServerConfig` object is missing or is not an object, the handler logs an error and gives no answer for that event, as for `setNodeConfig`.
+- If the outputs object is missing or is not valid JSON, the handler logs an error and gives no answer for that event.
+
+Keep the reply under 3 KB: ESP32-C2 nodes use a 3 KB MQTT inbound buffer and
+drop a larger message.
 
 ### The `hello` / config-refresh pattern
 

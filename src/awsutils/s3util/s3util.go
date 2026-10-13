@@ -61,8 +61,13 @@ func GetS3Path(bucketName, key string) string {
 	return "s3://" + bucketName + "/" + key
 }
 
+// WithRegion sends one S3 call to the given region, for a bucket outside the client's region.
+func WithRegion(region string) func(*s3.Options) {
+	return func(o *s3.Options) { o.Region = region }
+}
+
 // GetObjectContent fetches an object from S3 and returns its content as bytes
-func GetObjectContent(ctx context.Context, bucketName, key string) ([]byte, error) {
+func GetObjectContent(ctx context.Context, bucketName, key string, optFns ...func(*s3.Options)) ([]byte, error) {
 	s3Client := awscommon.GetS3Client()
 
 	input := &s3.GetObjectInput{
@@ -70,7 +75,7 @@ func GetObjectContent(ctx context.Context, bucketName, key string) ([]byte, erro
 		Key:    aws.String(key),
 	}
 
-	result, err := s3Client.GetObject(ctx, input)
+	result, err := s3Client.GetObject(ctx, input, optFns...)
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to get object from S3: "+bucketName+" / "+key)
 	}

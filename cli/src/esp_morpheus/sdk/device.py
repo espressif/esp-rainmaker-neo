@@ -973,6 +973,35 @@ class Device:
         device_log(f"Timeout waiting for getSchedDetails response after {timeout} seconds")
         return None
 
+    @requires('mqtt', blocked=None)
+    def get_server_config(self, request_tree, timeout=15):
+        """Request server config keys; request_tree marks each key with None, e.g. {"rmng-base": {"StackRegion": None}}.
+
+        Returns:
+            dict: The getServerConfig reply if received, None if timeout
+        """
+        while not self.from_cloud_queue.empty():
+            self.from_cloud_queue.get_nowait()
+
+        request = {"event": ["getServerConfig"]}
+        if request_tree is not None:
+            request["getServerConfig"] = request_tree
+        if not self.publish_to_cloud(request):
+            device_log("Failed to publish getServerConfig request")
+            return None
+
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            try:
+                message = self.from_cloud_queue.get(timeout=1)
+                if "getServerConfig" in message:
+                    return message["getServerConfig"]
+            except Empty:
+                continue
+
+        device_log(f"Timeout waiting for getServerConfig response after {timeout} seconds")
+        return None
+
     def wait_for_schedule_update(self, timeout=10):
         """Wait for a schedule update message.
 

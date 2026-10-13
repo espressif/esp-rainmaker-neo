@@ -1243,6 +1243,9 @@ func HandleGetTriggerDetails(ctx context.Context, n *Node, responseData *DataToD
 	return nil
 }
 
+// publicAssetsRegion is where upload_rmng_outputs.py creates the public-assets bucket, whatever the stack region.
+const publicAssetsRegion = "us-east-1"
+
 // clientOutputsLocation returns the public-assets bucket and key that
 // upload_rmng_outputs.py writes the sanitized client outputs to. The bucket is
 // account-scoped and always lives in us-east-1; the object is region-partitioned.
@@ -1252,10 +1255,11 @@ func clientOutputsLocation() (string, string) {
 	return bucket, key
 }
 
-func HandleGetServerConfig(ctx context.Context, n *Node, responseData *DataToDevice) error {
+// HandleGetServerConfig answers with the server config keys that the request tree names.
+func HandleGetServerConfig(ctx context.Context, n *Node, request map[string]interface{}, responseData *DataToDevice) error {
 	bucket, key := clientOutputsLocation()
 
-	content, err := s3util.GetObjectContent(ctx, bucket, key)
+	content, err := s3util.GetObjectContent(ctx, bucket, key, s3util.WithRegion(publicAssetsRegion))
 	if err != nil {
 		return rmerror.NewRMError(err, "failed to fetch server config from S3")
 	}
@@ -1267,8 +1271,35 @@ func HandleGetServerConfig(ctx context.Context, n *Node, responseData *DataToDev
 		}
 	}
 
-	AppendGetServerConfig(responseData, outputs)
+	AppendGetServerConfig(responseData, SelectServerConfig(request, outputs))
 	return nil
+}
+
+// SelectServerConfig copies the string values the request tree names, where null marks a key and an object marks a level:
+// {"rmng-base": {"StackRegion": null, "Nope": null}} -> {"rmng-base": {"StackRegion": "us-east-1"}}. Unknown keys, non-string values and empty levels are omitted.
+func SelectServerConfig(request, outputs map[string]interface{}) map[string]interface{} {
+	selected := make(map[string]interface{})
+	for name, req := range request {
+		stored, ok := outputs[name]
+		if !ok {
+			continue
+		}
+		switch req := req.(type) {
+		case nil:
+			if value, isString := stored.(string); isString {
+				selected[name] = value
+			}
+		case map[string]interface{}:
+			level, isLevel := stored.(map[string]interface{})
+			if !isLevel {
+				continue
+			}
+			if sub := SelectServerConfig(req, level); len(sub) > 0 {
+				selected[name] = sub
+			}
+		}
+	}
+	return selected
 }
 
 func AppendGetServerConfig(data *DataToDevice, outputs map[string]interface{}) {

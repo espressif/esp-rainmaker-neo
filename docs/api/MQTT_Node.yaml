@@ -643,6 +643,23 @@ components:
                 example: "hello-001"
           setNodeConfig:
             $ref: "#/components/schemas/nodeConfig"
+          getServerConfig:
+            type: object
+            additionalProperties: true
+            description: |
+              Request tree for `getServerConfig`. A member whose value is
+              `null` requests that key; a member whose value is an object is
+              a nested level with the same rules. A level can hold keys and
+              nested levels together, with no fixed depth limit. Names are
+              case-sensitive and never contain `.`. Required with the
+              `getServerConfig` event; the cloud does not answer a request
+              without it.
+            example:
+              rmng-base:
+                StackRegion: null
+                CredentialProviderEndpoint: null
+                NodeVideoRoleAliases: null
+                NodeFileRoleAliases: null
       examples:
         - name: Startup handshake
           summary: Typical first message after MQTT connect
@@ -726,6 +743,17 @@ components:
               - getTriggerVer
             hello:
               id: "hello-001"
+        - name: Server config request
+          summary: Node requests the server config keys it needs
+          payload:
+            event:
+              - getServerConfig
+            getServerConfig:
+              rmng-base:
+                StackRegion: null
+                CredentialProviderEndpoint: null
+                NodeVideoRoleAliases: null
+                NodeFileRoleAliases: null
 
     # ── from_cloud ───────────────────────────────────────────────────────────
     fromCloudMessage:
@@ -847,16 +875,17 @@ components:
             type: object
             additionalProperties: true
             description: |
-              The backend deployments configuration with commonly required
-              IDs and ARNs are available in a public S3 bucket for clients
-              to read. Make this available to firmware easily through this
-              option. The example below shows a representative subset.
+              Values from the sanitized deployment outputs that the cloud
+              publishes to the public-assets bucket. The response copies the
+              request tree and replaces each `null` with the string value of
+              that key. The cloud omits unknown keys, keys with a non-string
+              value, and levels that hold no known key; it never sends `null`
+              or keys that the node did not request. If no requested key is
+              known, the value is `{}`. A list value is one comma-separated
+              string.
             example:
               rmng-base:
-                IoTEndpointUrl: "<iot-endpoint-prefix>-ats.iot.<region>.amazonaws.com"
-                ApiGatewayUrl: "https://<api-id>.execute-api.<region>.amazonaws.com/prod/"
-                UserPoolId: "<region>_XXXXXXXXX"
-                IdentityPoolId: "<region>:00000000-0000-0000-0000-000000000000"
+                StackRegion: "<region>"
                 CredentialProviderEndpoint: "<credential-provider-prefix>.credentials.iot.<region>.amazonaws.com"
                 NodeFileRoleAliases: "rmng-node-file-role-v1"
                 NodeVideoRoleAliases: "rmng-node-video-role-v1"
@@ -943,16 +972,13 @@ components:
                   operator: "eq"
                   value: true
         - name: Server config response
-          summary: Cloud returns the sanitized server config fetched from S3
+          summary: Cloud returns the requested server config keys only
           payload:
             event:
               - getServerConfig
             getServerConfig:
               rmng-base:
-                IoTEndpointUrl: "<iot-endpoint-prefix>-ats.iot.<region>.amazonaws.com"
-                ApiGatewayUrl: "https://<api-id>.execute-api.<region>.amazonaws.com/prod/"
-                UserPoolId: "<region>_XXXXXXXXX"
-                IdentityPoolId: "<region>:00000000-0000-0000-0000-000000000000"
+                StackRegion: "<region>"
                 CredentialProviderEndpoint: "<credential-provider-prefix>.credentials.iot.<region>.amazonaws.com"
                 NodeFileRoleAliases: "rmng-node-file-role-v1"
                 NodeVideoRoleAliases: "rmng-node-video-role-v1"

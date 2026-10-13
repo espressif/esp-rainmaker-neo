@@ -23,6 +23,8 @@ type S3ClientMock struct {
 	// Lets tests exercise write-failure paths (e.g. the container's
 	// non-fatal failed-nodes CSV write) without an HTTP layer.
 	ForcePutObjectErr error
+	// LastGetObjectRegion is the region the last GetObject call set through its options.
+	LastGetObjectRegion string
 }
 
 func NewS3ClientMock() *S3ClientMock {
@@ -73,6 +75,12 @@ func (m *S3ClientMock) PutObject(ctx context.Context, input *s3.PutObjectInput, 
 }
 
 func (m *S3ClientMock) GetObject(ctx context.Context, input *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	var opts s3.Options
+	for _, fn := range optFns {
+		fn(&opts)
+	}
+	m.LastGetObjectRegion = opts.Region
+
 	bucket := *input.Bucket
 	key := *input.Key
 
