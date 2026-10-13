@@ -140,10 +140,14 @@ func handlePublishInputEvent(ctx context.Context, event node.PublishInputEvent) 
 		case "getTimeSync":
 			node.AppendGetTimeSync(responseData)
 		case "getServerConfig":
-			err := node.HandleGetServerConfig(ctx, n, responseData)
-			if err != nil {
-				rlog.Error(rmngCtx).Err(err).Msg("Failed to handle getServerConfig")
-				continue
+			request, ok := event.Data["getServerConfig"].(map[string]interface{})
+			if !ok {
+				rlog.Error(rmngCtx).Err(fmt.Errorf("'getServerConfig' field is missing or invalid in the input")).Send()
+			} else {
+				err := node.HandleGetServerConfig(ctx, n, request, responseData)
+				if err != nil {
+					rlog.Error(rmngCtx).Err(err).Msg("Failed to handle getServerConfig")
+				}
 			}
 		case "getTriggerVer":
 			err := node.HandleGetTriggerVerWithNodeDetails(ctx, n, responseData, nodeDetails)

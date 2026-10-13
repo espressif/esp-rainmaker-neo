@@ -899,42 +899,91 @@ var _ = Describe("getServerConfig event", func() {
 		Expect(err).To(BeNil())
 	}
 
-	publishGetServerConfig := func() error {
+	publishGetServerConfigRequest := func(request interface{}) error {
 		event := node.PublishInputEvent{
 			ThingName: thingName,
-			Data:      map[string]interface{}{"event": []interface{}{"getServerConfig"}},
+			Data: map[string]interface{}{
+				"event":           []interface{}{"getServerConfig"},
+				"getServerConfig": request,
+			},
 		}
 		return handlePublishInputEvent(ctx, event)
 	}
 
-	It("fetches the server config from the public-assets bucket and returns it from the cloud", func() {
-		seedServerConfig(`{"foo": "bar", "count": 3}`)
+	stackRegionRequest := map[string]interface{}{
+		"rmng-base": map[string]interface{}{"StackRegion": nil},
+	}
 
-		Expect(publishGetServerConfig()).To(BeNil())
-
+	publishedServerConfig := func() map[string]interface{} {
 		Expect(iotMock.PublishCalls).To(HaveLen(1))
-		Expect(*iotMock.PublishCalls[0].Topic).To(Equal("rainmaker/nodes/" + thingName + "/from_cloud"))
-
 		var publishedData map[string]interface{}
 		Expect(json.Unmarshal(iotMock.PublishCalls[0].Payload, &publishedData)).To(BeNil())
-
 		Expect(publishedData["event"]).To(ContainElement("getServerConfig"))
 		outputs, ok := publishedData["getServerConfig"].(map[string]interface{})
 		Expect(ok).To(BeTrue())
-		Expect(outputs["foo"]).To(Equal("bar"))
-		Expect(outputs["count"]).To(BeNumerically("==", 3))
+		return outputs
+	}
+
+	It("returns only the keys named in the request tree", func() {
+		seedServerConfig(`{"rmng-base": {"StackRegion": "us-east-1", "UserPoolId": "pool", "Count": 3}}`)
+
+		Expect(publishGetServerConfigRequest(map[string]interface{}{
+			"rmng-base":     map[string]interface{}{"StackRegion": nil, "NoSuchKey": nil, "Count": nil},
+			"no-such-level": map[string]interface{}{"Foo": nil},
+		})).To(BeNil())
+
+		Expect(publishedServerConfig()).To(Equal(map[string]interface{}{
+			"rmng-base": map[string]interface{}{"StackRegion": "us-east-1"},
+		}))
+	})
+
+	It("reads the server config from the us-east-1 public-assets bucket whatever the stack region", func() {
+		seedServerConfig(`{"rmng-base": {"StackRegion": "us-east-1"}}`)
+
+		Expect(publishGetServerConfigRequest(stackRegionRequest)).To(BeNil())
+
+		Expect(publishedServerConfig()).NotTo(BeEmpty())
+		Expect(s3Mock.LastGetObjectRegion).To(Equal("us-east-1"))
+	})
+
+	It("answers with an empty object when no requested key is known", func() {
+		seedServerConfig(`{"rmng-base": {"StackRegion": "us-east-1"}}`)
+
+		Expect(publishGetServerConfigRequest(map[string]interface{}{
+			"rmng-base": map[string]interface{}{"NoSuchKey": nil},
+		})).To(BeNil())
+
+		Expect(publishedServerConfig()).To(BeEmpty())
+	})
+
+	It("does not publish a from_cloud response when the request tree is not an object", func() {
+		seedServerConfig(`{"rmng-base": {"StackRegion": "us-east-1"}}`)
+
+		Expect(publishGetServerConfigRequest("rmng-base")).To(BeNil())
+		Expect(iotMock.PublishCalls).To(BeEmpty())
+	})
+
+	It("does not publish a from_cloud response when the request has no tree", func() {
+		seedServerConfig(`{"rmng-base": {"StackRegion": "us-east-1"}}`)
+
+		event := node.PublishInputEvent{
+			ThingName: thingName,
+			Data:      map[string]interface{}{"event": []interface{}{"getServerConfig"}},
+		}
+		Expect(handlePublishInputEvent(ctx, event)).To(BeNil())
+		Expect(iotMock.PublishCalls).To(BeEmpty())
 	})
 
 	It("does not publish a from_cloud response when the server config object is missing", func() {
 		// Nothing seeded — the S3 GetObject fails, the handler logs and skips.
-		Expect(publishGetServerConfig()).To(BeNil())
+		Expect(publishGetServerConfigRequest(stackRegionRequest)).To(BeNil())
 		Expect(iotMock.PublishCalls).To(BeEmpty())
 	})
 
 	It("does not publish a from_cloud response when the stored config is malformed JSON", func() {
 		seedServerConfig(`{not valid json`)
 
-		Expect(publishGetServerConfig()).To(BeNil())
+		Expect(publishGetServerConfigRequest(stackRegionRequest)).To(BeNil())
 		Expect(iotMock.PublishCalls).To(BeEmpty())
 	})
 })
