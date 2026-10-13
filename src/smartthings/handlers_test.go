@@ -184,6 +184,19 @@ func readCallbackTokens(userID string) []user_integration_db.UserIntegrationEntr
 	return entries
 }
 
+// sentTokenRequest decodes the single token request the mock HTTP client received.
+func sentTokenRequest(mockHTTP *mock.MockHTTPClient) accessTokenRequest {
+	GinkgoHelper()
+	Expect(mockHTTP.Requests).To(HaveLen(1))
+	body, err := mockHTTP.Requests[0].GetBody()
+	Expect(err).NotTo(HaveOccurred())
+	raw, err := io.ReadAll(body)
+	Expect(err).NotTo(HaveOccurred())
+	var sent accessTokenRequest
+	Expect(json.Unmarshal(raw, &sent)).To(Succeed())
+	return sent
+}
+
 // stRequest builds a base STRequest with a valid auth token for the given user.
 func stRequest(userID, interactionType string) STRequest {
 	return STRequest{
@@ -869,17 +882,52 @@ var _ = Describe("SmartThings handlers", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(token.AccessToken).To(Equal("refreshed-access-token"))
 
-			Expect(mockHTTP.Requests).To(HaveLen(1))
-			body, err := mockHTTP.Requests[0].GetBody()
-			Expect(err).NotTo(HaveOccurred())
-			raw, err := io.ReadAll(body)
-			Expect(err).NotTo(HaveOccurred())
-
-			var sent accessTokenRequest
-			Expect(json.Unmarshal(raw, &sent)).To(Succeed())
+			sent := sentTokenRequest(mockHTTP)
 			Expect(sent.Headers.InteractionType).To(Equal(InteractionRefreshAccessTokens))
 			Expect(sent.CallbackAuthentication.GrantType).To(Equal("refresh_token"))
 			Expect(sent.CallbackAuthentication.RefreshToken).To(Equal("old-refresh-token"))
+		})
+
+		Context("with webhook_mock_base_url set", func() {
+			const mockBase = "https://mock.example.com/prod"
+
+			BeforeEach(func() {
+				GinkgoT().Setenv("webhook_mock_base_url", mockBase)
+			})
+
+			It("sends a mock token request without client credentials", func() {
+				mockHTTP := mock.NewMockHTTPClient()
+				httpclient.Set(mockHTTP)
+				tokenResp := `{"callbackAuthentication":{"accessToken":"mock-access-token","refreshToken":"mock-refresh-token","expiresIn":86400}}`
+				Expect(mockHTTP.RegisterResponse(mockBase+"/v1/smartthings/token", "POST", 200, tokenResp)).To(BeNil())
+
+				_, err := exchangeCodeForTokens(ctx, "auth-code", mockBase+"/v1/smartthings/token")
+				Expect(err).NotTo(HaveOccurred())
+
+				sent := sentTokenRequest(mockHTTP)
+				Expect(sent.CallbackAuthentication.ClientID).To(BeEmpty())
+				Expect(sent.CallbackAuthentication.ClientSecret).To(BeEmpty())
+			})
+
+			const realTokenURL = "https://c2c-ap.smartthings.com/oauth/token"
+
+			DescribeTable("refuses a token request to real SmartThings without sending it",
+				func(send func() error) {
+					mockHTTP := mock.NewMockHTTPClient()
+					httpclient.Set(mockHTTP)
+
+					Expect(send()).To(MatchError(ContainSubstring("not the webhook mock")))
+					Expect(mockHTTP.Requests).To(BeEmpty())
+				},
+				Entry("grant", func() error {
+					_, err := exchangeCodeForTokens(ctx, "auth-code", realTokenURL)
+					return err
+				}),
+				Entry("refresh", func() error {
+					_, err := refreshCallbackToken(ctx, realTokenURL)("old-refresh-token")
+					return err
+				}),
+			)
 		})
 
 		It("errors when callbackAuthentication is missing", func() {
