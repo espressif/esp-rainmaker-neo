@@ -1054,6 +1054,28 @@ class User:
 
         return assumed_credentials
 
+    def node_group(self, node_id):
+        """The group holding node_id, or None. A node is in one group; one listed only under a subgroup resolves to that subgroup's group: "n-sub" in subgroup "sub1" of "home" -> "home"."""
+        from .group import Group  # group.py imports this module
+
+        def holds(group):
+            return node_id in (group.get('node_ids') or []) or any(holds(sub) for sub in group.get('subgroups') or [])
+
+        return next((g['group_id'] for g in Group(self).list_groups().get('groups', []) if holds(g)), None)
+
+    def get_node_service_credentials(self, node_id, services, group_id=None):
+        """Temporary AWS credentials scoped to one node's services ("kvs", "s3").
+
+        Uses POST /v1/groups/{group}/nodes/{node}/assumed-roles; group_id defaults to the node's group.
+        Returns the response body: access_key, secret_key, session_token and expiration.
+        """
+        group_id = group_id or self.node_group(node_id)
+        assert group_id, f"node {node_id} is in none of this user's groups"
+        path = f"/v1/groups/{group_id}/nodes/{node_id}/assumed-roles"
+        response = self.make_api_request('POST', path, data=json.dumps({"services": list(services)}))
+        assert response.status_code in (200, 201), f"assume_role failed: {response.status_code} {response.text}"
+        return response.json()
+
     def get_s3_client(self, group_id, node_id):
         """Get a boto3 S3 client using assume-role credentials scoped to one node.
 
@@ -1064,12 +1086,7 @@ class User:
         Returns:
             boto3.client: An S3 client configured with assumed-role credentials.
         """
-        data = json.dumps({"services": ["s3"]})
-
-        path = f"/v1/groups/{group_id}/nodes/{node_id}/assumed-roles"
-        response = self.make_api_request('POST', path, data=data)
-        assert response.status_code in (200, 201), f"assume_role failed: {response.status_code} {response.text}"
-        assumed = response.json()
+        assumed = self.get_node_service_credentials(node_id, ["s3"], group_id=group_id)
 
         return boto3.client(
             "s3",

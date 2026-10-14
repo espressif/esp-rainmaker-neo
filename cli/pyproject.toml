@@ -44,6 +44,10 @@ dependencies = [
     "ask-smapi-sdk>=1.0",
     "ask-smapi-model>=1.36",
     "ask-sdk-model-runtime>=1.0",
+    # `user <id> node camera-stream`: the KVS WebRTC viewer and its video window or --save.
+    "aiortc>=1.15",
+    "websockets>=11.0",
+    "opencv-python>=4.8",
 ]
 
 [project.urls]

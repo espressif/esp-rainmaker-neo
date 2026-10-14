@@ -1496,3 +1496,97 @@ def test_parse_json_arg_reads_a_file(tmp_path):
 def test_read_json_file_reports_a_missing_file():
     with pytest.raises(output.CommandError):
         output.read_json_file('/nonexistent/payload.json')
+
+
+# --- node service credentials and the KVS viewer --------------------------------
+
+class _Response:
+    def __init__(self, status_code, body):
+        self.status_code, self._body, self.text = status_code, body, json.dumps(body)
+
+    def json(self):
+        return self._body
+
+
+GROUPS = {'groups': [
+    {'group_id': 'office', 'node_ids': ['n-office'], 'subgroups': []},
+    {'group_id': 'home', 'node_ids': ['n-home'],
+     'subgroups': [{'subgroup_id': 'sub1', 'node_ids': ['n-sub'], 'subgroups': []}]},
+]}
+
+
+def _api_user(responses, calls):
+    from esp_morpheus.sdk.user import User
+
+    user = User.__new__(User)
+    user.region = 'us-east-1'
+
+    def make_api_request(method, path, data=None, **kwargs):
+        calls.append((method, path, data))
+        return responses[(method, path)]
+    user.make_api_request = make_api_request
+    return user
+
+
+def test_a_node_in_a_subgroup_resolves_to_its_group():
+    """The per-node assumed-roles route takes the group id; a subgroup id gets 403."""
+    user = _api_user({('GET', '/v1/groups'): _Response(200, GROUPS)}, [])
+    assert user.node_group('n-sub') == 'home'
+    assert user.node_group('n-office') == 'office'
+    assert user.node_group('n-elsewhere') is None
+
+
+def test_node_service_credentials_post_the_services_to_the_group_route():
+    calls = []
+    creds = {'access_key': 'a', 'secret_key': 's', 'session_token': 't', 'expiration': 1}
+    user = _api_user({('GET', '/v1/groups'): _Response(200, GROUPS),
+                      ('POST', '/v1/groups/home/nodes/n-sub/assumed-roles'): _Response(200, creds)}, calls)
+
+    assert user.get_node_service_credentials('n-sub', ['kvs']) == creds
+    assert calls[-1] == ('POST', '/v1/groups/home/nodes/n-sub/assumed-roles', json.dumps({'services': ['kvs']}))
+
+
+def test_a_given_group_skips_the_group_lookup():
+    calls = []
+    creds = {'access_key': 'a', 'secret_key': 's', 'session_token': 't'}
+    user = _api_user({('POST', '/v1/groups/home/nodes/n-home/assumed-roles'): _Response(200, creds)}, calls)
+
+    user.get_node_service_credentials('n-home', ['s3'], group_id='home')
+    assert [c[1] for c in calls] == ['/v1/groups/home/nodes/n-home/assumed-roles']
+
+
+class _StreamUser:
+    region = 'us-east-1'
+
+    def __init__(self):
+        self.requests = []
+
+    def get_node_service_credentials(self, node_id, services, group_id=None):
+        self.requests.append((node_id, services, group_id))
+        return {'access_key': 'a', 'secret_key': 's', 'session_token': 't', 'expiration': 7}
+
+
+@pytest.fixture
+def stream_user(outputs_file, monkeypatch):
+    user = _StreamUser()
+    monkeypatch.setenv('MORPHEUS_OUTPUTS', outputs_file)
+    monkeypatch.setattr(Session, 'authenticated_user', lambda self, on_failure='raise': user)
+    return user
+
+
+def test_stream_views_the_nodes_channel_with_its_kvs_credentials(run, stream_user, monkeypatch):
+    from esp_morpheus.sdk import kvs_viewer
+
+    started = []
+
+    async def fake_start(credentials, channel, **kwargs):
+        started.append((credentials, channel, kwargs))
+    monkeypatch.setattr(kvs_viewer, 'start_kvs_streaming', fake_start)
+
+    result = run('user', 'someone', 'node', 'camera-stream', 'n-1', '--duration', '5', '--stats-only')
+    assert result.exit_code == 0, result.output
+    assert stream_user.requests == [('n-1', ['kvs'], None)]
+    credentials, channel, kwargs = started[0]
+    assert channel == 'rmng-v1-n-1'
+    assert (credentials.access_key_id, credentials.region, credentials.expiration) == ('a', 'us-east-1', 7)
+    assert kwargs == {'save_path': None, 'duration': 5, 'stats_only': True}

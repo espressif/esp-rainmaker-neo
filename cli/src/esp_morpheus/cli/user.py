@@ -6,7 +6,6 @@
 
 import click
 
-from ..sdk.group import Group
 from . import output
 from .context import pass_unverified_user, pass_user
 
@@ -87,10 +86,8 @@ def params_shadow_name_for(user, node_id):
     """Name of the params shadow a node currently reports into, or None if the node is not in any
     of this user's groups. The group is part of the shadow name, so it has to be resolved before
     the shadow can be read."""
-    for grp in Group(user).list_groups().get('groups', []):
-        if node_id in (grp.get('node_ids') or []):
-            return f"params-{grp['group_id']}"
-    return None
+    group_id = user.node_group(node_id)
+    return f"params-{group_id}" if group_id else None
 
 
 @click.command('get-shadow')
