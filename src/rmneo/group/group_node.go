@@ -5,6 +5,8 @@
 package group
 
 import (
+	"errors"
+
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
@@ -20,6 +22,11 @@ func GetNodesGroup(ctx *rmngctx.RmngContext, nodeID string) (group_node_db.Nodes
 // it is removed from the old group first.
 // Returns the old group and subgroups the node was in.
 func AddNode(ctx *rmngctx.RmngContext, groupID string, nodeID string, capabilities []string) (group_node_db.NodesGroups, error) {
+	// Ahead of the same-group no-op so secondary members cannot re-associate (Wi-Fi reconfiguration), and of the old-group removal (node rights only) so a refusal never leaves the node in no group.
+	if err := ctx.IsAuthorized(utils.GroupEditNodes, groupID); err != nil {
+		return group_node_db.NodesGroups{}, rmerror.NewRMError(errors.Join(ErrNodeAddForbidden, err), "insufficient permissions to add node to group")
+	}
+
 	groupNodeDB := group_node_db.NewGroupNodeDB(ctx)
 	oldGroup, err := groupNodeDB.GetNodesGroup(nodeID)
 	if err != nil {

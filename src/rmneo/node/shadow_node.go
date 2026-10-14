@@ -275,7 +275,7 @@ func ShadowNodeRemoveFromGroupAuthorizedBulk(
 // downstream handler, if deployed, reacts to it).
 func ShadowNodeAddToGroup(ctx *rmngctx.RmngContext, nodeID, groupID string, capabilities []string) error {
 	if _, err := group.GetUserGroupAccess(ctx, groupID); err != nil {
-		return rmerror.NewRMError(err, "parent group does not exist")
+		return rmerror.NewRMError(group.ErrGroupAccessDenied, "group does not exist or access denied")
 	}
 	oldGroup, err := ShadowNodeAddToGroupAuthorized(ctx, nodeID, groupID, capabilities)
 	if err != nil {
