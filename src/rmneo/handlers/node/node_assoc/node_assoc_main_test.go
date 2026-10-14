@@ -403,8 +403,8 @@ var _ = Describe("Associate Main", func() {
 			response, err := handleVerify(ctx, verifyRequest)
 
 			Expect(err).To(BeNil())
-			Expect(response.StatusCode).To(Equal(http.StatusInternalServerError))
-			Expect(response.Body).To(ContainSubstring("{\"message\":\"Failed to confirm node association\"}"))
+			Expect(response.StatusCode).To(Equal(http.StatusForbidden))
+			Expect(response.Body).To(ContainSubstring("Insufficient permissions for this group"))
 
 			// Verify that the requestId was deleted from DynamoDB
 			AssertRequestIdNotInDB(requestID)
@@ -659,6 +659,80 @@ var _ = Describe("Associate Main", func() {
 
 			// A challenge_response node on a Matter group is still a plain RainMaker node: "rmng".
 			test_utils.AssertNodeInGroup(matterGroup.GroupID, nodeID, "rmng")
+		})
+
+		// The caller owns the node's current group, so only their standing in the target group decides whether the node may move.
+		Context("target group permission", func() {
+			var targetGroupID string
+
+			BeforeEach(func() {
+				rmng_context.SetAllow(utils.GroupAll, old_group_id)
+				AddNodeToGroup(rmng_context, old_group_id, nodeID)
+
+				_, ownerCtx := test_utils.SetupTestUser(ctx, "target-owner", "target-owner@example.com")
+				targetGroup, err := group.CreateGroupForUser(ownerCtx, "Target Group")
+				Expect(err).To(BeNil())
+				targetGroupID = targetGroup.GroupID
+			})
+
+			joinTargetAs := func(accessType utils.GroupAccessType) {
+				ownerCtx := rmngctx.NewRmngContext(user.NewUser("target-owner"))
+				_, err := group.ShareGroup(ownerCtx, targetGroupID, userID, accessType, auth.UserInfo{})
+				Expect(err).To(BeNil())
+				callerCtx := rmngctx.NewRmngContext(user.NewUser(userID))
+				reqs, err := group.GetMySharingRequests(callerCtx)
+				Expect(err).To(BeNil())
+				Expect(reqs).To(HaveLen(1))
+				Expect(group.ApproveSharingRequest(callerCtx, reqs[0].SharingRequestID)).To(BeNil())
+			}
+
+			verifyIntoTarget := func() events.APIGatewayProxyResponse {
+				storeInDynamoDB(ctx, requestID, challenge, userID, targetGroupID)
+				verifyRequest.PathParameters["groupId"] = targetGroupID
+				resp, err := handleVerify(ctx, verifyRequest)
+				Expect(err).To(BeNil())
+				return resp
+			}
+
+			It("should refuse a secondary member of the target group and leave the node in its current group", func() {
+				joinTargetAs(utils.GroupSecondaryAccess)
+
+				resp := verifyIntoTarget()
+
+				Expect(resp.StatusCode).To(Equal(http.StatusForbidden), resp.Body)
+				Expect(resp.Body).To(ContainSubstring("Insufficient permissions for this group"))
+				AssertRequestIdNotInDB(requestID)
+				test_utils.AssertNodeInGroup(old_group_id, nodeID)
+				test_utils.AssertNodeNotInGroup(targetGroupID, nodeID)
+			})
+
+			It("should refuse a secondary member re-associating a node into its current group and leave it there", func() {
+				ownerCtx := rmngctx.NewRmngContext(user.NewUser("target-owner"))
+				ownerCtx.SetAllow(utils.NodeAll, nodeID)
+				_, err := group.GetUserGroupAccess(ownerCtx, targetGroupID)
+				Expect(err).To(BeNil())
+				_, err = group.AddNode(ownerCtx, targetGroupID, nodeID, nil)
+				Expect(err).To(BeNil())
+				joinTargetAs(utils.GroupSecondaryAccess)
+
+				resp := verifyIntoTarget()
+
+				Expect(resp.StatusCode).To(Equal(http.StatusForbidden), resp.Body)
+				Expect(resp.Body).To(ContainSubstring("Insufficient permissions for this group"))
+				AssertRequestIdNotInDB(requestID)
+				test_utils.AssertNodeInGroup(targetGroupID, nodeID)
+			})
+
+			It("should move the node for a primary member of the target group", func() {
+				joinTargetAs(utils.GroupPrimaryAccess)
+
+				resp := verifyIntoTarget()
+
+				Expect(resp.StatusCode).To(Equal(http.StatusOK), resp.Body)
+				AssertRequestIdNotInDB(requestID)
+				test_utils.AssertNodeInGroup(targetGroupID, nodeID, "rmng")
+				test_utils.AssertNodeNotInGroup(old_group_id, nodeID)
+			})
 		})
 	})
 })

@@ -194,8 +194,8 @@ This flow works for both Matter and non-Matter groups. It verifies the node usin
   3. Hex-decode the `challenge_response` to get the raw signature
   4. Verify the signature against the hashed challenge using the node's public certificate
      - Supports both ECDSA and RSA-PSS signature algorithms
-  5. On **success**: Run the ADD NODE TO GROUP FLOW (node is added immediately, no confirm step needed)
-  6. On **failure**: Delete the association request from DB (burns the challenge to prevent brute-force), return 401
+  5. On **failure**: Delete the association request from DB (burns the challenge to prevent brute-force), return 401
+  6. Run the ADD NODE TO GROUP FLOW (node is added immediately, no confirm step needed). If the caller lacks `group:editnodes` on the target group (non-member or secondary access), return 403: the request is already burned and the node stays where it is
 - **Response** (success):
   ```json
   {
@@ -246,7 +246,8 @@ This flow is only valid for Matter-capable groups. It uses Matter's NOCSRElement
        - Skip attestation signature verification
        - Generate a random `node_id` (16 hex characters, 8 bytes)
   5. Convert the extracted CSR (DER) to PEM format
-  6. **Generate Device NOC**:
+  6. Verify the caller has `group:editnodes` on the target group (primary access). If not: return 403; no NOC is issued
+  7. **Generate Device NOC**:
      - Load Matter group fabric information: `root_ca`, `root_ca_key`
      - Generate `matter_node_id` from `node_id` (hex encoding of thingName)
      - Create NOC certificate:
@@ -258,7 +259,7 @@ This flow is only valid for Matter-capable groups. It uses Matter's NOCSRElement
        - Subject: Matter Fabric ID (OID 1.3.6.1.4.1.37244.1.5), Matter Node ID (OID 1.3.6.1.4.1.37244.1.1) - UTF-8 encoded
        - No CAT ID for device NOCs
        - Serial Number: Cryptographically secure random
-  7. **Update association request** status to `"verified"` in DB (stores `node_id` and `matter_node_id`; refreshes TTL to 5 more minutes)
+  8. **Update association request** status to `"verified"` in DB (stores `node_id` and `matter_node_id`; refreshes TTL to 5 more minutes)
 - **Response** (success):
   ```json
   {
@@ -282,7 +283,7 @@ This API is called after Matter commissioning is complete. It finalizes the asso
   4. Verify `group_id` from path matches the stored `group_id`
   5. Verify the request status is `"verified"` (reject with 400 if not)
   6. Verify `node_id` is present in the stored request
-  7. Run the ADD NODE TO GROUP FLOW with the stored `node_id` and `group_id`
+  7. Run the ADD NODE TO GROUP FLOW with the stored `node_id` and `group_id`. If the caller lacks `group:editnodes` on the target group (e.g. their access was lowered after verify), return 403
 - **Response** (success):
   ```json
   {
@@ -298,8 +299,9 @@ This flow is shared between the `challenge_response` verify path (called directl
 2. **Duplicate check**: Look up the node's current group (if any)
    - TableName: `rmng-group-node-assoc`, IndexName: `rmng-group-node-assoc-by-node-id`
    - Query by `node_id`
-   - If the node is already in the **target** group → the add is a **no-op that returns success**, with no side effects (no shadow migration, no iparams clear, no data reset, no Alexa/GVA notification). This is deliberate: a Wi-Fi reconfiguration re-runs association against the group the node is already in, and that must not tear down and rebuild its state.
+   - If the node is already in the **target** group → the add is a **no-op that returns success**, with no side effects (no shadow migration, no iparams clear, no data reset, no Alexa/GVA notification). This is deliberate: a Wi-Fi reconfiguration re-runs association against the group the node is already in, and that must not tear down and rebuild its state. It still requires `group:editnodes` on the target group, so a secondary member cannot re-associate (see [FAQ 4](#faqs)).
 3. **Handle old group** (if node is currently in a group):
+   - `group:editnodes` on the **target** group is checked before the duplicate check; if it is missing, nothing is removed
    - Run **REMOVE NODE FROM GROUP FLOW** for the old group (unlink, delete group shadow, clean iparams user tags, notify)
    - **Trigger async node data reset** with `{node_ids: [node_id], old_group_id, group_delete: false}`. See [Async cleanup](#async-cleanup-node_data_reset-lambda) for details.
 4. Grant the caller full access to the node for the remainder of this request (`NodeAll` in the request context). RBAC is evaluated per request from the user's group mapping — there is no stored per-node grant, and therefore nothing to revoke later; access ends when the node leaves the group.

@@ -303,10 +303,7 @@ func handleVerify(ctx context.Context, request events.APIGatewayProxyRequest) (e
 	err = n.VerifySignature(challengeHash[:], signature)
 	if err != nil {
 		rlog.Error(rmngCtx).Err(err).Send()
-		// Delete the request to prevent replay attacks - challenge is burned. A failed delete leaves the challenge reusable, so surface it as a warning rather than swallowing it.
-		if delErr := assocDB.DeleteAssocRequest(requestID); delErr != nil {
-			rlog.Warn(rmngCtx).Err(delErr).Str("request_id", requestID).Msg("failed to burn assoc request after signature verification failure")
-		}
+		burnAssocRequest(rmngCtx, assocDB, requestID)
 		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Invalid challenge response")), nil
 	}
 
@@ -317,7 +314,7 @@ func handleVerify(ctx context.Context, request events.APIGatewayProxyRequest) (e
 	err = confirmNodeAssociation(rmngCtx, assocDB, requestID, requestBody.NodeID, storedEntry.GroupID, []string{group.NodeCapabilityRMNG})
 	if err != nil {
 		rlog.Error(rmngCtx).Err(err).Send()
-		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Failed to confirm node association")), nil
+		return confirmFailureResponse(err), nil
 	}
 
 	return utils.APIGwRespJSON(http.StatusOK, utils.NewAPIStatus("success")), nil
@@ -332,6 +329,21 @@ func assocRequestUsable(entry *assoc_request_db.AssocRequestEntry, wantStatus st
 		return fmt.Errorf("assoc request expired at %d", entry.ExpirationTime)
 	}
 	return nil
+}
+
+// confirmFailureResponse maps a caller who may not add nodes to the target group (non-member or secondary access) to 403; any other failure is a 500.
+func confirmFailureResponse(err error) events.APIGatewayProxyResponse {
+	if errors.Is(err, group.ErrGroupAccessDenied) || errors.Is(err, group.ErrNodeAddForbidden) {
+		return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("Insufficient permissions for this group"))
+	}
+	return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Failed to confirm node association"))
+}
+
+// burnAssocRequest deletes the request so its challenge cannot be replayed. A failed delete leaves the challenge reusable, so it is surfaced as a warning rather than swallowed.
+func burnAssocRequest(rmngCtx *rmngctx.RmngContext, assocDB *assoc_request_db.AssocRequestDB, requestID string) {
+	if err := assocDB.DeleteAssocRequest(requestID); err != nil {
+		rlog.Warn(rmngCtx).Err(err).Str("request_id", requestID).Msg("failed to burn assoc request")
+	}
 }
 
 // MatterAttestationInput contains the input parameters for Matter CSR attestation verification
@@ -457,7 +469,7 @@ func handleMatterVerifyWithCSR(ctx context.Context, rmngCtx *rmngctx.RmngContext
 	// here, at verify, so it must be gated here too.
 	if err := rmngCtx.IsAuthorized(utils.GroupEditNodes, groupID); err != nil {
 		rlog.Error(rmngCtx).Err(err).Send()
-		return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("Insufficient permissions to add a node to this group")), nil
+		return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("Insufficient permissions for this group")), nil
 	}
 
 	// Generate Device NOC
@@ -598,7 +610,7 @@ func handleConfirm(ctx context.Context, request events.APIGatewayProxyRequest) (
 	err = confirmNodeAssociation(rmngCtx, assocDB, requestID, storedEntry.NodeID, storedEntry.GroupID, nodeCapabilities)
 	if err != nil {
 		rlog.Error(rmngCtx).Err(err).Msg("Failed to confirm node association")
-		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Failed to confirm node association")), nil
+		return confirmFailureResponse(err), nil
 	}
 
 	// TODO: We could also model this as a generic event stream via SNS/SQS, so any downstream stacks could process this event for taking any stack specific actions.

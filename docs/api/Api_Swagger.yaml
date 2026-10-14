@@ -337,6 +337,18 @@ paths:
                 userIdMismatch:
                   value:
                     message: "User ID mismatch"
+        "403":
+          description: |
+            The caller cannot add nodes to this group. Only members with primary access can associate a node.
+            The node stays in its current group.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                insufficientPermissions:
+                  value:
+                    message: "Insufficient permissions for this group"
         "500":
           description: Internal server error
           content:
@@ -384,8 +396,7 @@ paths:
                   type: array
                   items:
                     type: string
-                  description:
-                    List of capabilities to enable for the node
+                  description: List of capabilities to enable for the node
             examples:
               withCapabilities:
                 summary: "Confirm with capabilities"
@@ -429,6 +440,18 @@ paths:
                 $ref: "#/components/schemas/Error"
               example:
                 message: "User ID mismatch"
+        "403":
+          description: |
+            The caller cannot add nodes to this group. Only members with primary access can associate a node.
+            The association request is consumed and the node stays in its current group.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                insufficientPermissions:
+                  value:
+                    message: "Insufficient permissions for this group"
         "500":
           description: Internal server error
           content:
@@ -482,7 +505,9 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
         "409":
-          description: The user has no group yet, so there is nothing to scope MQTT credentials to.
+          description:
+            The user has no group yet, so there is nothing to scope MQTT
+            credentials to.
           content:
             application/json:
               schema:
@@ -1795,9 +1820,9 @@ paths:
         to the group, and may send notifications.
 
 
-        A QR-code request (one created without a `username`) is accepted the same
-        way by whoever scanned it, since no recipient was named up front. The
-        sharer who created it cannot accept their own request.
+        A QR-code request (one created without a `username`) is accepted the
+        same way by whoever scanned it, since no recipient was named up front.
+        The sharer who created it cannot accept their own request.
       tags:
         - Sharing Requests
       security:
@@ -3216,7 +3241,10 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
         "409":
-          description: 'A CA is published but was not signed by the current signing key (typically left over from a previous install); re-mint with `{"force": true}`'
+          description:
+            'A CA is published but was not signed by the current signing key
+            (typically left over from a previous install); re-mint with
+            `{"force": true}`'
           content:
             application/json:
               schema:
@@ -6416,8 +6444,8 @@ components:
           type: string
           maxLength: 32
           description:
-            Display name for the schedule. Stored by the cloud and reported
-            back by the device, which does not otherwise act on it.
+            Display name for the schedule. Stored by the cloud and reported back
+            by the device, which does not otherwise act on it.
         enabled:
           type: boolean
           description: Whether the schedule is active.

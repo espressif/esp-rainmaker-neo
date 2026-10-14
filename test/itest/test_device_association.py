@@ -154,7 +154,7 @@ def test_user_node_assoc_on_different_user_group(test_user1, test_user2, valid_d
 
     # Try to associate the node with the other user's group
     result = test_user1.do_user_node_assoc(valid_device, other_group_id)
-    assert result == "ERROR_VERIFY_FAILED_500", f"Association should fail with error, but got: {result}"
+    assert result == "ERROR_VERIFY_FAILED_403", f"Association should fail with error, but got: {result}"
 
     # Verify that the node is not in the other user's group
     other_list_groups_data = user2_group_api.list_groups()
@@ -162,6 +162,49 @@ def test_user_node_assoc_on_different_user_group(test_user1, test_user2, valid_d
     assert other_group is not None, f"Other user's group {other_group_id} not found in the list of groups"
     assert "node_ids" not in other_group or valid_device.node_thing_name not in other_group["node_ids"], f"Node {valid_device.node_thing_name} should not be in the other user's group"
     user2_group_api.delete_group(other_group_id)
+
+def test_user_node_assoc_secondary_in_target_group(test_user1, test_user2, valid_device):
+    """A secondary member of the target group cannot move a node there, even out of a group they own."""
+    user1_group_api = Group(test_user1)
+    old_group_id = user1_group_api.create_group("Assoc Source Group")
+    result = test_user1.do_user_node_assoc(valid_device, old_group_id)
+    assert result is None, f"Association failed: {result}"
+
+    user2_group_api = Group(test_user2)
+    target_group_id = user2_group_api.create_group("Assoc Secondary Target")
+    user2_group_api.share_group(target_group_id, test_user1.username, "secondary")
+    accept_sharing_request_for(test_user1, target_group_id, "")
+
+    result = test_user1.do_user_node_assoc(valid_device, target_group_id)
+    assert result == "ERROR_VERIFY_FAILED_403", f"Association should be refused, but got: {result}"
+
+    user1_group_api.verify_group_structure(old_group_id, {
+        "group_id": old_group_id,
+        "group_name": "Assoc Source Group",
+        "node_ids": [valid_device.node_thing_name],
+    })
+    user2_group_api.delete_group(target_group_id)
+    user1_group_api.delete_group(old_group_id)
+
+def test_user_node_assoc_secondary_same_group(test_user1, test_user2, valid_device):
+    """A secondary member cannot re-associate a node into the group it is already in (Wi-Fi reconfiguration); see FAQ 4 in node_assoc.md."""
+    user2_group_api = Group(test_user2)
+    group_id = user2_group_api.create_group("Assoc Secondary Same Group")
+    result = test_user2.do_user_node_assoc(valid_device, group_id)
+    assert result is None, f"Association failed: {result}"
+
+    user2_group_api.share_group(group_id, test_user1.username, "secondary")
+    accept_sharing_request_for(test_user1, group_id, "")
+
+    result = test_user1.do_user_node_assoc(valid_device, group_id)
+    assert result == "ERROR_VERIFY_FAILED_403", f"Re-association should be refused, but got: {result}"
+
+    user2_group_api.verify_group_structure(group_id, {
+        "group_id": group_id,
+        "group_name": "Assoc Secondary Same Group",
+        "node_ids": [valid_device.node_thing_name],
+    })
+    user2_group_api.delete_group(group_id)
 
 def test_remove_node_from_group(test_user1, valid_device):
     """Scenario 1: Remove node from group (disassociate).

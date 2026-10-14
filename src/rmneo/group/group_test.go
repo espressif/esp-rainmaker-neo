@@ -133,6 +133,44 @@ var _ = Describe("Group", func() {
 			test_utils.AssertNodeNotInGroup(testGroup.GroupID, "node1")
 			test_utils.AssertNodeInGroup(group2.GroupID, "node1")
 		})
+
+		It("should leave the node in its current group when the caller cannot add nodes to the target", func() {
+			rmng_context.SetAllow(utils.NodeAll, "node1")
+			_, err := group.AddNode(rmng_context, testGroup.GroupID, "node1", nil)
+			Expect(err).To(BeNil())
+
+			owner := rmngctx.NewRmngContext(user.NewUser("target-owner"))
+			target, err := group.CreateGroupForUser(owner, "Target Group")
+			Expect(err).To(BeNil())
+			ShareAndApproveGroup(owner, rmng_context, target.GroupID, utils.GroupSecondaryAccess)
+			_, err = group.GetUserGroupAccess(rmng_context, target.GroupID)
+			Expect(err).To(BeNil())
+
+			_, err = group.AddNode(rmng_context, target.GroupID, "node1", nil)
+			Expect(err).To(MatchError(group.ErrNodeAddForbidden))
+
+			test_utils.AssertNodeInGroup(testGroup.GroupID, "node1")
+			test_utils.AssertNodeNotInGroup(target.GroupID, "node1")
+		})
+
+		It("should refuse a secondary member re-associating a node into its current group", func() {
+			owner := rmngctx.NewRmngContext(user.NewUser("target-owner"))
+			target, err := group.CreateGroupForUser(owner, "Target Group")
+			Expect(err).To(BeNil())
+			owner.SetAllow(utils.NodeAll, "node1")
+			_, err = group.AddNode(owner, target.GroupID, "node1", nil)
+			Expect(err).To(BeNil())
+
+			ShareAndApproveGroup(owner, rmng_context, target.GroupID, utils.GroupSecondaryAccess)
+			_, err = group.GetUserGroupAccess(rmng_context, target.GroupID)
+			Expect(err).To(BeNil())
+			rmng_context.SetAllow(utils.NodeAll, "node1")
+
+			_, err = group.AddNode(rmng_context, target.GroupID, "node1", nil)
+			Expect(err).To(MatchError(group.ErrNodeAddForbidden))
+
+			test_utils.AssertNodeInGroup(target.GroupID, "node1")
+		})
 	})
 
 	Describe("GenerateGroupID", func() {
