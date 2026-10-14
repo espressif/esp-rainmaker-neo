@@ -5,13 +5,14 @@
 # Vendored from esp-rainmaker-cli rmaker_lib/kvs_streaming.py (7f6ff3f); keep fixes in step with it.
 
 import asyncio
+import logging
 import os
+import re
 import sys
 import time
-import re
 import warnings
-from datetime import datetime
-from typing import Optional, Callable
+from collections.abc import Callable
+from dataclasses import dataclass
 
 # Suppress FFmpeg duplicate library warnings from cv2 and av (Issue #9)
 # On macOS, cv2 and av ship duplicate AV libraries causing Objective-C runtime warnings.
@@ -51,7 +52,14 @@ except ImportError:
     CV2_AVAILABLE = False
 
 def _import_aiortc():
-    from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack, RTCIceCandidate, RTCConfiguration, RTCIceServer
+    from aiortc import (
+        RTCConfiguration,
+        RTCIceCandidate,
+        RTCIceServer,
+        RTCPeerConnection,
+        RTCSessionDescription,
+        VideoStreamTrack,
+    )
     from aiortc.contrib.media import MediaPlayer, MediaRelay
     from aiortc.sdp import candidate_from_sdp
     return RTCPeerConnection, RTCSessionDescription, VideoStreamTrack, RTCIceCandidate, RTCConfiguration, RTCIceServer, MediaPlayer, MediaRelay, candidate_from_sdp
@@ -72,26 +80,24 @@ except (ImportError, TypeError) as e:
 
 try:
     import boto3
-    from botocore.exceptions import ClientError
     BOTO3_AVAILABLE = True
 except ImportError:
     BOTO3_AVAILABLE = False
 
 try:
-    import websockets
-    import json
     import base64
     import binascii
+    import json
+    import uuid
+
+    import websockets
     from botocore.auth import SigV4QueryAuth
     from botocore.awsrequest import AWSRequest
     from botocore.credentials import Credentials
-    import uuid
     WEBSOCKETS_AVAILABLE = True
 except ImportError:
     WEBSOCKETS_AVAILABLE = False
 
-import logging
-from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
 
@@ -103,7 +109,7 @@ class AWSCredentials:
     secret_access_key: str
     session_token: str
     region: str
-    expiration: Optional[int] = None
+    expiration: int | None = None
 
 
 class VideoStatistics:
@@ -197,7 +203,6 @@ def is_video_display_available():
         try:
             # Try to create a test window
             # Note: On macOS, this might hang if X11/display server isn't properly configured
-            test_img = np.zeros((100, 100, 3), dtype=np.uint8)
             cv2.namedWindow('test', cv2.WINDOW_NORMAL)
             cv2.destroyWindow('test')
             return True
@@ -210,7 +215,7 @@ def is_video_display_available():
 class KVSViewerTrack(VideoStreamTrack):
     """Video track for receiving KVS WebRTC video stream."""
 
-    def __init__(self, stats: VideoStatistics, show_video: bool, save_path: Optional[str] = None, remote_track=None):
+    def __init__(self, stats: VideoStatistics, show_video: bool, save_path: str | None = None, remote_track=None):
         super().__init__()
         self.stats = stats
         self.show_video = show_video
@@ -233,7 +238,6 @@ class KVSViewerTrack(VideoStreamTrack):
         if CV2_AVAILABLE:
             img = frame.to_ndarray(format="bgr24")
             height, width = img.shape[:2]
-            frame_size = img.nbytes
 
             # Update statistics
             self.stats.update_frame(resolution=(width, height), codec="H264")
@@ -280,8 +284,8 @@ class KVSStreamingClient:
     """KVS WebRTC streaming client for viewer mode."""
 
     def __init__(self, credentials: AWSCredentials, channel_arn: str,
-                 show_video: bool = None, save_path: Optional[str] = None,
-                 stats_callback: Optional[Callable] = None):
+                 show_video: bool = None, save_path: str | None = None,
+                 stats_callback: Callable | None = None):
         """
         Initialize KVS streaming client.
 
@@ -546,7 +550,7 @@ class KVSStreamingClient:
                             log.warning(f"Display error: {e}, disabling video")
                             self.show_video = False
 
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     consecutive_timeouts += 1
                     conn_state = self.peer_connection.connectionState if self.peer_connection else "unknown"
                     ice_state = self.peer_connection.iceConnectionState if self.peer_connection else "unknown"
@@ -582,7 +586,7 @@ class KVSStreamingClient:
                     error_name = type(e).__name__
                     # Handle MediaStreamError gracefully (device init/reboot)
                     if 'MediaStreamError' in error_name or 'MediaStreamTrack' in error_name:
-                        print(f"\nMedia stream error: The device stream ended unexpectedly.")
+                        print("\nMedia stream error: The device stream ended unexpectedly.")
                         print("The device may be initializing or rebooting. Please try again.")
                         self.running = False
                         break
@@ -657,7 +661,7 @@ class KVSStreamingClient:
                     log.info(f"Resolved channel ARN: {actual_channel_arn}")
                 except Exception as e:
                     log.error(f"Failed to resolve channel name to ARN: {e}")
-                    raise Exception(f"Failed to resolve channel name '{self.channel_arn}' to ARN: {e}")
+                    raise Exception(f"Failed to resolve channel name '{self.channel_arn}' to ARN: {e}") from e
 
             # Get signaling channel endpoint using boto3
             # Following Python SDK reference pattern - boto3 handles all sigv4 signing
@@ -1034,7 +1038,7 @@ class KVSStreamingClient:
                 wire_sdp = offer.sdp
                 wire_sdp_lines = wire_sdp.split('\r\n') if '\r\n' in wire_sdp else wire_sdp.split('\n')
                 wire_line_sep = '\r\n' if '\r\n' in wire_sdp else '\n'
-                if any(l.startswith('a=group:BUNDLE') for l in wire_sdp_lines):
+                if any(ln.startswith('a=group:BUNDLE') for ln in wire_sdp_lines):
                     first_ufrag = first_pwd = None
                     in_media = False
                     for line in wire_sdp_lines:
@@ -1047,9 +1051,9 @@ class KVSStreamingClient:
                             break
                     if first_ufrag and first_pwd:
                         wire_sdp_lines = [
-                            first_ufrag if l.startswith('a=ice-ufrag:') else
-                            first_pwd if l.startswith('a=ice-pwd:') else l
-                            for l in wire_sdp_lines
+                            first_ufrag if ln.startswith('a=ice-ufrag:') else
+                            first_pwd if ln.startswith('a=ice-pwd:') else ln
+                            for ln in wire_sdp_lines
                         ]
                         log.debug(f"BUNDLE: unified ice-ufrag/pwd in wire SDP (ufrag={first_ufrag.split(':',1)[1]})")
 
@@ -1059,8 +1063,8 @@ class KVSStreamingClient:
                 # last, verification fails (STATUS_SSL_REMOTE_CERTIFICATE_VERIFICATION_FAILED).
                 # Strip non-sha-256 fingerprints from the wire SDP.
                 wire_sdp_lines = [
-                    l for l in wire_sdp_lines
-                    if not (l.startswith('a=fingerprint:sha-384') or l.startswith('a=fingerprint:sha-512'))
+                    ln for ln in wire_sdp_lines
+                    if not (ln.startswith('a=fingerprint:sha-384') or ln.startswith('a=fingerprint:sha-512'))
                 ]
                 wire_sdp = wire_line_sep.join(wire_sdp_lines)
                 log.debug("Stripped sha-384/sha-512 fingerprints from wire SDP (KVS SDK only supports sha-256)")
@@ -1097,7 +1101,7 @@ class KVSStreamingClient:
                     while self.running or not connection_established:
                         try:
                             message = await asyncio.wait_for(websocket.recv(), timeout=2.0)
-                        except asyncio.TimeoutError:
+                        except TimeoutError:
                             if not self.running and connection_established:
                                 log.info("Stream stopped, exiting WebSocket loop")
                                 break
@@ -1232,7 +1236,7 @@ class KVSStreamingClient:
                                                 if needs_normalization or uses_bundle:
                                                     # Ensure all media-level credentials match the first one
                                                     normalized_lines.append(f'a=ice-pwd:{first_media_pwd}')
-                                                    log.debug(f"Normalized media-level ICE pwd")
+                                                    log.debug("Normalized media-level ICE pwd")
                                                 else:
                                                     normalized_lines.append(line)
                                             elif in_session_level and (line.startswith('a=ice-ufrag:') or line.startswith('a=ice-pwd:')):
@@ -1245,14 +1249,14 @@ class KVSStreamingClient:
                                                         log.debug(f"Replaced session-level ICE ufrag with media-level for BUNDLE: {first_media_ufrag}")
                                                     elif line.startswith('a=ice-pwd:'):
                                                         normalized_lines.append(f'a=ice-pwd:{first_media_pwd}')
-                                                        log.debug(f"Replaced session-level ICE pwd with media-level for BUNDLE")
+                                                        log.debug("Replaced session-level ICE pwd with media-level for BUNDLE")
                                                 else:
                                                     normalized_lines.append(line)
                                             elif line.strip() == 't=0 0':
                                                 # Add session-level credentials after 't=0 0' if not already present
                                                 normalized_lines.append(line)
                                                 # Check if session-level credentials already exist (will be added in next iteration if not)
-                                                session_creds_exist = any(l.startswith('a=ice-ufrag:') or l.startswith('a=ice-pwd:') for l in normalized_lines[-10:] if not l.startswith('m='))
+                                                session_creds_exist = any(ln.startswith('a=ice-ufrag:') or ln.startswith('a=ice-pwd:') for ln in normalized_lines[-10:] if not ln.startswith('m='))
                                                 if not session_creds_exist:
                                                     # Add session-level credentials matching media-level (for BUNDLE) or extracted (for non-BUNDLE)
                                                     normalized_lines.append(f'a=ice-ufrag:{first_media_ufrag}')
@@ -1267,7 +1271,7 @@ class KVSStreamingClient:
                                                 # Verify session-level credentials match media-level (RFC 8843 requirement)
                                                 session_level_creds_found = False
                                                 session_ufrag_value = None
-                                                for i, line in enumerate(normalized_lines):
+                                                for line in normalized_lines:
                                                     if line.startswith('m='):
                                                         break  # Reached first media section
                                                     if line.startswith('a=ice-ufrag:'):
@@ -1327,7 +1331,7 @@ class KVSStreamingClient:
                                                 elif in_session_level and line.startswith('a=ice-pwd:'):
                                                     # Replace session-level pwd with media-level one to ensure consistency (RFC 8843)
                                                     normalized_lines.append(f'a=ice-pwd:{first_media_pwd}')
-                                                    log.debug(f"Replaced session-level ICE pwd with media-level for BUNDLE")
+                                                    log.debug("Replaced session-level ICE pwd with media-level for BUNDLE")
                                                 elif in_media_section and line.startswith('a=ice-ufrag:'):
                                                     # Ensure all media-level credentials match the first one
                                                     normalized_lines.append(f'a=ice-ufrag:{first_media_ufrag}')
@@ -1335,7 +1339,7 @@ class KVSStreamingClient:
                                                 elif in_media_section and line.startswith('a=ice-pwd:'):
                                                     # Ensure all media-level credentials match the first one
                                                     normalized_lines.append(f'a=ice-pwd:{first_media_pwd}')
-                                                    log.debug(f"Normalized media-level ICE pwd")
+                                                    log.debug("Normalized media-level ICE pwd")
                                                 else:
                                                     normalized_lines.append(line)
 
@@ -1354,11 +1358,11 @@ class KVSStreamingClient:
                                                 elif in_media_section and line.startswith('a=ice-ufrag:'):
                                                     # Replace media-level ufrag with session-level one to ensure consistency
                                                     normalized_lines.append(f'a=ice-ufrag:{first_media_ufrag}')
-                                                    log.debug(f"Normalized media-level ICE ufrag to match session-level")
+                                                    log.debug("Normalized media-level ICE ufrag to match session-level")
                                                 elif in_media_section and line.startswith('a=ice-pwd:'):
                                                     # Replace media-level pwd with session-level one to ensure consistency
                                                     normalized_lines.append(f'a=ice-pwd:{first_media_pwd}')
-                                                    log.debug(f"Normalized media-level ICE pwd to match session-level")
+                                                    log.debug("Normalized media-level ICE pwd to match session-level")
                                                 else:
                                                     normalized_lines.append(line)
 
@@ -1407,17 +1411,13 @@ class KVSStreamingClient:
                                     # Check for session-level ICE credentials (before first 'm=' line)
                                     has_applied_session_ufrag = False
                                     has_applied_session_pwd = False
-                                    applied_session_ufrag_value = None
-                                    applied_session_pwd_value = None
                                     for line in applied_sdp_lines:
                                         if line.startswith('m='):
                                             break  # Reached first media section
                                         if line.startswith('a=ice-ufrag:'):
                                             has_applied_session_ufrag = True
-                                            applied_session_ufrag_value = line.split(':', 1)[1].strip()
                                         elif line.startswith('a=ice-pwd:'):
                                             has_applied_session_pwd = True
-                                            applied_session_pwd_value = line.split(':', 1)[1].strip()
 
                                     # Count total ICE ufrag attributes to verify normalization
                                     total_ufrag_count = sum(1 for line in applied_sdp_lines if line.startswith('a=ice-ufrag:'))
@@ -1500,7 +1500,7 @@ class KVSStreamingClient:
                                     log.info(f"ICE credentials found: session-level ufrag={session_ufrag}, pwd length={len(session_pwd)}")
                                     log.info("aiortc should use these credentials to validate incoming STUN binding requests")
                                 elif media_ufrags and media_pwds:
-                                    log.warning(f"Only media-level ICE credentials found (no session-level)")
+                                    log.warning("Only media-level ICE credentials found (no session-level)")
                                     log.warning("This might cause STUN validation issues if aiortc expects session-level credentials")
                                 else:
                                     log.error("No ICE credentials found in SDP answer - STUN validation will fail!")
@@ -1614,7 +1614,6 @@ class KVSStreamingClient:
                                         log.debug(f"DTLS monitoring check at {elapsed_check}s - connection still active")
 
                                         conn_state = self.peer_connection.connectionState
-                                        ice_state = self.peer_connection.iceConnectionState
 
                                         # Check DTLS transport states
                                         try:
@@ -1772,7 +1771,7 @@ class KVSStreamingClient:
 
                 except websockets.exceptions.ConnectionClosed as e:
                     if not answer_received:
-                        raise Exception(f"WebSocket closed before SDP answer received: {e}")
+                        raise Exception(f"WebSocket closed before SDP answer received: {e}") from e
                     log.debug(f"WebSocket closed after signaling: {e}")
                 except Exception as e:
                     log.error(f"Error in WebSocket message loop: {e}")
@@ -1825,7 +1824,7 @@ class KVSStreamingClient:
             log.error(f"Failed to connect to KVS: {e}")
             raise
 
-    async def run(self, duration: Optional[int] = None):
+    async def run(self, duration: int | None = None):
         """
         Run the streaming client.
 
@@ -1873,7 +1872,6 @@ class KVSStreamingClient:
             except RuntimeError:
                 pass
 
-        stats_interval = 2.0  # Print stats every 2 seconds
 
         log.info("Waiting for ICE connection...")
         max_wait_for_ice = 30  # seconds
@@ -1912,7 +1910,6 @@ class KVSStreamingClient:
         start_time = time.time()
         if not self._stream_start_time:
             self._stream_start_time = start_time
-        last_stats_time = start_time
 
         try:
             # Wait for frame consumption task to complete (handles stats, duration, display)
@@ -1969,9 +1966,9 @@ class KVSStreamingClient:
 
 
 async def start_kvs_streaming(credentials: AWSCredentials, channel_arn: str,
-                              show_video: Optional[bool] = None,
-                              save_path: Optional[str] = None,
-                              duration: Optional[int] = None,
+                              show_video: bool | None = None,
+                              save_path: str | None = None,
+                              duration: int | None = None,
                               stats_only: bool = False):
     """
     Start KVS video streaming.
@@ -2015,7 +2012,7 @@ async def start_kvs_streaming(credentials: AWSCredentials, channel_arn: str,
             await asyncio.wait_for(client.run(duration=duration), timeout=total_timeout)
         else:
             await client.run(duration=duration)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         print(f"\nStream duration ({duration}s) reached.")
     except (KeyboardInterrupt, asyncio.CancelledError):
         print("\nStopping stream...")
