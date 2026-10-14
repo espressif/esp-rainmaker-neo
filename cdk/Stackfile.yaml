@@ -30,6 +30,7 @@ packages:
       - gva
       - smartthings
       - claim
+      - bridge
 
   enterprise:
     friendly_name: "Enterprise Plan"
@@ -38,7 +39,6 @@ packages:
     groups:
       - support
       - espuser-pro
-      - bridge
       - insights
       - private-agents
 
