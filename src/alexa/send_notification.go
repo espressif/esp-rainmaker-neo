@@ -8,14 +8,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/collections"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"net/http"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification/integrationauth"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/config"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/collections"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
 	"github.com/google/uuid"
@@ -272,7 +273,45 @@ func (a *AlexaNotification) Marshal(notif *notification.Notification) (interface
 		result = append(result, changeReport)
 	}
 
+	// Alexa learns friendlyName from discovery alone — esp.param.name maps to no
+	// capability, so a rename would otherwise emit a ChangeReport that cannot update
+	// the spoken/app name. GVA RequestSyncs and SmartThings sends a discoveryCallback
+	// for the same reason; emit AddOrUpdateReport alongside (endpoints resolve names
+	// from the reported shadow, which already holds the new value).
+	if deltaRenamesDevice(shadowUpdate.Delta.Params, nodeCfg.Devices) {
+		endpoints, err := buildDiscoveryEndpoints(rmngCtx, nodeID, groupID, nodeCfg)
+		if err != nil {
+			return nil, rmerror.NewRMError(err, "failed to build discovery endpoints for rename AddOrUpdateReport")
+		}
+		if len(endpoints) == 0 {
+			rlog.Info(rmngCtx).Str("nodeID", nodeID).Msg("No Alexa endpoints for node, skipping rename AddOrUpdateReport")
+		} else {
+			result = append(result, newDiscoveryReport("AddOrUpdateReport", &AddOrUpdateReportPayload{Endpoints: endpoints}))
+		}
+	}
+
 	return result, nil
+}
+
+// deltaRenamesDevice reports whether the delta changed any device's esp.param.name.
+// Mirrors GVA/SmartThings helpers of the same name; a rename reaches Alexa only through
+// a fresh discovery report, never through a ChangeReport property.
+func deltaRenamesDevice(deltaParams map[string]interface{}, devices []config.NodeCfgDevice) bool {
+	for _, device := range devices {
+		deviceDelta, ok := deltaParams[device.ID].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		for _, param := range device.Params {
+			if param.Type != RMParamName {
+				continue
+			}
+			if _, renamed := deviceDelta[param.ID]; renamed {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // marshalGroupMembership builds an Alexa.Discovery report for a node's group

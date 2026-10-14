@@ -8,6 +8,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/config"
+
 	// Qualified import: this package already declares a Context type (the
 	// Alexa wire-format Context), which collides with ginkgo's dot-importable
 	// Context symbol.
@@ -50,4 +52,47 @@ func TestAlexaEventGatewayForRegion(t *testing.T) {
 			t.Errorf("region %q: expected no gateway, got %q", region, gw)
 		}
 	}
+}
+
+func TestDeltaRenamesDevice(t *testing.T) {
+	devices := []config.NodeCfgDevice{{
+		ID: "Light",
+		Params: []config.NodeCfgDeviceParam{
+			{ID: "name", Type: RMParamName},
+			{ID: "Power", Type: RMParamPower},
+		},
+	}}
+
+	t.Run("name param in delta", func(t *testing.T) {
+		delta := map[string]interface{}{
+			"Light": map[string]interface{}{"name": "Bedroom"},
+		}
+		if !deltaRenamesDevice(delta, devices) {
+			t.Fatal("expected rename when esp.param.name id is in the delta")
+		}
+	})
+
+	t.Run("power-only delta", func(t *testing.T) {
+		delta := map[string]interface{}{
+			"Light": map[string]interface{}{"Power": true},
+		}
+		if deltaRenamesDevice(delta, devices) {
+			t.Fatal("expected no rename when only power changed")
+		}
+	})
+
+	t.Run("empty delta", func(t *testing.T) {
+		if deltaRenamesDevice(nil, devices) {
+			t.Fatal("expected no rename for nil delta")
+		}
+	})
+
+	t.Run("unknown device in delta", func(t *testing.T) {
+		delta := map[string]interface{}{
+			"Other": map[string]interface{}{"name": "X"},
+		}
+		if deltaRenamesDevice(delta, devices) {
+			t.Fatal("expected no rename when the named device is not in config")
+		}
+	})
 }
