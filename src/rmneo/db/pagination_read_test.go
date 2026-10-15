@@ -212,7 +212,7 @@ var _ = Describe("Cursor pagination while rows are deleted", func() {
 			})).To(Succeed())
 		}
 
-		page1, err := reqDB.ListNodeRegRequests(pageSize, "", "")
+		page1, err := reqDB.ListNodeRegRequests(pageSize, "", "", "")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(page1.Entries).To(HaveLen(pageSize))
 		Expect(page1.NextKey).ToNot(BeEmpty())
@@ -231,7 +231,7 @@ var _ = Describe("Cursor pagination while rows are deleted", func() {
 			seen = append(seen, entry.RequestID)
 		}
 		for startKey := page1.NextKey; startKey != ""; {
-			page, err := reqDB.ListNodeRegRequests(pageSize, startKey, "")
+			page, err := reqDB.ListNodeRegRequests(pageSize, startKey, "", "")
 			Expect(err).ToNot(HaveOccurred())
 			for _, entry := range page.Entries {
 				Expect(seen).ToNot(ContainElement(entry.RequestID), "page restarted and re-served a request already returned")

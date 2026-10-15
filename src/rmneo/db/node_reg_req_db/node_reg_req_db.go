@@ -222,18 +222,16 @@ type ListNodeRegRequestsOutput struct {
 	NextKey string // Opaque token for pagination (base64-encoded last evaluated key)
 }
 
-// ListNodeRegRequests lists bulk-job requests ordered by created_at descending, optionally filtered by status. The list returns BOTH register and update jobs interleaved; callers disambiguate via the job_type field on each entry, or call the type-specific Lambda.
-//
-// A server-side job_type filter is still future work, but no longer for a tooling reason: the mock evaluates OR correctly now, so "job_type = :t OR attribute_not_exists(job_type)" is now testable and is the shape that keeps legacy rows lacking job_type. What remains is the product decision about which jobs an unfiltered caller should see.
-func (db *NodeRegRequestsDB) ListNodeRegRequests(limit int64, startKey string, statusFilter string) (*ListNodeRegRequestsOutput, error) {
+// ListNodeRegRequests lists bulk-job requests ordered by created_at descending, optionally filtered by status and job_type. Empty jobTypeFilter returns every job. FILTER register matches job_type=register, missing job_type, or empty job_type (legacy rows). FILTER update matches job_type=update only.
+func (db *NodeRegRequestsDB) ListNodeRegRequests(limit int64, startKey string, statusFilter string, jobTypeFilter string) (*ListNodeRegRequestsOutput, error) {
 	if err := db.DB.IsAuthorized(utils.NodeAdminRegisterStatus, "*"); err != nil {
 		return nil, err
 	}
 
 	keyCondition := expression.Key("gsi_pk").Equal(expression.Value(nodeRegRequestsGSIPK))
 	builder := expression.NewBuilder().WithKeyCondition(keyCondition)
-	if statusFilter != "" {
-		builder = builder.WithFilter(expression.Name("status").Equal(expression.Value(statusFilter)))
+	if filter, ok := listJobsFilter(statusFilter, jobTypeFilter); ok {
+		builder = builder.WithFilter(filter)
 	}
 	expr, err := builder.Build()
 	if err != nil {
@@ -285,4 +283,37 @@ func (db *NodeRegRequestsDB) ListNodeRegRequests(limit int64, startKey string, s
 	}
 
 	return output, nil
+}
+
+func listJobsFilter(statusFilter, jobTypeFilter string) (expression.ConditionBuilder, bool) {
+	var filter expression.ConditionBuilder
+	hasFilter := false
+	if statusFilter != "" {
+		filter = expression.Name("status").Equal(expression.Value(statusFilter))
+		hasFilter = true
+	}
+	if jobTypeCond, ok := jobTypeFilterCondition(jobTypeFilter); ok {
+		if hasFilter {
+			filter = expression.And(filter, jobTypeCond)
+		} else {
+			filter = jobTypeCond
+			hasFilter = true
+		}
+	}
+	return filter, hasFilter
+}
+
+func jobTypeFilterCondition(jobTypeFilter string) (expression.ConditionBuilder, bool) {
+	switch jobTypeFilter {
+	case NODE_REG_JOB_TYPE_UPDATE:
+		return expression.Name("job_type").Equal(expression.Value(NODE_REG_JOB_TYPE_UPDATE)), true
+	case NODE_REG_JOB_TYPE_REGISTER:
+		return expression.Or(
+			expression.Name("job_type").Equal(expression.Value(NODE_REG_JOB_TYPE_REGISTER)),
+			expression.AttributeNotExists(expression.Name("job_type")),
+			expression.Name("job_type").Equal(expression.Value("")),
+		), true
+	default:
+		return expression.ConditionBuilder{}, false
+	}
 }

@@ -53,14 +53,6 @@ type BulkUpdateNodesResponse struct {
 	Message   string `json:"message,omitempty"`
 }
 
-// Test-facing aliases so the in-package _test.go file (also package main)
-// keeps referring to the Lambda-local type names while the actual definitions
-// live in jobs_api. Same wire shape either way.
-type (
-	UpdateNodeStatusResponse = jobs_api.StatusResponse
-	ListFailedNodesResponse  = jobs_api.ListFailedNodesResponse
-)
-
 func handleBulkUpdateNodes(rctx *rmngctx.RmngContext, request events.APIGatewayProxyRequest) (BulkUpdateNodesResponse, error) {
 	var req BulkUpdateNodesRequest
 
@@ -137,6 +129,14 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 	method := request.HTTPMethod
 
 	switch {
+	case path == "/v1/admin/nodes/update-jobs" && method == "GET":
+		response, err = jobs_api.List(rctx, request, node_reg_req_db.NODE_REG_JOB_TYPE_UPDATE)
+		if err != nil {
+			rlog.Error(rctx).Err(err).Send()
+			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
+		}
+		return utils.APIGwRespJSON(http.StatusOK, response), nil
+
 	case path == "/v1/admin/nodes/update-jobs" && method == "POST":
 		response, err = handleBulkUpdateNodes(rctx, request)
 		if err != nil {

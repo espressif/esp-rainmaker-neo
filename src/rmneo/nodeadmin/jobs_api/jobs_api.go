@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package jobs_api centralises the read-side handlers shared by the
-// registration and update Lambdas: status lookup and the paginated
-// failed-nodes audit list. Each function takes the expected job_type so
-// cross-flow scoping is preserved — a request looking up a registration
-// job_id on /update-jobs/{id} still gets a 404 instead of the registration
-// row.
+// registration and update Lambdas: collection list, status lookup, and the
+// paginated failed-nodes audit list. Each function takes the expected
+// job_type so cross-flow scoping is preserved — a request looking up a
+// registration job_id on /update-jobs/{id} still gets a 404 instead of the
+// registration row.
 //
 // The re-uploadable, cert-bearing failed-rows CSV is written to S3 by the
 // container at end-of-job (see docs/en/specs/node_reg.md §3.5.5); the status
@@ -76,6 +76,13 @@ type ListFailedNodesResponse struct {
 	NextKey     string                                            `json:"next_key,omitempty"`
 }
 
+// ListResponse is the body of GET .../jobs (collection).
+type ListResponse struct {
+	Jobs      []StatusResponse `json:"jobs"`
+	PageTotal int              `json:"page_total"`
+	NextKey   string           `json:"next_key,omitempty"`
+}
+
 // LoadJob fetches the parent job row for a request_id and enforces the
 // cross-flow isolation: a job whose stored job_type doesn't match
 // expectedJobType is reported as ErrJobNotFound rather than returning
@@ -97,6 +104,33 @@ func LoadJob(rctx *rmngctx.RmngContext, requestID, expectedJobType string) (*nod
 		return nil, ErrJobNotFound
 	}
 	return entry, nil
+}
+
+// List implements GET .../jobs. expectedJobType is applied at the DB layer
+// (register includes legacy rows with missing/empty job_type).
+func List(rctx *rmngctx.RmngContext, request events.APIGatewayProxyRequest, expectedJobType string) (ListResponse, error) {
+	rctx.SetAllow(utils.NodeAdminRegisterStatus, "*")
+
+	limit := rmngrequest.ParsePageSize(request.QueryStringParameters)
+	startKey := request.QueryStringParameters["start_key"]
+	statusFilter := request.QueryStringParameters["status"]
+
+	result, err := node_reg_req_db.NewNodeRegRequestsDB(rctx).
+		ListNodeRegRequests(limit, startKey, statusFilter, expectedJobType)
+	if err != nil {
+		return ListResponse{}, rmerror.NewRMError(err, "failed to list jobs")
+	}
+
+	jobs := make([]StatusResponse, 0, len(result.Entries))
+	for i := range result.Entries {
+		jobs = append(jobs, entryToResponse(&result.Entries[i]))
+	}
+
+	return ListResponse{
+		Jobs:      jobs,
+		PageTotal: len(jobs),
+		NextKey:   result.NextKey,
+	}, nil
 }
 
 // Status implements GET .../jobs/{requestId}. Returns ErrJobNotFound
@@ -160,13 +194,6 @@ func ListFailedNodes(rctx *rmngctx.RmngContext, request events.APIGatewayProxyRe
 		PageTotal:   len(out.Entries),
 		NextKey:     out.NextKey,
 	}, nil
-}
-
-// EntryToResponse converts a node_reg_reqs DB row to the wire shape.
-// Exported because the register Lambda's list endpoint maps over a
-// slice of these.
-func EntryToResponse(entry *node_reg_req_db.NodeRegRequestsEntry) StatusResponse {
-	return entryToResponse(entry)
 }
 
 func entryToResponse(entry *node_reg_req_db.NodeRegRequestsEntry) StatusResponse {

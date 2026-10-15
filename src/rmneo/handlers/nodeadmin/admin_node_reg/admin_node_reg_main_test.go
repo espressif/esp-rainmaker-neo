@@ -11,6 +11,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/nodeadmin/jobs_api"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"net/http"
 	"os"
@@ -668,7 +669,7 @@ var _ = Describe("Admin Nodes Registration", func() {
 			statusRespRaw, err := handleRequest(ctx.Context, request)
 			Expect(err).To(BeNil())
 			Expect(statusRespRaw.StatusCode).To(Equal(http.StatusOK))
-			var statusResp RegisterNodeStatusResponse
+			var statusResp jobs_api.StatusResponse
 			err = json.Unmarshal([]byte(statusRespRaw.Body), &statusResp)
 			Expect(err).To(BeNil())
 			Expect(statusResp.RequestID).To(Equal(responseBody.RequestId))
@@ -737,7 +738,7 @@ var _ = Describe("Admin Nodes Registration", func() {
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusOK))
 
-			var listResp ListRegistrationJobsResponse
+			var listResp jobs_api.ListResponse
 			err = json.Unmarshal([]byte(response.Body), &listResp)
 			Expect(err).To(BeNil())
 			Expect(listResp.Jobs).To(HaveLen(0))
@@ -778,7 +779,7 @@ var _ = Describe("Admin Nodes Registration", func() {
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusOK))
 
-			var listResp ListRegistrationJobsResponse
+			var listResp jobs_api.ListResponse
 			err = json.Unmarshal([]byte(response.Body), &listResp)
 			Expect(err).To(BeNil())
 			Expect(listResp.Jobs).To(HaveLen(1))
@@ -824,7 +825,7 @@ var _ = Describe("Admin Nodes Registration", func() {
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusOK))
 
-			var listResp ListRegistrationJobsResponse
+			var listResp jobs_api.ListResponse
 			err = json.Unmarshal([]byte(response.Body), &listResp)
 			Expect(err).To(BeNil())
 			Expect(listResp.Jobs).To(HaveLen(2))
@@ -839,7 +840,7 @@ var _ = Describe("Admin Nodes Registration", func() {
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusOK))
 
-			var page2Resp ListRegistrationJobsResponse
+			var page2Resp jobs_api.ListResponse
 			err = json.Unmarshal([]byte(response.Body), &page2Resp)
 			Expect(err).To(BeNil())
 			Expect(page2Resp.Jobs).To(HaveLen(1))
@@ -885,7 +886,7 @@ var _ = Describe("Admin Nodes Registration", func() {
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusOK))
 
-			var listResp ListRegistrationJobsResponse
+			var listResp jobs_api.ListResponse
 			err = json.Unmarshal([]byte(response.Body), &listResp)
 			Expect(err).To(BeNil())
 			for _, job := range listResp.Jobs {
@@ -904,6 +905,32 @@ var _ = Describe("Admin Nodes Registration", func() {
 
 			// Clean up query params
 			request.QueryStringParameters = nil
+		})
+
+		It("should omit update jobs from the registration list", func() {
+			seederCtx := rmngctx.NewRmngContext(user.NewUser("seeder"))
+			seederCtx.SetAllow(utils.NodeAdminAdd, "*")
+			seederCtx.SetAllow(utils.NodeAdminRegisterStatus, "*")
+			Expect(node_reg_req_db.NewNodeRegRequestsDB(seederCtx).CreateNodeRegRequest(node_reg_req_db.NodeRegRequestsEntry{
+				RequestID: "update-job-should-hide",
+				JobType:   node_reg_req_db.NODE_REG_JOB_TYPE_UPDATE,
+				UserID:    "admin",
+				Status:    node_reg_req_db.NODE_REG_STATUS_COMPLETED,
+			})).To(Succeed())
+
+			request.Body = ""
+			request.Path = "/v1/admin/nodes/registration-jobs"
+			request.HTTPMethod = "GET"
+			response, err := handleRequest(ctx.Context, request)
+			Expect(err).To(BeNil())
+			Expect(response.StatusCode).To(Equal(http.StatusOK))
+
+			var listResp jobs_api.ListResponse
+			Expect(json.Unmarshal([]byte(response.Body), &listResp)).To(Succeed())
+			for _, job := range listResp.Jobs {
+				Expect(job.RequestID).NotTo(Equal("update-job-should-hide"))
+				Expect(job.JobType).NotTo(Equal(node_reg_req_db.NODE_REG_JOB_TYPE_UPDATE))
+			}
 		})
 	})
 
@@ -1002,7 +1029,7 @@ var _ = Describe("Admin Nodes Registration", func() {
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusOK))
 
-			var statusResp RegisterNodeStatusResponse
+			var statusResp jobs_api.StatusResponse
 			Expect(json.Unmarshal([]byte(response.Body), &statusResp)).To(Succeed())
 			Expect(statusResp.RequestID).To(Equal(legacyID))
 			Expect(statusResp.JobType).To(Equal(node_reg_req_db.NODE_REG_JOB_TYPE_REGISTER))
@@ -1064,7 +1091,7 @@ var _ = Describe("Admin Nodes Registration", func() {
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusOK))
 
-			var resp ListFailedNodesResponse
+			var resp jobs_api.ListFailedNodesResponse
 			Expect(json.Unmarshal([]byte(response.Body), &resp)).To(Succeed())
 			Expect(resp.FailedNodes).To(HaveLen(2))
 			Expect(resp.PageTotal).To(Equal(2))
@@ -1091,7 +1118,7 @@ var _ = Describe("Admin Nodes Registration", func() {
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusOK))
 
-			var resp ListFailedNodesResponse
+			var resp jobs_api.ListFailedNodesResponse
 			Expect(json.Unmarshal([]byte(response.Body), &resp)).To(Succeed())
 			Expect(resp.FailedNodes).To(BeEmpty())
 			Expect(resp.PageTotal).To(Equal(0))
@@ -1135,7 +1162,7 @@ var _ = Describe("Admin Nodes Registration", func() {
 				Expect(err).To(BeNil())
 				Expect(response.StatusCode).To(Equal(http.StatusOK))
 
-				var resp ListFailedNodesResponse
+				var resp jobs_api.ListFailedNodesResponse
 				Expect(json.Unmarshal([]byte(response.Body), &resp)).To(Succeed())
 				for _, e := range resp.FailedNodes {
 					seen[e.NodeID] = true
@@ -1194,7 +1221,7 @@ var _ = Describe("Admin Nodes Registration", func() {
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusOK))
 
-			var resp RegisterNodeStatusResponse
+			var resp jobs_api.StatusResponse
 			Expect(json.Unmarshal([]byte(response.Body), &resp)).To(Succeed())
 			Expect(resp.FailedFileS3Path).To(Equal(failedPath))
 			// Presigned GET URL points at the same object and is signed.
@@ -1213,7 +1240,7 @@ var _ = Describe("Admin Nodes Registration", func() {
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusOK))
 
-			var resp RegisterNodeStatusResponse
+			var resp jobs_api.StatusResponse
 			Expect(json.Unmarshal([]byte(response.Body), &resp)).To(Succeed())
 			Expect(resp.FailedFileS3Path).To(BeEmpty())
 			Expect(resp.FailedFileDownloadURL).To(BeEmpty())

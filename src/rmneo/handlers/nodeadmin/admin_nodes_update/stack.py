@@ -16,9 +16,9 @@ from app_common import (
     create_lambda_function,
     get_or_create_api_resource,
 )
-from arn_utils import get_table_arn
+from arn_utils import get_table_arn, get_table_index_arn
 from src.espuser.stacks.base_res_constants import USER_TABLE_NAMES
-from src.rmneo.stacks.base_res_constants import IOT_RESOURCES
+from src.rmneo.stacks.base_res_constants import INDEX_NAMES, IOT_RESOURCES, TABLE_NAMES
 
 
 class UpdateAPI(Construct):
@@ -38,9 +38,9 @@ class UpdateAPI(Construct):
 
         admin_nodes_update_lambda_role = create_base_lambda_role(self, "admin_nodes_update_lambda_role")
 
-        # Reuse the shared policy: it already grants the DynamoDB access on
-        # node_reg_reqs / node_reg_failed_nodes that this Lambda needs, plus
-        # S3 GetObject on the input bucket for the failed-nodes retry-csv path.
+        # Shared policy: table R/W on node_reg_reqs / node_reg_failed_nodes,
+        # plus S3 GetObject for the failed-nodes retry-csv path. List still
+        # needs an explicit Query on the list GSI (same as admin_node_reg).
         admin_nodes_update_lambda_role.attach_inline_policy(node_register_policy)
 
         # IoT thing-group operations needed by CreateAdminGroupIfNotExists
@@ -76,6 +76,17 @@ class UpdateAPI(Construct):
         admin_nodes_update_lambda_role.add_to_policy(iam.PolicyStatement(
             actions=["dynamodb:GetItem"],
             resources=[get_table_arn(USER_TABLE_NAMES['USER_DETAILS'], region)]
+        ))
+
+        # GET /update-jobs queries the list GSI; table-level grants from
+        # node_register_policy do not cover index ARNs.
+        admin_nodes_update_lambda_role.add_to_policy(iam.PolicyStatement(
+            actions=["dynamodb:Query"],
+            resources=[get_table_index_arn(
+                TABLE_NAMES['NODE_REG_REQS'],
+                INDEX_NAMES['NODE_REG_REQS_LIST'],
+                region,
+            )]
         ))
 
         self.admin_nodes_update_function = create_lambda_function(
@@ -114,9 +125,13 @@ class UpdateAPI(Construct):
             self, "UpdateJobsPostMethod", common_resources,
             update_jobs_resource_id, "POST", self.admin_nodes_update_function
         )
+        create_cfn_api_method(
+            self, "UpdateJobsGetMethod", common_resources,
+            update_jobs_resource_id, "GET", self.admin_nodes_update_function
+        )
         add_cors_options(
             self, "UpdateJobsOptionsMethod", common_resources,
-            update_jobs_resource_id, allowed_methods=["POST"]
+            update_jobs_resource_id, allowed_methods=["POST", "GET"]
         )
 
         # /v1/admin/nodes/update-jobs/{requestId}
