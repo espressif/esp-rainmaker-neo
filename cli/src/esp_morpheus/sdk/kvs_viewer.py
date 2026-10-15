@@ -310,9 +310,7 @@ class KVSStreamingClient:
             error_msg = "aiortc is required for KVS streaming"
             if AIORTC_IMPORT_ERROR:
                 error_msg += f"\nImport error: {AIORTC_IMPORT_ERROR}"
-            error_msg += "\n\nTo install aiortc, run: pip install aiortc"
-            error_msg += "\nNote: If you're using Python 3.13+, you may need Python 3.11 or 3.12,"
-            error_msg += "\nor install PyAV separately: pip install av"
+            error_msg += "\n\nInstall the camera extra: pip install 'esp-morpheus[camera]'"
             raise ImportError(error_msg)
         if not BOTO3_AVAILABLE:
             raise ImportError("boto3 is required for KVS streaming. Install with: pip install boto3")
@@ -370,7 +368,7 @@ class KVSStreamingClient:
         :rtype: tuple[str, str]
         """
         if not WEBSOCKETS_AVAILABLE:
-            raise ImportError("websockets is required for WebSocket signaling. Install with: pip install websockets")
+            raise ImportError("websockets is required for WebSocket signaling. Install the camera extra: pip install 'esp-morpheus[camera]'")
 
         # Generate unique client ID if not provided
         if client_id is None:
@@ -702,7 +700,7 @@ class KVSStreamingClient:
             # Prepare signed WebSocket URL now (CPU-only, fast) so we can start
             # the WebSocket connection concurrently with the ICE server fetch
             if not WEBSOCKETS_AVAILABLE:
-                raise ImportError("websockets is required for WebSocket signaling. Install with: pip install websockets")
+                raise ImportError("websockets is required for WebSocket signaling. Install the camera extra: pip install 'esp-morpheus[camera]'")
             signed_wss_url, _ = self._create_wss_url(wss_endpoint, actual_channel_arn, client_id)
 
             # Launch ICE server fetch and WebSocket connection in parallel
