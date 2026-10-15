@@ -14,7 +14,7 @@ import (
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/auth_flows_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/user_details_db"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -43,13 +43,13 @@ var _ = Describe("profile claims in minted tokens", func() {
 	seedProfileUser := func() {
 		db := user_details_db.NewUserDetailsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
 		Expect(db.CreateUserDetails(&user_details_db.UserDetailsEntry{
-			UserID:   profileUserID,
-			Email:    profileEmail,
-			Provider: "cognito",
-			Sub:      "upstream-sub-1",
-			Name:     "Ada Lovelace",
-			Locale:   "en-GB",
-			Picture:  "https://img.example/ada.png",
+			UserID:      profileUserID,
+			Email:       profileEmail,
+			Provider:    "cognito",
+			ExternalSub: "upstream-sub-1",
+			Name:        "Ada Lovelace",
+			Locale:      "en-GB",
+			Picture:     "https://img.example/ada.png",
 		})).To(Succeed())
 	}
 

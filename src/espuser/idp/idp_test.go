@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/user_details_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/pkceutil"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils/jwtutil"
@@ -67,7 +68,7 @@ func signedIDToken(priv *rsa.PrivateKey, claims jwt.MapClaims) (string, string) 
 
 var _ = Describe("Identity.VerifiedContacts", func() {
 	It("returns both contacts when the upstream verified both", func() {
-		email, phone, err := Identity{
+		email, phone, err := UpstreamIdentity{
 			Email: "ada@example.com", EmailVerified: true,
 			PhoneNumber: "+15550100", PhoneVerified: true,
 		}.VerifiedContacts()
@@ -77,7 +78,7 @@ var _ = Describe("Identity.VerifiedContacts", func() {
 	})
 
 	It("drops an unverified email but keeps the verified phone", func() {
-		email, phone, err := Identity{
+		email, phone, err := UpstreamIdentity{
 			Email: "ada@example.com", PhoneNumber: "+15550100", PhoneVerified: true,
 		}.VerifiedContacts()
 		Expect(err).NotTo(HaveOccurred())
@@ -86,7 +87,7 @@ var _ = Describe("Identity.VerifiedContacts", func() {
 	})
 
 	It("drops an unverified phone but keeps the verified email", func() {
-		email, phone, err := Identity{
+		email, phone, err := UpstreamIdentity{
 			Email: "ada@example.com", EmailVerified: true, PhoneNumber: "+15550100",
 		}.VerifiedContacts()
 		Expect(err).NotTo(HaveOccurred())
@@ -95,7 +96,7 @@ var _ = Describe("Identity.VerifiedContacts", func() {
 	})
 
 	It("refuses an identity with nothing verified (negative)", func() {
-		_, _, err := Identity{Email: "ada@example.com", PhoneNumber: "+15550100"}.VerifiedContacts()
+		_, _, err := UpstreamIdentity{Email: "ada@example.com", PhoneNumber: "+15550100"}.VerifiedContacts()
 		Expect(err).To(HaveOccurred())
 	})
 })
@@ -173,9 +174,10 @@ var _ = Describe("OIDCProvider.HandleCallback", func() {
 		tok, jwks := signedIDToken(priv, claims)
 		id, err := provider(tok, jwks).HandleCallback(context.Background(), "code", UpstreamLeg{Nonce: nonce})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(id.Name).To(Equal("Ada Lovelace"))
-		Expect(id.Locale).To(Equal("en-GB"))
-		Expect(id.Picture).To(Equal("https://img.example/ada.png"))
+		Expect(id.Profile).To(Equal(user_details_db.UpstreamProfile{
+			Provider: "cognito", ExternalSub: "cog-sub-1",
+			Name: "Ada Lovelace", Locale: "en-GB", Picture: "https://img.example/ada.png",
+		}))
 	})
 
 	It("honors the registry attribute mapping over the default claim names", func() {
@@ -186,7 +188,7 @@ var _ = Describe("OIDCProvider.HandleCallback", func() {
 		p.AttributeMapping = map[string]string{"name": "custom:display_name"}
 		id, err := p.HandleCallback(context.Background(), "code", UpstreamLeg{Nonce: nonce})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(id.Name).To(Equal("Mapped Name"))
+		Expect(id.Profile.Name).To(Equal("Mapped Name"))
 	})
 
 	It("reads only allow-listed keys — a mapping cannot smuggle arbitrary claims (negative)", func() {
@@ -197,7 +199,33 @@ var _ = Describe("OIDCProvider.HandleCallback", func() {
 		p.AttributeMapping = map[string]string{"role": "custom:role"}
 		id, err := p.HandleCallback(context.Background(), "code", UpstreamLeg{Nonce: nonce})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(id.Name).To(BeEmpty())
+		Expect(id.Profile).To(Equal(user_details_db.UpstreamProfile{Provider: "cognito", ExternalSub: "cog-sub-1"}))
+	})
+
+	It("reads sub only when the row maps it — the default never names our subject", func() {
+		claims := baseClaims()
+		claims["custom:user_id"] = "Google_legacy123"
+		tok, jwks := signedIDToken(priv, claims)
+
+		unmapped, err := provider(tok, jwks).HandleCallback(context.Background(), "code", UpstreamLeg{Nonce: nonce})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(unmapped.Profile.Sub).To(BeEmpty(), "a row that does not map sub must not be able to name our subject")
+
+		p := provider(tok, jwks)
+		p.AttributeMapping = map[string]string{SubAttribute: "custom:user_id"}
+		mapped, err := p.HandleCallback(context.Background(), "code", UpstreamLeg{Nonce: nonce})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(mapped.Profile.Sub).To(Equal("Google_legacy123"))
+		Expect(mapped.Profile.ExternalSub).To(Equal("cog-sub-1"), "the upstream's own sub is read directly, whatever the row maps")
+	})
+
+	It("leaves sub empty when the mapped claim is absent (negative)", func() {
+		tok, jwks := signedIDToken(priv, baseClaims())
+		p := provider(tok, jwks)
+		p.AttributeMapping = map[string]string{SubAttribute: "custom:user_id"}
+		id, err := p.HandleCallback(context.Background(), "code", UpstreamLeg{Nonce: nonce})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(id.Profile.Sub).To(BeEmpty(), "the upstream's own sub must not stand in for the mapped claim")
 	})
 
 	It("tolerates a string-typed email_verified (provider quirk)", func() {
@@ -215,7 +243,7 @@ var _ = Describe("OIDCProvider.HandleCallback", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(id.Email).To(Equal("u@example.com"))
 		Expect(id.EmailVerified).To(BeTrue())
-		Expect(id.ExternalSub).To(Equal("cog-sub-1"))
+		Expect(id.Profile.ExternalSub).To(Equal("cog-sub-1"))
 	})
 
 	It("inherits auth_time from the upstream id token — the session must never claim a fresher authentication", func() {

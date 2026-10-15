@@ -8,17 +8,18 @@ package main
 
 import (
 	"context"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
+	"errors"
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/ssmutil"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/auth_flows_db"
-	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/user_details_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/idp"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/session"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
@@ -169,15 +170,13 @@ func handleFederationCallback(ctx context.Context, request events.APIGatewayProx
 	}
 	// Persisting the claims with the user is what lets the token endpoint stamp them without ever
 	// calling upstream.
-	userID, err := svc.ResolveOrCreateUserByContacts(rmngCtx, email, phone, &user_details_db.UpstreamProfile{
-		Provider:    identity.ProviderName,
-		ExternalSub: identity.ExternalSub,
-		Name:        identity.Name,
-		Locale:      identity.Locale,
-		Picture:     identity.Picture,
-	})
+	userID, err := svc.ResolveOrCreateUserByContacts(rmngCtx, email, phone, &identity.Profile)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Msg("federation callback: resolve user")
+		// Says only that sign-in was refused: the page must not reveal who holds the id.
+		if errors.Is(err, auth.ErrUpstreamUserIDUnusable) {
+			return errorPage(http.StatusForbidden, oidc.OAuthErrAccessDenied, "This account cannot be signed in. Please contact support."), nil
+		}
 		return errorPage(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
 	}
 	// Our own session, so single sign-on stops depending on the upstream's cookie. Any
@@ -196,7 +195,7 @@ func handleFederationCallback(ctx context.Context, request events.APIGatewayProx
 	// page and would describe whatever was calling, not who authenticated.
 	cookieValue, newSID, err := sess.Establish(session.EstablishInput{
 		UserID:                userID,
-		Provider:              identity.ProviderName,
+		Provider:              identity.Profile.Provider,
 		AuthTime:              identity.AuthTime,
 		AMR:                   identity.AMR,
 		ACR:                   identity.ACR,

@@ -6,11 +6,13 @@ package auth_test
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/user_details_db"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -30,10 +32,11 @@ var _ = Describe("ResolveOrCreateUserByContacts", func() {
 	var (
 		svc     *auth.OAuthUserAuthService
 		rmngCtx *rmngctx.RmngContext
+		backend *test_utils.EspUserBackend
 	)
 
 	BeforeEach(func() {
-		test_utils.SetupEspUserBackend(context.Background())
+		backend = test_utils.SetupEspUserBackend(context.Background())
 		var err error
 		svc, err = auth.NewOAuthUserAuthService(context.Background())
 		Expect(err).NotTo(HaveOccurred())
@@ -113,6 +116,90 @@ var _ = Describe("ResolveOrCreateUserByContacts", func() {
 
 		_, err = svc.ResolveOrCreateUserByContacts(rmngCtx, email, phone, nil)
 		Expect(err).To(MatchError(auth.ErrContactsOnDifferentUsers))
+	})
+
+	Context("when the provider row maps sub", func() {
+		const upstreamSub = "Google_StNysuBee2yLHzxLiY7PHo"
+
+		upstream := func(provider, sub, externalSub string) *user_details_db.UpstreamProfile {
+			return &user_details_db.UpstreamProfile{
+				Provider:    provider,
+				ExternalSub: externalSub,
+				Sub:         sub,
+				Name:        "Ada",
+			}
+		}
+
+		It("opens the account under that sub, recording the provider and the upstream's own sub", func() {
+			userID, err := svc.ResolveOrCreateUserByContacts(rmngCtx, email, "", upstream("cognito", upstreamSub, "cog-sub-1"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(userID).To(Equal(upstreamSub))
+			entry := entryFor(userID)
+			Expect(entry.Provider).To(Equal("cognito"))
+			Expect(entry.ExternalSub).To(Equal("cog-sub-1"))
+			Expect(entry.Name).To(Equal("Ada"))
+		})
+
+		It("mints an id when the profile carries no sub, still recording the upstream's own sub", func() {
+			userID, err := svc.ResolveOrCreateUserByContacts(rmngCtx, email, "", upstream("cognito", "", "cog-sub-1"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(userID).NotTo(BeEmpty())
+			Expect(entryFor(userID).ExternalSub).To(Equal("cog-sub-1"))
+		})
+
+		It("keeps an existing account's id: a matching contact wins over the upstream sub", func() {
+			existing, err := svc.ResolveOrCreateUserByContacts(rmngCtx, email, "", nil)
+			Expect(err).NotTo(HaveOccurred())
+
+			again, err := svc.ResolveOrCreateUserByContacts(rmngCtx, email, "", upstream("cognito", upstreamSub, "cog-sub-1"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(again).To(Equal(existing))
+		})
+
+		It("refuses a taken user_id even to its owner once no contact matches (negative)", func() {
+			_, err := svc.ResolveOrCreateUserByContacts(rmngCtx, email, "", upstream("cognito", upstreamSub, "cog-sub-1"))
+			Expect(err).NotTo(HaveOccurred())
+
+			_, err = svc.ResolveOrCreateUserByContacts(rmngCtx, "ada.new@example.com", "", upstream("cognito", upstreamSub, "cog-sub-1"))
+			Expect(err).To(MatchError(auth.ErrUpstreamUserIDUnusable))
+		})
+
+		It("refuses another upstream identity naming a taken user_id, and leaves that user untouched (negative)", func() {
+			holder, err := svc.ResolveOrCreateUserByContacts(rmngCtx, email, "", upstream("cognito", upstreamSub, "cog-sub-1"))
+			Expect(err).NotTo(HaveOccurred())
+
+			_, err = svc.ResolveOrCreateUserByContacts(rmngCtx, "attacker@example.com", "", upstream("cognito", upstreamSub, "cog-sub-attacker"))
+			Expect(err).To(MatchError(auth.ErrUpstreamUserIDUnusable))
+			Expect(entryFor(holder).Email).To(Equal(email))
+		})
+
+		It("refuses another provider naming a taken user_id (negative)", func() {
+			_, err := svc.ResolveOrCreateUserByContacts(rmngCtx, email, "", upstream("cognito", upstreamSub, "cog-sub-1"))
+			Expect(err).NotTo(HaveOccurred())
+
+			_, err = svc.ResolveOrCreateUserByContacts(rmngCtx, "attacker@example.com", "", upstream("other-idp", upstreamSub, "cog-sub-1"))
+			Expect(err).To(MatchError(auth.ErrUpstreamUserIDUnusable))
+		})
+
+		It("refuses an upstream naming a minted account (negative)", func() {
+			minted, err := svc.ResolveOrCreateUserByContacts(rmngCtx, email, "", nil)
+			Expect(err).NotTo(HaveOccurred())
+
+			_, err = svc.ResolveOrCreateUserByContacts(rmngCtx, "attacker@example.com", "", upstream("cognito", minted, "cog-sub-attacker"))
+			Expect(err).To(MatchError(auth.ErrUpstreamUserIDUnusable))
+		})
+
+		It("refuses a sub that cannot be an OIDC sub (negative)", func() {
+			_, err := svc.ResolveOrCreateUserByContacts(rmngCtx, email, "", upstream("cognito", strings.Repeat("a", 256), "cog-sub-1"))
+			Expect(err).To(MatchError(auth.ErrUpstreamUserIDUnusable))
+		})
+
+		It("reports a storage failure as an error, not as a refusal (negative)", func() {
+			backend.DBMock.PutItemErr = errors.New("throttled")
+			_, err := svc.ResolveOrCreateUserByContacts(rmngCtx, email, "", upstream("cognito", upstreamSub, "cog-sub-1"))
+			Expect(err).To(HaveOccurred())
+			Expect(err).NotTo(MatchError(auth.ErrUpstreamUserIDUnusable))
+		})
 	})
 
 	It("requires at least one verified contact (negative)", func() {

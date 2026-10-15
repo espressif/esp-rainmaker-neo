@@ -43,12 +43,14 @@ import uuid
 import boto3
 import pytest
 import requests
+from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
 from test.itest.conftest import (
     END_USER_POOL_ID,
     REGION,
     USER_API_GATEWAY_URL,
+    decode_jwt_claims,
 )
 from test.itest.email_utils import (
     generate_mailosaur_email,
@@ -81,6 +83,10 @@ PROVIDER_ROW = {
     "external": TEST_PROVIDER_NAME,
     "external-alias": ALIAS_PROVIDER_NAME,
 }
+
+# The client and scope every legacy access token is issued for (legacyClientID, legacyScope in legacyauth).
+LEGACY_CLIENT_ID = "user-pool-client"
+LEGACY_SCOPE = "openid email phone"
 
 # Long enough for Cognito to mail a code and Mailosaur to receive it.
 CODE_WAIT = {"max_retries": 6, "retry_delay": 3.0, "timeout": 45.0}
@@ -158,8 +164,8 @@ def _create_external_pool(cognito, alias_shaped=False):
             "RequireNumbers": True, "RequireSymbols": False,
         }},
         AutoVerifiedAttributes=["email"],
-        Schema=[{"Name": "email", "AttributeDataType": "String",
-                 "Mutable": True, "Required": False}],
+        Schema=[{"Name": "email", "AttributeDataType": "String", "Mutable": True, "Required": False},
+                {"Name": "user_id", "AttributeDataType": "String", "Mutable": True}],
         **shape,
     )["UserPool"]
 
@@ -172,6 +178,8 @@ def _create_external_pool(cognito, alias_shaped=False):
         # The prod client sets this; keeping it identical means Cognito masks existence
         # errors here too, so the backend's own masking is what these tests measure.
         PreventUserExistenceErrors="ENABLED",
+        # A sub mapped to custom:user_id is trusted only while no client can write it (federation.md, "Attribute mapping").
+        WriteAttributes=["email", "phone_number"],
     )["UserPoolClient"]
 
     return pool["Id"], client["ClientId"], client["ClientSecret"]
@@ -217,14 +225,14 @@ def _select_pool(label):
     time.sleep(PROVIDER_SWAP_SETTLE)
 
 
-def _register_provider(provider_name, pool_id, client_id, client_secret):
+def _register_provider(provider_name, pool_id, client_id, client_secret, attribute_mapping=None):
     """Point the legacy surface at the pool by writing its provider row.
 
     The row must be removed again in teardown or it would shadow the deployment's own provider for
     every later test.
     """
     issuer = f"https://cognito-idp.{REGION}.amazonaws.com/{pool_id}"
-    _providers_table().put_item(Item={
+    item = {
         "provider_name": provider_name,
         "type": "oidc",
         "display_name": "itest external cognito",
@@ -237,7 +245,10 @@ def _register_provider(provider_name, pool_id, client_id, client_secret):
         "password_grant": True,
         "token_endpoint_auth": "client_secret_basic",
         "created_at": int(time.time()),
-    })
+    }
+    if attribute_mapping:
+        item["attribute_mapping"] = attribute_mapping
+    _providers_table().put_item(Item=item)
 
 
 @pytest.fixture(scope="module")
@@ -1048,3 +1059,129 @@ def test_signup_validates_its_request_before_touching_the_pool(cognito_pool, pay
     refused = requests.post(_auth_url("signup"), json=payload)
     assert refused.status_code == 400, f"[{label}] {refused.text}"
     assert _status(refused) == expected, refused.text
+
+
+# ============================================================================
+# Attribute mapping: a provider row that maps sub opens new accounts under that claim (federation.md).
+# ============================================================================
+
+USER_DETAILS_TABLE = "espuser-user-details"
+
+
+def _set_attribute_mapping(provider_name, attribute_mapping):
+    """Set the row's attribute_mapping, or remove it when attribute_mapping is empty."""
+    if attribute_mapping:
+        _providers_table().update_item(
+            Key={"provider_name": provider_name},
+            UpdateExpression="SET attribute_mapping = :m",
+            ExpressionAttributeValues={":m": attribute_mapping},
+        )
+    else:
+        _providers_table().update_item(Key={"provider_name": provider_name},
+                                       UpdateExpression="REMOVE attribute_mapping")
+
+
+@pytest.fixture
+def external_user(external_pool):
+    """Factory for confirmed users of the external pool; the espuser-user-details rows their logins open are removed afterwards."""
+    cognito = boto3.client("cognito-idp", region_name=REGION)
+    made = []
+
+    def _make(user_id=None):
+        email = generate_random_email()
+        password = generate_test_password()
+        attributes = [{"Name": "email", "Value": email}, {"Name": "email_verified", "Value": "true"}]
+        if user_id:
+            attributes.append({"Name": "custom:user_id", "Value": user_id})
+        cognito.admin_create_user(UserPoolId=external_pool, Username=email, MessageAction="SUPPRESS",
+                                  UserAttributes=attributes)
+        cognito.admin_set_user_password(UserPoolId=external_pool, Username=email, Password=password, Permanent=True)
+        made.append(email)
+        return email, password
+
+    yield _make
+
+    table = boto3.resource("dynamodb", region_name=REGION).Table(USER_DETAILS_TABLE)
+    for email in made:
+        try:
+            items = table.query(IndexName=f"{USER_DETAILS_TABLE}-by-email",
+                                KeyConditionExpression=Key("email").eq(email.lower())).get("Items", [])
+            for item in items:
+                table.delete_item(Key={"user_id": item["user_id"]})
+        except Exception:  # noqa: BLE001
+            pass
+
+
+@pytest.fixture
+def sub_mapped(external_pool):
+    """The external row maps sub to custom:user_id for one test, and maps nothing again afterwards."""
+    _set_attribute_mapping(TEST_PROVIDER_NAME, {"sub": "custom:user_id"})
+    _select_pool("external")
+    try:
+        yield
+    finally:
+        _set_attribute_mapping(TEST_PROVIDER_NAME, None)
+
+
+def _signin_claims(email, password):
+    signed_in = requests.post(_auth_url("token"), json={"username": email, "password": password})
+    assert signed_in.status_code == 200, signed_in.text
+    return decode_jwt_claims(signed_in.json()["access_token"])
+
+
+def _assert_legacy_access_claims(claims, sub, email):
+    """The full claim set of a legacy access token, so a regression in any claim is caught, not only sub."""
+    assert claims["sub"] == sub, claims
+    assert claims["email"] == email.lower(), claims
+    assert claims["token_use"] == "access", claims
+    assert claims["client_id"] == LEGACY_CLIENT_ID, claims
+    assert claims["aud"] == LEGACY_CLIENT_ID, claims
+    assert claims["scope"] == LEGACY_SCOPE, claims
+    assert claims["exp"] > claims["iat"], claims
+
+
+def test_a_mapped_sub_names_the_user_id(sub_mapped, external_user):
+    upstream_user_id = f"itest_{uuid.uuid4().hex}"
+    email, password = external_user(upstream_user_id)
+
+    _assert_legacy_access_claims(_signin_claims(email, password), upstream_user_id, email)
+
+
+def test_a_returning_login_keeps_the_mapped_sub(sub_mapped, external_user):
+    upstream_user_id = f"itest_{uuid.uuid4().hex}"
+    email, password = external_user(upstream_user_id)
+
+    first = _signin_claims(email, password)
+    again = _signin_claims(email, password)
+    assert again["sub"] == first["sub"] == upstream_user_id, (first, again)
+
+
+def test_an_unmapped_row_mints_the_user_id(external_user):
+    """The default maps no sub, so the upstream's custom:user_id must not name the user_id (negative)."""
+    upstream_user_id = f"itest_{uuid.uuid4().hex}"
+    email, password = external_user(upstream_user_id)
+    _select_pool("external")
+
+    claims = _signin_claims(email, password)
+    assert claims["sub"] != upstream_user_id, claims
+    assert claims["email"] == email.lower(), claims
+
+
+def test_a_user_without_the_mapped_claim_gets_a_minted_user_id(sub_mapped, external_user):
+    email, password = external_user()
+
+    claims = _signin_claims(email, password)
+    assert claims["sub"] and not claims["sub"].startswith("itest_"), claims
+
+
+def test_a_taken_user_id_is_refused_to_another_identity(sub_mapped, external_user):
+    """A second pool user naming a user_id already taken must not reach that account, and is refused like any failed signin (negative)."""
+    upstream_user_id = f"itest_{uuid.uuid4().hex}"
+    owner_email, owner_password = external_user(upstream_user_id)
+    other_email, other_password = external_user(upstream_user_id)
+
+    _assert_legacy_access_claims(_signin_claims(owner_email, owner_password), upstream_user_id, owner_email)
+
+    refused = requests.post(_auth_url("token"), json={"username": other_email, "password": other_password})
+    assert refused.status_code == 401, refused.text
+    assert _status(refused) == "Authentication failed", refused.text

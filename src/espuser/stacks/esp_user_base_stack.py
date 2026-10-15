@@ -912,6 +912,16 @@ def handler(event, context):
             # itself stays in SSM; only its parameter name is stored.
             table = boto3.resource('dynamodb').Table(os.environ['PROVIDERS_TABLE'])
             existing = table.get_item(Key={'provider_name': 'cognito'}).get('Item')
+            attribute_mapping = {
+                'email': 'email',
+                'email_verified': 'email_verified',
+                'phone_number': 'phone_number',
+                'name': 'name',
+                'locale': 'locale',
+                'picture': 'picture',
+                'external_sub': 'sub',
+            }
+
             # Preserve an operator's enable/disable choice across redeploys; default to enabled only
             # on first create. Connection config below is still refreshed on every reseed.
             table.put_item(Item={
@@ -933,15 +943,7 @@ def handler(event, context):
                 # requires it on the logout URL.
                 'end_session_url': f"{os.environ['COGNITO_HOSTED_UI_URL']}/logout?client_id={os.environ['COGNITO_CLIENT_ID']}",
                 'end_session_redirect_param': 'logout_uri',
-                'attribute_mapping': {
-                    'external_sub': 'sub',
-                    'email': 'email',
-                    'email_verified': 'email_verified',
-                    'phone_number': 'phone_number',
-                    'name': 'name',
-                    'locale': 'locale',
-                    'picture': 'picture',
-                },
+                'attribute_mapping': attribute_mapping,
             })
         _respond(event, context, 'SUCCESS', physical_id)
     except Exception as e:

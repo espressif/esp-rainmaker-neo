@@ -266,9 +266,11 @@ func (s *OAuthUserAuthService) ResolveOrCreateUserByContacts(rmngCtx *rmngctx.Rm
 	}
 
 	switch {
+	// Picking either account would hand one person's account to the other.
 	case byEmail != nil && byPhone != nil && byEmail.UserID != byPhone.UserID:
 		return "", ErrContactsOnDifferentUsers
 	case byEmail != nil || byPhone != nil:
+		// Both hits are the same account here, so whichever lookup matched names it.
 		match := byEmail
 		if match == nil {
 			match = byPhone
@@ -293,8 +295,35 @@ func (s *OAuthUserAuthService) ResolveOrCreateUserByContacts(rmngCtx *rmngctx.Rm
 	return s.createUser(rmngCtx, email, phone, profile)
 }
 
+// ErrUpstreamUserIDUnusable refuses a login whose upstream id cannot be adopted. One error for every reason, so the claim cannot be used to learn which ids exist.
+var ErrUpstreamUserIDUnusable = errors.New("the upstream id cannot be used for this account")
+
+// createUser opens an account under the upstream sub when the provider row maps it, otherwise under a minted id.
 func (s *OAuthUserAuthService) createUser(rmngCtx *rmngctx.RmngContext, email, phone string, profile *user_details_db.UpstreamProfile) (string, error) {
 	userID := ids.NewUserID()
+	upstreamSub := ""
+	if profile != nil && profile.Sub != "" {
+		upstreamSub = profile.Sub
+		if !isValidSubject(upstreamSub) {
+			return "", rmerror.NewRMError(ErrUpstreamUserIDUnusable, fmt.Sprintf("%s named %q, which cannot be an OIDC subject", profile.Provider, upstreamSub))
+		}
+		userID = upstreamSub
+	}
+
+	// Uniqueness comes from CreateUserDetails' conditional write, not the lookups above.
+	err := user_details_db.NewUserDetailsDB(rmngCtx).CreateUserDetails(newUserEntry(userID, email, phone, profile))
+	if err == nil {
+		return userID, nil
+	}
+
+	// No contact matched, so nothing shows this login owns the account already under that id.
+	if upstreamSub != "" && errors.Is(err, user_details_db.ErrUserIDTaken) {
+		return "", rmerror.NewRMError(ErrUpstreamUserIDUnusable, fmt.Sprintf("%s named %q, which is already taken", profile.Provider, upstreamSub))
+	}
+	return "", rmerror.NewRMError(err, "failed to JIT-create oauth user")
+}
+
+func newUserEntry(userID, email, phone string, profile *user_details_db.UpstreamProfile) *user_details_db.UserDetailsEntry {
 	entry := &user_details_db.UserDetailsEntry{
 		UserID:      userID,
 		Email:       email,
@@ -307,16 +336,25 @@ func (s *OAuthUserAuthService) createUser(rmngCtx *rmngctx.RmngContext, email, p
 		if profile.Provider != "" {
 			entry.Provider = profile.Provider
 		}
-		entry.Sub = profile.ExternalSub
+		entry.ExternalSub = profile.ExternalSub
 		entry.Name = profile.Name
 		entry.Locale = profile.Locale
 		entry.Picture = profile.Picture
 	}
-	// Uniqueness comes from CreateUserDetails' conditional write, not the lookups above.
-	if err := user_details_db.NewUserDetailsDB(rmngCtx).CreateUserDetails(entry); err != nil {
-		return "", rmerror.NewRMError(err, "failed to JIT-create oauth user")
+	return entry
+}
+
+// isValidSubject applies OIDC Core §2: a sub is 1 to 255 ASCII characters. Control characters and spaces are refused too, since the id lands in keys and URLs.
+func isValidSubject(id string) bool {
+	if id == "" || len(id) > 255 {
+		return false
 	}
-	return userID, nil
+	for i := 0; i < len(id); i++ {
+		if id[i] <= ' ' || id[i] > '~' {
+			return false
+		}
+	}
+	return true
 }
 
 // ErrResourceNoLongerAllowed is a renewal refused because the family's RFC 8707 resource has

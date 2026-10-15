@@ -42,6 +42,7 @@ package user_details_db
 
 import (
 	"errors"
+
 	"github.com/espressif/esp-rainmaker-neo/src/utils/ids"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
@@ -72,6 +73,7 @@ const (
 // Error types
 var (
 	ErrUserNotFound = errors.New("user details not found")
+	ErrUserIDTaken  = errors.New("user_id already exists")
 )
 
 const ProviderOIDC = "OIDC"
@@ -92,7 +94,7 @@ type UserDetailsEntry struct {
 	Provider    string `dynamodbav:"provider,omitempty"`
 	Email       string `dynamodbav:"email,omitempty"`
 	PhoneNumber string `dynamodbav:"phone,omitempty"`
-	Sub         string `dynamodbav:"sub,omitempty"` // Just for third party providers like Google, Facebook, etc.
+	ExternalSub string `dynamodbav:"external_sub,omitempty"` // The upstream's own sub, for accounts a federated or password-proxy login opened
 
 	Name    string `dynamodbav:"name,omitempty"`
 	Locale  string `dynamodbav:"locale,omitempty"`
@@ -119,6 +121,10 @@ func (udb *UserDetailsDB) CreateUserDetails(entry *UserDetailsEntry) error {
 	entry.Email = ids.FormatUsername(entry.Email)
 
 	err := udb.EspDB.DbCreateItem(userDetailsTableName, entry)
+	var exists *types.ConditionalCheckFailedException
+	if errors.As(err, &exists) {
+		return ErrUserIDTaken
+	}
 	if err != nil {
 		return rmerror.NewRMError(err, "failed to create user details")
 	}
@@ -338,10 +344,16 @@ func (db *UserDetailsDB) RecordVerifiedContacts(userID, email, phone string) err
 	return err
 }
 
+// UpstreamProfile is what a login learns about the person upstream, stored with the account it opens.
 type UpstreamProfile struct {
-	Provider    string
+	Provider string
+	// ExternalSub is the upstream's own sub; Sub is the user_id when the provider row maps it.
 	ExternalSub string
-	Name        string
-	Locale      string
-	Picture     string
+	// Sub is set only when the provider row maps "sub"; a new account then opens under it instead of a minted id.
+	Sub        string
+	Name       string
+	GivenName  string
+	FamilyName string
+	Locale     string
+	Picture    string
 }

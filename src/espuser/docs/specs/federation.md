@@ -74,7 +74,7 @@ sequenceDiagram
     CB->>Flows: Recover flow by HMAC state — exact-match stored state
     CB->>IdP: POST token endpoint (broker secret + OUR PKCE verifier) — server side
     IdP-->>CB: upstream id_token (validated: iss/aud/nonce/exp/signature)
-    CB->>Users: resolve by verified contacts — reuse or create, storing profile claims
+    CB->>Users: resolve by verified contacts — reuse, or create (under a trusted upstream's id), storing profile claims
     CB->>Flows: Bind subject, issue OUR single-use code
     CB-->>Browser: 302 redirect_uri?code=...&state=... (client's own state)
     Browser->>Client: delivers OUR code
@@ -144,7 +144,8 @@ next, and verifying a second contact upstream later does not strand them in a fr
 
 | Situation | Outcome |
 | --- | --- |
-| Neither contact known | New account. The id derives from the email when present, otherwise the phone, so it does not depend on which contact signed in first |
+| Neither contact known | New account: under the claim the provider row maps to `sub` ([Attribute mapping](#attribute-mapping)), otherwise under a freshly minted id |
+| Neither contact known, and the mapped `sub` is already a taken `user_id` or not a valid OIDC `sub` | Refused with `access_denied`, the same page for every reason so the claim cannot be used to learn which ids exist |
 | One contact known | That account is reused; the other contact is recorded on it |
 | Both contacts known, same account | That account is reused |
 | Both contacts known, **different** accounts | Refused. Choosing one would either strand the other's data or attach this login to the wrong account, so the login fails and an operator decides |
@@ -152,6 +153,31 @@ next, and verifying a second contact upstream later does not strand them in a fr
 
 Recording a contact is conditional on the account not already holding one, so a login can never
 overwrite another user's email or phone.
+
+## Attribute mapping
+
+A provider row's `attribute_mapping` names, for each of OUR keys, the upstream claim to read; a key it
+leaves out reads the default claim. Only these keys are ever read, so a mapping can redirect a claim but
+cannot widen what we ingest. Federation and the [password proxy](legacy-user-auth.md) read claims the
+same way.
+
+| Our key | Default claim | Used for |
+| --- | --- | --- |
+| `email`, `email_verified` | same | Identity resolution, by verified contact |
+| `phone_number`, `phone_verified` | `phone_number`, `phone_number_verified` | Identity resolution, by verified contact |
+| `external_sub` | `sub` | Stored on the account as `external_sub` |
+| `name`, `locale`, `picture` | same | Stored on the account |
+| `given_name`, `family_name` | same | Read, not stored |
+| `auth_time`, `amr`, `acr` | same | Session metadata |
+| `sub` | none | When a row maps it (e.g. `custom:user_id`), a new account opens under that claim's value instead of a minted id, so a pool that predates ESP User keeps its own ids |
+
+**What trust rests on.** Mapping `sub` trusts the claim: ESP User cannot tell a real id from one a user
+wrote into their own upstream record, so a pool user who can write the mapped claim can open an
+account under the id of anyone who has not yet signed in. Before mapping `sub`, every app client on
+that pool must set `WriteAttributes` without the mapped claim (an unset list makes every attribute
+writable), and our broker client must have it in `ReadAttributes`, or every login mints.
+`test/itest/test_tenant_identity_security.py` checks the first on every pool a row maps `sub` for. The
+seeded `cognito` row maps no `sub`, and keeps one an operator adds across redeploys.
 
 ## Provider selection at `/oauth2/authorize`
 
@@ -191,7 +217,7 @@ can change on pool replacement). Fields:
 | `client_secret` | the app client secret |
 | `scopes` | space-separated upstream scopes (default `openid email phone`) |
 | `token_endpoint_auth` | `client_secret_basic` (default) or `client_secret_post` |
-| `attribute_mapping` | OUR claim name → upstream claim name; normalization reads only the fixed allow-listed key set, so a mapping cannot widen what we ingest |
+| `attribute_mapping` | OUR claim name → upstream claim name; see [Attribute mapping](#attribute-mapping) |
 | `authorize_url` | where a login begins: the upstream authorize endpoint, or the hosted page for an `otp` row |
 | `token_url` / `userinfo_url` | optional pins; absent → OIDC discovery |
 | `jwks_url` | optional URL pin for the upstream JWKS; absent → fetched from discovery `jwks_uri` |
@@ -222,10 +248,7 @@ MCP is unaffected: the proxy still fronts our issuer and validates our tokens.
 
 ## Deferred (tracked)
 
-- `espuser-user-identities` table + by-`idp_sub`-GSI for O(1) returning-user
-  lookup and multi-provider linking (temp design). Interim resolution is by
-  verified email or phone, which is correct for a single upstream.
 - Provider chooser page (≥2 providers) and per-client `allowed_providers` gating.
 - Native RFC 8693 token-exchange grant; profile re-sync `sync_mode`.
-- Email-change / `user_id` remap policy when a Cognito user changes email
-  (email is the join key today).
+- Linking an existing account to an upstream identity, which also restores access after an
+  upstream email change (today the taken `user_id` refuses its owner). -- We won't do this as fo rNeo email/phone is the primary identity.
