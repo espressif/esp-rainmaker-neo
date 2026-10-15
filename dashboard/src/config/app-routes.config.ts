@@ -302,7 +302,7 @@ export const routesConfig: RouteConfig[] = [
       },
       {
         path: "/settings",
-        redirectTo: "/home/settings/voice-assistants",
+        redirectTo: "/home/settings/push-notifications",
         subroutes: [
           {
             path: "/voice-assistants",
