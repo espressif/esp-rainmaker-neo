@@ -55,8 +55,8 @@ sequenceDiagram
 
 - **`/token`**: `InitiateAuth USER_PASSWORD_AUTH` against the Cognito end-user
   pool. On success, read the authenticated user's verified email/phone from the
-  Cognito id token, run [identity resolution](federation.md) (`ResolveOrCreateUser`
-  → `DeriveUserID`), and mint **our** access/id/refresh tokens. The Cognito tokens
+  Cognito id token, run [identity resolution](federation.md#identity-resolution)
+  (reading claims through the provider row's [attribute mapping](federation.md#attribute-mapping)), and mint **our** access/id/refresh tokens. The Cognito tokens
   are discarded. So a legacy password login and a federated/OTP login for the same
   verified contact resolve to the same `user_id` and issue the same shape of token.
 - **`/token/refresh`**: rotates **our** refresh token via our refresh service —

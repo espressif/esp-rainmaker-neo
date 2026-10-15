@@ -7,15 +7,17 @@ package legacyauth
 import (
 	"context"
 	"encoding/json"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"testing"
 
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
+
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/identity_providers_db"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/user_details_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/jwtutil"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -38,39 +40,58 @@ const (
 )
 
 // seedPasswordProvider registers the enabled provider row NewService resolves its app client from.
-func seedPasswordProvider(clientID string) {
+func seedPasswordProvider(clientID string, attributeMapping map[string]string) {
 	rmngCtx := rmngctx.NewRmngContextWithCtx(context.Background(), nil)
 	yes := true
 	Expect(identity_providers_db.NewIdentityProvidersDB(rmngCtx).CreateProvider(&identity_providers_db.ProviderEntry{
-		ProviderName:  "cognito",
-		Type:          identity_providers_db.TypeOIDC,
-		Enabled:       &yes,
-		ClientID:      clientID,
-		ClientSecret:  "provider-client-secret",
-		PasswordGrant: &yes,
+		ProviderName:     "cognito",
+		Type:             identity_providers_db.TypeOIDC,
+		Enabled:          &yes,
+		ClientID:         clientID,
+		ClientSecret:     "provider-client-secret",
+		PasswordGrant:    &yes,
+		AttributeMapping: attributeMapping,
 	})).To(Succeed())
 }
 
 var _ = Describe("SigninWithPassword", func() {
 	var backend *test_utils.EspUserBackend
 
-	newService := func(email string, emailVerified bool) *Service {
+	// upstream describes the provider row and the claims its ID token carries beyond the contact.
+	type upstream struct {
+		mapping     map[string]string
+		extraClaims jwt.MapClaims
+	}
+
+	newServiceWith := func(email string, emailVerified bool, up upstream) *Service {
 		cog := mock.NewCognitoProviderMock()
 		cog.AddTestUserPoolDirect(testPoolID, testClientID2)
 		cog.AddTestUserDirect(testPoolID, email, email, testPassword, true)
 		cog.IDTokenMinter = func(user *mock.UserState) string {
-			tok, err := jwtutil.SignRS256(jwt.MapClaims{
-				"email": email, "email_verified": emailVerified,
-			}, backend.SigningKey, oidc.SigningKeyID)
+			claims := jwt.MapClaims{"email": email, "email_verified": emailVerified}
+			for k, v := range up.extraClaims {
+				claims[k] = v
+			}
+			tok, err := jwtutil.SignRS256(claims, backend.SigningKey, oidc.SigningKeyID)
 			Expect(err).NotTo(HaveOccurred())
 			return tok
 		}
 		awscommon.SetCognitoProviderClient(cog)
 
-		seedPasswordProvider(testClientID2)
+		seedPasswordProvider(testClientID2, up.mapping)
 		svc, err := NewService(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 		return svc
+	}
+
+	newService := func(email string, emailVerified bool) *Service {
+		return newServiceWith(email, emailVerified, upstream{})
+	}
+
+	subjectOf := func(accessToken string) string {
+		parsed, _, err := jwt.NewParser().ParseUnverified(accessToken, jwt.MapClaims{})
+		Expect(err).NotTo(HaveOccurred())
+		return parsed.Claims.(jwt.MapClaims)["sub"].(string)
 	}
 
 	BeforeEach(func() {
@@ -97,6 +118,46 @@ var _ = Describe("SigninWithPassword", func() {
 		Expect(claims["iss"]).To(Equal(backend.Issuer))
 		Expect(claims["aud"]).To(Equal(legacyClientID))
 		Expect(claims["scope"]).To(Equal(legacyScope))
+	})
+
+	It("signs a password login in under the claim the row maps to sub, recording the provider", func() {
+		svc := newServiceWith("legacy@example.com", true, upstream{
+			mapping:     map[string]string{"sub": "custom:user_id"},
+			extraClaims: jwt.MapClaims{"sub": "cog-sub-9", "custom:user_id": "Google_legacy123"},
+		})
+
+		tokens, err := svc.SigninWithPassword(context.Background(), "legacy@example.com", testPassword)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(subjectOf(tokens.AccessToken)).To(Equal("Google_legacy123"))
+
+		entry, err := user_details_db.NewUserDetailsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).GetUserDetailsByUserID("Google_legacy123")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(entry.Provider).To(Equal("cognito"))
+		Expect(entry.ExternalSub).To(Equal("cog-sub-9"))
+	})
+
+	It("mints an id when the row does not map sub (negative)", func() {
+		svc := newServiceWith("legacy@example.com", true, upstream{extraClaims: jwt.MapClaims{"sub": "cog-sub-9", "custom:user_id": "Google_legacy123"}})
+
+		tokens, err := svc.SigninWithPassword(context.Background(), "legacy@example.com", testPassword)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(subjectOf(tokens.AccessToken)).NotTo(Equal("Google_legacy123"))
+	})
+
+	It("reads sub and the profile through the row's attribute_mapping, as federation does", func() {
+		svc := newServiceWith("legacy@example.com", true, upstream{
+			mapping:     map[string]string{"sub": "custom:legacy_id", "name": "custom:display_name"},
+			extraClaims: jwt.MapClaims{"sub": "cog-sub-9", "custom:user_id": "unmapped", "custom:legacy_id": "Google_legacy123", "custom:display_name": "Ada"},
+		})
+
+		tokens, err := svc.SigninWithPassword(context.Background(), "legacy@example.com", testPassword)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(subjectOf(tokens.AccessToken)).To(Equal("Google_legacy123"))
+
+		entry, err := user_details_db.NewUserDetailsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).GetUserDetailsByUserID("Google_legacy123")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(entry.ExternalSub).To(Equal("cog-sub-9"))
+		Expect(entry.Name).To(Equal("Ada"))
 	})
 
 	It("rejects a login whose contact is unverified (negative)", func() {

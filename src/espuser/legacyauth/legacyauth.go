@@ -38,6 +38,8 @@ type Service struct {
 	oauth   *auth.OAuthUserAuthService
 
 	providerName string
+	// Read like the browser flow's, so both logins of one person reach the same account.
+	attributeMapping map[string]string
 }
 
 // IsRainMakerProvider reports whether the resolved provider is RainMaker's own, so user-facing
@@ -82,9 +84,10 @@ func NewService(ctx context.Context) (*Service, error) {
 	return &Service{
 		// The provider's pool may live in another region than this deployment; InitiateAuth must
 		// reach that region's Cognito endpoint, so the client is built for the issuer's region.
-		cognito:      cognitoutil.NewAppClientServiceForRegion(provider.ClientID, provider.ClientSecret, regionFromCognitoIssuer(provider.Issuer)),
-		oauth:        oauth,
-		providerName: provider.ProviderName,
+		cognito:          cognitoutil.NewAppClientServiceForRegion(provider.ClientID, provider.ClientSecret, regionFromCognitoIssuer(provider.Issuer)),
+		oauth:            oauth,
+		providerName:     provider.ProviderName,
+		attributeMapping: provider.AttributeMapping,
 	}, nil
 }
 
@@ -120,7 +123,7 @@ func (s *Service) SigninWithPassword(ctx context.Context, username, password str
 		return nil, err
 	}
 	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, nil)
-	userID, err := s.oauth.ResolveOrCreateUserByContacts(rmngCtx, email, phone, loginProfile(login.IDToken))
+	userID, err := s.oauth.ResolveOrCreateUserByContacts(rmngCtx, email, phone, s.loginProfile(login.IDToken))
 	if err != nil {
 		return nil, err
 	}
@@ -238,17 +241,13 @@ func (s *Service) Signout(ctx context.Context, refreshToken string) error {
 }
 
 // Read unverified because we obtained this token ourselves
-func loginProfile(idToken string) *user_details_db.UpstreamProfile {
+func (s *Service) loginProfile(idToken string) *user_details_db.UpstreamProfile {
 	parsed, _, err := jwt.NewParser().ParseUnverified(idToken, jwt.MapClaims{})
 	if err != nil {
 		return nil
 	}
 	claims, _ := parsed.Claims.(jwt.MapClaims)
-	profile := user_details_db.UpstreamProfile{}
-	profile.ExternalSub, _ = claims["sub"].(string)
-	profile.Name, _ = claims["name"].(string)
-	profile.Locale, _ = claims["locale"].(string)
-	profile.Picture, _ = claims["picture"].(string)
+	profile := idp.ReadProfile(s.providerName, claims, s.attributeMapping)
 	if profile == (user_details_db.UpstreamProfile{}) {
 		return nil
 	}
@@ -265,7 +264,7 @@ func verifiedContacts(idToken string) (email, phone string, err error) {
 	emailVerified, _ := claims["email_verified"].(bool)
 	rawPhone, _ := claims["phone_number"].(string)
 	phoneVerified, _ := claims["phone_number_verified"].(bool)
-	return idp.Identity{
+	return idp.UpstreamIdentity{
 		Email:         rawEmail,
 		EmailVerified: emailVerified,
 		PhoneNumber:   rawPhone,

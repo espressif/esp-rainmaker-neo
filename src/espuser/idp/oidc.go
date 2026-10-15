@@ -8,14 +8,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 
+	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
+
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/user_details_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/httpclient"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/jwtutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/pkceutil"
@@ -85,8 +87,10 @@ func (p *OIDCProvider) AuthorizeRedirectURL(_ context.Context, leg UpstreamLeg) 
 	return oidc.AppendQuery(base, q), nil
 }
 
-// Only these keys are ever read, so a registry row's attribute_mapping can redirect where a claim
-// comes from but cannot widen what we ingest.
+// SubAttribute has no default, so only a row that maps it opens accounts under an upstream user_id (federation.md, "Attribute mapping").
+const SubAttribute = "sub"
+
+// Only these keys, plus SubAttribute, are ever read, so a row's attribute_mapping can redirect a claim but cannot widen what we ingest.
 var defaultAttributeMapping = map[string]string{
 	"external_sub":   "sub",
 	"email":          "email",
@@ -105,15 +109,38 @@ var defaultAttributeMapping = map[string]string{
 
 // claimKey is the upstream claim name for one of ours: the registry's attribute_mapping when set, else the default.
 func (p *OIDCProvider) claimKey(ours string) string {
-	if mapped := p.AttributeMapping[ours]; mapped != "" {
+	return mappedClaimKey(p.AttributeMapping, ours)
+}
+
+func mappedClaimKey(mapping map[string]string, ours string) string {
+	if mapped := mapping[ours]; mapped != "" {
 		return mapped
 	}
 	return defaultAttributeMapping[ours]
 }
 
-func (p *OIDCProvider) upstreamClaim(claims jwt.MapClaims, ours string) string {
-	v, _ := claims[p.claimKey(ours)].(string)
+// UpstreamClaim reads one of OUR claim keys through a row's attribute_mapping: ("external_sub", no mapping) reads "sub".
+func UpstreamClaim(claims jwt.MapClaims, mapping map[string]string, ours string) string {
+	key := mappedClaimKey(mapping, ours)
+	if key == "" {
+		return ""
+	}
+	v, _ := claims[key].(string)
 	return v
+}
+
+// ReadProfile reads the profile claims through a row's attribute_mapping: {"sub": "custom:user_id"} sets Sub, no mapping leaves it empty.
+func ReadProfile(provider string, claims jwt.MapClaims, mapping map[string]string) user_details_db.UpstreamProfile {
+	return user_details_db.UpstreamProfile{
+		Provider:    provider,
+		ExternalSub: UpstreamClaim(claims, mapping, "external_sub"),
+		Sub:         UpstreamClaim(claims, mapping, SubAttribute),
+		Name:        UpstreamClaim(claims, mapping, "name"),
+		GivenName:   UpstreamClaim(claims, mapping, "given_name"),
+		FamilyName:  UpstreamClaim(claims, mapping, "family_name"),
+		Locale:      UpstreamClaim(claims, mapping, "locale"),
+		Picture:     UpstreamClaim(claims, mapping, "picture"),
+	}
 }
 
 func (p *OIDCProvider) upstreamBoolClaim(claims jwt.MapClaims, ours string) bool {
@@ -177,45 +204,39 @@ func (p *OIDCProvider) authTimeClaim(claims jwt.MapClaims) int64 {
 	return 0
 }
 
-func (p *OIDCProvider) HandleCallback(ctx context.Context, code string, leg UpstreamLeg) (Identity, error) {
+func (p *OIDCProvider) HandleCallback(ctx context.Context, code string, leg UpstreamLeg) (UpstreamIdentity, error) {
 	idToken, err := p.exchangeCode(ctx, code, leg.PKCEVerifier)
 	if err != nil {
-		return Identity{}, err
+		return UpstreamIdentity{}, err
 	}
 
 	keySet, err := jwtutil.ParseJWKS(p.JWKS)
 	if err != nil {
-		return Identity{}, rmerror.NewRMError(err, "idp: failed to parse provider JWKS")
+		return UpstreamIdentity{}, rmerror.NewRMError(err, "idp: failed to parse provider JWKS")
 	}
 	claims, err := jwtutil.VerifyJWT(idToken, keySet)
 	if err != nil {
-		return Identity{}, rmerror.NewRMError(err, "idp: id_token signature/expiry invalid")
+		return UpstreamIdentity{}, rmerror.NewRMError(err, "idp: id_token signature/expiry invalid")
 	}
 	// OpenID Connect Core §3.1.3.7.
 	if iss, _ := claims["iss"].(string); iss != p.Issuer {
-		return Identity{}, rmerror.NewRMError(nil, "idp: id_token issuer mismatch")
+		return UpstreamIdentity{}, rmerror.NewRMError(nil, "idp: id_token issuer mismatch")
 	}
 	if err := jwtutil.AssertAudience(claims, p.ClientID); err != nil {
-		return Identity{}, rmerror.NewRMError(err, "idp: id_token audience mismatch")
+		return UpstreamIdentity{}, rmerror.NewRMError(err, "idp: id_token audience mismatch")
 	}
 	if nonce, _ := claims["nonce"].(string); nonce == "" || nonce != leg.Nonce {
-		return Identity{}, rmerror.NewRMError(nil, "idp: id_token nonce mismatch")
+		return UpstreamIdentity{}, rmerror.NewRMError(nil, "idp: id_token nonce mismatch")
 	}
-	return Identity{
-		ProviderName:  p.ProviderName,
-		ExternalSub:   p.upstreamClaim(claims, "external_sub"),
-		Email:         p.upstreamClaim(claims, "email"),
+	return UpstreamIdentity{
+		Email:         UpstreamClaim(claims, p.AttributeMapping, "email"),
 		EmailVerified: p.upstreamBoolClaim(claims, "email_verified"),
 		PhoneVerified: p.upstreamBoolClaim(claims, "phone_verified"),
-		PhoneNumber:   p.upstreamClaim(claims, "phone_number"),
-		Name:          p.upstreamClaim(claims, "name"),
-		GivenName:     p.upstreamClaim(claims, "given_name"),
-		FamilyName:    p.upstreamClaim(claims, "family_name"),
-		Locale:        p.upstreamClaim(claims, "locale"),
-		Picture:       p.upstreamClaim(claims, "picture"),
+		PhoneNumber:   UpstreamClaim(claims, p.AttributeMapping, "phone_number"),
+		Profile:       ReadProfile(p.ProviderName, claims, p.AttributeMapping),
 		AuthTime:      p.authTimeClaim(claims),
 		AMR:           p.upstreamStringsClaim(claims, "amr"),
-		ACR:           p.upstreamClaim(claims, "acr"),
+		ACR:           UpstreamClaim(claims, p.AttributeMapping, "acr"),
 	}, nil
 }
 

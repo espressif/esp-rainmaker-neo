@@ -20,7 +20,7 @@ the same way. Cognito is one such row.
 | `scopes` | Space-separated, requested on the upstream authorize |
 | `token_endpoint_auth` | How the client authenticates at the token endpoint: `client_secret_basic` or `client_secret_post` |
 | `password_grant` | Whether `client_id` also accepts a direct username/password exchange |
-| `attribute_mapping` | Our claim name → the provider's claim name |
+| `attribute_mapping` | Our claim name → the provider's claim name; see [Attribute mapping](federation.md#attribute-mapping) |
 | `session_max_ttl_seconds` | Optional cap on OUR session's absolute lifetime for logins this provider authenticated — the operator's assertion of what the upstream sanctions (not discoverable over OIDC). Combined as `min(global, this)`, so a row can only shorten the deployment cap, never extend it. Unset ⇒ the global cap applies |
 | `end_session_url` | The provider's sign-out endpoint. Unset ⇒ the upstream hop is skipped entirely and only OUR session ends. See **Sign-out** below |
 | `end_session_redirect_param` | The query parameter that provider uses for "come back here afterwards". Defaults to `post_logout_redirect_uri`; Cognito names it `logout_uri` |

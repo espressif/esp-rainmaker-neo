@@ -11,25 +11,20 @@ import (
 	"context"
 	"errors"
 
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/user_details_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/secretutil"
 )
 
-// Identity is the normalized upstream identity. The *Verified flags default to false when the
+// UpstreamIdentity is the normalized upstream identity. The *Verified flags default to false when the
 // upstream omits them, so an unverified contact can never resolve an account by accident.
-type Identity struct {
-	ProviderName  string
-	ExternalSub   string
+type UpstreamIdentity struct {
 	Email         string
 	EmailVerified bool
 	PhoneNumber   string
 	PhoneVerified bool
 
-	// Enrichment only; account resolution trusts nothing below this point.
-	Name       string
-	GivenName  string
-	FamilyName string
-	Locale     string
-	Picture    string
+	// Profile is stored with the account a login opens; account resolution reads only Profile.Sub.
+	Profile user_details_db.UpstreamProfile
 
 	// Session metadata, never identity. AuthTime is the upstream's auth_time claim (falling
 	// back to the id token's iat) — WHEN the person actually authenticated there, which may be
@@ -44,7 +39,7 @@ type Identity struct {
 // VerifiedContacts returns every contact the upstream vouched for, so an account can be found by
 // either of them. Unverified values are dropped: identity is derived from a contact, so trusting one
 // would let anyone who can set an arbitrary email or phone upstream claim the matching ESP User.
-func (id Identity) VerifiedContacts() (email, phone string, err error) {
+func (id UpstreamIdentity) VerifiedContacts() (email, phone string, err error) {
 	if id.EmailVerified {
 		email = id.Email
 	}
@@ -71,7 +66,7 @@ type UpstreamLeg struct {
 type Provider interface {
 	Name() string
 	AuthorizeRedirectURL(ctx context.Context, leg UpstreamLeg) (string, error)
-	HandleCallback(ctx context.Context, code string, leg UpstreamLeg) (Identity, error)
+	HandleCallback(ctx context.Context, code string, leg UpstreamLeg) (UpstreamIdentity, error)
 }
 
 func NewUpstreamLeg(flowID string, hmacKey []byte) (UpstreamLeg, error) {
