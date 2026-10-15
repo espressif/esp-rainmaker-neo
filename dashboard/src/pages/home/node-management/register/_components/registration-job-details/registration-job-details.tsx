@@ -37,17 +37,21 @@ const META: Record<string, DynamicListMetaEntry> = {
 export function RegistrationJobDetails({
   job,
   onDownload,
+  i18nNamespace = "register",
+  defaultJobType = "register",
 }: RegistrationJobDetailsProps) {
-  const { t } = useTranslation("register");
+  const { t } = useTranslation(i18nNamespace);
 
   const fileName =
     getRegistrationJobFileName(job.cert_file_s3_path) ??
-    t("unknownFile", "Registration job");
+    (i18nNamespace === "update"
+      ? t("unknownFile", "Update job")
+      : t("unknownFile", "Registration job"));
 
   const items = useMemo<DynamicListEntry[]>(() => {
     const entries: DynamicListEntry[] = [
       { key: "request_id", value: job.request_id },
-      { key: "job_type", value: job.job_type ?? "register" },
+      { key: "job_type", value: job.job_type ?? defaultJobType },
       { key: "total_nodes", value: job.total_nodes ?? 0 },
       { key: "success_count", value: job.success_count ?? 0 },
       { key: "failed_count", value: job.failed_count ?? 0 },
@@ -81,7 +85,7 @@ export function RegistrationJobDetails({
     }
 
     return entries;
-  }, [job]);
+  }, [job, defaultJobType]);
 
   const accordionItems: AccordionItem[] = useMemo(
     () => [

@@ -16,7 +16,9 @@ import type { RegistrationJobRow } from "../register.props";
 export function getRegistrationJobsColumns(
   t: TFunction,
   onDownload: (s3Path: string) => void,
+  options?: { i18nNamespace?: string },
 ): ColumnDef<RegistrationJobRow>[] {
+  const i18nNamespace = options?.i18nNamespace ?? "register";
   return [
     {
       id: "name",
@@ -28,6 +30,7 @@ export function getRegistrationJobsColumns(
           requestId={row.original.requestId}
           certFileS3Path={row.original.certFileS3Path}
           failedCount={row.original.failedCount}
+          i18nNamespace={i18nNamespace}
         />
       ),
     },

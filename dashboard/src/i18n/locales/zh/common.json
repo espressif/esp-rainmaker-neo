@@ -95,6 +95,7 @@
     "nodes": "节点",
     "nodeGroups": "节点组",
     "registerNodes": "注册节点",
+    "updateNodes": "更新节点",
     "generateNodes": "生成节点",
     "ota": "OTA",
     "otaImages": "镜像",
@@ -119,6 +120,7 @@
     "title": "新建",
     "nodeGroup": "节点组",
     "registerNodes": "注册节点",
+    "updateNodes": "更新节点",
     "otaImage": "上传 OTA 镜像",
     "otaJob": "OTA 作业"
   },

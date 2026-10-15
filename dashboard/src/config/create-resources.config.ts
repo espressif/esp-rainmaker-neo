@@ -7,13 +7,14 @@
 import type { ComponentType } from "react";
 import type { TFunction } from "i18next";
 import type { SidebarEndActionConfig } from "@espressif/dashboard-ui-components/components";
-import { CloudUpload, Cpu, FileStack, Group, Plus } from "lucide-react";
+import { CloudUpload, Cpu, FileStack, Group, Pencil, Plus } from "lucide-react";
 
 type ResourceIcon = ComponentType<{ className?: string }>;
 
 export type CreatableResourceId =
   | "node-group"
   | "register"
+  | "update"
   | "ota-image"
   | "ota-job";
 
@@ -61,6 +62,14 @@ export const CREATABLE_RESOURCES = [
     fallback: "Register nodes",
     icon: FileStack,
     path: "/home/node-management/register/new",
+  },
+  {
+    id: "update",
+    group: "node-management",
+    labelKey: "common:createMenu.updateNodes",
+    fallback: "Update nodes",
+    icon: Pencil,
+    path: "/home/node-management/update/new",
   },
   {
     id: "ota-image",

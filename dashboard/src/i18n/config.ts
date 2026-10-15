@@ -21,6 +21,7 @@ import otaJobsEn from './locales/en/ota-jobs.json'
 import postDeploymentEn from './locales/en/post-deployment.json'
 import pushNotificationsEn from './locales/en/push-notifications.json'
 import registerEn from './locales/en/register.json'
+import updateEn from './locales/en/update.json'
 import setPasswordEn from './locales/en/set-password.json'
 import staticEn from './locales/en/static.json'
 import voiceAssistantsEn from './locales/en/voice-assistants.json'
@@ -37,6 +38,7 @@ import otaJobsZh from './locales/zh/ota-jobs.json'
 import postDeploymentZh from './locales/zh/post-deployment.json'
 import pushNotificationsZh from './locales/zh/push-notifications.json'
 import registerZh from './locales/zh/register.json'
+import updateZh from './locales/zh/update.json'
 import setPasswordZh from './locales/zh/set-password.json'
 import staticZh from './locales/zh/static.json'
 import voiceAssistantsZh from './locales/zh/voice-assistants.json'
@@ -57,6 +59,7 @@ const resources = {
     nodes: nodesEn,
     'node-groups': nodeGroupsEn,
     register: registerEn,
+    update: updateEn,
     generate: generateEn,
     'ota-images': otaImagesEn,
     'ota-jobs': otaJobsEn,
@@ -75,6 +78,7 @@ const resources = {
     nodes: nodesZh,
     'node-groups': nodeGroupsZh,
     register: registerZh,
+    update: updateZh,
     generate: generateZh,
     'ota-images': otaImagesZh,
     'ota-jobs': otaJobsZh,

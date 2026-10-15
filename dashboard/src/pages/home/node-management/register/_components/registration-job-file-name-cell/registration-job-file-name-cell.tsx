@@ -14,11 +14,14 @@ export function RegistrationJobFileNameCell({
   requestId,
   certFileS3Path,
   failedCount,
+  i18nNamespace = "register",
 }: RegistrationJobFileNameCellProps) {
-  const { t } = useTranslation("register");
+  const { t } = useTranslation(i18nNamespace);
   const displayName =
     getRegistrationJobFileName(certFileS3Path) ??
-    t("unknownFile", "Registration job");
+    (i18nNamespace === "update"
+      ? t("unknownFile", "Update job")
+      : t("unknownFile", "Registration job"));
 
   return (
     <div className="flex min-w-0 items-center gap-3">

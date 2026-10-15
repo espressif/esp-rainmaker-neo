@@ -1,0 +1,104 @@
+{
+  "breadcrumbs": {
+    "jobs": "更新任务",
+    "new": "更新节点"
+  },
+  "downloadError": "无法下载 CSV",
+  "downloadFailed": "下载失败",
+  "fileUnavailable": "此文件已不可用，可能已从存储中删除。",
+  "columns": {
+    "fileRequestId": "文件 / 请求 ID",
+    "progress": "进度",
+    "lastUpdated": "最后更新"
+  },
+  "details": {
+    "adminGroups": "管理员分组",
+    "noAdminGroups": "暂无管理员分组"
+  },
+  "unknownFile": "更新任务",
+  "error": {
+    "title": "加载更新任务失败",
+    "description": "加载更新任务时出现问题。"
+  },
+  "noResults": "未找到更新任务",
+  "noResultsDescription": "请调整状态筛选条件，或更新节点。",
+  "updateNodesButton": "更新节点",
+  "new": {
+    "pageTitle": "更新节点",
+    "backToUpdateJobs": "返回更新任务",
+    "sections": {
+      "basicDetails": "基本信息",
+      "tags": "添加标签"
+    },
+    "fields": {
+      "certificateFile": {
+        "label": "节点 CSV 文件",
+        "title": "将节点 CSV 文件拖放到此处",
+        "description": "CSV 必须包含 node_id 列。仅支持 CSV 文件。"
+      },
+      "nodeGroup": {
+        "label": "选择节点分组",
+        "description": "可选。更新的节点将被添加到此分组（如已选择，还包括子分组）。"
+      }
+    },
+    "tags": {
+      "label": "标签",
+      "placeholder": "输入 key:value 并按 Enter",
+      "hint": "格式：key:value（不含空格）。",
+      "autoTagTitle": "部分标签将自动添加",
+      "autoTagNotice": "以下标签将自动添加：registered_from:dashboard、batch:<timestamp>。您可以通过在上方添加相同 key 的标签来覆盖它们。"
+    },
+    "form": {
+      "submit": "更新",
+      "submitting": "更新中…"
+    },
+    "progress": {
+      "dialogTitle": "更新进度",
+      "notStarted": "尚未开始",
+      "initiateTitle": "启动更新",
+      "initiateInProgress": "正在请求安全上传链接…",
+      "initiateSuccess": "更新已启动",
+      "initiateError": "无法启动更新",
+      "uploadTitle": "上传节点文件",
+      "uploadInProgress": "正在上传 CSV…",
+      "uploadSuccess": "CSV 已上传",
+      "uploadError": "无法上传 CSV",
+      "createTitle": "创建更新请求",
+      "createInProgress": "正在提交更新请求…",
+      "createSuccess": "更新请求已创建",
+      "createError": "无法创建更新请求",
+      "completedTitle": "更新完成",
+      "completedInProgress": "正在更新节点…这可能需要一点时间",
+      "completedSuccess": "所有节点已成功更新",
+      "completedWithFailures": "{{failedCount}} / {{totalNodes}} 个节点更新失败",
+      "completedError": "更新失败",
+      "backToJobs": "返回更新任务",
+      "updateMore": "更新更多节点",
+      "completedAllFailed": "没有节点被更新",
+      "completedWithUnknownFailures": "部分节点更新失败",
+      "completedStatusUnavailable": "无法获取更新状态",
+      "resultAlert": {
+        "successTitle": "所有节点更新成功",
+        "successDescription": "全部 {{totalNodes}} 个节点均已更新。",
+        "successDescriptionUnknownTotal": "CSV 中的所有节点均已更新。",
+        "partialTitle": "部分节点未能更新",
+        "partialDescription": "{{totalNodes}} 个节点中有 {{successCount}} 个已更新，{{failedCount}} 个失败。",
+        "partialDescriptionWithFile": "{{totalNodes}} 个节点中有 {{successCount}} 个已更新，{{failedCount}} 个失败 — 请下载失败节点文件以查看原因。",
+        "partialDescriptionUnknownCounts": "部分节点未能更新。请下载失败节点文件，查看具体节点及失败原因。",
+        "allFailedTitle": "节点更新失败",
+        "allFailedDescription": "全部 {{totalNodes}} 个节点均未能更新。请在更新任务中查看详细信息。",
+        "allFailedDescriptionWithFile": "全部 {{totalNodes}} 个节点均未能更新。请下载失败节点文件以查看原因。",
+        "jobErrorTitle": "更新任务失败",
+        "jobErrorDescription": "更新任务在完成前已中止。请在更新任务中查看详细信息。",
+        "statusErrorTitle": "无法获取更新状态",
+        "statusErrorDescription": "无法读取更新任务状态。任务可能仍在运行，请前往更新任务查看。",
+        "downloadFailedNodes": "下载失败节点",
+        "downloadErrorTitle": "无法下载失败节点文件"
+      }
+    },
+    "errors": {
+      "certificateFileRequired": "请上传节点 CSV。",
+      "certificateFileCsvOnly": "仅支持 CSV 文件。"
+    }
+  }
+}
