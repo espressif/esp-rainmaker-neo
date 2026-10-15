@@ -90,7 +90,7 @@ var _ = Describe("NodeRegRequestsDB", func() {
 
 	Describe("ListNodeRegRequests", func() {
 		It("should return empty list when no requests exist", func() {
-			result, err := nodeRegRequestDB.ListNodeRegRequests(20, "", "")
+			result, err := nodeRegRequestDB.ListNodeRegRequests(20, "", "", "")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.Entries).To(BeEmpty())
 			Expect(result.NextKey).To(BeEmpty())
@@ -111,7 +111,7 @@ var _ = Describe("NodeRegRequestsDB", func() {
 				Expect(err).NotTo(HaveOccurred())
 			}
 
-			result, err := nodeRegRequestDB.ListNodeRegRequests(20, "", "")
+			result, err := nodeRegRequestDB.ListNodeRegRequests(20, "", "", "")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.Entries).To(HaveLen(3))
 		})
@@ -127,7 +127,7 @@ var _ = Describe("NodeRegRequestsDB", func() {
 				Expect(err).NotTo(HaveOccurred())
 			}
 
-			result, err := nodeRegRequestDB.ListNodeRegRequests(2, "", "")
+			result, err := nodeRegRequestDB.ListNodeRegRequests(2, "", "", "")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.Entries).To(HaveLen(2))
 			Expect(result.NextKey).NotTo(BeEmpty())
@@ -145,13 +145,13 @@ var _ = Describe("NodeRegRequestsDB", func() {
 			}
 
 			// Get first page
-			result, err := nodeRegRequestDB.ListNodeRegRequests(2, "", "")
+			result, err := nodeRegRequestDB.ListNodeRegRequests(2, "", "", "")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.Entries).To(HaveLen(2))
 			Expect(result.NextKey).NotTo(BeEmpty())
 
 			// Get second page using NextKey
-			result2, err := nodeRegRequestDB.ListNodeRegRequests(2, result.NextKey, "")
+			result2, err := nodeRegRequestDB.ListNodeRegRequests(2, result.NextKey, "", "")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result2.Entries).To(HaveLen(1))
 		})
@@ -174,7 +174,7 @@ var _ = Describe("NodeRegRequestsDB", func() {
 			}
 
 			// Filter for started only
-			result, err := nodeRegRequestDB.ListNodeRegRequests(20, "", node_reg_req_db.NODE_REG_STATUS_STARTED)
+			result, err := nodeRegRequestDB.ListNodeRegRequests(20, "", node_reg_req_db.NODE_REG_STATUS_STARTED, "")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.Entries).To(HaveLen(2))
 			for _, e := range result.Entries {
@@ -182,10 +182,57 @@ var _ = Describe("NodeRegRequestsDB", func() {
 			}
 
 			// Filter for completed only
-			result, err = nodeRegRequestDB.ListNodeRegRequests(20, "", node_reg_req_db.NODE_REG_STATUS_COMPLETED)
+			result, err = nodeRegRequestDB.ListNodeRegRequests(20, "", node_reg_req_db.NODE_REG_STATUS_COMPLETED, "")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.Entries).To(HaveLen(1))
 			Expect(result.Entries[0].Status).To(Equal(node_reg_req_db.NODE_REG_STATUS_COMPLETED))
+		})
+
+		It("should filter by job type, treating missing job_type as register", func() {
+			entries := []node_reg_req_db.NodeRegRequestsEntry{
+				{RequestID: "legacy-register", UserID: testUserID, Status: node_reg_req_db.NODE_REG_STATUS_STARTED},
+				{RequestID: "explicit-register", UserID: testUserID, Status: node_reg_req_db.NODE_REG_STATUS_STARTED, JobType: node_reg_req_db.NODE_REG_JOB_TYPE_REGISTER},
+				{RequestID: "update-job", UserID: testUserID, Status: node_reg_req_db.NODE_REG_STATUS_STARTED, JobType: node_reg_req_db.NODE_REG_JOB_TYPE_UPDATE},
+			}
+			for _, entry := range entries {
+				Expect(nodeRegRequestDB.CreateNodeRegRequest(entry)).To(Succeed())
+			}
+
+			all, err := nodeRegRequestDB.ListNodeRegRequests(20, "", "", "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(all.Entries).To(HaveLen(3))
+
+			registerJobs, err := nodeRegRequestDB.ListNodeRegRequests(20, "", "", node_reg_req_db.NODE_REG_JOB_TYPE_REGISTER)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(registerJobs.Entries).To(HaveLen(2))
+			for _, e := range registerJobs.Entries {
+				Expect(e.RequestID).NotTo(Equal("update-job"))
+			}
+
+			updateJobs, err := nodeRegRequestDB.ListNodeRegRequests(20, "", "", node_reg_req_db.NODE_REG_JOB_TYPE_UPDATE)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(updateJobs.Entries).To(HaveLen(1))
+			Expect(updateJobs.Entries[0].RequestID).To(Equal("update-job"))
+		})
+
+		It("should AND status and job_type filters", func() {
+			entries := []node_reg_req_db.NodeRegRequestsEntry{
+				{RequestID: "update-completed", UserID: testUserID, Status: node_reg_req_db.NODE_REG_STATUS_COMPLETED, JobType: node_reg_req_db.NODE_REG_JOB_TYPE_UPDATE},
+				{RequestID: "update-started", UserID: testUserID, Status: node_reg_req_db.NODE_REG_STATUS_STARTED, JobType: node_reg_req_db.NODE_REG_JOB_TYPE_UPDATE},
+				{RequestID: "register-completed", UserID: testUserID, Status: node_reg_req_db.NODE_REG_STATUS_COMPLETED, JobType: node_reg_req_db.NODE_REG_JOB_TYPE_REGISTER},
+			}
+			for _, entry := range entries {
+				Expect(nodeRegRequestDB.CreateNodeRegRequest(entry)).To(Succeed())
+			}
+
+			result, err := nodeRegRequestDB.ListNodeRegRequests(
+				20, "",
+				node_reg_req_db.NODE_REG_STATUS_COMPLETED,
+				node_reg_req_db.NODE_REG_JOB_TYPE_UPDATE,
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Entries).To(HaveLen(1))
+			Expect(result.Entries[0].RequestID).To(Equal("update-completed"))
 		})
 	})
 

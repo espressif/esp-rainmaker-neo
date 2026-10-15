@@ -176,10 +176,11 @@ The action surface is split by intent; everything else is shared.
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/v1/admin/nodes/registration-jobs` | Submit a bulk register job |
-| `GET`  | `/v1/admin/nodes/registration-jobs` | List jobs |
+| `GET`  | `/v1/admin/nodes/registration-jobs` | List register jobs |
 | `GET`  | `/v1/admin/nodes/registration-jobs/{requestId}` | Aggregate status of one register job |
 | `GET`  | `/v1/admin/nodes/registration-jobs/{requestId}/failed-nodes` | Paginated audit failure list |
 | `POST` | `/v1/admin/nodes/update-jobs` | Submit a bulk update job |
+| `GET`  | `/v1/admin/nodes/update-jobs` | List update jobs |
 | `GET`  | `/v1/admin/nodes/update-jobs/{requestId}` | Aggregate status of one update job |
 | `GET`  | `/v1/admin/nodes/update-jobs/{requestId}/failed-nodes` | Paginated audit failure list |
 
@@ -193,10 +194,10 @@ Two things the shape does **not** do:
   `request_id` queried under `/registration-jobs/` therefore looks like it does
   not exist — deliberately, because `request_id` is not flow-scoped and the
   tracking table is shared.
-- **`GET /registration-jobs` takes no `job_type` filter.** The list endpoint
-  exists only under `registration-jobs` (there is no list under `update-jobs`)
-  and returns **both** register and update jobs; clients filter client-side on
-  the `job_type` field in each row.
+- **Each collection GET is flow-isolated.** `GET /registration-jobs`
+  returns only register jobs (legacy rows with a missing `job_type`
+  count as register). `GET /update-jobs` returns only update jobs.
+  Clients do not need a `?job_type=` query param; the path is the filter.
 
 There is no failed-nodes *export* endpoint. The re-uploadable CSV is written
 to S3 by the container at end-of-job (§3.5.5); the status response
@@ -204,10 +205,10 @@ to S3 by the container at end-of-job (§3.5.5); the status response
 paginated `failed-nodes` list above is the audit surface (node ID, code,
 reason).
 
-The `update-jobs` `{requestId}` sub-tree mirrors the `registration-jobs` one —
-same status and failed-CSV semantics, same DB tables — with the cross-flow 404
-described above keeping the two sets of jobs from leaking into each other. Only
-the list endpoint is not duplicated.
+The `update-jobs` tree mirrors the `registration-jobs` one — collection
+list, status, and failed-CSV semantics, same DB tables — with the
+cross-flow 404 described above keeping the two sets of jobs from leaking
+into each other.
 
 ### 3.2 Job request and storage
 
@@ -230,8 +231,8 @@ augmented with a `job_type` attribute (values `register` or `update`).
 
 Existing rows have `job_type=""` and are interpreted as `register` for
 backward compatibility. New registration jobs explicitly set
-`job_type="register"`; new update jobs set `job_type="update"`. The list
-endpoint can optionally filter by `job_type`.
+`job_type="register"`; new update jobs set `job_type="update"`. Each
+collection list filters to its own job type.
 
 The row gains one more attribute, `failed_file_s3_path`, written by the
 container at end-of-job when the run produced at least one failure. It is
@@ -869,9 +870,10 @@ Registration endpoint tests verify:
   when `failed_file_s3_path` is unset.
 
 Endpoint-level tests for the update Lambda cover `POST /update-jobs`,
+`GET /update-jobs` (collection, excluding register jobs),
 `GET /update-jobs/{requestId}` and its failed-nodes endpoint, plus the
 cross-flow isolation: a register job's `request_id` read under `/update-jobs/`
-(and vice versa) must 404. There is no list endpoint under `update-jobs`.
+(and vice versa) must 404.
 
 ### 6.5 SDK retryer verification
 
@@ -953,10 +955,6 @@ cross-flow isolation: a register job's `request_id` read under `/update-jobs/`
   and reject mismatches with a distinct error.
 - **Bulk delete jobs.** A future `delete-jobs` endpoint would slot in
   with the same container, schema, and failure-visibility patterns.
-- **Server-side `?job_type=` filter on `/registration-jobs` list.**
-  Today the list endpoint returns both registration and update jobs;
-  clients can filter by the `job_type` field. A query-param filter on
-  the DB layer would be cheaper at scale.
 - **First-class `type`/`model`/`subtype` fields.** Treated as
   tag-formatted CSV columns today. If the operator needs them as Thing
   attributes or distinct schema fields, that is a small additive

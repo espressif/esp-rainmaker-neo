@@ -2359,8 +2359,11 @@ paths:
     get:
       summary: List bulk node registration jobs
       description: |
-        Lists all bulk node registration jobs, ordered by creation time
+        Lists bulk node registration jobs, ordered by creation time
         (newest first). Paginated: server-side default page size is 20.
+        Only `job_type=register` jobs are returned (legacy rows with a
+        missing `job_type` count as register). Update jobs are listed
+        from `GET /v1/admin/nodes/update-jobs`.
       tags:
         - Node Administration
       security:
@@ -2480,6 +2483,39 @@ paths:
           $ref: "#/components/responses/InternalServerError"
 
   /v1/admin/nodes/update-jobs:
+    get:
+      summary: List bulk node update jobs
+      description: |
+        Lists bulk node update jobs, ordered by creation time (newest
+        first). Paginated: server-side default page size is 20. Only
+        `job_type=update` jobs are returned. Registration jobs are listed
+        from `GET /v1/admin/nodes/registration-jobs`.
+      tags:
+        - Node Administration
+      security:
+        - sigv4: []
+      parameters:
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/StartKey"
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [requested, started, data_loaded, completed]
+          description: Filter jobs by status
+      responses:
+        "200":
+          description: List of update jobs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListRegistrationJobsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
     post:
       summary: Bulk update nodes via S3
       description: |

@@ -68,23 +68,6 @@ type RegisterBulkNodesResponse struct {
 	Message   string `json:"message"`
 }
 
-// ListRegistrationJobsResponse is for the list endpoint. This list endpoint
-// is register-Lambda-only (no update equivalent), so the response type stays
-// here. Jobs uses the shared StatusResponse type.
-type ListRegistrationJobsResponse struct {
-	Jobs      []jobs_api.StatusResponse `json:"jobs"`
-	PageTotal int                       `json:"page_total"`
-	NextKey   string                    `json:"next_key,omitempty"`
-}
-
-// Test-facing aliases so the in-package _test.go file (also package main)
-// keeps referring to the Lambda-local type names while the actual
-// definitions live in jobs_api.
-type (
-	RegisterNodeStatusResponse = jobs_api.StatusResponse
-	ListFailedNodesResponse    = jobs_api.ListFailedNodesResponse
-)
-
 func handleRegisterSingleNode(rctx *rmngctx.RmngContext, request events.APIGatewayProxyRequest) (RegisterSingleNodeResponse, error) {
 	// Parse the request body
 	var req RegisterSingleNodeRequest
@@ -161,36 +144,6 @@ func handleRegisterBulkNodes(rctx *rmngctx.RmngContext, request events.APIGatewa
 	}, nil
 }
 
-// handleListRegistrationJobs is register-only (the update Lambda doesn't
-// expose a list endpoint). Today it returns both register and update jobs
-// — clients filter on job_type. A server-side ?job_type= filter is tracked
-// as future work in docs/en/specs/node_reg.md §10.
-func handleListRegistrationJobs(rctx *rmngctx.RmngContext, request events.APIGatewayProxyRequest) (ListRegistrationJobsResponse, error) {
-	rctx.SetAllow(utils.NodeAdminRegisterStatus, "*")
-
-	limit := rmngrequest.ParsePageSize(request.QueryStringParameters)
-	startKey := request.QueryStringParameters["start_key"]
-	statusFilter := request.QueryStringParameters["status"]
-
-	dbClient := node_reg_req_db.NewNodeRegRequestsDB(rctx)
-	result, err := dbClient.ListNodeRegRequests(limit, startKey, statusFilter)
-	if err != nil {
-		return ListRegistrationJobsResponse{}, rmerror.NewRMError(err, "failed to list registration jobs")
-	}
-
-	jobs := make([]jobs_api.StatusResponse, 0, len(result.Entries))
-	for _, entry := range result.Entries {
-		e := entry // avoid loop variable capture
-		jobs = append(jobs, jobs_api.EntryToResponse(&e))
-	}
-
-	return ListRegistrationJobsResponse{
-		Jobs:      jobs,
-		PageTotal: len(jobs),
-		NextKey:   result.NextKey,
-	}, nil
-}
-
 func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	var err error
 	var response interface{}
@@ -227,7 +180,7 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		return utils.APIGwRespJSON(http.StatusAccepted, response), nil
 
 	case path == "/v1/admin/nodes/registration-jobs" && method == "GET":
-		response, err = handleListRegistrationJobs(rctx, request)
+		response, err = jobs_api.List(rctx, request, node_reg_req_db.NODE_REG_JOB_TYPE_REGISTER)
 		if err != nil {
 			rlog.Error(rctx).Err(err).Send()
 			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil

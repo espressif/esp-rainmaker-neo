@@ -10,6 +10,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/nodeadmin/jobs_api"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"net/http"
 	"os"
@@ -55,19 +56,21 @@ var _ = Describe("Admin Nodes Update API", func() {
 		}
 	})
 
-	// seedJob creates a parent job row of the given type with optional failure rows.
-	seedJob := func(jobType string, certPath string, failures []node_reg_failed_nodes_db.NodeRegFailedNodeEntry) string {
+	seedSeq := 0
+	// seedJobWithStatus creates a parent job row; seedJob defaults status to completed.
+	seedJobWithStatus := func(jobType, certPath, status string, failures []node_reg_failed_nodes_db.NodeRegFailedNodeEntry) string {
 		seederCtx := rmngctx.NewRmngContext(user.NewUser("seeder"))
 		seederCtx.SetAllow(utils.NodeAdminAdd, "*")
 		seederCtx.SetAllow(utils.NodeAdminRegisterStatus, "*")
 
-		requestID := "seed-" + jobType + "-" + fmt.Sprintf("%d", GinkgoRandomSeed())
+		seedSeq++
+		requestID := fmt.Sprintf("seed-%s-%d-%d", jobType, GinkgoRandomSeed(), seedSeq)
 		err := node_reg_req_db.NewNodeRegRequestsDB(seederCtx).
 			CreateNodeRegRequest(node_reg_req_db.NodeRegRequestsEntry{
 				RequestID:      requestID,
 				JobType:        jobType,
 				CertFileS3Path: certPath,
-				Status:         node_reg_req_db.NODE_REG_STATUS_COMPLETED,
+				Status:         status,
 			})
 		Expect(err).NotTo(HaveOccurred())
 
@@ -77,6 +80,9 @@ var _ = Describe("Admin Nodes Update API", func() {
 			Expect(err).NotTo(HaveOccurred())
 		}
 		return requestID
+	}
+	seedJob := func(jobType string, certPath string, failures []node_reg_failed_nodes_db.NodeRegFailedNodeEntry) string {
+		return seedJobWithStatus(jobType, certPath, node_reg_req_db.NODE_REG_STATUS_COMPLETED, failures)
 	}
 
 	Describe("POST /v1/admin/nodes/update-jobs", func() {
@@ -155,7 +161,7 @@ var _ = Describe("Admin Nodes Update API", func() {
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusOK))
 
-			var status UpdateNodeStatusResponse
+			var status jobs_api.StatusResponse
 			Expect(json.Unmarshal([]byte(response.Body), &status)).To(Succeed())
 			Expect(status.RequestID).To(Equal(requestID))
 			Expect(status.JobType).To(Equal(node_reg_req_db.NODE_REG_JOB_TYPE_UPDATE))
@@ -208,7 +214,7 @@ var _ = Describe("Admin Nodes Update API", func() {
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusOK))
 
-			var status UpdateNodeStatusResponse
+			var status jobs_api.StatusResponse
 			Expect(json.Unmarshal([]byte(response.Body), &status)).To(Succeed())
 			Expect(status.FailedFileS3Path).To(Equal(failedPath))
 			Expect(status.FailedFileDownloadURL).To(ContainSubstring(failedKey))
@@ -231,7 +237,7 @@ var _ = Describe("Admin Nodes Update API", func() {
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusOK))
 
-			var resp ListFailedNodesResponse
+			var resp jobs_api.ListFailedNodesResponse
 			Expect(json.Unmarshal([]byte(response.Body), &resp)).To(Succeed())
 			Expect(resp.FailedNodes).To(HaveLen(2))
 		})
@@ -248,6 +254,150 @@ var _ = Describe("Admin Nodes Update API", func() {
 			response, err := handleRequest(adminCtx.Context, baseReq)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusNotFound))
+		})
+	})
+
+	Describe("GET /v1/admin/nodes/update-jobs", func() {
+		It("returns an empty list when no update jobs exist", func() {
+			baseReq.HTTPMethod = "GET"
+			baseReq.Path = "/v1/admin/nodes/update-jobs"
+			response, err := handleRequest(adminCtx.Context, baseReq)
+			Expect(err).To(BeNil())
+			Expect(response.StatusCode).To(Equal(http.StatusOK))
+
+			var listResp jobs_api.ListResponse
+			Expect(json.Unmarshal([]byte(response.Body), &listResp)).To(Succeed())
+			Expect(listResp.Jobs).To(HaveLen(0))
+			Expect(listResp.NextKey).To(BeEmpty())
+			Expect(listResp.PageTotal).To(Equal(0))
+		})
+
+		It("lists update jobs and omits registration jobs", func() {
+			updateID := seedJob(node_reg_req_db.NODE_REG_JOB_TYPE_UPDATE, "s3://bucket/update.csv", nil)
+			_ = seedJob(node_reg_req_db.NODE_REG_JOB_TYPE_REGISTER, "s3://bucket/register.csv", nil)
+			// Legacy / empty job_type rows are treated as register and must stay off this list.
+			seederCtx := rmngctx.NewRmngContext(user.NewUser("seeder"))
+			seederCtx.SetAllow(utils.NodeAdminAdd, "*")
+			Expect(node_reg_req_db.NewNodeRegRequestsDB(seederCtx).CreateNodeRegRequest(node_reg_req_db.NodeRegRequestsEntry{
+				RequestID: "legacy-register-hidden-from-update-list",
+				UserID:    "admin",
+				Status:    node_reg_req_db.NODE_REG_STATUS_COMPLETED,
+			})).To(Succeed())
+
+			baseReq.HTTPMethod = "GET"
+			baseReq.Path = "/v1/admin/nodes/update-jobs"
+			response, err := handleRequest(adminCtx.Context, baseReq)
+			Expect(err).To(BeNil())
+			Expect(response.StatusCode).To(Equal(http.StatusOK))
+
+			var listResp jobs_api.ListResponse
+			Expect(json.Unmarshal([]byte(response.Body), &listResp)).To(Succeed())
+			Expect(listResp.Jobs).To(HaveLen(1))
+			Expect(listResp.PageTotal).To(Equal(1))
+			Expect(listResp.Jobs[0].RequestID).To(Equal(updateID))
+			Expect(listResp.Jobs[0].JobType).To(Equal(node_reg_req_db.NODE_REG_JOB_TYPE_UPDATE))
+			Expect(listResp.Jobs[0].CertFileS3Path).To(Equal("s3://bucket/update.csv"))
+		})
+
+		It("respects page_size and start_key pagination", func() {
+			for i := 0; i < 3; i++ {
+				_ = seedJob(node_reg_req_db.NODE_REG_JOB_TYPE_UPDATE, fmt.Sprintf("s3://bucket/page-%d.csv", i), nil)
+			}
+
+			baseReq.HTTPMethod = "GET"
+			baseReq.Path = "/v1/admin/nodes/update-jobs"
+			baseReq.QueryStringParameters = map[string]string{"page_size": "2"}
+			response, err := handleRequest(adminCtx.Context, baseReq)
+			Expect(err).To(BeNil())
+			Expect(response.StatusCode).To(Equal(http.StatusOK))
+
+			var page1 jobs_api.ListResponse
+			Expect(json.Unmarshal([]byte(response.Body), &page1)).To(Succeed())
+			Expect(page1.Jobs).To(HaveLen(2))
+			Expect(page1.PageTotal).To(Equal(2))
+			Expect(page1.NextKey).NotTo(BeEmpty())
+			for _, job := range page1.Jobs {
+				Expect(job.JobType).To(Equal(node_reg_req_db.NODE_REG_JOB_TYPE_UPDATE))
+			}
+
+			baseReq.QueryStringParameters = map[string]string{
+				"page_size": "2",
+				"start_key": page1.NextKey,
+			}
+			response, err = handleRequest(adminCtx.Context, baseReq)
+			Expect(err).To(BeNil())
+			Expect(response.StatusCode).To(Equal(http.StatusOK))
+
+			var page2 jobs_api.ListResponse
+			Expect(json.Unmarshal([]byte(response.Body), &page2)).To(Succeed())
+			Expect(page2.Jobs).To(HaveLen(1))
+			Expect(page2.NextKey).To(BeEmpty())
+
+			seen := map[string]bool{}
+			for _, job := range append(page1.Jobs, page2.Jobs...) {
+				Expect(seen[job.RequestID]).To(BeFalse(), "duplicate request_id across pages")
+				seen[job.RequestID] = true
+			}
+			baseReq.QueryStringParameters = nil
+		})
+
+		It("filters update jobs by status", func() {
+			completedID := seedJobWithStatus(
+				node_reg_req_db.NODE_REG_JOB_TYPE_UPDATE,
+				"s3://bucket/completed.csv",
+				node_reg_req_db.NODE_REG_STATUS_COMPLETED,
+				nil,
+			)
+			_ = seedJobWithStatus(
+				node_reg_req_db.NODE_REG_JOB_TYPE_UPDATE,
+				"s3://bucket/started.csv",
+				node_reg_req_db.NODE_REG_STATUS_STARTED,
+				nil,
+			)
+			// Register job with matching status must not leak into the update list.
+			_ = seedJobWithStatus(
+				node_reg_req_db.NODE_REG_JOB_TYPE_REGISTER,
+				"s3://bucket/register-completed.csv",
+				node_reg_req_db.NODE_REG_STATUS_COMPLETED,
+				nil,
+			)
+
+			baseReq.HTTPMethod = "GET"
+			baseReq.Path = "/v1/admin/nodes/update-jobs"
+			baseReq.QueryStringParameters = map[string]string{"status": node_reg_req_db.NODE_REG_STATUS_COMPLETED}
+			response, err := handleRequest(adminCtx.Context, baseReq)
+			Expect(err).To(BeNil())
+			Expect(response.StatusCode).To(Equal(http.StatusOK))
+
+			var listResp jobs_api.ListResponse
+			Expect(json.Unmarshal([]byte(response.Body), &listResp)).To(Succeed())
+			Expect(listResp.Jobs).To(HaveLen(1))
+			Expect(listResp.Jobs[0].RequestID).To(Equal(completedID))
+			Expect(listResp.Jobs[0].Status).To(Equal(node_reg_req_db.NODE_REG_STATUS_COMPLETED))
+			Expect(listResp.Jobs[0].JobType).To(Equal(node_reg_req_db.NODE_REG_JOB_TYPE_UPDATE))
+
+			baseReq.QueryStringParameters = map[string]string{"status": node_reg_req_db.NODE_REG_STATUS_DATA_LOADED}
+			response, err = handleRequest(adminCtx.Context, baseReq)
+			Expect(err).To(BeNil())
+			Expect(response.StatusCode).To(Equal(http.StatusOK))
+			Expect(json.Unmarshal([]byte(response.Body), &listResp)).To(Succeed())
+			Expect(listResp.Jobs).To(HaveLen(0))
+
+			baseReq.QueryStringParameters = nil
+		})
+
+		It("returns 403 for a non-admin user", func() {
+			nonAdminID := "test-non-admin-update-list"
+			test_utils.SetupTestUser(context.Background(), nonAdminID, "non-admin@example.com")
+
+			baseReq.HTTPMethod = "GET"
+			baseReq.Path = "/v1/admin/nodes/update-jobs"
+			baseReq.RequestContext.Identity.CognitoIdentityID = nonAdminID
+			baseReq.RequestContext.Identity.CognitoAuthenticationProvider = test_utils.OIDCAuthProvider(nonAdminID)
+
+			response, err := handleRequest(adminCtx.Context, baseReq)
+			Expect(err).To(BeNil())
+			Expect(response.StatusCode).To(Equal(http.StatusForbidden))
 		})
 	})
 
