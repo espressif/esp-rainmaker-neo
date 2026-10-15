@@ -8,4 +8,9 @@ export interface RegistrationJobFileNameCellProps {
   requestId: string;
   certFileS3Path?: string;
   failedCount: number;
+  /**
+   * Namespace for the `unknownFile` fallback. Defaults to `register`;
+   * pass `update` when rendering update jobs.
+   */
+  i18nNamespace?: string;
 }

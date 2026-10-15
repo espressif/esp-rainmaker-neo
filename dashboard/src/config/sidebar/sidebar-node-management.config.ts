@@ -45,6 +45,13 @@ export function getNodeManagementSidebarGroup(
         path: "/home/node-management/register",
         endAction: getCreateEndAction(t, "register"),
       },
+      {
+        id: "update",
+        label: t("sidebar.updateNodes", "Update nodes"),
+        icon: group.items.update,
+        path: "/home/node-management/update",
+        endAction: getCreateEndAction(t, "update"),
+      },
     ],
   };
 }

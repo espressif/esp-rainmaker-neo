@@ -218,6 +218,22 @@ export const routesConfig: RouteConfig[] = [
             ],
           },
           {
+            path: "/update",
+            breadcrumb: {
+              i18nKey: "update:breadcrumbs.jobs",
+              fallback: "Update jobs",
+            },
+            subroutes: [
+              {
+                path: "/new",
+                breadcrumb: {
+                  i18nKey: "update:breadcrumbs.new",
+                  fallback: "Update nodes",
+                },
+              },
+            ],
+          },
+          {
             path: "/generate",
             breadcrumb: {
               i18nKey: "common:sidebar.generateNodes",

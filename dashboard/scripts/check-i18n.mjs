@@ -42,6 +42,7 @@ const NAMESPACE_OWNERS = {
   nodes: "/home/node-management/nodes",
   "node-groups": "/home/node-management/node-groups",
   register: "/home/node-management/register",
+  update: "/home/node-management/update",
   generate: "/home/node-management/generate",
   "ota-images": "/home/ota/images",
   "ota-jobs": "/home/ota/jobs",

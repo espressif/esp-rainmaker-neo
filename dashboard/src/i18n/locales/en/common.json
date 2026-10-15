@@ -95,6 +95,7 @@
     "nodes": "Nodes",
     "nodeGroups": "Node groups",
     "registerNodes": "Register nodes",
+    "updateNodes": "Update nodes",
     "generateNodes": "Generate nodes",
     "ota": "OTA",
     "otaImages": "Images",
@@ -119,6 +120,7 @@
     "title": "Create new",
     "nodeGroup": "Node group",
     "registerNodes": "Register nodes",
+    "updateNodes": "Update nodes",
     "otaImage": "Upload OTA Image",
     "otaJob": "OTA Job"
   },
