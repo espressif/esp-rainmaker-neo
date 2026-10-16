@@ -8,7 +8,7 @@ constructs==10.7.1
 # These pins are the dev environment. A new CLI dependency belongs
 # in cli/pyproject.toml first, and here only if this environment must pin it.
 
-# CLI (Morpheus) — editable install, puts `morpheus` on PATH for `make itest-setup`.
+# CLI (Morpheus) — editable install, puts `esp-morpheus` on PATH for `make itest-setup`.
 # The path is relative to the working directory, so run pip from the repo root.
 -e ./cli
 

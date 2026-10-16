@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""`morpheus admin iot-event-mode ...` and `admin claiming ...` — runtime configuration."""
+"""`esp-morpheus admin iot-event-mode ...` and `admin claiming ...` — runtime configuration."""
 
 import click
 

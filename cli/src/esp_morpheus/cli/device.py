@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""`morpheus device <node> ...` — the raw node side of the protocol."""
+"""`esp-morpheus device <node> ...` — the raw node side of the protocol."""
 
 import click
 

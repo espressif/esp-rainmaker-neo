@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""`morpheus admin ...` — every operation that needs AWS credentials or the admin API.
+"""`esp-morpheus admin ...` — every operation that needs AWS credentials or the admin API.
 
 One tree holds the whole privileged surface, so what an ordinary caller can reach is exactly what
 sits outside it: `user` and `device` go through the deployment's own API and broker and need no AWS
@@ -33,8 +33,8 @@ from . import (
     testdata,
 )
 
-IDENTITY_HINT = ('name one with `morpheus admin <identity>`, or seed one with '
-                 '`morpheus admin test-data setup`.')
+IDENTITY_HINT = ('name one with `esp-morpheus admin <identity>`, or seed one with '
+                 '`esp-morpheus admin test-data setup`.')
 
 # Where the group leaves the identity it took off the command line, for its own callback to read.
 IDENTITY_META = 'morpheus.admin.identity'

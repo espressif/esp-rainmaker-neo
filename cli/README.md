@@ -1,6 +1,6 @@
-# `morpheus` — the ESP RainMaker Neo console client
+# `esp-morpheus` — the ESP RainMaker Neo console client
 
-`morpheus` configures and exercises an ESP RainMaker Neo deployment end to end. It authenticates
+`esp-morpheus` configures and exercises an ESP RainMaker Neo deployment end to end. It authenticates
 users, registers and destroys IoT nodes, drives the user-facing REST API, connects to MQTT as a user
 or as a simulated device, and manages groups, sharing, mobile push platforms and Matter
 commissioning. It validates any deployment feature with no device and no phone app.
@@ -8,16 +8,16 @@ commissioning. It validates any deployment feature with no device and no phone a
 It installs as a command and runs from any directory, against any deployment, with no checkout of
 this repository.
 
-To reach a deployment, `morpheus` needs its **outputs**: every deployment publishes its common
-outputs to one file, which phone apps, the dashboard and this client all read. `morpheus` reads
+To reach a deployment, `esp-morpheus` needs its **outputs**: every deployment publishes its common
+outputs to one file, which phone apps, the dashboard and this client all read. `esp-morpheus` reads
 `rmng-outputs.json`, or the source given by `--client-outputs`.
 
-Most of `morpheus` needs nothing else. Driving a deployment as a user or a node goes through the
+Most of `esp-morpheus` needs nothing else. Driving a deployment as a user or a node goes through the
 deployment's own API and its MQTT broker — an end user signs in against the API and is handed
-credentials by it — so `morpheus --client-outputs <url> user someone@example.com` works with no AWS
+credentials by it — so `esp-morpheus --client-outputs <url> user someone@example.com` works with no AWS
 account, no profile, and no checkout.
 
-**AWS credentials** are needed only under `morpheus admin`, which holds the whole privileged
+**AWS credentials** are needed only under `esp-morpheus admin`, which holds the whole privileged
 surface: every command that reaches AWS directly or calls the admin API. The ones that reach AWS
 create, delete or sweep real resources, so they check that the credentials name the account in the
 outputs and refuse to run against another one. The region is not enforced: every AWS client is
@@ -42,47 +42,47 @@ Needs Python 3.12 or later.
 ## 2. Point it at a deployment
 
 The outputs are a JSON file keyed by stack name (`espuser-base`, `espuser-core`, `rmng-base`,
-`rmng-core`, ...). Give `morpheus` a path or a URL.
+`rmng-core`, ...). Give `esp-morpheus` a path or a URL.
 
-**A local file (default).** With no flag, `morpheus` reads `rmng-outputs.json`. Inside a checkout,
+**A local file (default).** With no flag, `esp-morpheus` reads `rmng-outputs.json`. Inside a checkout,
 a relative path resolves against the repo root, so it resolves the same from every directory;
 outside one, it resolves against the working directory.
 
 ```bash
-morpheus user someone@example.com
+esp-morpheus user someone@example.com
 ```
 
 **A URL.** Point `--client-outputs` at a published outputs file, such as the per-region
 client-outputs in S3. It is fetched at startup, so nothing is downloaded by hand.
 
 ```bash
-morpheus --client-outputs https://rmng-public-assets-123456789012.s3.us-east-1.amazonaws.com/ap-south-1/rmng-client-outputs.json \
-         user someone@example.com
+esp-morpheus --client-outputs https://rmng-public-assets-123456789012.s3.us-east-1.amazonaws.com/ap-south-1/rmng-client-outputs.json \
+             user someone@example.com
 ```
 
 `MORPHEUS_OUTPUTS` sets the same value, so a shell session can pick a deployment once.
 
 ## 3. Pick an identity
 
-Everything `morpheus` does, it does as somebody.
+Everything `esp-morpheus` does, it does as somebody.
 
 ### An account that already exists
 
 Pass any account provisioned in the deployment.
 
 ```bash
-morpheus user someone@example.com            # prompts for the password
+esp-morpheus user someone@example.com            # prompts for the password
 ```
 
 This tree is the end-user API and nothing else: it signs in against the end-user pool, and an admin
-account belongs to `morpheus admin`. `--password` belongs to `user`, so it comes before the
+account belongs to `esp-morpheus admin`. `--password` belongs to `user`, so it comes before the
 identity; everything after it is the subcommand.
 
 The password is read from `--password`, then `RMNG_PASSWORD`, then a prompt. Prefer the prompt or
 the environment variable: a password in `--password` is visible to other processes and lands in
 shell history.
 
-`morpheus` signs in before running anything, so a wrong password is reported at the prompt rather
+`esp-morpheus` signs in before running anything, so a wrong password is reported at the prompt rather
 than by whichever command you run first. A typed one can be retyped, up to three tries; one from
 `--password` or `RMNG_PASSWORD` fails straight away with exit code 3, since a script cannot answer
 a prompt. `auth` is the exception — it provisions an account that may not exist yet, so it runs
@@ -95,17 +95,17 @@ users and nodes from `test_config.json`. It registers every user and node, creat
 group per user, and associates nodes flagged with `associate_to`.
 
 ```bash
-morpheus admin test-data setup
+esp-morpheus admin test-data setup
 ```
 
 On a fresh install this also writes `test_config.json` from the packaged defaults, generating
 passwords and device certificates. It needs admin AWS credentials, since it provisions users in
-Cognito. The seeded admin is marked `"admin": true`, which is how `morpheus admin` finds it without
+Cognito. The seeded admin is marked `"admin": true`, which is how `esp-morpheus admin` finds it without
 naming one.
 
 ```bash
-morpheus user someone@example.com
-morpheus device node_rsa
+esp-morpheus user someone@example.com
+esp-morpheus device node_rsa
 ```
 
 `admin test-data destroy` removes them again: the seeded devices, their groups, and any leftover
@@ -116,13 +116,13 @@ alone.
 
 `admin bot-user create` creates an IAM user with AdministratorAccess for CI, and writes its access
 keys to `bot-iam-user-credentials.json` next to `test_config.json`. The name defaults to `bot`. Pass
-another one, and `morpheus` saves it as `ci_bot_user` in `test_config.json`, so `delete` and `show`
+another one, and `esp-morpheus` saves it as `ci_bot_user` in `test_config.json`, so `delete` and `show`
 find it again.
 
 ```bash
-morpheus admin bot-user create      # or: morpheus admin bot-user create rmng-ci
-morpheus admin bot-user show
-morpheus admin bot-user delete
+esp-morpheus admin bot-user create      # or: esp-morpheus admin bot-user create rmng-ci
+esp-morpheus admin bot-user show
+esp-morpheus admin bot-user delete
 ```
 
 One bot at a time. There is a single credentials file, so a second user under another name would
@@ -136,17 +136,17 @@ credentials file is lost.
 
 ## 4. One command, or a prompt
 
-Every command runs two ways. Name it on the command line and `morpheus` runs it and exits:
+Every command runs two ways. Name it on the command line and `esp-morpheus` runs it and exits:
 
 ```bash
-morpheus user someone@example.com group list
+esp-morpheus user someone@example.com group list
 ```
 
-Name no subcommand and `morpheus` opens a prompt bound to that identity, where the
-`morpheus user someone@example.com` prefix is implicit:
+Name no subcommand and `esp-morpheus` opens a prompt bound to that identity, where the
+`esp-morpheus user someone@example.com` prefix is implicit:
 
 ```
-$ morpheus user someone@example.com
+$ esp-morpheus user someone@example.com
 User context: someone@example.com
 Type help for commands, q to leave.
 someone@example.com > group create My Home
@@ -161,7 +161,7 @@ call and `Ctrl-C` all return you to the prompt; `q`, `quit` and `Ctrl-D` leave.
 ## 5. The command tree
 
 ```
-morpheus [--client-outputs SRC] [--json] [--raw] [-v]
+esp-morpheus [--client-outputs SRC] [--json] [--raw] [-v]
   user [--password PW] <identity> [SUBCOMMAND...]             # no subcommand -> prompt
       auth  connect  subscribe  publish  read-shadow  upload-file
       api                    get | post | put | patch | delete
@@ -201,7 +201,7 @@ call at a time. `app-sim` and `device-sim` sit on top and run the sequence of ra
 phone app or a real node performs.
 
 `admin` is the third tree, and the only privileged one: everything that needs AWS credentials or the
-admin API is under it, so what the rest of `morpheus` reaches is what an ordinary account reaches.
+admin API is under it, so what the rest of `esp-morpheus` reaches is what an ordinary account reaches.
 `guide` and `test-data gen-device` are the exceptions in the other direction — they need neither,
 and sit there because each one's other half is an admin command: `guide` prints the console side of
 a setup, and the node `gen-device` writes is inert until `test-data setup` registers it.
@@ -224,19 +224,19 @@ sharing list                               # pending shares
 
 ### `admin` — deployment-wide operations
 
-One tree for everything privileged, so what the rest of `morpheus` can reach is what an ordinary
+One tree for everything privileged, so what the rest of `esp-morpheus` can reach is what an ordinary
 account can reach.
 
 Its commands split in two. `integrations`, `platforms`, `nodes`, `iot-event-mode` and `claiming`
 call the admin API, which returns 403 for a regular user, so they need an admin identity: name one
-before the command, and without it `morpheus` uses the admin `test_config.json` flags. `ses`, `sns`,
+before the command, and without it `esp-morpheus` uses the admin `test_config.json` flags. `ses`, `sns`,
 `test-data` and `bot-user` call AWS directly and need no identity at all — only credentials for the
 account the outputs name.
 
 ```bash
-morpheus admin platforms list
-morpheus admin admin@example.com platforms list
-morpheus admin                             # a prompt over the same tree
+esp-morpheus admin platforms list
+esp-morpheus admin admin@example.com platforms list
+esp-morpheus admin                             # a prompt over the same tree
 ```
 
 ```
@@ -281,7 +281,7 @@ update-tags {"location":"hall"}
 ### `app-sim <identity>` — the app simulator
 
 The mobile app for a user: groups, automations, schedules and BLE provisioning. It resolves and
-checks IDENTITY exactly as `morpheus user` does, prompting for a password, so it drives any account
+checks IDENTITY exactly as `esp-morpheus user` does, prompting for a password, so it drives any account
 in the deployment rather than only the ones in `test_config.json`.
 
 ```
@@ -313,7 +313,7 @@ answers with a live secret key and session token — so redirect it rather than 
 `jq`:
 
 ```bash
-morpheus --json user someone@example.com api get v1/user/nodes | jq -e '.nodes'
+esp-morpheus --json user someone@example.com api get v1/user/nodes | jq -e '.nodes'
 ```
 
 Exit codes say what happened, so a script can branch without parsing text:
@@ -327,7 +327,7 @@ Exit codes say what happened, so a script can branch without parsing text:
 
 ## 8. Where state lives
 
-Inside a checkout, `morpheus` keeps using the paths that are already there: `cli/test_config.json`,
+Inside a checkout, `esp-morpheus` keeps using the paths that are already there: `cli/test_config.json`,
 `cli/.*.command_history` and `.sim/`. Installed, it uses XDG directories and writes nothing to the
 working directory.
 

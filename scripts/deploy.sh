@@ -162,7 +162,7 @@ elif [ "$command" == "--diff" ]; then
 elif [ "$command" == "--destroy" ]; then
     # Test nodes, groups and IoT things live in rmng, and cdk destroy does not remove the runtime-created ones.
     if [ "$STACK_GROUP" == "rmng" ]; then
-        morpheus admin test-data destroy || echo "warning: test-data cleanup failed; test IoT things/certs may remain" >&2
+        esp-morpheus admin test-data destroy || echo "warning: test-data cleanup failed; test IoT things/certs may remain" >&2
     fi
     cdk destroy --all --force --app "python3 $APP_FILE" --output "$(cdk_out_dir "$STACK_GROUP")"
     exit $?

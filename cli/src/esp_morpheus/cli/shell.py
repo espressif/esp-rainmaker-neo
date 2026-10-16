@@ -7,7 +7,7 @@
 The completer, the help text and the dispatcher all read the same click command tree, so a command
 cannot exist without appearing in completion and help.
 
-Dispatch reuses the group's already-built context, so `morpheus user alice` resolves the identity
+Dispatch reuses the group's already-built context, so `esp-morpheus user alice` resolves the identity
 once and every line typed afterwards runs against it.
 """
 

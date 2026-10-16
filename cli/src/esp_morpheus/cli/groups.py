@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""`morpheus user <id> group ...` — groups, subgroups and group sharing."""
+"""`esp-morpheus user <id> group ...` — groups, subgroups and group sharing."""
 
 import click
 

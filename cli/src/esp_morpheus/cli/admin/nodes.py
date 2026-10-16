@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""`morpheus admin nodes ...` — registering nodes into the deployment."""
+"""`esp-morpheus admin nodes ...` — registering nodes into the deployment."""
 
 import click
 

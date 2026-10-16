@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""`morpheus admin bot-user ...` — the CI IAM user and its access keys."""
+"""`esp-morpheus admin bot-user ...` — the CI IAM user and its access keys."""
 
 import json
 
@@ -146,14 +146,14 @@ def create_bot_user(session, name, rotate):
     # a live AdministratorAccess key. A tracked name IAM no longer has is stale, so it does not bite.
     if tracked and tracked != name and _iam_user_exists(iam, tracked):
         output.fail(f"This checkout already tracks IAM user {tracked!r}, and there is one "
-                    f"credentials file. Run `morpheus admin bot-user delete` before creating "
-                    f"{name!r}, or `morpheus admin bot-user create {tracked} --rotate` to issue it "
+                    f"credentials file. Run `esp-morpheus admin bot-user delete` before creating "
+                    f"{name!r}, or `esp-morpheus admin bot-user create {tracked} --rotate` to issue it "
                     'a new key.')
 
     exists = _iam_user_exists(iam, name)
     if exists and not rotate:
-        output.fail(f"IAM user {name!r} already exists. Run `morpheus admin bot-user create "
-                    '--rotate` to issue a new key, or `morpheus admin bot-user delete` to remove '
+        output.fail(f"IAM user {name!r} already exists. Run `esp-morpheus admin bot-user create "
+                    '--rotate` to issue a new key, or `esp-morpheus admin bot-user delete` to remove '
                     'the user.')
     if exists:
         # A rotate is the recovery path for a lost credentials file: IAM allows two keys per user,

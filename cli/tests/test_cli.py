@@ -10,6 +10,8 @@ codes, and the shell's error containment — holds without one.
 
 import json
 import os
+import tomllib
+from pathlib import Path
 
 import click
 import pytest
@@ -67,6 +69,11 @@ def test_unknown_command_is_a_usage_error(run):
 
 def test_version(run):
     assert run('--version').exit_code == 0
+
+
+def test_the_console_script_is_esp_morpheus():
+    pyproject = tomllib.loads((Path(__file__).parents[1] / 'pyproject.toml').read_text())
+    assert pyproject['project']['scripts'] == {'esp-morpheus': 'esp_morpheus.cli.main:main'}
 
 
 def test_the_privileged_surface_is_one_top_level_tree(run):
@@ -314,7 +321,7 @@ def test_the_banner_says_where_an_admin_comes_from(outputs_file, monkeypatch, ca
 
     monkeypatch.setattr(admin_module, '_aws_row', lambda: ('sso', ''))
     assert admin_module._print_context(Session(outputs_source=outputs_file), None) is None
-    assert 'morpheus admin <identity>' in capsys.readouterr().out
+    assert 'esp-morpheus admin <identity>' in capsys.readouterr().out
 
 
 def test_the_banner_names_a_sign_in_that_failed(outputs_file, monkeypatch, capsys):
@@ -509,7 +516,7 @@ def test_gen_device_stdout_prints_the_material_and_writes_nothing(run, tmp_path,
 
 
 def test_gen_device_appends_to_test_config(run, tmp_path, monkeypatch):
-    """The point of the command: the node is usable as `morpheus device <index>` straight after."""
+    """The point of the command: the node is usable as `esp-morpheus device <index>` straight after."""
     monkeypatch.setenv('MORPHEUS_CONFIG_DIR', str(tmp_path))
     config = tmp_path / 'test_config.json'
     config.write_text(json.dumps({'nodes': [{'thing_name': 'node_ec', 'cert': 'c', 'key': 'k'}]}))
@@ -761,7 +768,7 @@ def test_bot_user_show_reports_state_and_creates_nothing(bot):
 
 def test_app_sim_drives_an_identity_outside_test_config(outputs_file, tmp_path, monkeypatch):
     """test_config.json is read only to look an identity up, so a resolved user needs none — the
-    simulator can drive any account in the deployment, like `morpheus user` can."""
+    simulator can drive any account in the deployment, like `esp-morpheus user` can."""
     from esp_morpheus.sims.app import AppSim
 
     monkeypatch.setenv('MORPHEUS_CONFIG_DIR', str(tmp_path))   # empty: no test_config.json
@@ -786,7 +793,7 @@ def test_app_sim_still_reads_test_config_when_given_no_user(outputs_file, tmp_pa
 
 
 def test_neither_user_nor_app_sim_authenticates_against_the_admin_pool(run):
-    """Both trees are the end-user API. The admin pool is reached under `morpheus admin` alone."""
+    """Both trees are the end-user API. The admin pool is reached under `esp-morpheus admin` alone."""
     for listing in (run('user', '--help').output, run('app-sim', '--help').output):
         assert '--password' in listing and '--admin' not in listing
 

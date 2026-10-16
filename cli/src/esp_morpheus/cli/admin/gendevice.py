@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""`morpheus admin test-data gen-device` — a certificate and key for a node, generated locally.
+"""`esp-morpheus admin test-data gen-device` — a certificate and key for a node, generated locally.
 
 It reaches nothing and needs no credentials. It sits with `test-data` because it owns the same
 test_config.json, and the node it writes there does nothing until `test-data setup` registers it.
@@ -28,7 +28,7 @@ def gen_device(session, node_name, key_type, to_stdout, force):
 
     Needs no deployment and no credentials. The node is appended to test_config.json, which is
     written from the packaged defaults first when it does not exist yet. Register it with
-    `morpheus admin test-data setup`, which re-runs idempotently over the nodes already seeded.
+    `esp-morpheus admin test-data setup`, which re-runs idempotently over the nodes already seeded.
     """
     key_pem, cert_pem = generate_key_and_cert(node_name, key_type)
     entry = {'thing_name': node_name, 'cert': cert_pem, 'key': key_pem}

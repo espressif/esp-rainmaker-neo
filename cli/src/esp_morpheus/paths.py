@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Where morpheus keeps its config, history and simulator caches.
+"""Where esp-morpheus keeps its config, history and simulator caches.
 
 Installed, the command runs from any directory, so nothing may anchor to the CWD. Each resolver
 below answers in the same order: an environment override, then the repo checkout when the caller
@@ -85,7 +85,7 @@ def ensure(path):
 
 
 def test_config_path():
-    """The seeded test users and nodes, written by `morpheus admin test-data setup`."""
+    """The seeded test users and nodes, written by `esp-morpheus admin test-data setup`."""
     override = os.environ.get(_ENV_CONFIG)
     if override:
         return pathlib.Path(override).expanduser()
@@ -93,7 +93,7 @@ def test_config_path():
 
 
 def bot_credentials_path():
-    """IAM access keys for the CI bot user, written by `morpheus admin bot-user create`."""
+    """IAM access keys for the CI bot user, written by `esp-morpheus admin bot-user create`."""
     return config_dir() / 'bot-iam-user-credentials.json'
 
 

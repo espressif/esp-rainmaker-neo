@@ -49,7 +49,7 @@ class SparseDependency:
         work with a shallow (depth=1) fetch; arbitrary SHAs work only if the
         server allows fetching them directly (GitHub generally does).
     dest:
-        Where to place the checkout. Defaults to the morpheus cache, never the CWD.
+        Where to place the checkout. Defaults to the esp-morpheus cache, never the CWD.
     import_subdir:
         Directory (relative to the checkout root) to return / put on sys.path.
         Defaults to the first ``subdir``. Override when the importable package

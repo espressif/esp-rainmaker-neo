@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""`morpheus user <id> matter ...` — the three-step Matter commissioning exchange.
+"""`esp-morpheus user <id> matter ...` — the three-step Matter commissioning exchange.
 
 Each step used to be a token in the middle of `matter_assoc <group_id> <step> ...`, hand-dispatched
 after the group id had already been consumed. They are real subcommands now, so click checks their

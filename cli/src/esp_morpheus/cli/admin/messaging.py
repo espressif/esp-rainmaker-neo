@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""`morpheus admin ses ...` and `admin sns ...` — the account-level email and SMS setup.
+"""`esp-morpheus admin ses ...` and `admin sns ...` — the account-level email and SMS setup.
 
 These reach AWS directly rather than through the deployment API, so they need AWS credentials for
 the account the outputs name.

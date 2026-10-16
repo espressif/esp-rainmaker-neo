@@ -71,7 +71,7 @@ jobs:
           echo "mqtt=$(check docs/api/MQTT_*.yaml docs/api/Push_*.yaml)" >> "$GITHUB_OUTPUT"
           echo "cli=$(check 'cli/**' 'py_sdk/**')" >> "$GITHUB_OUTPUT"
 
-  # The morpheus CLI's offline suite: the command tree, the shell and the output
+  # The esp-morpheus CLI's offline suite: the command tree, the shell and the output
   # formatter. Needs no AWS credentials and no deployment.
   cli_test:
     name: CLI tests

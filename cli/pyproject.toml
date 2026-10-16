@@ -55,7 +55,7 @@ Homepage = "https://github.com/espressif/esp-rainmaker-neo"
 Source = "https://github.com/espressif/esp-rainmaker-neo"
 
 [project.scripts]
-morpheus = "esp_morpheus.cli.main:main"
+esp-morpheus = "esp_morpheus.cli.main:main"
 
 [project.optional-dependencies]
 test = ["pytest>=8.0"]
