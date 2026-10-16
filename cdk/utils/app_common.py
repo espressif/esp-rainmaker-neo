@@ -1088,6 +1088,9 @@ _RETRY = Config(retries={'max_attempts': 10, 'mode': 'adaptive'})
 _CONFLICT_ATTEMPTS = 12
 _CONFLICT_BACKOFF = 10
 
+# createDeployment snapshots every method on the API, and CloudFormation attaches a sibling stack's integration only after creating its method, so this BadRequest clears once that stack catches up.
+_PENDING_INTEGRATION = 'No integration defined for method'
+
 
 def handler(event, context):
     try:
@@ -1112,9 +1115,11 @@ def handler(event, context):
                                  {'DeploymentId': result['id']},
                                  physicalResourceId=props['PhysicalId'])
                 return
-            except client.exceptions.ConflictException as exc:
+            except (client.exceptions.ConflictException, client.exceptions.BadRequestException) as exc:
+                if isinstance(exc, client.exceptions.BadRequestException) and _PENDING_INTEGRATION not in str(exc):
+                    raise
                 last_error = exc
-                print('createDeployment conflicted (attempt %d/%d): %s'
+                print('createDeployment retrying (attempt %d/%d): %s'
                       % (attempt + 1, _CONFLICT_ATTEMPTS, exc))
                 time.sleep(_CONFLICT_BACKOFF)
 
