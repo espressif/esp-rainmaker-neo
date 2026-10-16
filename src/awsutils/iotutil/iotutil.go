@@ -15,6 +15,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
@@ -117,6 +118,36 @@ func attachPolicy(ctx context.Context, policyName, certArn string) error {
 	}
 
 	rlog.Info(ctx).Str("policyName", policyName).Str("certArn", certArn).Msg("policy attached to certificate successfully")
+	return nil
+}
+
+// ListAttachedPolicies returns the names of every IoT policy attached to a principal (cert ARN), across all pages.
+func ListAttachedPolicies(ctx context.Context, principalArn string) ([]string, error) {
+	paginator := iot.NewListAttachedPoliciesPaginator(awscommon.GetIoTClient(), &iot.ListAttachedPoliciesInput{
+		Target: aws.String(principalArn),
+	})
+	var names []string
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, rmerror.NewRMError(err, fmt.Sprintf("failed to list policies attached to %s", principalArn))
+		}
+		for _, p := range page.Policies {
+			if p.PolicyName != nil {
+				names = append(names, *p.PolicyName)
+			}
+		}
+	}
+	return names, nil
+}
+
+// AttachPolicies attaches each named policy to certArn once, skipping repeats. Idempotent, so a retry after a partial attach completes it.
+func AttachPolicies(ctx context.Context, certArn string, names []string) error {
+	for _, name := range slices.Compact(slices.Sorted(slices.Values(names))) {
+		if err := attachPolicy(ctx, name, certArn); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

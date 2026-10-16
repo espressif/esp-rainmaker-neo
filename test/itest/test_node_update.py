@@ -218,6 +218,8 @@ def test_update_node_cert(admin_user):
     """Pre-register a node with cert A, run an update job with cert B for the
     same node, then verify:
       - cert B is ACTIVE and attached to the Thing
+      - cert B carries every IoT policy cert A had (#266: the update job passes
+        no capabilities, so the policies must come from cert A itself)
       - cert A is INACTIVE (deactivated) and detached from the Thing
       - a Device built with cert B can actually connect to MQTT
 
@@ -240,7 +242,7 @@ def test_update_node_cert(admin_user):
     # Pre-register via the single-node Lambda path so we can keep cert A's
     # private key around for connectivity assertions.
     device_a = Device(node_id, key_a_pem, cert_a_pem, CA_CERT, IOT_ENDPOINT, REGION, DEBUG)
-    assert admin_user.register_node(device_a), \
+    assert admin_user.register_node(device_a, capabilities=["s3"]), \
         f"Pre-registration of {node_id} with cert A failed"
     assert connect_device_with_retry(device_a), \
         f"Pre-registered device {node_id} could not connect with cert A"
@@ -255,17 +257,24 @@ def test_update_node_cert(admin_user):
     # attachment immediately, but the control-plane listing can lag by tens of
     # seconds. Poll instead of a fixed sleep so the test isn't tuned to a guess.
     cert_a_id = None
+    cert_a_arn = None
     deadline = time.time() + 30
     while time.time() < deadline:
         principals_before = iot_client.list_thing_principals(thingName=node_id)["principals"]
         for p in principals_before:
             if ":cert/" in p:
+                cert_a_arn = p
                 cert_a_id = p.rsplit("/", 1)[-1]
                 break
         if cert_a_id:
             break
         time.sleep(2)
     assert cert_a_id, f"No cert principal found on Thing {node_id} before update"
+
+    policies_a = sorted(p["policyName"] for p in
+                        iot_client.list_attached_policies(target=cert_a_arn)["policies"])
+    assert len(policies_a) >= 2, \
+        f"Expected the base policy plus the s3 capability policy on cert A, got {policies_a}"
 
     update_csv = _build_update_csv_bytes(
         rows=[{"node_id": node_id, "certs": cert_b_only}],
@@ -295,6 +304,11 @@ def test_update_node_cert(admin_user):
         assert cert_b_principal is not None, \
             f"No cert attached to Thing {node_id} after cert update"
         cert_b_id = cert_b_principal.rsplit("/", 1)[-1]
+
+        policies_b = sorted(p["policyName"] for p in
+                            iot_client.list_attached_policies(target=cert_b_principal)["policies"])
+        assert set(policies_a) <= set(policies_b), \
+            f"Cert B lost policies on update: had {policies_a} on cert A, got {policies_b}"
 
         cert_a_status = iot_client.describe_certificate(certificateId=cert_a_id) \
             ["certificateDescription"]["status"]
