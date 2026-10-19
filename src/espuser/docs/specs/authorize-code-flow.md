@@ -24,7 +24,7 @@ This is the interactive counterpart to [direct-token OTP](auth-flows.md): same O
 
 **In:** SSO sessions and silent re-auth — see [Single sign-on](#single-sign-on--the-session) below.
 
-**Out (deferred):** consent screen, per-client branding, custom-domain→issuer, and the full S3+CloudFront branded SPA. Those are deferred features and are **not** built here. Since first-party clients skip consent, the flow goes login → OTP → code with no consent step.
+**Out (deferred):** consent screen, per-client branding, and the full S3+CloudFront branded SPA. Those are deferred features and are **not** built here. Since first-party clients skip consent, the flow goes login → OTP → code with no consent step.
 
 ## Pre-requisites
 

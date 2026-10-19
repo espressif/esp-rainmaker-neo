@@ -6,12 +6,11 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
-
+	"github.com/espressif/esp-rainmaker-neo/src/awsutils/ssmutil"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/jwtutil"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -23,8 +22,10 @@ func TestPublishDiscovery(t *testing.T) {
 	RunSpecs(t, "Publish Discovery Suite")
 }
 
+const jwksParam = "/espuser/base/user-jwks-publish-test"
+
 var _ = Describe("publish config validation", func() {
-	full := Config{Issuer: "https://i", APIBase: "https://a", Bucket: "b", JWKSParam: "j", KMSKeyARN: "arn:test"}
+	full := Config{JWKSParam: jwksParam, KMSKeyARN: "arn:test"}
 
 	It("rejects a config missing the jwks param", func() {
 		cfg := full
@@ -41,44 +42,19 @@ var _ = Describe("publish config validation", func() {
 	})
 })
 
-var _ = Describe("cache lifetimes on the published documents", func() {
-	// Not cosmetic. The discovery document advertises which capabilities exist, so its
-	// max-age IS the delay between shipping a feature and clients being able to use it. At 24
-	// hours, adding end_session_endpoint shipped a server that could sign people out and
-	// browsers that kept yesterday's document saying it could not -- and the SDK, finding no
-	// endpoint, silently dropped local tokens and left the session alive. Sign-out looked
-	// successful and ended nothing.
-	It("keeps the metadata short enough that a discovery change lands the same day", func() {
-		Expect(metadataCacheControl).To(ContainSubstring("max-age=300"))
-		Expect(metadataCacheControl).To(ContainSubstring("must-revalidate"))
-	})
-
-	It("keeps JWKS cacheable but rotatable within the hour", func() {
-		// Longer than the metadata (it is fetched on a verification hot path) but far short
-		// of a day, so an emergency key rotation actually propagates.
-		Expect(jwksCacheControl).To(ContainSubstring("max-age=3600"))
-	})
-
-	It("never publishes a document cached for a day or more (the regression)", func() {
-		for _, header := range []string{metadataCacheControl, jwksCacheControl} {
-			Expect(header).NotTo(ContainSubstring("86400"))
-		}
-	})
-})
-
 var _ = Describe("published JWKS", func() {
-	It("carries the KMS public key under its RFC 7638 thumbprint kid", func() {
+	It("writes the KMS public key to SSM under its RFC 7638 thumbprint kid", func() {
 		kmsMock, key := mock.NewMockRSAKMS("arn:test")
 		awscommon.SetKMSClient(kmsMock)
+		awscommon.SetSSMClient(mock.NewMockSSM())
 
-		pub := &key.PublicKey
-		jwks := jwtutil.BuildJWKS(jwtutil.BuildJWK(pub, jwtutil.RSAThumbprint(pub)))
-		body, err := json.Marshal(jwks)
-		Expect(err).NotTo(HaveOccurred())
+		Expect(publish(context.Background(), Config{JWKSParam: jwksParam, KMSKeyARN: "arn:test"})).To(Succeed())
 
-		set, err := jwtutil.ParseJWKS(string(body))
+		stored, err := ssmutil.GetParameterWithCaching(context.Background(), jwksParam, false, false)
 		Expect(err).NotTo(HaveOccurred())
-		_, found := set.LookupKeyID(jwtutil.RSAThumbprint(pub))
-		Expect(found).To(BeTrue())
+		set, err := jwtutil.ParseJWKS(stored)
+		Expect(err).NotTo(HaveOccurred())
+		_, found := set.LookupKeyID(jwtutil.RSAThumbprint(&key.PublicKey))
+		Expect(found).To(BeTrue(), "the verifiers find the signing key by its thumbprint kid")
 	})
 })

@@ -29,6 +29,7 @@ from ..handlers.token.stack import TokenAPI
 from ..handlers.user_auth.stack import UserAuthAPI
 from ..handlers.user_common.stack import UserCommonAPI
 from ..handlers.userinfo.stack import UserinfoAPI
+from ..handlers.well_known.stack import WellKnownAPI
 from .base_res_constants import USER_SSM_PARAMETERS
 
 # Comma-separated list of one or more email-shaped tokens (each at least a@b.c), whitespace around commas allowed. Blank is NOT accepted.
@@ -95,6 +96,7 @@ class EspUserCoreStack(Stack):
         revoke_api = RevokeAPI(self, "RevokeAPI", common_resources)
         clients_api = ClientsAPI(self, "ClientsAPI", common_resources)
         authorize_api = AuthorizeAPI(self, "AuthorizeAPI", common_resources)
+        well_known_api = WellKnownAPI(self, "WellKnownAPI", common_resources)
 
         user_auth_api = UserAuthAPI(self, "UserAuthAPI", common_resources)
 
@@ -116,6 +118,7 @@ class EspUserCoreStack(Stack):
         esp_user_api_deploy.node.add_dependency(revoke_api)
         esp_user_api_deploy.node.add_dependency(clients_api)
         esp_user_api_deploy.node.add_dependency(authorize_api)
+        esp_user_api_deploy.node.add_dependency(well_known_api)
         esp_user_api_deploy.node.add_dependency(user_auth_api)
         esp_user_api_deploy.node.add_dependency(admin_creds_api)
 

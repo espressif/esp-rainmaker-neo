@@ -41,8 +41,8 @@ point at `jwks.json` for the public keys.
   sharing state, and it changes **iff** the key changes — which is precisely
   when a rotation wants a new `kid`.
 - **Rotation.** A new KMS key yields a new thumbprint `kid`; publish an overlap
-  JWKS containing both keys for at least `max(access-token TTL, JWKS S3 cache =
-  86400s)` before retiring the old key. Verifiers cache the JWKS without
+  JWKS containing both keys for at least `max(access-token TTL, JWKS cache =
+  3600s)` before retiring the old key. Verifiers cache the JWKS without
   refetching on an unknown `kid`, so a key **addition** needs a consumer refresh
   (a redeploy does this); a key **removal** is only safe after the overlap.
 - **Provider parity.** `jwtutils.Minter` signs through a `crypto.Signer`, so the
@@ -54,8 +54,8 @@ point at `jwks.json` for the public keys.
 - **RS256 only.** Sole signing alg; `alg: none` rejected (RFC 8725).
 - **`issuer` = deployment base URL.** Every URL in all three docs is built from
   it; `jwks_uri` = `<issuer>/.well-known/jwks.json`.
-- **Static, public, cacheable.** No secrets — JWKS publishes only public JWKs.
-  Generated once and served from S3; no Lambda on the read path.
+- **Public, cacheable, built per request.** No secrets — JWKS publishes only public
+  JWKs. The well-known Lambda serves all three from the issuer's host; nothing is stored.
 - **Issuer is fixed once chosen.** It is signed into every token, so changing it
   is a migration, not a toggle.
 - **Token responses are never cached.** Every response carrying tokens (`/oauth2/token` and the legacy `/v1/user/auth/token` and `/token/refresh`) sends `Cache-Control: no-store` and `Pragma: no-cache` (RFC 6749 §5.1).
@@ -82,31 +82,61 @@ semantics:
 
 ## Design
 
-The three documents are immutable and identical for every caller, so they are
-**generated once and served as static S3 objects** — not computed per request.
+The ESP User API serves the three documents itself, at the issuer's `/.well-known/*`. Its own
+Lambda, `well_known`, builds the two metadata documents on every request from the issuer and the API
+base (`oidc.BuildOIDCMetadata`, `oidc.BuildAuthServerMetadata`) and serves the JWKS from the SSM
+parameter `ESP_USER_JWKS`. Nothing is stored in S3 and there is no CloudFront, so the documents
+always describe the code that is running.
 
-- **Tier 1 (default):** public S3 objects over HTTPS; `issuer` = the S3 URL.
-- **Tier 2 (custom domain):** CloudFront (ACM cert) over a private S3 origin
-  (OAC); `issuer` = the custom domain. Added only when a custom domain is attached.
+- **Caching:** `public, max-age=300, must-revalidate` on the metadata, `public, max-age=3600` on
+  the JWKS. Every response carries an `ETag`; a matching `If-None-Match` gets `304`.
+- **CORS:** `Access-Control-Allow-Origin: *`. The documents are public by specification and never
+  credentialed, and a browser relying party reads discovery before it can start a login.
+- **Keys:** the Lambda reads `ESP_USER_JWKS` once per container, as every token verifier does, so
+  a key change reaches this endpoint and the verifiers on a cold start.
 
-A **publisher** (deploy hook; later, key rotation) builds the objects from the
-issuer + the key's public half and writes them to S3:
+The issuer is derived from the ESP User API's custom domain, of which there is at most one:
+
+- **One custom domain mapped:** `https://<domain>[/<base-path>]`. One host then carries the issuer,
+  the documents, the `/oauth2/*` endpoints and the sign-in page.
+- **No custom domain mapped:** the API's own URL, `https://<api-id>.execute-api.<region>.amazonaws.com/prod`.
+- **More than one mapped:** the `espuser-base` deploy fails and names the domains; it never picks one.
+
+An issuer with a path (`/prod`, or a domain mapped under a base path) is found by OIDC Discovery,
+which appends `/.well-known/openid-configuration` to the issuer, but not by a strict RFC 8414 §3
+client, which inserts the well-known segment before the path. Production maps its domain at the
+root.
+
+**Attaching or removing the ESP User API's custom domain changes the issuer.** The issuer is signed
+into every token, so after the next deploy the access and ID tokens issued before it stop verifying
+and users sign in again; refresh tokens do not carry the issuer, so a client renews into the new
+one. Attach the domain before going live.
+
+A **publisher** (deploy hook; later, key rotation) builds the JWKS from the key's public half and
+writes it to SSM, where the well-known Lambda serves it and every verifier reads it:
 
 ```mermaid
 sequenceDiagram
     participant Pub as "Publisher (deploy hook)"
     participant KMS as "KMS (asymmetric RSA key)"
-    participant S3 as "S3 bucket"
+    participant SSM as "SSM ESP_USER_JWKS"
+    participant Client as "Client"
+    participant WK as "well_known Lambda"
 
     Pub->>KMS: GetPublicKey (public half only)
-    Pub->>Pub: public key -> JWK (kid = RFC 7638 thumbprint) — issuer -> metadata
-    Pub->>S3: PutObject .well-known/openid-configuration
-    Pub->>S3: PutObject .well-known/oauth-authorization-server
-    Pub->>S3: PutObject .well-known/jwks.json
+    Pub->>Pub: public key -> JWK (kid = RFC 7638 thumbprint)
+    Pub->>SSM: PutParameter
+    Client->>WK: GET /.well-known/jwks.json (If-None-Match)
+    WK->>SSM: GetParameter (once per container)
+    alt ETag matches If-None-Match
+        WK-->>Client: 304, no body
+    else
+        WK-->>Client: 200 JWKS, Cache-Control max-age=3600, ETag
+    end
 ```
 
-The build logic (issuer → metadata struct, public key → JWK Set struct) lives in
-shared utils so the publisher and any future request-time handler share it.
+The build logic (issuer → metadata struct, public key → JWK Set struct) lives in shared utils,
+used by the publisher at deploy and by the well-known Lambda at request time.
 
 ## APIs
 
@@ -120,8 +150,8 @@ shared utils so the publisher and any future request-time handler share it.
 **API**: `GET /.well-known/openid-configuration`
 
 **Process**:
-1. Serve the static object built from `issuer`.
-2. `Content-Type: application/json`, `Cache-Control: public, max-age=86400`.
+1. Build the document from the issuer and the API base.
+2. `Content-Type: application/json`, `Cache-Control: public, max-age=300, must-revalidate`, `ETag`; `304` on a matching `If-None-Match`.
 
 **Response** (fields REQUIRED by OpenID Discovery 1.0):
 | field | example | notes |
@@ -144,8 +174,8 @@ shared utils so the publisher and any future request-time handler share it.
 **API**: `GET /.well-known/oauth-authorization-server`
 
 **Process**:
-1. Serve the static object built from `issuer`.
-2. `Content-Type: application/json`, `Cache-Control: public, max-age=86400`.
+1. Build the document from the issuer and the API base.
+2. `Content-Type: application/json`, `Cache-Control: public, max-age=300, must-revalidate`, `ETag`; `304` on a matching `If-None-Match`.
 
 **Response** (fields required/recommended by RFC 8414):
 | field | example | notes |
@@ -176,8 +206,8 @@ shared utils so the publisher and any future request-time handler share it.
 **API**: `GET /.well-known/jwks.json`
 
 **Process**:
-1. Serve the static JWK Set — public half of every trusted signing key.
-2. `Content-Type: application/json`, `Cache-Control: public, max-age=86400`.
+1. Serve the JWK Set from `ESP_USER_JWKS`: the public half of every trusted signing key.
+2. `Content-Type: application/json`, `Cache-Control: public, max-age=3600`, `ETag`; `304` on a matching `If-None-Match`.
 
 **Response** (per-key fields required by RFC 7517/7518 for an RSA verify key —
 `kty`, `kid`, `use`, `alg`, `n`, `e`):
@@ -187,8 +217,9 @@ shared utils so the publisher and any future request-time handler share it.
 > v1 publishes one active key. Rotation (publish-next → flip-active → retire) is
 > deferred to the token-issuing slice.
 >
-> **Rotation overlap must be ≥ the JWKS cache lifetime.** JWKS is cached for 1
-> day (`max-age=86400`), so a verifier may hold a stale key set for up to a day.
-> When rotation lands, publish the new key **before** it signs and keep the old
-> key in JWKS for **≥ 1 day** after the new key becomes active — otherwise tokens
-> signed by the new key fail verification against caches that predate it.
+> **Rotation overlap must be ≥ the JWKS cache lifetime.** JWKS is cached for an
+> hour (`max-age=3600`), and this endpoint and the verifiers read SSM once per
+> container, so a key change reaches them only on a cold start. When rotation lands, publish the new key **before** it signs and
+> keep the old key in JWKS for **≥ 1 hour** after the new key becomes active —
+> otherwise tokens signed by the new key fail verification against caches that
+> predate it.

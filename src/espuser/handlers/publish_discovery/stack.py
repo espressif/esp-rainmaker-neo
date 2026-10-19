@@ -14,21 +14,18 @@ from app_common import (
     create_base_lambda_role,
     create_lambda_function,
 )
-from arn_utils import get_s3_object_arn, get_ssm_parameter_arn
+from arn_utils import get_ssm_parameter_arn
 from src.espuser.stacks.base_res_constants import USER_SSM_PARAMETERS
 
 
 class PublishDiscovery(Construct):
-    """Publishes the OIDC/OAuth discovery documents to S3 once, at stack create, via a custom resource backed by the publish_discovery Go Lambda. The verify key is the KMS signing key's public half; no private key exists outside KMS."""
+    """Writes the JWKS to SSM once per deploy, via a custom resource backed by the publish_discovery Go Lambda. The verify key is the KMS signing key's public half; no private key exists outside KMS."""
 
     def __init__(
         self,
         scope: Construct,
         id: str,
         common_resources: CommonResources,
-        discovery_bucket,
-        issuer: str,
-        api_base: str,
         signing_kms_key=None,
         **kwargs,
     ) -> None:
@@ -45,40 +42,12 @@ class PublishDiscovery(Construct):
             resources=[get_ssm_parameter_arn(jwks_param, region)],
         ))
 
-        # Write only the three discovery objects under the well-known prefix.
-        lambda_role.add_to_policy(iam.PolicyStatement(
-            actions=["s3:PutObject"],
-            resources=[get_s3_object_arn(discovery_bucket.bucket_name, ".well-known/*")],
-        ))
-
         if signing_kms_key is None:
             raise ValueError("PublishDiscovery requires the KMS signing key — tokens sign exclusively via kms:Sign")
 
         environment = {
-            "USER_ISSUER": issuer,
-            "ESPUSER_API_BASE": api_base,
-            "ESPUSER_DISCOVERY_BUCKET": discovery_bucket.bucket_name,
             "USER_JWKS_PARA_NAME": jwks_param,
             "ESPUSER_KMS_SIGNING_KEY_ARN": signing_kms_key.key_arn,
-        }
-        cr_properties = {
-            "Issuer": issuer,
-            "ApiBase": api_base,
-            "Bucket": discovery_bucket.bucket_name,
-            "JwksParam": jwks_param,
-            "KmsKeyArn": signing_kms_key.key_arn,
-            # 5: grant_types_supported gained client_credentials. The documents are
-            # built from oidc.SupportedGrantTypes at publish time, and a change there moves
-            # no property below, so nothing else would make CloudFormation republish.
-            # 6: end_session_endpoint added (RP-Initiated Logout) and scopes_supported gained
-            # account:sessions. Same trap as 5, and it bites harder here: a client discovers
-            # sign-out FROM this document, so a stale copy means every SDK silently falls back
-            # to dropping local tokens and the session survives.
-            # 7: cache-control on the published documents cut from 24h to 5min (metadata) and
-            # 1h (jwks). The header is part of the OUTPUT, not of any property below, so this
-            # bump is the only thing that republishes it -- and until it does, every browser
-            # holding yesterday's document keeps it for the rest of the day.
-            "PublishVersion": "7",
         }
         signing_kms_key.grant(lambda_role, "kms:GetPublicKey")
 
@@ -89,11 +58,11 @@ class PublishDiscovery(Construct):
             environment=environment,
         )
 
-        # Properties make CloudFormation fire an Update (which republishes) whenever a publish input changes. JwksParam is included so a change to the JWKS parameter path re-publishes to the new location; bump PublishVersion to force a republish when the output changes for a reason not captured by the others (e.g. cache-control headers, document fields).
+        # A new key ARN or parameter path changes these properties, so CloudFormation fires an Update and the JWKS is republished.
         CustomResource(
             self, "PublishDiscoveryResource",
             service_token=publish_function.function_arn,
-            properties=cr_properties,
+            properties={"JwksParam": jwks_param, "KmsKeyArn": signing_kms_key.key_arn},
         )
 
         self.publish_function = publish_function

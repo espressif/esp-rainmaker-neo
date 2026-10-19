@@ -18,7 +18,6 @@ from aws_cdk import (
     aws_iam as iam,
     aws_kms as kms,
     aws_lambda as lambda_,
-    aws_s3 as s3,
 )
 from constructs import Construct
 
@@ -31,7 +30,6 @@ from app_common import (
     create_cognito_user_pool_domain,
     create_kms_signing_key,
     create_rest_api,
-    create_s3_bucket,
     create_ssm_string_parameter,
     create_write_once_secret,
     discover_api_custom_domain,
@@ -304,62 +302,15 @@ def handler(event, context):
                                  physical_id="seed-refresh-secret")
 
 class CreateDiscoveryStorage(Construct):
-    """Storage for the static OIDC/OAuth discovery documents.
+    """The OIDC signing key and the JWKS published from it.
 
-    Tier 1 (default): a bucket whose objects are publicly readable over HTTPS at
-    the S3 REST endpoint, so the issuer can be the S3 URL and no CloudFront is
-    needed. Tier 2 (custom domain) front this bucket with CloudFront/OAC later;
-    that does not change this storage. See espuser/docs/en/specs/oidc-oauth2.md.
-
-    `api_base` is the API Gateway base URL the `/oauth2/*` endpoints live on; it
-    is advertised in the discovery documents, which are served from the issuer
-    (S3) host — the two hosts differ.
-
-    The KMS signing key lives here too, so the key and the JWKS that advertises it are created
-    and destroyed together.
+    The discovery documents are not stored anywhere: the well-known Lambda builds them per request
+    from the issuer and serves them, with the JWKS from SSM, at the ESP User API's /.well-known/*.
+    The key and the JWKS that advertises it are created and destroyed together. See
+    src/espuser/docs/specs/oidc-oauth2.md.
     """
-    def __init__(self, scope: Construct, id: str, *, common_resources, api_base: str, **kwargs) -> None:
+    def __init__(self, scope: Construct, id: str, *, common_resources, **kwargs) -> None:
         super().__init__(scope, id, **kwargs)
-
-        region = Stack.of(self).region
-
-        # public=True for the AnyPrincipal grant on .well-known/ below.
-        self.discovery_bucket = create_s3_bucket(
-            self, "DiscoveryBucket", common_resources, "oauth",
-            public=True,
-            # Browsers fetch these two documents with JavaScript, so a public object is not
-            # enough: without CORS the request succeeds and the browser discards the response,
-            # which surfaces to a user as "could not reach the sign-in service" even though the
-            # object returned 200. Every OIDC relying party running in a browser reads
-            # /.well-known/openid-configuration before it can start a login, so this is not
-            # optional for any of them.
-            #
-            # `*` is correct here rather than an origin allowlist: these documents are public by
-            # specification and are already world-readable over plain HTTPS, so naming origins
-            # would restrict nothing an attacker could not read with curl, while guaranteeing
-            # that each new product must edit this stack before it can sign anyone in. Nothing
-            # here is credentialed — no cookies, no Authorization header — so there is no
-            # ambient authority for a hostile origin to borrow.
-            cors=[s3.CorsRule(
-                allowed_methods=[s3.HttpMethods.GET, s3.HttpMethods.HEAD],
-                allowed_origins=["*"],
-                allowed_headers=["*"],
-                exposed_headers=["ETag"],
-                max_age=86400,
-            )],
-            removal_policy=RemovalPolicy.DESTROY,
-            auto_delete_objects=True,
-        )
-
-        self.discovery_bucket.add_to_resource_policy(iam.PolicyStatement(
-            actions=["s3:GetObject"],
-            resources=[self.discovery_bucket.arn_for_objects(".well-known/*")],
-            principals=[iam.AnyPrincipal()],
-        ))
-
-        # Account-Regional Namespace means AWS composes the physical name, so read it off the bucket
-        # rather than recomposing it here — this resolves to a CFN token, not a literal.
-        self.issuer = f"https://{self.discovery_bucket.bucket_name}.s3.{region}.amazonaws.com"
 
         self.signing_key = create_kms_signing_key(
             self, "OIDCSigningKey",
@@ -374,11 +325,11 @@ class CreateDiscoveryStorage(Construct):
             description="ARN of the KMS asymmetric key that signs ESP User OIDC tokens",
         )
 
+    def publish(self, *, common_resources, issuer: str) -> None:
+        """Record `issuer` and publish the JWKS to SSM."""
+        self.issuer = issuer
         self.publish_discovery = PublishDiscovery(
             self, "PublishDiscovery", common_resources,
-            discovery_bucket=self.discovery_bucket,
-            issuer=self.issuer,
-            api_base=api_base,
             signing_kms_key=self.signing_key,
         )
 
@@ -553,15 +504,20 @@ class EspUserBaseStack(Stack):
             jwks_fetcher_lambda=self.common_base_resources.jwks_fetcher_lambda
         )
 
-        # Resolved before the end-user pool and CreateDiscoveryStorage so both the identity
-        # providers' callback and the published .well-known documents advertise the custom-domain
-        # /oauth2/* endpoints when one is mapped.
+        self.discovery_storage = CreateDiscoveryStorage(
+            self, "CreateDiscoveryStorage",
+            common_resources=self.common_resources,
+        )
+
+        # Resolved before the end-user pool, so its callbacks use the custom-domain /oauth2/* endpoints.
+        # The issuer is the API's one custom domain, else its own execute-api URL; the deploy fails when more than one domain is mapped.
         self.api_custom_domain, esp_user_api_url, esp_user_api_base_url = discover_api_custom_domain(
             self, "EspUserApiCustomDomainDiscovery",
             name="espuser-api-custom-domain-discovery",
             api_id=self.common_base_resources.esp_user_api.rest_api_id,
             api_type="REST",
             default_url=self.common_base_resources.esp_user_api.url,
+            is_issuer=True,
         )
 
         # base_url has no trailing slash, so the "/path" suffix joins correctly whether or not a
@@ -576,11 +532,7 @@ class EspUserBaseStack(Stack):
         )
         self._publish_end_user_pool_params()
 
-        self.discovery_storage = CreateDiscoveryStorage(
-            self, "CreateDiscoveryStorage",
-            common_resources=self.common_resources,
-            api_base=esp_user_api_url,
-        )
+        self.discovery_storage.publish(common_resources=self.common_resources, issuer=esp_user_api_url)
 
         self.gsi_readiness = GsiReadinessGate(
             self, "GsiReadiness",

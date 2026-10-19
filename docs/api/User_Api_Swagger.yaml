@@ -99,50 +99,122 @@ paths:
       summary: OpenID Provider metadata
       description:
         OIDC discovery document — endpoint URLs and the `jwks_uri`. Public and
-        cacheable.
+        cacheable. Served at `<issuer>/.well-known/*` by the ESP User API, built per request;
+        revalidate with `If-None-Match` to get a 304 instead of the body.
       tags:
         - OIDC Discovery
       security: []
+      parameters:
+        - name: If-None-Match
+          in: header
+          required: false
+          description: The `ETag` from an earlier response.
+          schema:
+            type: string
+          example: '"3f2a9c1e0b7d4a6c8e5f1a2b3c4d5e6f"'
       responses:
         "200":
           description: Discovery metadata
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              example: "public, max-age=300, must-revalidate"
+            ETag:
+              schema:
+                type: string
+              example: '"3f2a9c1e0b7d4a6c8e5f1a2b3c4d5e6f"'
+            Access-Control-Allow-Origin:
+              schema:
+                type: string
+              example: "*"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/OpenIDConfiguration"
+        "304":
+          description: Not modified; the `If-None-Match` ETag is current. No body.
 
   /.well-known/oauth-authorization-server:
     get:
       summary: OAuth 2.0 Authorization Server metadata
       description:
         OAuth 2.0 authorization server metadata for non-OIDC clients. Public and
-        cacheable.
+        cacheable. Served at `<issuer>/.well-known/*` by the ESP User API, built per request;
+        revalidate with `If-None-Match` to get a 304 instead of the body.
       tags:
         - OIDC Discovery
       security: []
+      parameters:
+        - name: If-None-Match
+          in: header
+          required: false
+          description: The `ETag` from an earlier response.
+          schema:
+            type: string
+          example: '"3f2a9c1e0b7d4a6c8e5f1a2b3c4d5e6f"'
       responses:
         "200":
           description: Authorization Server metadata
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              example: "public, max-age=300, must-revalidate"
+            ETag:
+              schema:
+                type: string
+              example: '"3f2a9c1e0b7d4a6c8e5f1a2b3c4d5e6f"'
+            Access-Control-Allow-Origin:
+              schema:
+                type: string
+              example: "*"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/AuthorizationServerMetadata"
+        "304":
+          description: Not modified; the `If-None-Match` ETag is current. No body.
 
   /.well-known/jwks.json:
     get:
       summary: JSON Web Key Set
       description:
-        Public keys for verifying issued tokens. Public and cacheable.
+        Public keys for verifying issued tokens. Public and cacheable. Served at `<issuer>/.well-known/*` by the ESP User API, built per request;
+        revalidate with `If-None-Match` to get a 304 instead of the body.
       tags:
         - OIDC Discovery
       security: []
+      parameters:
+        - name: If-None-Match
+          in: header
+          required: false
+          description: The `ETag` from an earlier response.
+          schema:
+            type: string
+          example: '"3f2a9c1e0b7d4a6c8e5f1a2b3c4d5e6f"'
       responses:
         "200":
           description: JWK Set
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              example: "public, max-age=3600"
+            ETag:
+              schema:
+                type: string
+              example: '"3f2a9c1e0b7d4a6c8e5f1a2b3c4d5e6f"'
+            Access-Control-Allow-Origin:
+              schema:
+                type: string
+              example: "*"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/JWKS"
+        "304":
+          description: Not modified; the `If-None-Match` ETag is current. No body.
 
   /oauth2/authorize:
     get:

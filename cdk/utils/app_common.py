@@ -1260,7 +1260,8 @@ from botocore.config import Config
 # GetDomainNames/GetBasePathMappings hit API Gateway's account-region control plane, and the api + mcp discovery custom resources across stacks call it concurrently during a parallel deploy, self-throttling to TooManyRequestsException. Adaptive mode adds a client-side rate limiter plus exponential backoff with jitter, and the higher attempt cap rides out the throttle instead of failing the stack after the default 4 retries.
 _RETRY = Config(retries={'max_attempts': 10, 'mode': 'adaptive'})
 
-def _discover_rest(api_id):
+def _rest_mappings(api_id):
+    # Yields (domain, base_path) for every custom domain mapping of api_id, lazily so a caller can stop at the first.
     client = boto3.client('apigateway', config=_RETRY)
     for page in client.get_paginator('get_domain_names').paginate():
         for item in page.get('items', []):
@@ -1272,10 +1273,9 @@ def _discover_rest(api_id):
             for mapping in mappings.get('items', []):
                 if mapping.get('restApiId') == api_id:
                     raw_path = mapping.get('basePath', '')
-                    return candidate, ('' if raw_path in ('(none)', None) else raw_path)
-    return '', ''
+                    yield candidate, ('' if raw_path in ('(none)', None) else raw_path)
 
-def _discover_http(api_id):
+def _http_mappings(api_id):
     client = boto3.client('apigatewayv2', config=_RETRY)
     next_token = None
     while True:
@@ -1291,10 +1291,18 @@ def _discover_http(api_id):
                 continue
             for mapping in mappings.get('Items', []):
                 if mapping.get('ApiId') == api_id:
-                    return candidate, mapping.get('ApiMappingKey', '') or ''
+                    yield candidate, mapping.get('ApiMappingKey', '') or ''
         next_token = page.get('NextToken')
         if not next_token:
-            return '', ''
+            return
+
+def _only_mapping(mappings, api_id):
+    # The issuer is derived from this mapping, so picking one of several would let AWS's listing order decide every token's iss.
+    found = list(mappings)
+    if len(found) > 1:
+        names = ', '.join(f'{d}/{p}' if p else d for d, p in found)
+        raise Exception(f'API {api_id} has more than one custom domain mapping ({names}), so its issuer is ambiguous; keep exactly one')
+    return found[0] if found else ('', '')
 
 def handler(event, context):
     # Log the raw event first - carries ResponseURL, which unstick_custom_resource.py needs if this hangs.
@@ -1306,10 +1314,11 @@ def handler(event, context):
             props = event['ResourceProperties']
             api_id = props['ApiId']
             default_url = props['DefaultUrl']
-            if props['ApiType'] == 'REST':
-                domain_name, base_path = _discover_rest(api_id)
+            mappings = _rest_mappings(api_id) if props['ApiType'] == 'REST' else _http_mappings(api_id)
+            if props.get('IsIssuer') == 'true':
+                domain_name, base_path = _only_mapping(mappings, api_id)
             else:
-                domain_name, base_path = _discover_http(api_id)
+                domain_name, base_path = next(mappings, ('', ''))
             print(f'Discovered domain={domain_name!r} base_path={base_path!r}')
             # Resolve the fallback here rather than with a CfnCondition: CloudFormation
             # forbids referencing resource attributes from the Conditions block.
@@ -1339,6 +1348,7 @@ def discover_api_custom_domain(
     api_id: str,
     api_type: str,
     default_url: str,
+    is_issuer: bool = False,
 ) -> tuple:
     """Discover the custom domain mapped to an API Gateway API at deploy time.
 
@@ -1350,6 +1360,8 @@ def discover_api_custom_domain(
     Discovery is used instead of a CfnParameter because a parameter the installer
     forgets to re-supply reverts to its default, which would silently drop the
     custom domain from outputs on upgrade. ``api_type`` is "REST" or "HTTP".
+
+    ``is_issuer`` marks ``url`` as the API's issuer, so the deploy fails when more than one custom domain is mapped to it; otherwise the first domain found is used. One mapping "sso.example.com" under "auth" -> "https://sso.example.com/auth"; none -> the execute-api URL.
     """
     if api_type not in ("REST", "HTTP"):
         raise ValueError(f"api_type must be 'REST' or 'HTTP', got {api_type!r}")
@@ -1384,12 +1396,12 @@ def discover_api_custom_domain(
         fn.node.default_child.override_logical_id(
             stable_logical_id("LambdaFunc", "api-custom-domain-discovery"))
 
-    resource = CustomResource(
-        scope, id,
-        service_token=fn.function_arn,
-        properties={"ApiId": api_id, "ApiType": api_type, "DefaultUrl": default_url,
-                    "RediscoverOn": _DISCOVERY_SALT},
-    )
+    properties = {"ApiId": api_id, "ApiType": api_type, "DefaultUrl": default_url,
+                  "RediscoverOn": _DISCOVERY_SALT}
+    if is_issuer:
+        properties["IsIssuer"] = "true"
+
+    resource = CustomResource(scope, id, service_token=fn.function_arn, properties=properties)
     resource.node.default_child.override_logical_id(stable_logical_id("CustomResource", name))
 
     # The handler applies the fallback and returns the final URLs. CloudFormation
