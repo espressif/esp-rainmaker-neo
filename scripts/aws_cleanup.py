@@ -37,6 +37,7 @@ class AWSDeployCleanup:
         self.cloudwatch = self.session.client('logs')
         self.cloudfront = self.session.client('cloudfront')
         self.sns = self.session.client('sns')
+        self.ssm = self.session.client('ssm')
         self.services = services if services else ['all']
 
     def cleanup_cognito(self):
@@ -917,6 +918,55 @@ class AWSDeployCleanup:
             self.console.print(f"[red]Error cleaning up SNS resources: {str(e)}[/red]")
             raise
 
+    def cleanup_ssm_parameters(self):
+        """Clean up Systems Manager Parameter Store parameters"""
+        try:
+            self.console.print("[bold cyan]Listing SSM Parameter Store parameters...[/bold cyan]")
+            parameters = []
+            paginator = self.ssm.get_paginator('describe_parameters')
+
+            for page in paginator.paginate():
+                for parameter in page.get('Parameters', []):
+                    parameter_name = parameter.get('Name')
+                    parameters.append(parameter_name)
+                    self.console.print(f"Found parameter: {parameter_name}")
+
+            if not parameters:
+                self.console.print("[yellow]No parameters found[/yellow]")
+                return
+
+            self.console.print(f"\n[bold cyan]Found {len(parameters)} parameters to delete[/bold cyan]")
+            # delete_parameters accepts at most 10 names per call
+            for index in range(0, len(parameters), 10):
+                batch = parameters[index:index + 10]
+                try:
+                    self.console.print(f"\n[bold]Processing batch of {len(batch)} parameters[/bold]")
+
+                    self.console.print("\n[cyan]Deleting parameters...[/cyan]")
+                    response = self.ssm.delete_parameters(Names=batch)
+
+                    for parameter_name in response.get('DeletedParameters', []):
+                        self.console.print(f"[green]✓ Successfully deleted parameter: {parameter_name}[/green]")
+                    for parameter_name in response.get('InvalidParameters', []):
+                        self.console.print(f"[yellow]⚠ Warning: Could not delete parameter: {parameter_name}[/yellow]")
+
+                except ClientError as e:
+                    error_code = e.response['Error']['Code']
+                    error_message = e.response['Error']['Message']
+                    self.console.print(f"[red]✗ Error deleting parameters {batch}: {error_code} - {error_message}[/red]")
+                    continue
+
+            self.console.print("\n[bold green]SSM Parameter Store cleanup completed![/bold green]")
+
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            error_message = e.response['Error']['Message']
+            self.console.print(f"[red]Error cleaning up SSM parameters: {error_code} - {error_message}[/red]")
+            raise
+        except Exception as e:
+            self.console.print(f"[red]Error cleaning up SSM parameters: {str(e)}[/red]")
+            raise
+
     def cleanup_aws_resources(self):
         """Clean up AWS resources based on specified services"""
         try:
@@ -949,7 +999,10 @@ class AWSDeployCleanup:
             
             if self.services == ['all'] or 'sns' in self.services:
                 self.cleanup_sns()
-            
+
+            if self.services == ['all'] or 'ssm' in self.services:
+                self.cleanup_ssm_parameters()
+
             self.console.print("\n[bold green]AWS cleanup completed![/bold green]")
             
         except Exception as e:
@@ -962,8 +1015,8 @@ class AWSDeployCleanup:
 @click.option('--secret-key', help='AWS secret access key')
 @click.option('--session-token', help='AWS session token')
 @click.option('--region', default='us-east-1', help='AWS region name (e.g., us-east-1, eu-west-1)')
-@click.option('--service', type=click.Choice(['iam', 's3', 'lambda', 'cloudformation', 'cognito', 'dynamodb', 'iot', 'cloudwatch', 'cloudfront', 'sns', 'all']), default='all',
-              help='Service to clean up (iam=IAM roles, s3=S3 buckets, lambda=Lambda functions, cloudformation=CloudFormation stacks, cognito=Cognito user pools, dynamodb=DynamoDB tables, iot=IoT resources, cloudwatch=CloudWatch resources, cloudfront=CloudFront resources, sns=SNS topics and subscriptions, all=all services)')
+@click.option('--service', type=click.Choice(['iam', 's3', 'lambda', 'cloudformation', 'cognito', 'dynamodb', 'iot', 'cloudwatch', 'cloudfront', 'sns', 'ssm', 'all']), default='all',
+              help='Service to clean up (iam=IAM roles, s3=S3 buckets, lambda=Lambda functions, cloudformation=CloudFormation stacks, cognito=Cognito user pools, dynamodb=DynamoDB tables, iot=IoT resources, cloudwatch=CloudWatch resources, cloudfront=CloudFront resources, sns=SNS topics and subscriptions, ssm=Systems Manager Parameter Store parameters, all=all services)')
 def main(profile, access_key, secret_key, session_token, region, service):
     """AWS Deployment Cleanup Tool"""
     cleanup = AWSDeployCleanup(profile, access_key, secret_key, session_token, region, [service])
