@@ -491,9 +491,10 @@ class AWSDeployCleanup:
                 self.console.print("[yellow]No stacks found[/yellow]")
                 return
 
-            # Sort stacks by creation time (newest first)
+            # Newest first, but CDK bootstrap stacks last: deleting an app stack assumes its bootstrap stack's execution role.
             self.console.print(f"\n[bold cyan]Found {len(stacks)} stacks to delete[/bold cyan]")
             sorted_stacks = sorted(stacks, key=lambda x: x.get('CreationTime', ''), reverse=True)
+            sorted_stacks.sort(key=lambda x: x['StackName'].startswith('CDKToolkit'))
             
             for stack in sorted_stacks:
                 stack_name = stack.get('StackName')
