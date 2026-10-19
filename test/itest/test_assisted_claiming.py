@@ -39,8 +39,13 @@ from test.itest.conftest import (
     REGION,
     _destroy_user,
     _init_user,
+    bridge_associate_and_ready,
+    bridge_child_ids,
+    cleanup_bridge_children,
     connect_device_with_retry,
+    publish_add_child,
     rmng_outputs,
+    stored_node_type,
 )
 
 # Claiming configuration the suite bootstraps with, via the admin admin API
@@ -304,18 +309,12 @@ def _attached_cert_policies(node_id):
     return {p["policyName"] for p in iot.list_attached_policies(target=principals[0])["policies"]}
 
 
-def _node_type(node_id):
-    item = boto3.resource("dynamodb", region_name=REGION).Table("rmng-nodes").get_item(
-        Key={"node_id": node_id}).get("Item", {})
-    return item.get("node_type", "")
-
-
 def test_claim_with_bridge_attaches_the_bridge_policy(_bridge_stack_deployed, test_user1, claimed_nodes):
     c = test_user1.claim(capabilities=["bridge"])
     claimed_nodes.append(c["node_id"])
 
     assert BRIDGE_POLICY_NAME in _attached_cert_policies(c["node_id"])
-    assert _node_type(c["node_id"]) == "bridge"
+    assert stored_node_type(c["node_id"]) == "bridge"
 
 
 def test_reclaim_with_bridge_upgrades_a_plain_node(_bridge_stack_deployed, test_user1, claimed_nodes):
@@ -329,7 +328,49 @@ def test_reclaim_with_bridge_upgrades_a_plain_node(_bridge_stack_deployed, test_
     assert resp.status_code == 201, resp.text
 
     assert BRIDGE_POLICY_NAME in _attached_cert_policies(node_id)
-    assert _node_type(node_id) == "bridge", "presence cascade filters on node_type"
+    assert stored_node_type(node_id) == "bridge", "presence cascade filters on node_type"
+
+
+def test_reclaim_without_bridge_clears_the_bridge_node_type_and_deletes_its_children(_bridge_stack_deployed, test_user1, claimed_nodes):
+    """A bridge re-claimed as a plain node loses its type and its children (spec §5.8): nothing relays for them any more, and the presence cascade, which filters on node_type, would leave them showing online."""
+    mac = _random_mac()
+    c = test_user1.claim(mac, capabilities=["bridge"])
+    node_id = c["node_id"]
+    claimed_nodes.append(node_id)
+    assert stored_node_type(node_id) == "bridge"
+    child_id = f"{node_id}--reclaim1"
+    bridge = Device(node_id, c["private_key"], c["certificate"], CA_CERT, IOT_ENDPOINT, REGION, DEBUG)
+    group_api = Group(test_user1)
+    group_id = None
+    try:
+        group_id = bridge_associate_and_ready(bridge, test_user1, group_api)
+        publish_add_child(bridge, "reclaim1", "0xRECLAIM001")
+        deadline = time.time() + 15
+        while time.time() < deadline and bridge_child_ids(node_id) != [child_id]:
+            time.sleep(0.5)
+        assert bridge_child_ids(node_id) == [child_id], "addChild did not create the child"
+        bridge.disconnect()
+
+        csr_pem, _key_pem = _make_csr()
+        resp = _verify(test_user1, mac, csr_pem)
+        assert resp.status_code == 201, resp.text
+        assert stored_node_type(node_id) == "", "re-claim without bridge did not clear node_type"
+
+        deadline = time.time() + 30
+        while time.time() < deadline and bridge_child_ids(node_id):
+            time.sleep(0.5)
+        assert bridge_child_ids(node_id) == [], "bridge_children rows survived the demotion"
+        with pytest.raises(ClientError) as excinfo:
+            boto3.client("iot", region_name=REGION).describe_thing(thingName=child_id)
+        assert excinfo.value.response["Error"]["Code"] == "ResourceNotFoundException"
+    finally:
+        try:
+            bridge.disconnect()
+        except Exception:  # noqa: BLE001 - best-effort teardown
+            pass
+        cleanup_bridge_children(node_id)
+        if group_id:
+            group_api.delete_group(group_id, warn_error=True)
 
 
 def test_claim_with_bridge_is_granted_only_where_the_bridge_stack_is_deployed(test_user1, claimed_nodes):

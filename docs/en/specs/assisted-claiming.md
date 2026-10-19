@@ -190,6 +190,22 @@ same registration hook a first registration fires. Without that, a device with
 `s3`/`kvs`/`bridge` would silently lose those policies and fail later at the
 credential provider with AccessDenied rather than visibly at the point of change.
 
+The replacement gets only the policies the claim's capabilities imply; it does
+not inherit the old certificate's, so a capability left out of a re-claim loses
+its policy (a bridge re-claimed without `bridge` loses the bridge policy). A
+bulk update with a `certs` column is the opposite case: it states no
+capabilities, so its replacement certificate keeps every policy the old one
+carried.
+
+The claim's capabilities are also authoritative for the node's `node_type`: the
+hook's classification replaces the stored one, including with empty when the
+claim no longer requests a classifying capability. When a non-empty value is
+changed or cleared, the claim handler async-invokes the node-type-changed
+lifecycle hook with the node ID, so the module that owned the old type can
+clean up; the bridge module uses it to delete a demoted bridge's
+children ([bridge.md §5.8](bridge.md)). A bulk update supplies no capabilities
+and leaves `node_type` untouched.
+
 ### 3.7 Provenance tags
 
 Claimed nodes are stamped with admin tags reusing the keys the dashboard already

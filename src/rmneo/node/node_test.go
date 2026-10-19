@@ -1234,29 +1234,76 @@ var _ = Describe("Node", func() {
 				Expect(events[0].CertArn).NotTo(BeEmpty())
 			})
 
-			It("sets node_type when a re-claim adds a classifying capability", func() {
+			It("leaves node_type empty and fires no type-changed hook when the hook classifies nothing and the stored node_type is empty", func() {
 				nodeID, err := node.RegisterNodeInRmng(testCtx, nodeCert, "", nil, nil, "test-admin", nil)
 				Expect(err).To(BeNil())
-				installHook("bridge", nil)
+				installHook("", nil)
+				typeChanges := recordTypeChanges()
 
-				Expect(node.UpdateNodeInRmng(testCtx, nodeID, replacementCert, nil, nil, []string{"bridge"})).To(Succeed())
+				Expect(node.ReplaceNodeInRmng(testCtx, nodeID, replacementCert, nil, nil, nil)).To(Succeed())
 
 				nodeType, err := node_details_db.NewNodeDetailsDB(testCtx).GetNodeType(nodeID)
 				Expect(err).To(BeNil())
-				Expect(nodeType).To(Equal("bridge"))
+				Expect(nodeType).To(BeEmpty())
+				Expect(typeChanges()).To(BeEmpty())
 			})
 
-			It("keeps the stored node_type when the hook classifies nothing", func() {
+			It("clears node_type and fires the type-changed hook when a re-claim classifies nothing and the stored node_type is bridge", func() {
 				installHook("bridge", nil)
 				nodeID, err := node.RegisterNodeInRmng(testCtx, nodeCert, "", nil, nil, "test-admin", []string{"bridge"})
 				Expect(err).To(BeNil())
 				installHook("", nil)
+				typeChanges := recordTypeChanges()
 
-				Expect(node.UpdateNodeInRmng(testCtx, nodeID, replacementCert, nil, nil, nil)).To(Succeed())
+				Expect(node.ReplaceNodeInRmng(testCtx, nodeID, replacementCert, nil, nil, nil)).To(Succeed())
+
+				nodeType, err := node_details_db.NewNodeDetailsDB(testCtx).GetNodeType(nodeID)
+				Expect(err).To(BeNil())
+				Expect(nodeType).To(BeEmpty())
+				Expect(typeChanges()).To(Equal([]nodelifecycle.NodeTypeChangedEvent{{NodeID: nodeID}}))
+			})
+
+			It("sets node_type to bridge and fires no type-changed hook when the hook says bridge and the stored node_type is empty", func() {
+				nodeID, err := node.RegisterNodeInRmng(testCtx, nodeCert, "", nil, nil, "test-admin", nil)
+				Expect(err).To(BeNil())
+				installHook("bridge", nil)
+				typeChanges := recordTypeChanges()
+
+				Expect(node.ReplaceNodeInRmng(testCtx, nodeID, replacementCert, nil, nil, []string{"bridge"})).To(Succeed())
 
 				nodeType, err := node_details_db.NewNodeDetailsDB(testCtx).GetNodeType(nodeID)
 				Expect(err).To(BeNil())
 				Expect(nodeType).To(Equal("bridge"))
+				Expect(typeChanges()).To(BeEmpty())
+			})
+
+			It("keeps node_type bridge and fires no type-changed hook when the hook says bridge and the stored node_type is bridge", func() {
+				installHook("bridge", nil)
+				nodeID, err := node.RegisterNodeInRmng(testCtx, nodeCert, "", nil, nil, "test-admin", []string{"bridge"})
+				Expect(err).To(BeNil())
+				typeChanges := recordTypeChanges()
+
+				Expect(node.ReplaceNodeInRmng(testCtx, nodeID, replacementCert, nil, nil, []string{"bridge"})).To(Succeed())
+
+				nodeType, err := node_details_db.NewNodeDetailsDB(testCtx).GetNodeType(nodeID)
+				Expect(err).To(BeNil())
+				Expect(nodeType).To(Equal("bridge"))
+				Expect(typeChanges()).To(BeEmpty())
+			})
+
+			It("keeps node_type bridge and fires no type-changed hook on a bulk update where no capabilities are supplied", func() {
+				installHook("bridge", nil)
+				nodeID, err := node.RegisterNodeInRmng(testCtx, nodeCert, "", nil, nil, "test-admin", []string{"bridge"})
+				Expect(err).To(BeNil())
+				installHook("", nil)
+				typeChanges := recordTypeChanges()
+
+				Expect(node.UpdateNodeInRmng(testCtx, nodeID, replacementCert, []string{"GroupA"}, []string{"env:prod"}, nil)).To(Succeed())
+
+				nodeType, err := node_details_db.NewNodeDetailsDB(testCtx).GetNodeType(nodeID)
+				Expect(err).To(BeNil())
+				Expect(nodeType).To(Equal("bridge"))
+				Expect(typeChanges()).To(BeEmpty())
 			})
 
 			It("refuses to set node_type on a node with no row", func() {
@@ -1272,12 +1319,14 @@ var _ = Describe("Node", func() {
 				nodeID, err := node.RegisterNodeInRmng(testCtx, nodeCert, "", nil, nil, "test-admin", nil)
 				Expect(err).To(BeNil())
 				installHook("bridge", errors.New("attach failed"))
+				typeChanges := recordTypeChanges()
 
-				Expect(node.UpdateNodeInRmng(testCtx, nodeID, replacementCert, nil, nil, []string{"bridge"})).NotTo(Succeed())
+				Expect(node.ReplaceNodeInRmng(testCtx, nodeID, replacementCert, nil, nil, []string{"bridge"})).NotTo(Succeed())
 
 				nodeType, err := node_details_db.NewNodeDetailsDB(testCtx).GetNodeType(nodeID)
 				Expect(err).To(BeNil())
 				Expect(nodeType).To(BeEmpty())
+				Expect(typeChanges()).To(BeEmpty())
 			})
 		})
 	})
@@ -1300,6 +1349,28 @@ func installHook(nodeType string, hookErr error) *[]hookCall {
 		return nodeType, hookErr
 	})
 	return calls
+}
+
+// recordTypeChanges points the node-type-changed hook at the Lambda mock and returns a func that decodes the events invoked on it since.
+func recordTypeChanges() func() []nodelifecycle.NodeTypeChangedEvent {
+	const fnName = "test-node-type-changed-hook"
+	Expect(os.Setenv("NODE_TYPE_CHANGED_HOOK_FUNCTION_NAME", fnName)).To(Succeed())
+	DeferCleanup(os.Unsetenv, "NODE_TYPE_CHANGED_HOOK_FUNCTION_NAME")
+	lambdaMock := awscommon.GetLambdaClient().(*mock.LambdaMock)
+	lambdaMock.InvokeCalls = nil
+
+	return func() []nodelifecycle.NodeTypeChangedEvent {
+		var events []nodelifecycle.NodeTypeChangedEvent
+		for _, call := range lambdaMock.InvokeCalls {
+			if *call.FunctionName != fnName {
+				continue
+			}
+			var event nodelifecycle.NodeTypeChangedEvent
+			Expect(json.Unmarshal(call.Payload, &event)).To(Succeed())
+			events = append(events, event)
+		}
+		return events
+	}
 }
 
 func AssertShadowIsDeleted(testNode *node.Node, groups group_node_db.NodesGroups) {

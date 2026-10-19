@@ -26,6 +26,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/kmsutil"
 	"github.com/espressif/esp-rainmaker-neo/src/claim"
 	"github.com/espressif/esp-rainmaker-neo/src/claim/ca_bootstrap"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_details_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_id_reservation_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
@@ -346,6 +347,59 @@ var _ = Describe("Claim Verify", func() {
 		})
 	})
 
+	// policiesOn returns the IoT policies attached to the certificate with this PEM.
+	policiesOn := func(certPEM string) []string {
+		cert, _, exists := iotMock.FindCertificateByPEMDirect(certPEM)
+		Expect(exists).To(BeTrue(), "certificate is not registered")
+		return iotMock.GetAttachedPolicies(cert.Arn)
+	}
+
+	storedNodeType := func() string {
+		readCtx := rmngctx.NewRmngContext(user.NewUser(callerA))
+		readCtx.SetAllow(utils.NodeAll, nodeID)
+		nodeType, err := node_details_db.NewNodeDetailsDB(readCtx).GetNodeType(nodeID)
+		Expect(err).To(BeNil())
+		return nodeType
+	}
+
+	withCaps := func(caps []string) []map[string]interface{} {
+		if caps == nil {
+			return nil
+		}
+		return []map[string]interface{}{{"capabilities": caps}}
+	}
+
+	// A re-claim's capabilities are authoritative: the new certificate gets exactly the policies they imply, whatever the old one had.
+	DescribeTable("re-claim attaches the policies of the re-claim's own capabilities to the new certificate",
+		func(firstCaps, reclaimCaps, wantPolicies []string) {
+			Expect(verifyFor(callerA, testMac, withCaps(firstCaps)...).StatusCode).To(Equal(http.StatusCreated))
+			resp := verifyFor(callerA, testMac, withCaps(reclaimCaps)...)
+			Expect(resp.StatusCode).To(Equal(http.StatusCreated), resp.Body)
+
+			Expect(policiesOn(certPEMFrom(resp))).To(ConsistOf(wantPolicies))
+			Expect(kvsMock.Channels).To(HaveLen(1), "the kvs channel is created once and never removed by a re-claim")
+			Expect(storedNodeType()).To(BeEmpty())
+		},
+		Entry("same s3 and kvs again", []string{"s3", "kvs"}, []string{"s3", "kvs"},
+			[]string{"rmng-base-node-policy", "rmng-node-file-policy", "rmng-node-video-policy"}),
+		Entry("s3 and kvs added", nil, []string{"s3", "kvs"},
+			[]string{"rmng-base-node-policy", "rmng-node-file-policy", "rmng-node-video-policy"}),
+		Entry("s3 and kvs left out", []string{"s3", "kvs"}, nil,
+			[]string{"rmng-base-node-policy"}),
+	)
+
+	It("drops the bridge policy when a bridge is re-claimed without the bridge capability", func() {
+		first := verifyFor(callerA, testMac, withCaps([]string{"bridge"})...)
+		Expect(first.StatusCode).To(Equal(http.StatusCreated), first.Body)
+		Expect(policiesOn(certPEMFrom(first))).To(ContainElement("rmng-bridge-policy"))
+
+		resp := verifyFor(callerA, testMac)
+		Expect(resp.StatusCode).To(Equal(http.StatusCreated), resp.Body)
+
+		Expect(policiesOn(certPEMFrom(resp))).To(ConsistOf("rmng-base-node-policy"))
+		Expect(storedNodeType()).To(BeEmpty())
+	})
+
 	Describe("bridge capability without the bridge stack", func() {
 		It("returns 400 and no certificate", func() {
 			iotMock.MissingPolicies = map[string]bool{"rmng-bridge-policy": true}
@@ -353,6 +407,21 @@ var _ = Describe("Claim Verify", func() {
 			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest), resp.Body)
 			Expect(resp.Body).To(ContainSubstring(`capability \"bridge\" is not available on this deployment`))
 			Expect(resp.Body).NotTo(ContainSubstring("BEGIN CERTIFICATE"))
+		})
+
+		It("returns 400 on a re-claim and leaves the node on its old certificate", func() {
+			first := verifyFor(callerA, testMac)
+			Expect(first.StatusCode).To(Equal(http.StatusCreated), first.Body)
+			firstCert := certPEMFrom(first)
+
+			iotMock.MissingPolicies = map[string]bool{"rmng-bridge-policy": true}
+			resp := verifyFor(callerA, testMac, map[string]interface{}{"capabilities": []string{"bridge"}})
+			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest), resp.Body)
+			Expect(resp.Body).NotTo(ContainSubstring("BEGIN CERTIFICATE"))
+
+			Expect(iotMock.VerifyCertificateActive(firstCert)).To(BeTrue(), "a failed re-claim must not lock the device out")
+			Expect(iotMock.VerifyThingHasCertificate(nodeID, firstCert)).To(BeTrue())
+			Expect(storedNodeType()).To(BeEmpty())
 		})
 	})
 

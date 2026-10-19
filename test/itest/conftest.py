@@ -2242,21 +2242,31 @@ def drain():
     return _do
 
 
-def _cleanup_bridge_children(bridge_thing_name):
+def stored_node_type(node_id):
+    """The node_type on the node's rmng-nodes row; "" when unclassified."""
+    item = boto3.resource("dynamodb", region_name=REGION).Table("rmng-nodes").get_item(
+        Key={"node_id": node_id}).get("Item", {})
+    return item.get("node_type", "")
+
+
+def bridge_child_ids(bridge_thing_name):
+    """Child node IDs in rmng-bridge-children for this bridge."""
+    resp = boto3.client("dynamodb", region_name=REGION).query(
+        TableName="rmng-bridge-children",
+        KeyConditionExpression="parent_node_id = :p",
+        ExpressionAttributeValues={":p": {"S": bridge_thing_name}},
+    )
+    return [item["child_node_id"]["S"] for item in resp.get("Items", [])]
+
+
+def cleanup_bridge_children(bridge_thing_name):
     ddb = boto3.client("dynamodb")
     iot = boto3.client("iot", region_name=REGION)
     try:
-        resp = ddb.query(
-            TableName="rmng-bridge-children",
-            KeyConditionExpression="parent_node_id = :p",
-            ExpressionAttributeValues={":p": {"S": bridge_thing_name}},
-        )
+        children = bridge_child_ids(bridge_thing_name)
     except Exception:
         return
-    for item in resp.get("Items", []):
-        child = item.get("child_node_id", {}).get("S", "")
-        if not child:
-            continue
+    for child in children:
         try:
             iot.delete_thing(thingName=child)
         except Exception:
@@ -2270,7 +2280,7 @@ def _cleanup_bridge_children(bridge_thing_name):
             pass
 
 
-def _bridge_associate_and_ready(bridge, user, group_api):
+def bridge_associate_and_ready(bridge, user, group_api):
     assert connect_device_with_retry(bridge), \
         f"Failed to connect bridge {bridge.node_thing_name}"
     group_id = group_api.create_group("Bridge Test Group")
@@ -2292,7 +2302,7 @@ def _init_bridge_in_group():
     private_key_pem, cert_pem = generate_key_and_cert(thing_name, 'rsa')
     bridge = Device(thing_name, private_key_pem, cert_pem, CA_CERT, IOT_ENDPOINT, REGION, DEBUG)
     bridge.register_test_node(capabilities=['bridge'], caller_identity=node_registrar_identity())
-    group_id = _bridge_associate_and_ready(bridge, user, group_api)
+    group_id = bridge_associate_and_ready(bridge, user, group_api)
     return [bridge, group_id, user, group_api]
 
 
@@ -2305,13 +2315,13 @@ def _reset_bridge_in_group(resource):
         bridge.disconnect()
     except Exception:
         pass
-    _cleanup_bridge_children(bridge.node_thing_name)
+    cleanup_bridge_children(bridge.node_thing_name)
     try:
         group_api.delete_group(group_id, warn_error=True)
     except Exception as e:
         print(f"Warning: failed to delete bridge group {group_id}: {e}")
     try:
-        new_group_id = _bridge_associate_and_ready(bridge, user, group_api)
+        new_group_id = bridge_associate_and_ready(bridge, user, group_api)
         resource[1] = new_group_id
     except Exception as e:
         raise RuntimeError(f"Reset failed: could not rebuild bridge environment: {e}") from e
@@ -2326,7 +2336,7 @@ def _destroy_bridge_in_group(resource):
         bridge.disconnect()
     except Exception:
         pass
-    _cleanup_bridge_children(bridge.node_thing_name)
+    cleanup_bridge_children(bridge.node_thing_name)
     try:
         bridge.destroy_test_node()
     except Exception:
@@ -2431,6 +2441,23 @@ def bridge_in_group(_bridge_stack_deployed):
         bridge_in_group_pool.release(resource)
 
 
+def publish_add_child(bridge, suffix, local_id):
+    """Publish an addChild event on the bridge-to-cloud rule topic and return its request_id; the bridgeAck arrives on the bridge's from_cloud."""
+    req_id = str(uuid.uuid4())[:8]
+    topic = (
+        f"$aws/rules/bridge_to_cloud_rule/"
+        f"rainmaker/bridges/{bridge.node_thing_name}/to_cloud"
+    )
+    bridge._publish_to_topic(topic, {
+        "event": ["addChild"],
+        "addChild": {
+            "request_id": req_id, "child_suffix": suffix,
+            "child_local_id": local_id,
+        },
+    }, "bridge_to_cloud")
+    return req_id
+
+
 @pytest.fixture
 def seed_child(bridge_in_group):
     """Factory fixture: returns a callable(suffix, local_id) -> child_node_id.
@@ -2446,23 +2473,12 @@ def seed_child(bridge_in_group):
     from_cloud_q = bridge_in_group["from_cloud"]
 
     def _do(suffix, local_id):
-        req_id = str(uuid.uuid4())[:8]
         while True:
             try:
                 from_cloud_q.get_nowait()
             except Empty:
                 break
-        topic = (
-            f"$aws/rules/bridge_to_cloud_rule/"
-            f"rainmaker/bridges/{bridge.node_thing_name}/to_cloud"
-        )
-        bridge._publish_to_topic(topic, {
-            "event": ["addChild"],
-            "addChild": {
-                "request_id": req_id, "child_suffix": suffix,
-                "child_local_id": local_id,
-            },
-        }, "bridge_to_cloud")
+        req_id = publish_add_child(bridge, suffix, local_id)
         deadline = time.time() + 8.0
         while time.time() < deadline:
             try:

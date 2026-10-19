@@ -23,6 +23,7 @@ from src.bridge.stacks.base_res_constants import BRIDGE_RESOURCES
 from src.espuser.stacks.base_res_constants import USER_TABLE_NAMES
 from src.rmneo.stacks.base_res_constants import (
     IOT_RESOURCES,
+    NODE_LIFECYCLE_HOOKS,
     SSM_PARAMETERS,
     TABLE_NAMES,
 )
@@ -120,7 +121,16 @@ class ClaimCore(Construct):
             "DEVICE_FILE_POLICY_NAME": IOT_RESOURCES['DEVICE_FILE_POLICY_NAME'],
             "DEVICE_VIDEO_POLICY_NAME": IOT_RESOURCES['DEVICE_VIDEO_POLICY_NAME'],
             "BRIDGE_POLICY_NAME": BRIDGE_RESOURCES['BRIDGE_POLICY_NAME'],
+            "NODE_TYPE_CHANGED_HOOK_FUNCTION_NAME": NODE_LIFECYCLE_HOOKS['NODE_TYPE_CHANGED'],
         }
+
+        # A re-claim that changes or clears a non-empty node_type async-invokes the node-type-changed hook (e.g. the bridge module deletes a demoted bridge's children). Granted by name: the Lambda belongs to an optional stack, and when it is absent the failed invoke is only logged.
+        lambda_role.add_to_policy(iam.PolicyStatement(
+            actions=["lambda:InvokeFunction"],
+            resources=[
+                f"arn:aws:lambda:{region}:{Aws.ACCOUNT_ID}:function:{NODE_LIFECYCLE_HOOKS['NODE_TYPE_CHANGED']}",
+            ],
+        ))
 
         # Registration fires the bridge node-register hook in-process
         # (src/bridge/hooks): a node registering with the "bridge" capability

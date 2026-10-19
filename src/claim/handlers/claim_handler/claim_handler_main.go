@@ -421,7 +421,7 @@ func parseCSRPublicKey(csrPEM string) (*ecdsa.PublicKey, error) {
 // silently reverting the node to the base policy, and re-stamps provenance so
 // the tags survive too.
 func bindCertificate(rctx *rmngctx.RmngContext, nodeID, certPEM string, capabilities, tags []string, adminID string) error {
-	err := node.UpdateNodeInRmng(rctx, nodeID, certPEM, nil, tags, capabilities)
+	err := node.ReplaceNodeInRmng(rctx, nodeID, certPEM, nil, tags, capabilities)
 	if errors.Is(err, node.ErrNodeNotFound) {
 		// First claim only. Re-stamping on every re-claim would turn
 		// "registered at" into "last claimed at" and lose the date the node

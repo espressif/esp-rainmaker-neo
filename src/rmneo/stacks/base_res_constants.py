@@ -86,6 +86,7 @@ IOT_RESOURCES = {
 # Node-lifecycle hook Lambda names (see rmneo/node/nodelifecycle). Core owns the names by convention and async-invokes them if they exist; an optional stack creates the actual Lambdas. Absent => the hook is a no-op.
 NODE_LIFECYCLE_HOOKS = {
     'NODE_LEFT_GROUP': 'rmng-node-left-group-hook',
+    'NODE_TYPE_CHANGED': 'rmng-node-type-changed-hook',
 }
 
 # SSM Parameter Names (kebab path segments)
