@@ -2,11 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""The session one `morpheus` run drives: one deployment, one test_config.json, one identity.
+"""The session one `esp-morpheus` run drives: one deployment, one test_config.json, one identity.
 
 Everything here was a module global in cli/morpheus.py, which forced the outputs file to be read and
 the AWS identity to be checked before argparse had even chosen a command. The deployment now
-resolves on first use, so `morpheus --help` and `morpheus admin guide alexa` need no credentials.
+resolves on first use, so `esp-morpheus --help` and `esp-morpheus admin guide alexa` need no credentials.
 """
 
 import getpass
@@ -30,9 +30,9 @@ TEST_CONFIG_DEFAULTS = 'test_config.default.json'
 # one from --password or RMNG_PASSWORD came from a script, which cannot answer.
 PASSWORD_ATTEMPTS = 3
 
-# How a command that found no identity says where one comes from. `morpheus admin` replaces it,
+# How a command that found no identity says where one comes from. `esp-morpheus admin` replaces it,
 # because its identity is an option and half its commands need none.
-USER_IDENTITY_HINT = 'this command runs under `morpheus user <identity>`.'
+USER_IDENTITY_HINT = 'this command runs under `esp-morpheus user <identity>`.'
 
 
 def generate_password(length=16):
@@ -58,14 +58,14 @@ class Session:
         self._aws_verified = False
         self._config = None
         # The `user` and `device` groups record which identity was asked for; the object is built
-        # on first use, so `morpheus user 0 group --help` needs no credentials.
+        # on first use, so `esp-morpheus user 0 group --help` needs no credentials.
         self._user_identity = None
         self._device_identity = None
         self._user = None
         self._device = None
         self._password_prompted = False
         self.password = None
-        # Only `morpheus admin` sets this: an identity given there that test_config.json does not
+        # Only `esp-morpheus admin` sets this: an identity given there that test_config.json does not
         # carry signs in against the admin pool. `user` and `app-sim` are the end-user API.
         self.is_admin = False
         self.identity_hint = USER_IDENTITY_HINT
@@ -125,7 +125,7 @@ class Session:
     def device(self):
         if self._device is None:
             if self._device_identity is None:
-                output.fail('No device selected; this command runs under `morpheus device <node>`.')
+                output.fail('No device selected; this command runs under `esp-morpheus device <node>`.')
             self._device = self.get_node(self._device_identity)
         return self._device
 
@@ -195,7 +195,7 @@ class Session:
             with open(path) as handle:
                 return json.load(handle)
         except FileNotFoundError:
-            output.debug(f"No test_config.json at {path}; run `morpheus admin test-data setup` "
+            output.debug(f"No test_config.json at {path}; run `esp-morpheus admin test-data setup` "
                          'to create it.')
             return None
         except json.JSONDecodeError as e:
@@ -381,7 +381,7 @@ def _pass_ready(f, resolve, remedies):
 
 
 def pass_user(f):
-    """Give a subcommand the User its `morpheus user <identity>` group resolved, signed in."""
+    """Give a subcommand the User its `esp-morpheus user <identity>` group resolved, signed in."""
     return _pass_ready(f, lambda session: session.authenticated_user(), USER_REMEDY)
 
 
@@ -395,5 +395,5 @@ def pass_unverified_user(f):
 
 
 def pass_device(f):
-    """Give a subcommand the Device its `morpheus device <node>` group resolved."""
+    """Give a subcommand the Device its `esp-morpheus device <node>` group resolved."""
     return _pass_ready(f, lambda session: session.device, DEVICE_REMEDY)

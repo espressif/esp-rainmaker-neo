@@ -49,7 +49,7 @@ def _esp_user_client_id():
 ESP_USER_CLIENT_ID = _esp_user_client_id()
 
 # Off by default: the trace prints bearer tokens and STS session credentials verbatim, so it
-# belongs on a terminal only when the operator asks for it. `morpheus -v` turns it on.
+# belongs on a terminal only when the operator asks for it. `esp-morpheus -v` turns it on.
 request_logging = False
 
 

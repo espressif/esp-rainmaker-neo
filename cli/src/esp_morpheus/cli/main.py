@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""The `morpheus` command.
+"""The `esp-morpheus` command.
 
 `user`, `device` and `admin` take an identity and then either run one subcommand and exit, or —
 given no subcommand — open a REPL bound to that identity. The same click tree serves both, so a
@@ -65,7 +65,7 @@ def cli(ctx, client_outputs, json_mode, raw, verbose):
 def user(ctx, identity, password):
     """Act as IDENTITY, an end user: an email address, or an index or name in test_config.json.
 
-    This tree is the end-user API and nothing else. The privileged surface is `morpheus admin`.
+    This tree is the end-user API and nothing else. The privileged surface is `esp-morpheus admin`.
     With no subcommand, this opens an interactive prompt bound to that identity.
     """
     if identity is None:
@@ -116,7 +116,7 @@ def app_sim(ctx, identity, password):
     session = ctx.find_object(Session)
     session.password = password
     session.select_user(identity)
-    # The identity resolves the same way `morpheus user` resolves it — prompting for a password and
+    # The identity resolves the same way `esp-morpheus user` resolves it — prompting for a password and
     # checking it — rather than through the simulator's own copy of the lookup.
     sims.run(AppSim(identity, user=session.authenticated_user(),
                     rmng_outputs_path=session.settings.source),

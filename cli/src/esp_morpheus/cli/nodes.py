@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""`morpheus user <id> node ...` — associate, dissociate and claim nodes."""
+"""`esp-morpheus user <id> node ...` — associate, dissociate and claim nodes."""
 
 import click
 

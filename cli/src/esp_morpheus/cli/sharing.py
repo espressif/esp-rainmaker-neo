@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""`morpheus user <id> sharing ...` and `push ...` — incoming shares and push registration."""
+"""`esp-morpheus user <id> sharing ...` and `push ...` — incoming shares and push registration."""
 
 import click
 

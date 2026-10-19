@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""`morpheus admin platforms ...` — the APNS and FCM platform applications."""
+"""`esp-morpheus admin platforms ...` — the APNS and FCM platform applications."""
 
 import json
 

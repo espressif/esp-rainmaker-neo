@@ -5,7 +5,7 @@
 """The preconditions the SDK checks before it runs anything, and how it reports an unmet one.
 
 The SDK states the condition; the caller words the remedy. A phrase here names what is absent,
-never a Python method: the same Device drives the REPL, `morpheus device`, the simulators and the
+never a Python method: the same Device drives the REPL, `esp-morpheus device`, the simulators and the
 itests, and none of them share a vocabulary.
 
 A guarded class declares the subject its phrases are about, and where its trace goes, as

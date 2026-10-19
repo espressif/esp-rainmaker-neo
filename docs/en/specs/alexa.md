@@ -46,7 +46,7 @@ manual (it is an end-user OAuth consent flow that Amazon does not expose to SMAP
      → note **Client ID** + **Client Secret**.
    - On its **Web Settings**, add Allowed Return URL exactly: `http://127.0.0.1:9090/cb`.
    - The profile must live in the **same developer account** that owns the skill/vendor.
-2. **AWS credentials — only for the standalone-script path** (the morpheus path posts
+2. **AWS credentials — only for the standalone-script path** (the esp-morpheus path posts
    the config as the given admin instead, so it needs no AWS creds):
    ```bash
    aws sso login --profile <profile>
@@ -55,7 +55,7 @@ manual (it is an end-user OAuth consent flow that Amazon does not expose to SMAP
 
 #### Run
 
-**Via morpheus** (recommended — the config-API POST is authenticated as the given
+**Via esp-morpheus** (recommended — the config-API POST is authenticated as the given
 admin user, no AWS creds needed). All inputs come from a config file:
 
 ```json
@@ -68,7 +68,7 @@ admin user, no AWS creds needed). All inputs come from a config file:
 }
 ```
 ```bash
-morpheus admin integrations alexa setup-auto
+esp-morpheus admin integrations alexa setup-auto
 # reads alexa_skills_config.json by default
 ```
 
@@ -87,7 +87,7 @@ deployment's API Gateway URL, Lambda ARNs and pool ids.
 
 #### Helpful commands
 
-Inside the `morpheus admin` context (config-driven, no env vars). The config file
+Inside the `esp-morpheus admin` context (config-driven, no env vars). The config file
 defaults to `alexa_skills_config.json`; pass `--config` only to override:
 ```
 admin integrations alexa setup-auto [--config config.json] [skill name]
@@ -96,7 +96,7 @@ admin integrations alexa delete-skill <skill_id>
 ```
 
 The standalone script exposes the same operations plus read-only diagnostics
-(used mainly in CI / without a morpheus admin session):
+(used mainly in CI / without an esp-morpheus admin session):
 ```bash
 ./myenv/bin/python tools/alexa_setup.py --skill-id ... --status          # per-step report
 ./myenv/bin/python tools/alexa_setup.py --skill-id ... --status --debug  # + raw SMAPI JSON

@@ -284,7 +284,7 @@ unittest:
       - build/coverage/coverage.xml
 
 # -------------------------
-# morpheus CLI: the offline suite over the command tree, the shell and the output formatter.
+# esp-morpheus CLI: the offline suite over the command tree, the shell and the output formatter.
 # It needs neither AWS credentials nor a deployment, so it runs on every MR that touches the CLI.
 # -------------------------
 cli_test:

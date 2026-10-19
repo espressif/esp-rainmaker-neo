@@ -2,10 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""The one place morpheus writes to a terminal.
+"""The one place esp-morpheus writes to a terminal.
 
 Two contracts hold everything else together. Human mode puts prose and payloads on stdout. `--json`
-puts the payload on stdout and every other word on stderr, so a shell script can pipe morpheus into
+puts the payload on stdout and every other word on stderr, so a shell script can pipe esp-morpheus into
 jq without filtering out progress lines. Both modes report failure through the exit code.
 """
 
@@ -321,7 +321,7 @@ def fail(message):
 def missing_credentials(settings=None):
     """The message for a command that turned out to need AWS credentials and found none.
 
-    Most of morpheus needs none, so this names the command's own need rather than implying the
+    Most of esp-morpheus needs none, so this names the command's own need rather than implying the
     tool requires credentials to run at all.
     """
     where = ''

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""`morpheus admin integrations ...` — the voice-assistant credentials each skill needs."""
+"""`esp-morpheus admin integrations ...` — the voice-assistant credentials each skill needs."""
 
 import os
 
@@ -71,7 +71,7 @@ def _alexa_config_to_env(session, config_file):
         value = config.get(config_key)
         if value:
             os.environ[env_key] = ','.join(value) if isinstance(value, list) else str(value)
-    # alexa_setup reads outputs itself, keyed off RMNG_OUTPUTS; point it at the source morpheus
+    # alexa_setup reads outputs itself, keyed off RMNG_OUTPUTS; point it at the source esp-morpheus
     # resolved so --client-outputs applies there too.
     os.environ['RMNG_OUTPUTS'] = session.settings.source
     return config

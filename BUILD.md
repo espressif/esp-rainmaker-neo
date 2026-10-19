@@ -32,7 +32,7 @@ esp-rainmaker-neo/
 ├── cdk/                      apps/ (one per stack group) · utils/ (shared
 │                             constructs) · cdk/Stackfile.yaml · outputs/ · cdk.out/
 ├── dashboard/                admin dashboard (React + Vite + Tailwind)
-├── cli/                      esp-morpheus — the installable `morpheus` console client
+├── cli/                      the installable `esp-morpheus` console client
 ├── py_sdk/                   pre-rename SDK import path; binds cli/src/esp_morpheus/sdk
 ├── test/                     integration tests, simulators, itest infra stacks
 ├── docs/                     documentation source (Sphinx) + api/ (OpenAPI/AsyncAPI)
@@ -105,7 +105,7 @@ make lint        # rmng-lint over ./src/...
 make test        # Ginkgo unit tests + coverage, for rmng and its submodules
 
 # Integration tests: one-time setup per environment — deploys the test infra
-# and seeds test users/nodes via `morpheus admin test-data setup`
+# and seeds test users/nodes via `esp-morpheus admin test-data setup`
 make itest-setup
 make itest       # pytest test/itest/, HTML report in build/tests/
 ```
@@ -158,11 +158,11 @@ Both integrations are cloud-side and live in this repo, so they deploy with ever
 
 ## CLI (Morpheus)
 
-`morpheus` is a console client that exercises a deployment end-to-end — as a user, an admin, or a simulated device — without a phone app or real hardware. It ships as the `esp-morpheus` distribution and runs from any directory, with or without this checkout.
+`esp-morpheus` is a console client that exercises a deployment end-to-end — as a user, an admin, or a simulated device — without a phone app or real hardware. It runs from any directory, with or without this checkout.
 
 ```shell
 pip install -e ./cli          # from a checkout; `pip install esp-morpheus` otherwise
-morpheus user user@example.com
+esp-morpheus user user@example.com
 ```
 
 `pip install -r requirements.txt` already does the editable install, so skip it if
@@ -172,4 +172,4 @@ It needs AWS credentials for the target account and region for some commands, pl
 
 See the [CLI guide](cli/README.md).
 
-**Tests** — `pytest cli/tests` covers the command tree, the shell and the output formatter offline. `make itest-setup` calls `morpheus admin test-data setup` to seed test users and nodes.
+**Tests** — `pytest cli/tests` covers the command tree, the shell and the output formatter offline. `make itest-setup` calls `esp-morpheus admin test-data setup` to seed test users and nodes.

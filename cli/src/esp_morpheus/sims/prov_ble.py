@@ -56,7 +56,7 @@ def ensure_esp_prov():
             "BLE provisioning requires IDF_PATH (esp_prov needs the ESP-IDF "
             "protocomm python files). Re-run with IDF_PATH pointing at your "
             "ESP-IDF checkout, e.g.:\n"
-            "  IDF_PATH=~/esp/esp-idf morpheus app-sim <user>"
+            "  IDF_PATH=~/esp/esp-idf esp-morpheus app-sim <user>"
         )
 
     # Locate the esp_prov tool dir: honour a pre-existing checkout via ESP_PROV_PATH,

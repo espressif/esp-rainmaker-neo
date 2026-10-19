@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""click trees over the two simulators, so they share the `morpheus` shell."""
+"""click trees over the two simulators, so they share the `esp-morpheus` shell."""
 
 import functools
 

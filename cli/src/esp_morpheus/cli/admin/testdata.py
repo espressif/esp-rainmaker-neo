@@ -2,9 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""`morpheus admin test-data ...` — seeding a deployment with the fixtures the suite expects.
+"""`esp-morpheus admin test-data ...` — seeding a deployment with the fixtures the suite expects.
 
-Not needed to drive an account that already exists: `morpheus user <email>` reaches any provisioned
+Not needed to drive an account that already exists: `esp-morpheus user <email>` reaches any provisioned
 identity. Seeding provisions users in Cognito and things in IoT, so it needs AWS credentials.
 """
 
@@ -372,4 +372,4 @@ def sweep_test_certs(session, dry_run=False):
               f"left {skipped_certs} certificate(s) shared with non-test things untouched.")
     if failures:
         output.warn(f"{failures} thing(s) could not be processed — the sweep is incomplete. "
-                    'Re-run `morpheus admin test-data destroy` to retry them.')
+                    'Re-run `esp-morpheus admin test-data destroy` to retry them.')
