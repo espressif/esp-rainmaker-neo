@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import boto3
 import click
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, WaiterError
 from rich.console import Console
 from rich.progress import Progress
 
@@ -507,7 +507,7 @@ class AWSDeployCleanup:
                     self.console.print(f"Current status of stack '{stack_name}': {stack_status}")
 
                     if stack_status in DELETABLE_STACK_STATUSES:
-                        self._delete_stack(self.cloudformation, stack_name)
+                        self._delete_stack(self.cloudformation, stack_name, force=stack_status == 'DELETE_FAILED')
                         self.console.print(f"[green]✓ Successfully deleted stack: {stack_name}[/green]")
                     else:
                         self.console.print(f"[yellow]Stack '{stack_name}' cannot be deleted because its current status is '{stack_status}'.[/yellow]")
@@ -516,7 +516,7 @@ class AWSDeployCleanup:
                 except ClientError as e:
                     error_code = e.response['Error']['Code']
                     error_message = e.response['Error']['Message']
-                    if error_code == 'ValidationError':
+                    if error_code == 'ValidationError' and 'does not exist' in error_message:
                         self.console.print(f"[yellow]Stack '{stack_name}' does not exist, skipping.[/yellow]")
                     else:
                         self.console.print(f"[red]✗ Error deleting stack {stack_name}: {error_code} - {error_message}[/red]")
@@ -533,8 +533,11 @@ class AWSDeployCleanup:
             self.console.print(f"[red]Error cleaning up CloudFormation stacks: {str(e)}[/red]")
             raise
 
-    def _delete_stack(self, cloudformation, stack_name):
-        """Disable termination protection, delete and wait, falling back to a force delete."""
+    def _delete_stack(self, cloudformation, stack_name, force=False):
+        """Disable termination protection, delete and wait, falling back to a force delete.
+
+        Pass force for a DELETE_FAILED stack: a regular retry fails the same way, after up to an hour of custom-resource timeouts.
+        """
         try:
             self.console.print(f"Disabling termination protection for stack '{stack_name}'...")
             cloudformation.update_termination_protection(StackName=stack_name, EnableTerminationProtection=False)
@@ -546,14 +549,18 @@ class AWSDeployCleanup:
 
         waiter = cloudformation.get_waiter('stack_delete_complete')
         wait_config = {'Delay': 30, 'MaxAttempts': 240}  # 30 seconds * 240 attempts = 2 hours
-        try:
-            self.console.print(f"Deleting stack '{stack_name}'...")
-            cloudformation.delete_stack(StackName=stack_name)
-            waiter.wait(StackName=stack_name, WaiterConfig=wait_config)
-        except ClientError:
-            self.console.print("Regular deletion failed, attempting force delete...")
-            cloudformation.delete_stack(StackName=stack_name, DeletionMode='FORCE_DELETE_STACK')
-            waiter.wait(StackName=stack_name, WaiterConfig=wait_config)
+        if not force:
+            try:
+                self.console.print(f"Deleting stack '{stack_name}'...")
+                cloudformation.delete_stack(StackName=stack_name)
+                waiter.wait(StackName=stack_name, WaiterConfig=wait_config)
+                return
+            except (ClientError, WaiterError):
+                self.console.print("Regular deletion failed, attempting force delete...")
+
+        self.console.print(f"Force deleting stack '{stack_name}'...")
+        cloudformation.delete_stack(StackName=stack_name, DeletionMode='FORCE_DELETE_STACK')
+        waiter.wait(StackName=stack_name, WaiterConfig=wait_config)
 
     def cleanup_orphaned_cdk_toolkits(self):
         """Delete CDK bootstrap stacks whose staging bucket is gone, in every enabled region.
