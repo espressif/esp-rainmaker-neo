@@ -14,6 +14,7 @@ from rich.progress import Progress
 console = Console()
 
 DELETABLE_STACK_STATUSES = ['CREATE_COMPLETE', 'UPDATE_COMPLETE', 'UPDATE_ROLLBACK_COMPLETE', 'ROLLBACK_COMPLETE', 'DELETE_FAILED']
+STACK_DELETE_WAIT = {'Delay': 30, 'MaxAttempts': 240}  # 30 seconds * 240 attempts = 2 hours
 
 
 def _bucket_exists(s3, bucket):
@@ -479,7 +480,7 @@ class AWSDeployCleanup:
             stacks = []
             paginator = self.cloudformation.get_paginator('list_stacks')
             
-            for page in paginator.paginate(StackStatusFilter=DELETABLE_STACK_STATUSES):
+            for page in paginator.paginate(StackStatusFilter=DELETABLE_STACK_STATUSES + ['DELETE_IN_PROGRESS']):
                 for stack in page.get('StackSummaries', []):
                     # Filter out deleted and nested stacks
                     if (stack['StackStatus'] != 'DELETE_COMPLETE' and 
@@ -507,7 +508,10 @@ class AWSDeployCleanup:
                     stack_status = response['Stacks'][0]['StackStatus']
                     self.console.print(f"Current status of stack '{stack_name}': {stack_status}")
 
-                    if stack_status in DELETABLE_STACK_STATUSES:
+                    if stack_status == 'DELETE_IN_PROGRESS':
+                        self._finish_delete(self.cloudformation, stack_name)
+                        self.console.print(f"[green]✓ Successfully deleted stack: {stack_name}[/green]")
+                    elif stack_status in DELETABLE_STACK_STATUSES:
                         self._delete_stack(self.cloudformation, stack_name, force=stack_status == 'DELETE_FAILED')
                         self.console.print(f"[green]✓ Successfully deleted stack: {stack_name}[/green]")
                     else:
@@ -549,19 +553,26 @@ class AWSDeployCleanup:
                 self.console.print(f"Error disabling termination protection: {e}")
 
         waiter = cloudformation.get_waiter('stack_delete_complete')
-        wait_config = {'Delay': 30, 'MaxAttempts': 240}  # 30 seconds * 240 attempts = 2 hours
         if not force:
             try:
                 self.console.print(f"Deleting stack '{stack_name}'...")
                 cloudformation.delete_stack(StackName=stack_name)
-                waiter.wait(StackName=stack_name, WaiterConfig=wait_config)
+                waiter.wait(StackName=stack_name, WaiterConfig=STACK_DELETE_WAIT)
                 return
             except (ClientError, WaiterError):
                 self.console.print("Regular deletion failed, attempting force delete...")
 
         self.console.print(f"Force deleting stack '{stack_name}'...")
         cloudformation.delete_stack(StackName=stack_name, DeletionMode='FORCE_DELETE_STACK')
-        waiter.wait(StackName=stack_name, WaiterConfig=wait_config)
+        waiter.wait(StackName=stack_name, WaiterConfig=STACK_DELETE_WAIT)
+
+    def _finish_delete(self, cloudformation, stack_name):
+        """Wait out a delete another run started (a cancelled job's keeps going), force-deleting if it ends DELETE_FAILED."""
+        self.console.print(f"Waiting for the delete already in progress on stack '{stack_name}'...")
+        try:
+            cloudformation.get_waiter('stack_delete_complete').wait(StackName=stack_name, WaiterConfig=STACK_DELETE_WAIT)
+        except WaiterError:
+            self._delete_stack(cloudformation, stack_name, force=True)
 
     def cleanup_orphaned_cdk_toolkits(self):
         """Delete CDK bootstrap stacks whose staging bucket is gone, in every enabled region.
