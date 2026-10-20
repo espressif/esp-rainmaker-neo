@@ -402,6 +402,8 @@ publish_cli:
     - export RMNG_NOTIFY_DATA_JSON="${RMNG_NOTIFY_DATA_JSON}"
     - make setup
     - make deploy
+    # The webhook mock the alexa/gva/smartthings/notification callback tests need; without it they skip.
+    - make itest-setup
     # unsafe stays in, as in Jenkins; the cognito suite disables the shared login provider mid-run.
     - make itest ITEST_MARKERS='not cognito' ITEST_ARGS='-n auto --reruns 3 --reruns-delay 5'
   after_script:
