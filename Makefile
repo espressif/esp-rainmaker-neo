@@ -406,9 +406,11 @@ $(TEST_SUBMODULES:%=%-test): %-test: ; $(MAKE) -C $* test
 update-mcp-schema:  ## Regenerate docs/mcp/rainmaker-mcp.json from the MCP tool registry
 	@UPDATE_MCP_SCHEMA=1 go test ./src/mcp/handlers/mcp_server/ -run TestToolCatalogMatchesSnapshot -count=1
 
-ITEST_ARGS ?= -n 12 -m "not unsafe and not cognito"
+# Markers live apart from ITEST_ARGS so overriding the args keeps them: the cognito suite disables the shared login provider mid-run. A later -m in ITEST_ARGS still wins.
+ITEST_MARKERS ?= not unsafe and not cognito
+ITEST_ARGS ?= -n 12
 itest:  ## Run the pytest integration suite against a deployed stack
-	pytest test/itest/ $(OPTIONAL_ITEST_DIRS) -v -s --capture=tee-sys --html=build/tests/report.html --self-contained-html --dist=loadgroup $(ITEST_ARGS)
+	pytest test/itest/ $(OPTIONAL_ITEST_DIRS) -v -s --capture=tee-sys --html=build/tests/report.html --self-contained-html --dist=loadgroup -m "$(ITEST_MARKERS)" $(ITEST_ARGS)
 
 # --- Test setup / teardown ---------------------------------------------------
 # itest-setup deploys the standalone test webhook mock (cdk/apps/test_infra.py), captures its

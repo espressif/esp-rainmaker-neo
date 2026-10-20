@@ -18,7 +18,7 @@ Two admin shapes are covered because both exist in every upgraded deployment:
 
 Opt-in like test_cognito_auth_matrix: every code sent burns the pool's daily Cognito
 email quota, so the default `make itest` deselects it. Run it on its own with
-`make itest ITEST_ARGS='-m cognito -k admin_auth'`.
+`make itest ITEST_MARKERS=cognito ITEST_ARGS='-n 12 -k admin_auth'`.
 """
 
 import contextlib

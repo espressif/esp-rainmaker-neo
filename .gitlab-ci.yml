@@ -402,8 +402,8 @@ publish_cli:
     - export RMNG_NOTIFY_DATA_JSON="${RMNG_NOTIFY_DATA_JSON}"
     - make setup
     - make deploy
-    - make itest ITEST_ARGS='-n auto --dist=loadgroup --reruns 3 --reruns-delay
-      5'
+    # unsafe stays in, as in Jenkins; the cognito suite disables the shared login provider mid-run.
+    - make itest ITEST_MARKERS='not cognito' ITEST_ARGS='-n auto --reruns 3 --reruns-delay 5'
   after_script:
     - python3 resource-pool-cli.py release-all --user-id ${CI_JOB_ID}
 
