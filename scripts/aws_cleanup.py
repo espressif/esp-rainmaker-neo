@@ -309,38 +309,9 @@ class AWSDeployCleanup:
                     try:
                         self.console.print(f"\n[bold]Processing policy: {policy_name}[/bold]")
                         
-                        # First, detach the policy from all principals (targets)
-                        self.console.print("\n[cyan]Detaching policy from all principals...[/cyan]")
-                        try:
-                            paginator = self.iot.get_paginator('list_targets_for_policy')
-                            targets = []
-                            for page in paginator.paginate(policyName=policy_name):
-                                for target in page.get('targets', []):
-                                    targets.append(target)
-                            
-                            if targets:
-                                self.console.print(f"Found {len(targets)} principals attached to policy")
-                                for target in targets:
-                                    try:
-                                        self.iot.detach_policy(
-                                            policyName=policy_name,
-                                            target=target
-                                        )
-                                        self.console.print(f"[green]✓ Detached policy from: {target}[/green]")
-                                    except ClientError as e:
-                                        error_code = e.response['Error']['Code']
-                                        if error_code != 'ResourceNotFoundException':
-                                            self.console.print(f"[yellow]⚠ Warning: Could not detach policy from {target}: {str(e)}[/yellow]")
-                            else:
-                                self.console.print("No principals attached to this policy")
-                        except ClientError as e:
-                            error_code = e.response['Error']['Code']
-                            if error_code == 'ResourceNotFoundException':
-                                self.console.print("Policy not found, skipping")
-                                continue
-                            else:
-                                self.console.print(f"[yellow]⚠ Warning: Could not list targets for policy: {str(e)}[/yellow]")
-                        
+                        if not self._detach_iot_policy(policy_name):
+                            continue
+
                         # Delete the policy
                         self.console.print("\n[cyan]Deleting policy...[/cyan]")
                         self.iot.delete_policy(policyName=policy_name)
@@ -361,6 +332,48 @@ class AWSDeployCleanup:
             raise
         except Exception as e:
             self.console.print(f"[red]Error cleaning up IoT resources: {str(e)}[/red]")
+            raise
+
+    def _detach_iot_policy(self, policy_name):
+        """Detach the policy from every principal; False when the policy no longer exists."""
+        self.console.print("\n[cyan]Detaching policy from all principals...[/cyan]")
+        try:
+            targets = []
+            for page in self.iot.get_paginator('list_targets_for_policy').paginate(policyName=policy_name):
+                targets += page.get('targets', [])
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'ResourceNotFoundException':
+                self.console.print("Policy not found, skipping")
+                return False
+            self.console.print(f"[yellow]⚠ Warning: Could not list targets for policy: {str(e)}[/yellow]")
+            return True
+
+        if not targets:
+            self.console.print("No principals attached to this policy")
+            return True
+        self.console.print(f"Found {len(targets)} principals attached to policy")
+        for target in targets:
+            try:
+                self.iot.detach_policy(policyName=policy_name, target=target)
+                self.console.print(f"[green]✓ Detached policy from: {target}[/green]")
+            except ClientError as e:
+                if e.response['Error']['Code'] != 'ResourceNotFoundException':
+                    self.console.print(f"[yellow]⚠ Warning: Could not detach policy from {target}: {str(e)}[/yellow]")
+        return True
+
+    def detach_iot_policies(self):
+        """Detach every IoT policy from its certificates, since CloudFormation cannot delete a stack's policy while test devices still hold it."""
+        try:
+            self.console.print("[bold cyan]Detaching IoT policies before stack cleanup...[/bold cyan]")
+            for page in self.iot.get_paginator('list_policies').paginate():
+                for policy in page.get('policies', []):
+                    self.console.print(f"\n[bold]Processing policy: {policy['policyName']}[/bold]")
+                    self._detach_iot_policy(policy['policyName'])
+
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            error_message = e.response['Error']['Message']
+            self.console.print(f"[red]Error detaching IoT policies: {error_code} - {error_message}[/red]")
             raise
 
     def cleanup_cloudwatch(self):
@@ -1046,6 +1059,7 @@ class AWSDeployCleanup:
         """Clean up AWS resources based on specified services"""
         try:
             if self.services == ['all'] or 'cloudformation' in self.services:
+                self.detach_iot_policies()
                 self.cleanup_cloudformation_stacks()
 
             if self.services == ['all'] or 's3' in self.services:
