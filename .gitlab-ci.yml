@@ -155,6 +155,22 @@ license_headers:
       "$CI_MERGE_REQUEST_DIFF_BASE_SHA"
 
 # -------------------------
+# Commit-message gate. Blocking: a Co-authored-by trailer anywhere in the MR's commits
+# fails the pipeline. Same range as license_headers, so it sees exactly the MR's commits.
+# -------------------------
+commit_messages:
+  stage: lint
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.9_node24
+  variables:
+    GIT_SUBMODULE_STRATEGY: none
+    GIT_DEPTH: 0
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  script:
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+    - python3 scripts/check_commit_messages.py --since "$CI_MERGE_REQUEST_DIFF_BASE_SHA"
+
+# -------------------------
 # CDK synth check — the only gate on Python and dependency changes.
 # Every other job filters on **/*.go or docs/api/**, so a requirements.txt, cdk.json
 # or stack.py change previously produced a pipeline with nothing in it. Synth needs no AWS
