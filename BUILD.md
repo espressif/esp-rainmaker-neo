@@ -65,6 +65,8 @@ Prerequisites:
 
 ```shell
 # One-time: submodules + Python environment (run from the repo root)
+# Cloned from a fork? Point the submodule at upstream first, or the clone fails:
+#   git config submodule.src/esp-cloud-common.url https://github.com/espressif/esp-cloud-common.git
 git submodule update --init --recursive
 python3 -m venv myenv && source myenv/bin/activate
 pip3 install -r requirements.txt
