@@ -1649,9 +1649,7 @@ func UpdateNodeInRmng(rmngCtx *rmngctx.RmngContext, nodeID string, newCertPEM st
 	return nil
 }
 
-// replaceNodeCert replaces the cert binding for an existing Thing. The new
-// cert is registered (idempotent), attached, given the default policy, and
-// then any previously-attached certs are detached and deactivated.
+// replaceNodeCert replaces the cert binding for an existing Thing. The new cert is registered (idempotent), attached, given the default policy plus every policy the old cert carried, and then any previously-attached certs are detached and deactivated.
 // It returns the node_type that the register hook assigns, or "" when the hook assigns none.
 //
 // Replace-and-deactivate (rather than "leave the old cert active alongside")
@@ -1680,6 +1678,19 @@ func replaceNodeCert(rmngCtx *rmngctx.RmngContext, n *Node, newCertPEM string, c
 		return "", rmerror.NewRMError(err, "failed to list existing thing certificates")
 	}
 
+	// Read the old certs' policies before touching the Thing, so a failed read leaves the node exactly as it was.
+	var oldPolicies []string
+	for _, cert := range existingCerts {
+		if cert == nil || cert.CertificateId == nil || cert.CertificateArn == nil || *cert.CertificateId == newCertID {
+			continue
+		}
+		names, err := iotutil.ListAttachedPolicies(rmngCtx.Context, *cert.CertificateArn)
+		if err != nil {
+			return "", rmerror.NewRMError(err, fmt.Sprintf("failed to read policies of old cert %s", *cert.CertificateId))
+		}
+		oldPolicies = append(oldPolicies, names...)
+	}
+
 	// Register the new cert. registerCertOrRecoverARN absorbs the expected
 	// ResourceAlreadyExistsException on retry of a partially-completed update
 	// (or when the operator submits the cert that's already registered for
@@ -1693,19 +1704,12 @@ func replaceNodeCert(rmngCtx *rmngctx.RmngContext, n *Node, newCertPEM string, c
 	if err := iotutil.AttachCertificateToThing(rmngCtx.Context, n.ThingName, newCertArn); err != nil {
 		return "", rmerror.NewRMError(err, "failed to attach new cert to thing")
 	}
-	// Attach the base policy plus every capability-gated policy implied by
-	// `capabilities`, and fire the same registration hook a first-time
-	// registration fires.
-	//
-	// Callers that pass nil get the base policy only, which is correct for an
-	// operator correcting a wrong PEM on a node whose capabilities they are
-	// not restating. Assisted claiming passes the capabilities from the claim
-	// request, because there a re-claim after a factory erase is the normal
-	// path, not a rare correction: silently dropping the capability-gated
-	// policies would leave the device to fail later at the credential
-	// provider with AccessDenied rather than here, visibly.
 	if err := iotutil.AttachDefaultPolicy(rmngCtx.Context, newCertArn, capabilities); err != nil {
 		return "", rmerror.NewRMError(err, "failed to attach default policy to new cert")
+	}
+	// `capabilities` only adds to the old certs' policies, so a nil-capability replacement such as a bulk update never drops file, video or bridge access (#266).
+	if err := iotutil.AttachPolicies(rmngCtx.Context, newCertArn, oldPolicies); err != nil {
+		return "", rmerror.NewRMError(err, "failed to carry old cert policies to new cert")
 	}
 	// Same rule as first registration: the video policy comes with its channel.
 	// Idempotent, so a re-claim of a camera whose channel exists is unaffected.

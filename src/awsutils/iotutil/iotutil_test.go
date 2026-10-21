@@ -13,6 +13,8 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/iotutil"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/iot"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -217,5 +219,73 @@ var _ = Describe("EnsureSignalingChannel", func() {
 	It("propagates a KVS failure", func() {
 		kvsMock.ForceCreateError = true
 		Expect(iotutil.EnsureSignalingChannel(ctx, "node-1", []string{"kvs"})).NotTo(Succeed())
+	})
+})
+
+var _ = Describe("ListAttachedPolicies and AttachPolicies", func() {
+	const (
+		srcArn = "arn:aws:iot:us-east-1:123456789012:cert/src-cert"
+		dstArn = "arn:aws:iot:us-east-1:123456789012:cert/dst-cert"
+	)
+	var (
+		ctx     context.Context
+		iotMock *mock.IoTClientMock
+	)
+
+	attach := func(target string, names ...string) {
+		for _, name := range names {
+			_, err := iotMock.AttachPolicy(ctx, &iot.AttachPolicyInput{PolicyName: aws.String(name), Target: aws.String(target)})
+			Expect(err).To(BeNil())
+		}
+	}
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		iotMock = mock.NewIoTClientMock()
+		awscommon.SetIoTClient(iotMock)
+	})
+
+	It("lists every policy attached to a principal", func() {
+		attach(srcArn, "rmng-base-node-policy", "rmng-node-file-policy")
+
+		names, err := iotutil.ListAttachedPolicies(ctx, srcArn)
+		Expect(err).To(BeNil())
+		Expect(names).To(ConsistOf("rmng-base-node-policy", "rmng-node-file-policy"))
+	})
+
+	It("reads every page when the policies span several", func() {
+		iotMock.PolicyPageSize = 2
+		attach(srcArn, "p1", "p2", "p3", "p4", "p5")
+
+		names, err := iotutil.ListAttachedPolicies(ctx, srcArn)
+		Expect(err).To(BeNil())
+		Expect(names).To(ConsistOf("p1", "p2", "p3", "p4", "p5"))
+	})
+
+	It("lists nothing for a principal with no policies", func() {
+		names, err := iotutil.ListAttachedPolicies(ctx, srcArn)
+		Expect(err).To(BeNil())
+		Expect(names).To(BeEmpty())
+	})
+
+	It("fails when the policies cannot be listed", func() {
+		iotMock.ForceListAttachedPoliciesError = true
+
+		_, err := iotutil.ListAttachedPolicies(ctx, srcArn)
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("attaches each policy once, including ones repeated or already attached", func() {
+		attach(dstArn, "rmng-base-node-policy")
+
+		Expect(iotutil.AttachPolicies(ctx, dstArn, []string{"rmng-bridge-policy", "rmng-base-node-policy", "rmng-node-file-policy", "rmng-bridge-policy"})).To(Succeed())
+
+		Expect(iotMock.GetAttachedPolicies(dstArn)).To(ConsistOf("rmng-base-node-policy", "rmng-node-file-policy", "rmng-bridge-policy"))
+	})
+
+	It("fails when a policy cannot be attached", func() {
+		iotMock.ForcePolicyAttachmentError = true
+
+		Expect(iotutil.AttachPolicies(ctx, dstArn, []string{"rmng-base-node-policy"})).NotTo(Succeed())
 	})
 })

@@ -48,6 +48,7 @@ type IoTClientInterface interface {
 	CreateThingGroup(ctx context.Context, params *iot.CreateThingGroupInput, optFns ...func(*iot.Options)) (*iot.CreateThingGroupOutput, error)
 	AddThingToThingGroup(ctx context.Context, params *iot.AddThingToThingGroupInput, optFns ...func(*iot.Options)) (*iot.AddThingToThingGroupOutput, error)
 	AttachPolicy(ctx context.Context, params *iot.AttachPolicyInput, optFns ...func(*iot.Options)) (*iot.AttachPolicyOutput, error)
+	ListAttachedPolicies(ctx context.Context, params *iot.ListAttachedPoliciesInput, optFns ...func(*iot.Options)) (*iot.ListAttachedPoliciesOutput, error)
 	DescribeThingGroup(ctx context.Context, params *iot.DescribeThingGroupInput, optFns ...func(*iot.Options)) (*iot.DescribeThingGroupOutput, error)
 	DeleteCertificate(ctx context.Context, params *iot.DeleteCertificateInput, optFns ...func(*iot.Options)) (*iot.DeleteCertificateOutput, error)
 	DeleteThing(ctx context.Context, params *iot.DeleteThingInput, optFns ...func(*iot.Options)) (*iot.DeleteThingOutput, error)

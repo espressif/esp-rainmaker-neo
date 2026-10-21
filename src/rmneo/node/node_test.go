@@ -5,6 +5,7 @@
 package node_test
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
@@ -24,7 +25,9 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/aws/aws-sdk-go-v2/service/iot"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -1085,6 +1088,68 @@ var _ = Describe("Node", func() {
 				oldCertID, _ := iotutil.GetCertIDFromPEM(nodeCert)
 				Expect(thing.CertificateIds).NotTo(ContainElement(oldCertID))
 				Expect(iotClient.VerifyCertificateActive(nodeCert)).To(BeFalse())
+			})
+
+			certArnOf := func(iotClient *mock.IoTClientMock, certPEM string) string {
+				certID, err := iotutil.GetCertIDFromPEM(certPEM)
+				Expect(err).To(BeNil())
+				cert, exists := iotClient.GetCertificateDirect(certID)
+				Expect(exists).To(BeTrue())
+				return cert.Arn
+			}
+
+			It("carries every policy of the old cert over to the replacement cert (#266)", func() {
+				installHook("", nil)
+				nodeID, err := node.RegisterNodeInRmng(testCtx, nodeCert, "", nil, nil, "test-admin", []string{"s3"})
+				Expect(err).To(BeNil())
+
+				iotClient := awscommon.GetIoTClient().(*mock.IoTClientMock)
+				oldCertArn := certArnOf(iotClient, nodeCert)
+				// A policy an optional stack's hook attached: core cannot derive it from capabilities or node_type.
+				_, err = iotClient.AttachPolicy(testCtx.Context, &iot.AttachPolicyInput{PolicyName: aws.String("rmng-bridge-policy"), Target: aws.String(oldCertArn)})
+				Expect(err).To(BeNil())
+				oldPolicies := append([]string{}, iotClient.GetAttachedPolicies(oldCertArn)...)
+				Expect(oldPolicies).To(HaveLen(3))
+
+				Expect(node.UpdateNodeInRmng(testCtx, nodeID, replacementCert, nil, nil, nil)).To(Succeed())
+
+				Expect(iotClient.GetAttachedPolicies(certArnOf(iotClient, replacementCert))).To(ConsistOf(oldPolicies))
+				Expect(iotClient.VerifyCertificateActive(nodeCert)).To(BeFalse())
+			})
+
+			It("unions caller capabilities with the old cert's policies on a cert update", func() {
+				installHook("", nil)
+				nodeID, err := node.RegisterNodeInRmng(testCtx, nodeCert, "", nil, nil, "test-admin", nil)
+				Expect(err).To(BeNil())
+
+				iotClient := awscommon.GetIoTClient().(*mock.IoTClientMock)
+				oldCertArn := certArnOf(iotClient, nodeCert)
+				_, err = iotClient.AttachPolicy(testCtx.Context, &iot.AttachPolicyInput{PolicyName: aws.String("rmng-bridge-policy"), Target: aws.String(oldCertArn)})
+				Expect(err).To(BeNil())
+				oldPolicies := append([]string{}, iotClient.GetAttachedPolicies(oldCertArn)...)
+
+				Expect(node.UpdateNodeInRmng(testCtx, nodeID, replacementCert, nil, nil, []string{"s3"})).To(Succeed())
+
+				filePolicy := cmp.Or(os.Getenv("DEVICE_FILE_POLICY_NAME"), "rmng-node-file-policy")
+				Expect(iotClient.GetAttachedPolicies(certArnOf(iotClient, replacementCert))).To(ConsistOf(append(oldPolicies, filePolicy)))
+			})
+
+			It("changes nothing when the old cert's policies cannot be read", func() {
+				nodeID, err := node.RegisterNodeInRmng(testCtx, nodeCert, "", nil, nil, "test-admin", nil)
+				Expect(err).To(BeNil())
+				iotClient := awscommon.GetIoTClient().(*mock.IoTClientMock)
+				iotClient.ForceListAttachedPoliciesError = true
+
+				err = node.UpdateNodeInRmng(testCtx, nodeID, replacementCert, nil, nil, nil)
+				Expect(err).To(HaveOccurred())
+				Expect(rmerror.ErrorWithStack(err)).To(ContainSubstring("failed to read policies of old cert"))
+				Expect(iotClient.VerifyCertificateExists(replacementCert)).To(BeFalse())
+
+				oldCertID, _ := iotutil.GetCertIDFromPEM(nodeCert)
+				thing, exists := iotClient.GetThingDirect(nodeID)
+				Expect(exists).To(BeTrue())
+				Expect(thing.CertificateIds).To(ContainElement(oldCertID))
+				Expect(iotClient.VerifyCertificateActive(nodeCert)).To(BeTrue())
 			})
 
 			It("is a no-op when the supplied cert is already attached", func() {

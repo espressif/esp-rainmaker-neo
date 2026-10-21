@@ -8,6 +8,8 @@ import (
 	"context"
 	"fmt"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
+	"slices"
+	"strconv"
 	"sync"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/iotutil"
@@ -51,12 +53,15 @@ type IoTClientMock struct {
 	mutex sync.RWMutex
 
 	// Error forcing flags
-	ForceThingCreationError    bool
-	ForcePolicyAttachmentError bool
-	ForceGroupAdditionError    bool
-	ForceGroupCreationError    bool
-	ForceCertificateError      bool
-	ForceCertAttachmentError   bool
+	ForceThingCreationError        bool
+	ForcePolicyAttachmentError     bool
+	ForceGroupAdditionError        bool
+	ForceGroupCreationError        bool
+	ForceCertificateError          bool
+	ForceCertAttachmentError       bool
+	ForceListAttachedPoliciesError bool
+	// Page size for ListAttachedPolicies; 0 returns every policy in one page.
+	PolicyPageSize int
 	// Policy names AttachPolicy reports as ResourceNotFoundException, as for an undeployed optional stack.
 	MissingPolicies map[string]bool
 }
@@ -488,7 +493,10 @@ func (m *IoTClientMock) AttachPolicy(ctx context.Context, params *iot.AttachPoli
 	if m.AttachedPolicies == nil {
 		m.AttachedPolicies = make(map[string][]string)
 	}
-	m.AttachedPolicies[target] = append(m.AttachedPolicies[target], policyName)
+	// AWS treats a repeated AttachPolicy as a no-op, so the mock must not grow the list.
+	if !slices.Contains(m.AttachedPolicies[target], policyName) {
+		m.AttachedPolicies[target] = append(m.AttachedPolicies[target], policyName)
+	}
 	m.mutex.Unlock()
 
 	return &iot.AttachPolicyOutput{}, nil
@@ -502,6 +510,33 @@ func (m *IoTClientMock) GetAttachedPolicies(target string) []string {
 		return nil
 	}
 	return m.AttachedPolicies[target]
+}
+
+func (m *IoTClientMock) ListAttachedPolicies(ctx context.Context, params *iot.ListAttachedPoliciesInput, optFns ...func(*iot.Options)) (*iot.ListAttachedPoliciesOutput, error) {
+	if m.ForceListAttachedPoliciesError {
+		return nil, &smithy.GenericAPIError{
+			Code:    "InternalFailure",
+			Message: "Forced list attached policies error",
+		}
+	}
+
+	names := m.GetAttachedPolicies(*params.Target)
+	start := 0
+	if params.Marker != nil {
+		start, _ = strconv.Atoi(*params.Marker)
+	}
+	end := len(names)
+	if m.PolicyPageSize > 0 && start+m.PolicyPageSize < end {
+		end = start + m.PolicyPageSize
+	}
+	out := &iot.ListAttachedPoliciesOutput{Policies: make([]types.Policy, 0, end-start)}
+	for _, name := range names[start:end] {
+		out.Policies = append(out.Policies, types.Policy{PolicyName: aws.String(name)})
+	}
+	if end < len(names) {
+		out.NextMarker = aws.String(strconv.Itoa(end))
+	}
+	return out, nil
 }
 
 func (m *IoTClientMock) DescribeThing(ctx context.Context, params *iot.DescribeThingInput, optFns ...func(*iot.Options)) (*iot.DescribeThingOutput, error) {

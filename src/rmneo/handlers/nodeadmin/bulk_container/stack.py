@@ -42,6 +42,7 @@ class CreateNodeRegisterPolicy(Construct):
                         "iot:ListThingPrincipals",
                         "iot:AddThingToThingGroup",
                         "iot:AttachPolicy",
+                        "iot:ListAttachedPolicies",
                         "iot:UpdateThing",
                         "iot:UpdateThingShadow"
                     ],
