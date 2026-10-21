@@ -351,6 +351,12 @@ paths:
           description: The broker's own HMAC-bound state (not the client's).
           schema:
             type: string
+        - name: __Host-esp_flow_id
+          in: cookie
+          required: true
+          description: Login-flow cookie set by `/oauth2/authorize`; it must name the flow the `state` was issued for.
+          schema:
+            type: string
       responses:
         "302":
           description:
@@ -371,8 +377,8 @@ paths:
                 type: string
         "400":
           description:
-            State/flow mismatch or upstream validation failure (HTML error
-            page).
+            State/flow mismatch, a missing or different `__Host-esp_flow_id` cookie,
+            or upstream validation failure (HTML error page; no cookie is set).
           content:
             text/html:
               schema:
@@ -406,13 +412,13 @@ paths:
                 propertyName: grant_type
       responses:
         "200":
-          description: A fresh token set, including a new refresh token
+          description: "A fresh token set, including a new refresh token, sent with `Cache-Control: no-store` and `Pragma: no-cache` (RFC 6749 §5.1)."
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/TokenSet"
         "400":
-          description: invalid_request / invalid_grant / unsupported_grant_type
+          description: invalid_request / invalid_grant / unsupported_grant_type. A refresh token whose session has ended gets invalid_grant.
           content:
             application/json:
               schema:
@@ -606,15 +612,41 @@ paths:
     post:
       summary: RP-Initiated Logout (form POST)
       description: |
-        Same as `GET`, sent as a form POST.
+        Ends nothing itself: a cross-site POST carries no `SameSite=Lax` session cookie, so it answers `303` and the browser repeats the request as the `GET` above, carrying only the parameters below (the first value of each).
       tags:
         - OAuth2 / OIDC Core
       security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                id_token_hint: { type: string }
+                logout_hint: { type: string }
+                client_id: { type: string }
+                post_logout_redirect_uri: { type: string, format: uri }
+                state: { type: string }
+                ui_locales: { type: string }
+            example:
+              client_id: esp-account-dashboard
+              post_logout_redirect_uri: https://accounts.example.com/signed-out
+              state: xyz123
       responses:
-        "302":
-          description: As `GET`.
-        "200":
-          description: As `GET`.
+        "303":
+          description: Repeat as a `GET` of `/oauth2/logout` with the carried parameters.
+          headers:
+            Location:
+              schema:
+                type: string
+                example: "?client_id=esp-account-dashboard&post_logout_redirect_uri=https%3A%2F%2Faccounts.example.com%2Fsigned-out&state=xyz123"
+        "400":
+          description: The body is not `application/x-www-form-urlencoded` (`invalid_request`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
 
   /oauth2/logout/done:
     get:
@@ -809,7 +841,7 @@ paths:
               $ref: "#/components/schemas/LegacyTokenRequest"
       responses:
         "200":
-          description: ESP User token set.
+          description: "ESP User token set, sent with `Cache-Control: no-store` and `Pragma: no-cache` (RFC 6749 §5.1)."
           content:
             application/json:
               schema:
@@ -845,7 +877,7 @@ paths:
               $ref: "#/components/schemas/LegacyRefreshRequest"
       responses:
         "200":
-          description: ESP User token set.
+          description: "ESP User token set, sent with `Cache-Control: no-store` and `Pragma: no-cache` (RFC 6749 §5.1)."
           content:
             application/json:
               schema:

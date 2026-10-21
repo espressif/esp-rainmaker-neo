@@ -45,8 +45,8 @@ func FormValues(request events.APIGatewayProxyRequest, key string) []string {
 	return parsed[key]
 }
 
-// isFormRequest reports whether the request body is application/x-www-form-urlencoded (the OAuth token endpoint's encoding), read case-insensitively from Content-Type.
-func isFormRequest(request events.APIGatewayProxyRequest) bool {
+// IsFormRequest reports whether the request body is application/x-www-form-urlencoded (the OAuth endpoints' encoding), read case-insensitively from Content-Type.
+func IsFormRequest(request events.APIGatewayProxyRequest) bool {
 	ct := request.Headers["Content-Type"]
 	if ct == "" {
 		ct = request.Headers["content-type"]
@@ -64,7 +64,7 @@ func GetRequest(request events.APIGatewayProxyRequest, inputStruct any) error {
 
 	// First handle body if present
 	if request.Body != "" {
-		if isFormRequest(request) {
+		if IsFormRequest(request) {
 			values, err := url.ParseQuery(request.Body)
 			if err != nil {
 				return rmerror.NewRMError(err, "failed to parse form request body")

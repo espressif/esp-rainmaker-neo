@@ -5,6 +5,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"net/http"
 	"net/url"
 	"os"
@@ -408,6 +409,51 @@ var _ = Describe("GET /oauth2/logout", func() {
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.StatusCode).To(Equal(http.StatusMethodNotAllowed))
+	})
+})
+
+var _ = Describe("POST /oauth2/logout (RP-Initiated Logout 1.0 s2)", func() {
+	BeforeEach(func() {
+		backend = test_utils.SetupEspUserBackend(ctx())
+	})
+
+	post := func(headers map[string]string, body string, base64Encoded bool) events.APIGatewayProxyResponse {
+		resp, err := handleRequest(ctx(), events.APIGatewayProxyRequest{
+			HTTPMethod: http.MethodPost, Path: pathLogout, Headers: headers, Body: body, IsBase64Encoded: base64Encoded,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		return resp
+	}
+
+	DescribeTable("turns a form POST into a GET of the same parameters, ending nothing itself",
+		func(base64Encoded bool) {
+			registerClient()
+			cookie, sid := establish(me)
+			putFamily(me, dashboardClient, "fam_post", sid)
+			body := url.Values{"client_id": {dashboardClient}, "post_logout_redirect_uri": {registeredExit}, "state": {"s1", "s2"}, "ui_locales": {"en"}, "unrelated": {"x"}}.Encode()
+			if base64Encoded {
+				body = base64.StdEncoding.EncodeToString([]byte(body))
+			}
+
+			resp := post(map[string]string{"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "Cookie": cookie}, body, base64Encoded)
+			Expect(resp.StatusCode).To(Equal(http.StatusSeeOther))
+			Expect(resp.Headers).To(Equal(map[string]string{
+				"Location":        "?" + url.Values{"client_id": {dashboardClient}, "post_logout_redirect_uri": {registeredExit}, "state": {"s1"}, "ui_locales": {"en"}}.Encode(),
+				"Cache-Control":   "no-store",
+				"Referrer-Policy": "no-referrer",
+			}), "only the s2 parameters (the first value of each), never cached, the hint never sent as a Referer, and no cookie touched")
+			Expect(listBody(call(http.MethodGet, pathSessions, tokenFor(me, scope.Sessions, sid))).Sessions).To(HaveLen(1), "the POST ends nothing; the GET it becomes does")
+			Expect(familyClientIDs(me)).To(ConsistOf(dashboardClient))
+		},
+		Entry("plain body", false),
+		Entry("base64-encoded body", true),
+	)
+
+	It("refuses a body that is not a form (negative)", func() {
+		resp := post(map[string]string{"Content-Type": "application/json"}, `{"client_id":"`+dashboardClient+`"}`, false)
+		Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
+		Expect(resp.Body).To(ContainSubstring(oidc.OAuthErrInvalidRequest))
+		Expect(resp.Headers).NotTo(HaveKey("Location"))
 	})
 })
 

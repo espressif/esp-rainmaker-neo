@@ -5,8 +5,21 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
 	"testing"
 
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/identity_providers_db"
+	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/jwtutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
+
+	"github.com/aws/aws-lambda-go/events"
+	"github.com/golang-jwt/jwt/v5"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -15,6 +28,55 @@ func TestUserAuthHandler(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "User Auth Handler Suite")
 }
+
+var _ = Describe("legacy token responses (RFC 6749 s5.1)", func() {
+	const (
+		poolID   = "eu-west-2_testpool"
+		clientID = "native-client"
+		email    = "legacy@example.com"
+		password = "Password1!"
+	)
+
+	BeforeEach(func() {
+		backend := test_utils.SetupEspUserBackend(context.Background())
+		cog := mock.NewCognitoProviderMock()
+		cog.AddTestUserPoolDirect(poolID, clientID)
+		cog.AddTestUserDirect(poolID, email, email, password, true)
+		cog.IDTokenMinter = func(*mock.UserState) string {
+			tok, err := jwtutil.SignRS256(jwt.MapClaims{"email": email, "email_verified": true}, backend.SigningKey, oidc.SigningKeyID)
+			Expect(err).NotTo(HaveOccurred())
+			return tok
+		}
+		awscommon.SetCognitoProviderClient(cog)
+		yes := true
+		Expect(identity_providers_db.NewIdentityProvidersDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).CreateProvider(&identity_providers_db.ProviderEntry{
+			ProviderName: "cognito", Type: identity_providers_db.TypeOIDC, Enabled: &yes,
+			ClientID: clientID, ClientSecret: "provider-client-secret", PasswordGrant: &yes,
+		})).To(Succeed())
+	})
+
+	post := func(path string, body map[string]string) events.APIGatewayProxyResponse {
+		raw, err := json.Marshal(body)
+		Expect(err).NotTo(HaveOccurred())
+		resp, err := handler(context.Background(), events.APIGatewayProxyRequest{HTTPMethod: http.MethodPost, Path: path, Body: string(raw)})
+		Expect(err).NotTo(HaveOccurred())
+		return resp
+	}
+
+	It("marks the signin and refresh token sets uncacheable", func() {
+		signin := post(pathToken, map[string]string{"username": email, "password": password})
+		Expect(signin.StatusCode).To(Equal(http.StatusOK))
+		Expect(signin.Headers).To(HaveKeyWithValue("Cache-Control", "no-store"))
+		Expect(signin.Headers).To(HaveKeyWithValue("Pragma", "no-cache"))
+
+		var tokens map[string]any
+		Expect(json.Unmarshal([]byte(signin.Body), &tokens)).To(Succeed())
+		refresh := post(pathRefresh, map[string]string{"refresh_token": tokens["refresh_token"].(string)})
+		Expect(refresh.StatusCode).To(Equal(http.StatusOK))
+		Expect(refresh.Headers).To(HaveKeyWithValue("Cache-Control", "no-store"))
+		Expect(refresh.Headers).To(HaveKeyWithValue("Pragma", "no-cache"))
+	})
+})
 
 var _ = Describe("provider-specific wording", func() {
 	// Both messages name RainMaker only when RainMaker's own pool is what backs the deployment;

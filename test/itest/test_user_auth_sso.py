@@ -18,6 +18,9 @@ own end-session hop -- is test_user_login_ui.py. This file is the fast requests-
 
 Spec: espuser/docs/specs/sso-sessions.md, authorize-code-flow.md.
 """
+import time
+from urllib.parse import urljoin
+
 import pytest
 import requests
 
@@ -27,6 +30,7 @@ from test.itest.conftest import (
     SESSIONS_SCOPE,
     UPSTREAM_PROVIDER,
     USER_API_GATEWAY_URL,
+    decode_jwt_claims,
     requires_espuser,
 )
 
@@ -83,11 +87,17 @@ def test_sso_multi_webapps(apps, espuser_person):
     one = first.sign_in(browser, espuser_person)
     assert one.used_upstream, "the first login must actually authenticate somebody"
     assert one.code and browser.session_cookie, "a completed login must leave a session cookie"
+    signed_in_at = decode_jwt_claims(first.tokens(one)["id_token"])["auth_time"]
 
+    # auth_time has whole-second resolution; without the gap a code stamped with now would still match
+    time.sleep(2)
     two = second.sign_in(browser, espuser_person)
     assert not two.used_upstream, \
         "the second web app must be answered from our own session, not a round trip upstream"
-    assert second.tokens(two)["access_token"], "and the silent code must spend"
+    second_tokens = second.tokens(two)
+    assert second_tokens["access_token"], "and the silent code must spend"
+    assert decode_jwt_claims(second_tokens["id_token"])["auth_time"] == signed_in_at, \
+        "a code answered from the session authenticated nobody, so it must carry the session's auth_time"
 
     assert first.sign_in(Browser("phone"), espuser_person).used_upstream, \
         "a second device must authenticate; a session that follows the person is not a session"
@@ -288,6 +298,8 @@ def test_sso_multi_browser(apps, espuser_person):
     view = body["sessions"][0]
     assert view["current"] is True, \
         "the browser making the request must be labelled, or a UI cannot warn before ending it"
+    assert view["signed_in_at"] == decode_jwt_claims(laptop_tokens["id_token"])["auth_time"], \
+        "the session list and the ID token must name the same authentication"
     assert client_ids_under(view) == sorted([first.client_id, second.client_id]), view
 
     phone_tokens = signed_in(first, phone, espuser_person)
@@ -443,6 +455,8 @@ def test_sso_logout_ends_every_product_and_clears_the_cookie(apps, espuser_perso
 
     assert first.still_signed_in(one["refresh_token"]) and second.still_signed_in(two["refresh_token"]), \
         "precondition"
+    pending = first.sign_in(browser, espuser_person)
+    assert not pending.used_upstream and pending.code, "a code answered from the session, left unredeemed"
 
     out = second.logout(browser, id_token_hint=two.get("id_token"))
     assert out.status_code in (200, 302), f"{out.status_code} {out.text[:200]}"
@@ -466,6 +480,30 @@ def test_sso_logout_ends_every_product_and_clears_the_cookie(apps, espuser_perso
     assert browser.session_cookie is None, "the jar still holds a session cookie after sign-out"
     assert first.authorize(browser, prompt="none").error == "login_required", \
         "the session row survived the sign-out; the next authorize would shortcut to a code"
+
+    late = first.tokens(pending)
+    assert not first.still_signed_in(late["refresh_token"]), \
+        "a code redeemed after sign-out may mint once, but its refresh token must die at the first refresh"
+
+
+def test_sso_logout_accepts_a_form_post(apps, espuser_person):
+    """RP-Initiated Logout 1.0 §2 requires POST as well as GET. A cross-site POST carries no
+    SameSite=Lax cookie, so the POST is answered with a 303 to the same parameters as a GET and ends
+    nothing itself; following that 303 in the same browser is what signs the person out."""
+    first, _ = apps
+    browser = Browser()
+    tokens = signed_in(first, browser, espuser_person)
+
+    posted = browser.session.post(f"{USER_API_GATEWAY_URL}/oauth2/logout", data={
+        "client_id": first.client_id, "id_token_hint": tokens["id_token"],
+    }, allow_redirects=False)
+    assert posted.status_code == 303, f"{posted.status_code} {posted.text[:200]}"
+    assert "no-store" in posted.headers.get("Cache-Control", ""), posted.headers
+
+    out = browser.session.get(urljoin(posted.url, posted.headers["Location"]), allow_redirects=False)
+    assert out.status_code in (200, 302), f"{out.status_code} {out.text[:200]}"
+    assert not first.still_signed_in(tokens["refresh_token"]), \
+        "following the 303 must end the session and every family under it"
 
 
 def test_sso_logout_ignores_an_unregistered_landing_page_but_still_signs_out(apps, espuser_person):

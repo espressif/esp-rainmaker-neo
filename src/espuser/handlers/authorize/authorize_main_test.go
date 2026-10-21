@@ -610,6 +610,7 @@ var _ = Describe("GET /oauth2/federation/callback establishes the session", func
 
 	// A complete upstream: a token endpoint returning a signed id token whose auth_time is
 	// hours old (the upstream reused its own session), and a JWKS URL publishing its key.
+	// authTime 0 models an upstream whose token names no authentication time at all: no auth_time and no iat to fall back on.
 	setupUpstream := func(authTime int64, nonceFor func() string) (issuer string) {
 		priv, err := rsa.GenerateKey(rand.Reader, 2048)
 		Expect(err).NotTo(HaveOccurred())
@@ -622,12 +623,15 @@ var _ = Describe("GET /oauth2/federation/callback establishes the session", func
 		DeferCleanup(srv.Close)
 		mux.HandleFunc("/jwks", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(jwks) })
 		mux.HandleFunc("/token", func(w http.ResponseWriter, _ *http.Request) {
-			tok, err := jwtutil.SignRS256(jwtgo.MapClaims{
+			claims := jwtgo.MapClaims{
 				"iss": srv.URL, "aud": "broker-client", "sub": "up-sub-1", "nonce": nonceFor(),
 				"email": "sso@example.com", "email_verified": true,
-				"auth_time": authTime,
-				"iat":       time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(),
-			}, priv, kid)
+				"exp": time.Now().Add(time.Hour).Unix(),
+			}
+			if authTime > 0 {
+				claims["auth_time"], claims["iat"] = authTime, time.Now().Unix()
+			}
+			tok, err := jwtutil.SignRS256(claims, priv, kid)
 			Expect(err).NotTo(HaveOccurred())
 			_ = json.NewEncoder(w).Encode(map[string]string{"id_token": tok})
 		})
@@ -647,8 +651,8 @@ var _ = Describe("GET /oauth2/federation/callback establishes the session", func
 		os.Setenv("ESPUSER_FEDERATION_CALLBACK_URL", "https://us.example/oauth2/federation/callback")
 	})
 
-	// runCallback drives the full brokered leg: flow row, upstream leg, then the callback.
-	runCallback := func() events.APIGatewayProxyResponse {
+	// runCallback drives the full brokered leg: flow row, upstream leg, then the callback carrying the given Cookie header ("" sends none).
+	runCallback := func(cookie string) events.APIGatewayProxyResponse {
 		flowsDB := auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
 		Expect(flowsDB.CreateFlow(&auth_flows_db.AuthFlow{
 			FlowID: "fl_sso", ClientID: testClientID, RedirectURI: redirectURI,
@@ -666,26 +670,45 @@ var _ = Describe("GET /oauth2/federation/callback establishes the session", func
 			RequirePKCE: utils.Ptr(false),
 		})).To(Succeed())
 
-		resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathFederationCallback,
-			map[string]string{"code": "upstream-code", "state": leg.State}))
+		req := getRequest(pathFederationCallback, map[string]string{"code": "upstream-code", "state": leg.State})
+		if cookie != "" {
+			req = withCookie(req, cookie)
+		}
+		backend.DBMock.ProfileReset()
+		resp, err := handleAuthorizeRequest(context.Background(), req)
 		Expect(err).NotTo(HaveOccurred())
 		return resp
 	}
+
+	// The upstream nonce is minted when the leg is set up, so the fake upstream reads it back off the flow.
+	flowNonce := func() string {
+		flow, err := auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).GetFlow("fl_sso")
+		Expect(err).NotTo(HaveOccurred())
+		return flow.UpstreamNonce
+	}
+
+	// The specs below that send the right cookie are the positive control.
+	DescribeTable("refuses a callback from a browser that did not start the flow, before reading it (RFC 6749 s10.12, negative)",
+		func(cookie string) {
+			setupUpstream(time.Now().Unix(), flowNonce)
+			resp := runCallback(cookie)
+			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
+			Expect(resp.Headers).NotTo(HaveKey("Set-Cookie"))
+			Expect(resp.Headers).NotTo(HaveKey("Location"))
+			Expect(backend.DBMock.ProfileGet().Accesses["espuser-auth-flows"].ReadCount).To(BeZero(), "a forged callback costs no flow read")
+		},
+		Entry("no flow cookie", ""),
+		Entry("a flow cookie naming a different flow", flowCookieName+"=fl_someone_else"),
+	)
 
 	It("sets the __Host- session cookie and records the upstream's auth_time on the federation callback", func() {
 		// Old enough to prove inheritance: auth_time is a fact carried from the upstream, never
 		// the row's write time, and rolling retention on use must not move it.
 		upstreamAuthTime := time.Now().Add(-30 * time.Minute).Unix()
-		var currentNonce string
 		flowsDB := auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
-		setupUpstream(upstreamAuthTime, func() string {
-			flow, err := flowsDB.GetFlow("fl_sso")
-			Expect(err).NotTo(HaveOccurred())
-			currentNonce = flow.UpstreamNonce
-			return currentNonce
-		})
+		setupUpstream(upstreamAuthTime, flowNonce)
 
-		resp := runCallback()
+		resp := runCallback(flowCookieName + "=fl_sso")
 		Expect(resp.StatusCode).To(Equal(http.StatusFound))
 		Expect(resp.Headers["Location"]).To(ContainSubstring("code="))
 
@@ -698,6 +721,25 @@ var _ = Describe("GET /oauth2/federation/callback establishes the session", func
 		s := session.NewService(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).Lookup(cookieValue)
 		Expect(s).NotTo(BeNil())
 		Expect(s.AuthTime).To(Equal(upstreamAuthTime), "auth_time is the upstream's — 12:00 must not be recorded for a 09:00 login")
+
+		loc, err := url.Parse(resp.Headers["Location"])
+		Expect(err).NotTo(HaveOccurred())
+		flow, err := flowsDB.GetFlowByCode(loc.Query().Get("code"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(flow.AuthTime).To(Equal(upstreamAuthTime), "the ID token minted from this code must name the upstream sign-in too (OIDC Core s2)")
+	})
+
+	It("stamps the code with the callback time when the upstream's token names no authentication time", func() {
+		setupUpstream(0, flowNonce)
+		before := time.Now().Unix()
+
+		resp := runCallback(flowCookieName + "=fl_sso")
+		Expect(resp.StatusCode).To(Equal(http.StatusFound))
+		loc, err := url.Parse(resp.Headers["Location"])
+		Expect(err).NotTo(HaveOccurred())
+		flow, err := auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).GetFlowByCode(loc.Query().Get("code"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(flow.AuthTime).To(BeNumerically("~", before, 5), "with nothing upstream naming the sign-in, it happened on this request")
 	})
 })
 

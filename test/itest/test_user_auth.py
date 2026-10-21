@@ -4,6 +4,7 @@
 
 import base64
 import json
+import time
 import uuid
 from urllib.parse import parse_qs, urlparse
 
@@ -308,12 +309,29 @@ def federated_identity(fed_identity, provision_end_user):
 @pytest.mark.xdist_group("env_mut")
 def test_federated_login_carries_contacts_and_claims(federated_identity, fed_client):
     """One brokered login, asserted end to end: both verified contacts are stored, the upstream
-    profile reaches both tokens, userinfo agrees with them, a refresh preserves them, and a second
-    login reuses the account rather than creating another."""
+    profile reaches both tokens, userinfo agrees with them, a refresh preserves them and the
+    original auth_time, and a second login reuses the account rather than creating another.
+
+    Before the real callback, the same callback URL is opened from another browser, which must be
+    refused before the flow is read (RFC 6749 s10.12), so the real callback still completes
+    afterwards. Cognito stamps auth_time when its code is redeemed, so here auth_time is only
+    checked as this sign-in; that it carries the upstream's value rather than our callback time is
+    pinned by the authorize unit specs, whose fake upstream reports an older login."""
     _require_fed_env()
     email, phone, password = federated_identity
 
-    tokens = _login(fed_client, email, password, "openid email phone profile")
+    def from_another_browser(callback_url):
+        forged = requests.get(callback_url, allow_redirects=False)
+        assert forged.status_code == 400, \
+            f"a callback opened without the flow cookie must be refused: {forged.status_code} {forged.text[:200]}"
+
+    started = time.time()
+    tokens = _login(fed_client, email, password, "openid email phone profile",
+                    before_callback=from_another_browser)
+
+    id_claims = decode_jwt_claims(tokens["id_token"])
+    assert abs(id_claims["auth_time"] - started) < 300 and id_claims["auth_time"] <= id_claims["iat"], \
+        f"auth_time does not name this sign-in: {id_claims}"
 
     for label in ("access_token", "id_token"):
         claims = decode_jwt_claims(tokens[label])
@@ -336,9 +354,13 @@ def test_federated_login_carries_contacts_and_claims(federated_identity, fed_cli
         "client_id": fed_client,
     })
     assert refreshed.status_code == 200, f"refresh failed: {refreshed.status_code} {refreshed.text[:300]}"
+    assert "no-store" in refreshed.headers.get("Cache-Control", ""), \
+        f"a token response must never be cached (RFC 6749 s5.1): {refreshed.headers.get('Cache-Control')}"
     refreshed_claims = decode_jwt_claims(refreshed.json()["access_token"])
     for claim, expected in _UPSTREAM_PROFILE.items():
         assert refreshed_claims.get(claim) == expected, f"refreshed token lost {claim}: {refreshed_claims}"
+    assert decode_jwt_claims(refreshed.json()["id_token"])["auth_time"] == id_claims["auth_time"], \
+        "a refresh is not an authentication: its ID token must still name the original sign-in"
 
     # A second login is the only way to observe that resolution reused the account.
     again = decode_jwt_claims(_login(fed_client, email, password)["access_token"])

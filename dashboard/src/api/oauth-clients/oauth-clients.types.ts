@@ -18,9 +18,13 @@ export interface OAuthClient {
   client_name?: string
   client_type?: OAuthClientType
   redirect_uris?: string[]
+  post_logout_redirect_uris?: string[]
   grant_types?: string[]
   scopes?: string[]
+  allowed_resources?: string[]
+  allowed_providers?: string[]
   require_pkce?: boolean
+  first_party?: boolean
   /** Plaintext; present only when the list request set `get_secret=true` (confidential clients). */
   client_secret?: string
   created_at?: number
@@ -45,7 +49,11 @@ export interface UpdateOAuthClientRequest {
   /** Required by the API even when unchanged. */
   client_name: string
   redirect_uris: string[]
+  post_logout_redirect_uris: string[] | undefined
   grant_types: string[]
   scopes: string[]
-  require_pkce?: boolean
+  allowed_resources: string[] | undefined
+  allowed_providers: string[] | undefined
+  require_pkce: boolean | undefined
+  first_party: boolean | undefined
 }

@@ -104,8 +104,8 @@ the browser presented a cookie, the row exists, and `prompt`/`max_age`/`id_token
 `allowed_providers` permit it. There is no `sso_expires_on` field.
 
 **A grant may not outlive its user agent.** See
-[User agents and refresh families](#user-agents-and-refresh-families). This is what makes an orphaned
-family — a signed-in app with no user agent to end it from — impossible rather than merely unlikely.
+[User agents and refresh families](#user-agents-and-refresh-families). This is what keeps an orphaned
+family — a signed-in app with no user agent to end it from — from living on: the one that can still be minted, from a code redeemed after sign-out, is refused with `invalid_grant` and deleted at its first rotation.
 
 **A provider row can only ever shorten.** A provider may declare `session_max_ttl_seconds`, and the
 effective retention is the lower of that and the deployment-wide value. Without it, adopting a
@@ -324,8 +324,8 @@ row *behind* the families minted under it — the row swept while its families a
 orphan this design exists to remove. With the clamp, a provider cap also becomes *meaningful*:
 capping a provider's user agents at 30 days genuinely ends the app logins opened through them at 30 days.
 
-Consequently a live family always has its user agent row, so `GET /v1/user/sessions` cannot report a
-signed-in application it has no way to sign out. A family with no `sid` — pre-feature rows only — is
+Consequently a live family has its user agent row, so `GET /v1/user/sessions` cannot report a
+signed-in application it has no way to sign out. The one exception is a family minted from a code redeemed after sign-out, which is refused with `invalid_grant` and deleted at its first rotation. A rotation refuses and deletes a family the same way whenever its session has ended: the by-user index lists no row for its `sid`, or every listed row is past `expires_at`. A listed row that cannot be read yet, as while a re-sign-in replaces it, does not count as ended, and the family rotates at `now + RefreshTokenTTL`. A family with no `sid` — pre-feature rows only — is
 unclamped and is the only thing `unattached_products` can ever contain.
 
 **Constraint for implementers:** `RefreshTokenTTL` must stay `≤ RETAIN_TTL`.
@@ -514,9 +514,11 @@ Which to call:
 
 An access token already issued is never recalled by any of these; it lives out its hour.
 
-## Ending a session: `GET /oauth2/logout`
+## Ending a session: `GET`/`POST /oauth2/logout`
 
 RP-Initiated Logout 1.0 §2, advertised as `end_session_endpoint` in discovery.
+
+§2 also requires a form `POST`. A cross-site `POST` carries no `SameSite=Lax` cookie (RFC 6265bis §5.6.7.1), so the `POST` ends nothing itself: it answers `303 See Other` to `?<the §2 parameters>` (the first value of each) and the browser repeats it as the `GET` below. A body that is not `application/x-www-form-urlencoded` gets `400 invalid_request`.
 
 A `GET` that destroys state is not REST, and that is deliberate. Three things force a top-level
 browser navigation, and none survives a cross-origin `fetch()`:
@@ -632,7 +634,7 @@ Absent means no hop: a deployment that never fills these behaves exactly as it d
 | Keeping someone signed in past what the provider allowed | Retention is bounded by `auth_time` plus the lower of the deployment value and the provider's declared maximum |
 | Re-federation quietly extending recency | `auth_time` is set only by a real authentication; rolling either clock never touches it |
 | A capped provider orphaning live grants | The clamp: a family cannot be minted or rotated past its user agent's `expires_at` |
-| An orphaned family — a signed-in app with no user agent | Prevented by the invariant |
+| An orphaned family — a signed-in app with no user agent | Prevented by the invariant; the one minted from a code redeemed after sign-out is refused and deleted at its first rotation |
 | A browser timeout signing applications out | It cannot: families are deleted only by the deliberate acts listed above |
 | A third-party client minting a user agent | Only a human login establishes one; `client_credentials` never does, and the native path is gated on the client's `allow_direct_token` |
 | A relying party unable to demand fresh authentication | `prompt=login` and `max_age` are honoured before any shortcut is considered |

@@ -243,6 +243,14 @@ func OAuthErrorResp(status int, code, description string) events.APIGatewayProxy
 	return utils.APIGwRespJSON(status, &OAuthError{Error: code, Description: description})
 }
 
+// OAuthTokenResp is the 200 for any response carrying tokens; RFC 6749 s5.1 requires Cache-Control: no-store and Pragma: no-cache on it.
+func OAuthTokenResp(body any) events.APIGatewayProxyResponse {
+	resp := utils.APIGwRespJSON(http.StatusOK, body)
+	resp.Headers["Cache-Control"] = "no-store"
+	resp.Headers["Pragma"] = "no-cache"
+	return resp
+}
+
 // OAuthUnauthorizedResp is the 401 a bearer-protected resource owes an absent, expired or invalid token, carrying the WWW-Authenticate challenge RFC 6750 s3 requires.
 func OAuthUnauthorizedResp() events.APIGatewayProxyResponse {
 	resp := OAuthErrorResp(http.StatusUnauthorized, OAuthErrInvalidToken, "The access token is missing, expired, or invalid.")

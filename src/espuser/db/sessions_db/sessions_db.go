@@ -208,10 +208,9 @@ func (db *SessionsDB) touchLive(hash string, now, expiresAt int64, checkCap bool
 // the provider cap without re-reading the provider row. sessionTTLSeconds is passed in so this
 // package keeps no dependency on the session package.
 //
-// A gone session is a NO-OP, no error: a refresh family outlives the browser session it was
-// opened from (that row may have been signed out from another user agent), and the family keeps its
-// own lifetime. Returns the new expires_at so the token path can clamp the family's expiry to
-// it; 0 when there was nothing to bump.
+// Every row the index lists for the sid is tried, because during a re-sign-in the index can list the replaced row, the new one, or both.
+//
+// Returns the new expires_at so the token path can clamp the family's expiry to it. ErrSessionNotFound means the session has ended: the index lists no row for the sid, or every listed row is past expires_at. (0, nil) means it cannot tell, because a listed row is missing, which a lagging index or read shows mid re-sign-in.
 func (db *SessionsDB) TouchExpiryBySID(userID, sid string, now, sessionTTLSeconds int64) (int64, error) {
 	if userID == "" || sid == "" {
 		return 0, nil
@@ -220,17 +219,34 @@ func (db *SessionsDB) TouchExpiryBySID(userID, sid string, now, sessionTTLSecond
 	if err != nil {
 		return 0, err
 	}
-	if len(hashes) == 0 {
-		return 0, nil // the user agent is gone; the refresh outlived its browser session.
+	ended := true
+	for _, hash := range hashes {
+		expiresAt, err := db.touchExpiry(hash, now, sessionTTLSeconds)
+		if errors.Is(err, ErrSessionNotFound) {
+			continue
+		}
+		if err != nil || expiresAt > 0 {
+			return expiresAt, err
+		}
+		ended = false
 	}
-	hash := hashes[0]
+	if ended {
+		return 0, ErrSessionNotFound
+	}
+	return 0, nil
+}
 
+// touchExpiry rolls one row's expires_at forward. A row past expires_at is ErrSessionNotFound (the TTL sweep lags, so an ended session can still be on disk); a missing row is 0 with no error, since it may only not be readable yet.
+func (db *SessionsDB) touchExpiry(hash string, now, sessionTTLSeconds int64) (int64, error) {
 	var row SessionEntry
 	if err := db.DbGetItem(sessionsTableName, newSessionKey(hash), &row); err != nil {
 		return 0, rmerror.NewRMError(err, "failed to read session for retention bump")
 	}
 	if row.SessionHash == "" {
-		return 0, nil // deleted between the index read and here.
+		return 0, nil
+	}
+	if isExpired(row, now) {
+		return 0, ErrSessionNotFound
 	}
 
 	expiresAt := now + sessionTTLSeconds
@@ -241,14 +257,17 @@ func (db *SessionsDB) TouchExpiryBySID(userID, sid string, now, sessionTTLSecond
 	update := expression.
 		Set(expression.Name(colExpiresAt), expression.Value(expiresAt)).
 		Set(expression.Name(colLastSeenAt), expression.Value(now))
-	exists := expression.Name(sessionsHashKey).AttributeExists()
+	live := expression.Name(sessionsHashKey).AttributeExists().And(expression.Or(
+		expression.Name(colExpiresAt).Equal(expression.Value(0)),
+		expression.Name(colExpiresAt).GreaterThan(expression.Value(now)),
+	))
 	if _, err := db.DbUpdateItem(espdynamodb.DbUpdateItemInput{
 		TableName: sessionsTableName,
 		Update:    update,
 		Query:     newSessionKey(hash),
-		Condition: exists,
+		Condition: live,
 	}); err != nil {
-		// The row went away underneath us (a concurrent sign-out): a no-op, not a failure.
+		// The row changed between the read and the write, so whether the session ended is unknown.
 		var ccf *types.ConditionalCheckFailedException
 		if errors.As(err, &ccf) {
 			return 0, nil

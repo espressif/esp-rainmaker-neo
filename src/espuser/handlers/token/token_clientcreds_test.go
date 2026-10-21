@@ -101,6 +101,8 @@ var _ = Describe("OAuth token endpoint (client_credentials grant)", func() {
 			))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp.StatusCode).To(Equal(200))
+			Expect(resp.Headers).To(HaveKeyWithValue("Cache-Control", "no-store"), "RFC 6749 s5.1: a token response must not be cached")
+			Expect(resp.Headers).To(HaveKeyWithValue("Pragma", "no-cache"))
 
 			body := decodeBody[map[string]any](resp)
 			Expect(body["token_type"]).To(Equal("Bearer"))

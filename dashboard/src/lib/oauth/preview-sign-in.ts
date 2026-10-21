@@ -137,9 +137,13 @@ async function ensurePreviewRedirectUri(
   const updated = await oauthClientsApi.update(clientId, {
     client_name: client.client_name ?? clientId,
     redirect_uris: desired,
+    post_logout_redirect_uris: client.post_logout_redirect_uris,
     grant_types: client.grant_types,
     scopes: client.scopes ?? [],
+    allowed_resources: client.allowed_resources,
+    allowed_providers: client.allowed_providers,
     require_pkce: client.require_pkce,
+    first_party: client.first_party,
   })
 
   const survived = updated.redirect_uris ?? []

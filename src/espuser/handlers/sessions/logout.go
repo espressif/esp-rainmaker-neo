@@ -48,6 +48,9 @@ const (
 // Families are deleted before the session row. The reverse order, interrupted, leaves someone
 // signed out of the login but still signed in to everything it opened.
 func handleLogout(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+	if request.HTTPMethod == http.MethodPost {
+		return logoutPostAsGet(request), nil
+	}
 	if request.HTTPMethod != http.MethodGet {
 		return oidc.OAuthErrorResp(http.StatusMethodNotAllowed, oidc.OAuthErrInvalidRequest, "Method not allowed."), nil
 	}
@@ -203,6 +206,22 @@ func withState(destination, state string) string {
 	q.Set("state", state)
 	u.RawQuery = q.Encode()
 	return u.String()
+}
+
+// logoutPostAsGet answers a form POST with a 303 to the same RP-Initiated Logout 1.0 s2 parameters as a GET, ending nothing itself: RFC 6265bis s5.6.7.1 withholds a SameSite=Lax cookie from a cross-site POST but sends it on the top-level GET that follows.
+func logoutPostAsGet(request events.APIGatewayProxyRequest) events.APIGatewayProxyResponse {
+	if !rmngrequest.IsFormRequest(request) {
+		return oidc.OAuthErrorResp(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "The body must be application/x-www-form-urlencoded.")
+	}
+	params := url.Values{}
+	for _, name := range []string{"id_token_hint", "logout_hint", "client_id", "post_logout_redirect_uri", "state", "ui_locales"} {
+		if values := rmngrequest.FormValues(request, name); len(values) > 0 {
+			params.Set(name, values[0])
+		}
+	}
+	resp := redirect("?"+params.Encode(), "")
+	resp.StatusCode = http.StatusSeeOther
+	return resp
 }
 
 // idTokenHint is what a verified id_token_hint says; nil when the hint is absent or does not verify.

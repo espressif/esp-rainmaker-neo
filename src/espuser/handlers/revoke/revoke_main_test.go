@@ -9,8 +9,10 @@ import (
 	"encoding/base64"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/sessions_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/refreshtoken"
 	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
@@ -97,6 +99,9 @@ var _ = Describe("RFC 7009 revoke endpoint", func() {
 		//     end for being audience-scoped or session-bound.
 		const sid = "sess_revoke_1"
 		const resource = "https://api.accounts.example.com"
+		Expect(sessions_db.NewSessionsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).CreateSession(&sessions_db.SessionEntry{
+			SessionHash: "hash_" + sid, SID: sid, UserID: "user-123", ExpiresAt: time.Now().Add(time.Hour).Unix(),
+		})).To(Succeed())
 
 		token, err := svc.MintRefreshtoken("user-123", testClientID, "openid", resource, sid, 0)
 		Expect(err).NotTo(HaveOccurred())

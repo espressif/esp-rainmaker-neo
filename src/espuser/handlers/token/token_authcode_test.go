@@ -82,6 +82,8 @@ var _ = Describe("OAuth token endpoint (authorization_code grant)", func() {
 		resp, err := handleTokenRequest(context.Background(), formRequest(codeForm(nil)))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.StatusCode).To(Equal(200))
+		Expect(resp.Headers).To(HaveKeyWithValue("Cache-Control", "no-store"), "RFC 6749 s5.1: a token response must not be cached")
+		Expect(resp.Headers).To(HaveKeyWithValue("Pragma", "no-cache"))
 		tokens := decodeBody[map[string]any](resp)
 		Expect(tokens["access_token"]).NotTo(BeEmpty())
 		Expect(tokens["refresh_token"]).NotTo(BeEmpty())
