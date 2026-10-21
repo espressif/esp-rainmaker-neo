@@ -3,13 +3,46 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from concurrent.futures import ThreadPoolExecutor
+
 import boto3
 import click
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, WaiterError
 from rich.console import Console
 from rich.progress import Progress
 
 console = Console()
+
+DELETABLE_STACK_STATUSES = ['CREATE_COMPLETE', 'UPDATE_COMPLETE', 'UPDATE_ROLLBACK_COMPLETE', 'ROLLBACK_COMPLETE', 'DELETE_FAILED']
+STACK_DELETE_WAIT = {'Delay': 30, 'MaxAttempts': 240}  # 30 seconds * 240 attempts = 2 hours
+
+
+def _bucket_exists(s3, bucket):
+    """Only a 404 counts as gone; a 403 (bucket name owned by another account) re-raises rather than being treated as missing."""
+    try:
+        s3.head_bucket(Bucket=bucket)
+        return True
+    except ClientError as e:
+        if e.response['Error']['Code'] in ('404', 'NoSuchBucket'):
+            return False
+        raise
+
+
+def find_orphaned_cdk_toolkits(cloudformation, s3):
+    """Map each CDK bootstrap stack whose staging bucket is gone to that bucket: {"CDKToolkit-alexa": "cdk-alexa-assets-<account>-eu-west-1"}."""
+    orphans = {}
+    paginator = cloudformation.get_paginator('list_stacks')
+    for page in paginator.paginate(StackStatusFilter=DELETABLE_STACK_STATUSES):
+        for summary in page.get('StackSummaries', []):
+            stack_name = summary['StackName']
+            if not stack_name.startswith('CDKToolkit') or 'ParentId' in summary:
+                continue
+            stack = cloudformation.describe_stacks(StackName=stack_name)['Stacks'][0]
+            bucket = next((o['OutputValue'] for o in stack.get('Outputs', []) if o['OutputKey'] == 'BucketName'), None)
+            if bucket and not _bucket_exists(s3, bucket):
+                orphans[stack_name] = bucket
+    return orphans
+
 
 class AWSDeployCleanup:
     def __init__(self, profile=None, access_key=None, secret_key=None, session_token=None, region=None, services=None):
@@ -276,38 +309,9 @@ class AWSDeployCleanup:
                     try:
                         self.console.print(f"\n[bold]Processing policy: {policy_name}[/bold]")
                         
-                        # First, detach the policy from all principals (targets)
-                        self.console.print("\n[cyan]Detaching policy from all principals...[/cyan]")
-                        try:
-                            paginator = self.iot.get_paginator('list_targets_for_policy')
-                            targets = []
-                            for page in paginator.paginate(policyName=policy_name):
-                                for target in page.get('targets', []):
-                                    targets.append(target)
-                            
-                            if targets:
-                                self.console.print(f"Found {len(targets)} principals attached to policy")
-                                for target in targets:
-                                    try:
-                                        self.iot.detach_policy(
-                                            policyName=policy_name,
-                                            target=target
-                                        )
-                                        self.console.print(f"[green]✓ Detached policy from: {target}[/green]")
-                                    except ClientError as e:
-                                        error_code = e.response['Error']['Code']
-                                        if error_code != 'ResourceNotFoundException':
-                                            self.console.print(f"[yellow]⚠ Warning: Could not detach policy from {target}: {str(e)}[/yellow]")
-                            else:
-                                self.console.print("No principals attached to this policy")
-                        except ClientError as e:
-                            error_code = e.response['Error']['Code']
-                            if error_code == 'ResourceNotFoundException':
-                                self.console.print("Policy not found, skipping")
-                                continue
-                            else:
-                                self.console.print(f"[yellow]⚠ Warning: Could not list targets for policy: {str(e)}[/yellow]")
-                        
+                        if not self._detach_iot_policy(policy_name):
+                            continue
+
                         # Delete the policy
                         self.console.print("\n[cyan]Deleting policy...[/cyan]")
                         self.iot.delete_policy(policyName=policy_name)
@@ -328,6 +332,48 @@ class AWSDeployCleanup:
             raise
         except Exception as e:
             self.console.print(f"[red]Error cleaning up IoT resources: {str(e)}[/red]")
+            raise
+
+    def _detach_iot_policy(self, policy_name):
+        """Detach the policy from every principal; False when the policy no longer exists."""
+        self.console.print("\n[cyan]Detaching policy from all principals...[/cyan]")
+        try:
+            targets = []
+            for page in self.iot.get_paginator('list_targets_for_policy').paginate(policyName=policy_name):
+                targets += page.get('targets', [])
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'ResourceNotFoundException':
+                self.console.print("Policy not found, skipping")
+                return False
+            self.console.print(f"[yellow]⚠ Warning: Could not list targets for policy: {str(e)}[/yellow]")
+            return True
+
+        if not targets:
+            self.console.print("No principals attached to this policy")
+            return True
+        self.console.print(f"Found {len(targets)} principals attached to policy")
+        for target in targets:
+            try:
+                self.iot.detach_policy(policyName=policy_name, target=target)
+                self.console.print(f"[green]✓ Detached policy from: {target}[/green]")
+            except ClientError as e:
+                if e.response['Error']['Code'] != 'ResourceNotFoundException':
+                    self.console.print(f"[yellow]⚠ Warning: Could not detach policy from {target}: {str(e)}[/yellow]")
+        return True
+
+    def detach_iot_policies(self):
+        """Detach every IoT policy from its certificates, since CloudFormation cannot delete a stack's policy while test devices still hold it."""
+        try:
+            self.console.print("[bold cyan]Detaching IoT policies before stack cleanup...[/bold cyan]")
+            for page in self.iot.get_paginator('list_policies').paginate():
+                for policy in page.get('policies', []):
+                    self.console.print(f"\n[bold]Processing policy: {policy['policyName']}[/bold]")
+                    self._detach_iot_policy(policy['policyName'])
+
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            error_message = e.response['Error']['Message']
+            self.console.print(f"[red]Error detaching IoT policies: {error_code} - {error_message}[/red]")
             raise
 
     def cleanup_cloudwatch(self):
@@ -447,7 +493,7 @@ class AWSDeployCleanup:
             stacks = []
             paginator = self.cloudformation.get_paginator('list_stacks')
             
-            for page in paginator.paginate(StackStatusFilter=['CREATE_COMPLETE', 'UPDATE_COMPLETE', 'UPDATE_ROLLBACK_COMPLETE', 'ROLLBACK_COMPLETE', 'DELETE_FAILED']):
+            for page in paginator.paginate(StackStatusFilter=DELETABLE_STACK_STATUSES + ['DELETE_IN_PROGRESS']):
                 for stack in page.get('StackSummaries', []):
                     # Filter out deleted and nested stacks
                     if (stack['StackStatus'] != 'DELETE_COMPLETE' and 
@@ -459,9 +505,10 @@ class AWSDeployCleanup:
                 self.console.print("[yellow]No stacks found[/yellow]")
                 return
 
-            # Sort stacks by creation time (newest first)
+            # Newest first, but CDK bootstrap stacks last: deleting an app stack assumes its bootstrap stack's execution role.
             self.console.print(f"\n[bold cyan]Found {len(stacks)} stacks to delete[/bold cyan]")
             sorted_stacks = sorted(stacks, key=lambda x: x.get('CreationTime', ''), reverse=True)
+            sorted_stacks.sort(key=lambda x: x['StackName'].startswith('CDKToolkit'))
             
             for stack in sorted_stacks:
                 stack_name = stack.get('StackName')
@@ -474,38 +521,11 @@ class AWSDeployCleanup:
                     stack_status = response['Stacks'][0]['StackStatus']
                     self.console.print(f"Current status of stack '{stack_name}': {stack_status}")
 
-                    # Try to disable termination protection
-                    try:
-                        self.console.print(f"Disabling termination protection for stack '{stack_name}'...")
-                        self.cloudformation.update_termination_protection(
-                            StackName=stack_name,
-                            EnableTerminationProtection=False
-                        )
-                    except ClientError as e:
-                        if "Stack does not have termination protection enabled" in str(e):
-                            self.console.print("Termination protection was already disabled.")
-                        else:
-                            self.console.print(f"Error disabling termination protection: {e}")
-
-                    # Check if the stack can be deleted
-                    if stack_status in ['CREATE_COMPLETE', 'UPDATE_COMPLETE', 'ROLLBACK_COMPLETE', 'DELETE_FAILED', 'UPDATE_ROLLBACK_COMPLETE']:
-                        try:
-                            self.console.print(f"Deleting stack '{stack_name}'...")
-                            self.cloudformation.delete_stack(StackName=stack_name)
-                            waiter = self.cloudformation.get_waiter('stack_delete_complete')
-                            waiter.wait(
-                                StackName=stack_name,
-                                WaiterConfig={'Delay': 30, 'MaxAttempts': 240}  # 30 seconds * 240 attempts = 2 hours
-                            )
-                        except ClientError:
-                            self.console.print("Regular deletion failed, attempting force delete...")
-                            self.cloudformation.delete_stack(StackName=stack_name, DeletionMode='FORCE_DELETE_STACK')
-                            waiter = self.cloudformation.get_waiter('stack_delete_complete')
-                            waiter.wait(
-                                StackName=stack_name,
-                                WaiterConfig={'Delay': 30, 'MaxAttempts': 240}  # 30 seconds * 240 attempts = 2 hours
-                            )
-                        
+                    if stack_status == 'DELETE_IN_PROGRESS':
+                        self._finish_delete(self.cloudformation, stack_name)
+                        self.console.print(f"[green]✓ Successfully deleted stack: {stack_name}[/green]")
+                    elif stack_status in DELETABLE_STACK_STATUSES:
+                        self._delete_stack(self.cloudformation, stack_name, force=stack_status == 'DELETE_FAILED')
                         self.console.print(f"[green]✓ Successfully deleted stack: {stack_name}[/green]")
                     else:
                         self.console.print(f"[yellow]Stack '{stack_name}' cannot be deleted because its current status is '{stack_status}'.[/yellow]")
@@ -514,7 +534,7 @@ class AWSDeployCleanup:
                 except ClientError as e:
                     error_code = e.response['Error']['Code']
                     error_message = e.response['Error']['Message']
-                    if error_code == 'ValidationError':
+                    if error_code == 'ValidationError' and 'does not exist' in error_message:
                         self.console.print(f"[yellow]Stack '{stack_name}' does not exist, skipping.[/yellow]")
                     else:
                         self.console.print(f"[red]✗ Error deleting stack {stack_name}: {error_code} - {error_message}[/red]")
@@ -530,6 +550,74 @@ class AWSDeployCleanup:
         except Exception as e:
             self.console.print(f"[red]Error cleaning up CloudFormation stacks: {str(e)}[/red]")
             raise
+
+    def _delete_stack(self, cloudformation, stack_name, force=False):
+        """Disable termination protection, delete and wait, falling back to a force delete.
+
+        Pass force for a DELETE_FAILED stack: a regular retry fails the same way, after up to an hour of custom-resource timeouts.
+        """
+        try:
+            self.console.print(f"Disabling termination protection for stack '{stack_name}'...")
+            cloudformation.update_termination_protection(StackName=stack_name, EnableTerminationProtection=False)
+        except ClientError as e:
+            if "Stack does not have termination protection enabled" in str(e):
+                self.console.print("Termination protection was already disabled.")
+            else:
+                self.console.print(f"Error disabling termination protection: {e}")
+
+        waiter = cloudformation.get_waiter('stack_delete_complete')
+        if not force:
+            try:
+                self.console.print(f"Deleting stack '{stack_name}'...")
+                cloudformation.delete_stack(StackName=stack_name)
+                waiter.wait(StackName=stack_name, WaiterConfig=STACK_DELETE_WAIT)
+                return
+            except (ClientError, WaiterError):
+                self.console.print("Regular deletion failed, attempting force delete...")
+
+        self.console.print(f"Force deleting stack '{stack_name}'...")
+        cloudformation.delete_stack(StackName=stack_name, DeletionMode='FORCE_DELETE_STACK')
+        waiter.wait(StackName=stack_name, WaiterConfig=STACK_DELETE_WAIT)
+
+    def _finish_delete(self, cloudformation, stack_name):
+        """Wait out a delete another run started (a cancelled job's keeps going), force-deleting if it ends DELETE_FAILED."""
+        self.console.print(f"Waiting for the delete already in progress on stack '{stack_name}'...")
+        try:
+            cloudformation.get_waiter('stack_delete_complete').wait(StackName=stack_name, WaiterConfig=STACK_DELETE_WAIT)
+        except WaiterError:
+            self._delete_stack(cloudformation, stack_name, force=True)
+
+    def cleanup_orphaned_cdk_toolkits(self):
+        """Delete CDK bootstrap stacks whose staging bucket is gone, in every enabled region.
+
+        S3 cleanup spans all regions but stack cleanup only --region, and `cdk bootstrap` treats such a stack as bootstrapped, so the next deploy fails on the missing bucket.
+        """
+        try:
+            self.console.print("[bold cyan]Looking for CDK bootstrap stacks without a staging bucket...[/bold cyan]")
+            regions = [r['RegionName'] for r in self.session.client('ec2').describe_regions()['Regions']]
+            # boto3 sessions are not thread-safe, so build every client before fanning out.
+            clients = {r: (self.session.client('cloudformation', region_name=r), self.session.client('s3', region_name=r)) for r in regions}
+            with ThreadPoolExecutor(max_workers=len(regions)) as pool:
+                futures = [pool.submit(self._cleanup_orphaned_cdk_toolkits_in, r, cfn, s3) for r, (cfn, s3) in clients.items()]
+            for future in futures:
+                future.result()
+
+            self.console.print("\n[bold green]Orphaned CDK bootstrap stack cleanup completed![/bold green]")
+
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            error_message = e.response['Error']['Message']
+            self.console.print(f"[red]Error cleaning up orphaned CDK bootstrap stacks: {error_code} - {error_message}[/red]")
+            raise
+        except Exception as e:
+            self.console.print(f"[red]Error cleaning up orphaned CDK bootstrap stacks: {str(e)}[/red]")
+            raise
+
+    def _cleanup_orphaned_cdk_toolkits_in(self, region, cloudformation, s3):
+        for stack_name, bucket in find_orphaned_cdk_toolkits(cloudformation, s3).items():
+            self.console.print(f"\n[bold]Processing stack: {stack_name} in {region} (bucket {bucket} is gone)[/bold]")
+            self._delete_stack(cloudformation, stack_name)
+            self.console.print(f"[green]✓ Successfully deleted stack: {stack_name} in {region}[/green]")
 
     def cleanup_s3_buckets(self):
         """Clean up S3 buckets except those with specific prefixes"""
@@ -971,11 +1059,15 @@ class AWSDeployCleanup:
         """Clean up AWS resources based on specified services"""
         try:
             if self.services == ['all'] or 'cloudformation' in self.services:
+                self.detach_iot_policies()
                 self.cleanup_cloudformation_stacks()
 
             if self.services == ['all'] or 's3' in self.services:
                 self.cleanup_s3_buckets()
-            
+
+            if self.services == ['all'] or 's3' in self.services or 'cloudformation' in self.services:
+                self.cleanup_orphaned_cdk_toolkits()
+
             if self.services == ['all'] or 'iam' in self.services:
                 self.cleanup_iam()
             
