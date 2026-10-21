@@ -33,6 +33,10 @@ default:
   # S3 syncs, the docs-server push and the PyPI publish — opt out below with
   # interruptible: false.
   interruptible: true
+  # A job cancelled mid-fetch leaves ref .lock files in the runner's cached clone, and the next fetch that prunes that ref fails.
+  hooks:
+    pre_get_sources_script:
+      - find "$CI_PROJECT_DIR/.git" -name '*.lock' -type f -exec rm -f {} + 2>/dev/null || true
 
 stages:
   - lint
