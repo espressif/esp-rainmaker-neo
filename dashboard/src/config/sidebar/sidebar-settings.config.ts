@@ -17,6 +17,13 @@ export function getSettingsSidebarGroup(t: TFunction): SidebarGroupConfig {
     icon: group.icon,
     defaultExpanded: true,
     items: [
+      // Always present, so it stays first: /home/settings redirects here whichever voice-assistant stacks are deployed.
+      {
+        id: "push-notifications",
+        label: t("sidebar.pushNotifications", "Push notifications"),
+        icon: group.items["push-notifications"],
+        path: "/home/settings/push-notifications",
+      },
       // Each assistant ships as its own stack; with none deployed the page has
       // no tabs to show, so the entry is omitted rather than linking to it.
       ...(isAlexaEnabled() || isGvaEnabled() || isSmartThingsEnabled()
@@ -29,12 +36,6 @@ export function getSettingsSidebarGroup(t: TFunction): SidebarGroupConfig {
             },
           ]
         : []),
-      {
-        id: "push-notifications",
-        label: t("sidebar.pushNotifications", "Push notifications"),
-        icon: group.items["push-notifications"],
-        path: "/home/settings/push-notifications",
-      },
       {
         id: "post-deployment",
         label: t("sidebar.postDeployment", "Post-Deployment"),
