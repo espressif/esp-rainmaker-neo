@@ -163,14 +163,18 @@ def insert_header(path: str) -> None:
 
 
 def git(*args: str) -> list[str]:
+    """Paths come back NUL-separated and unquoted: by default git prints a non-ASCII name as "h\\303\\251llo.py", which matches no file on disk, so the file would be skipped."""
     out = subprocess.run(
-        ["git", *args], check=True, capture_output=True, text=True
+        ["git", "-c", "core.quotePath=false", *args, "-z"], check=True, capture_output=True, text=True
     ).stdout
-    return [line for line in out.splitlines() if line]
+    return [path for path in out.split("\0") if path]
 
 
 def added_since(ref: str) -> list[str]:
-    return git("diff", "--name-only", "--diff-filter=A", f"{ref}...HEAD")
+    if not ref.strip():
+        sys.exit("--added-since is empty: the base commit was not provided (is CI_MERGE_REQUEST_DIFF_BASE_SHA set?)")
+    # --no-renames: a file renamed into a checked extension needs a header too, but rename detection reports it as R rather than A.
+    return git("diff", "--name-only", "--diff-filter=A", "--no-renames", f"{ref}...HEAD")
 
 
 def main() -> int:
@@ -184,7 +188,7 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    if args.added_since:
+    if args.added_since is not None:
         candidates = added_since(args.added_since)
     elif args.all:
         candidates = git("ls-files")
