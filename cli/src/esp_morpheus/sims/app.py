@@ -22,6 +22,7 @@ from . import prov_ble
 # Never CWD-anchored: a cache that looks empty from a new directory would re-fetch every node
 # config the app already had.
 APP_CACHE_DIR = str(paths.sim_cache_dir('app'))
+CLAIM_DISABLED_MSG = 'Assisted claiming is not enabled on this deployment. Deploy the stack with claiming enabled'
 
 # ANSI color codes
 blue = "\033[94m"
@@ -1199,26 +1200,27 @@ class AppSim:
             else:
                 print(f"Failed to delete schedule details for device {device}")
 
-    def handle_prov_command(self, args):
+    def handle_prov_command(self, args, device=None, pop=None, ssid=None, passphrase=None):
         """Provision a BLE device the way the phone app does: discover, open a secure
-        session, prove identity via the `ch_resp` challenge, associate to the selected
-        group, push Wi-Fi credentials, then confirm online and set the timezone.
+        session, claim an unclaimed device, prove identity via the `ch_resp` challenge,
+        associate to the selected group, push Wi-Fi credentials, then confirm online and
+        set the timezone.
 
-        Usage: prov [name_prefix]
+        Usage: prov [name_prefix]. Each of device, pop, ssid and passphrase is prompted for when None. Returns True on success.
         """
         if not self.selected_group:
             print("Error: No group selected. Use 'select' command first.")
-            return
+            return False
 
         # BLE provisioning is opt-in: bootstrap the heavy esp_prov dependency
-        # (idf-extra-components clone + IDF_PATH) only now that `prov` was invoked,
-        # so plain app-sim sessions never need IDF. Fail with a clear hint if it's
+        # (idf-extra-components clone) only now that `prov` was invoked,
+        # so plain app-sim sessions never fetch it. Fail with a clear hint if it's
         # not set up rather than aborting the whole session at startup.
         try:
             prov_ble.ensure_esp_prov()
         except Exception as e:
             print(f"BLE provisioning is not available: {e}")
-            return
+            return False
 
         group_id = self.selected_group['group_id']
         name_prefix = args[0] if args else None
@@ -1227,13 +1229,13 @@ class AppSim:
         # loop so the transport/session stays open across them. Cloud calls are
         # synchronous and invoked inline between awaits.
         try:
-            node_id = asyncio.run(self._prov_ble_phase(group_id, name_prefix))
+            node_id = asyncio.run(self._prov_ble_phase(group_id, name_prefix, device, pop, ssid, passphrase))
         except Exception as e:
             print(f"Provisioning failed: {str(e)}")
-            return
+            return False
 
         if not node_id:
-            return
+            return False
 
         # A re-claimed node keeps its node ID, so it can already sit in a subgroup with its own shadow.
         shadow_name = f"params-{group_id}"
@@ -1247,19 +1249,84 @@ class AppSim:
         print(f"\nWaiting for node {node_id} to come online ({shadow_name})...")
         if not self._wait_node_online(node_id, shadow_name):
             print(f"Node {node_id} did not report online in time.")
-            return
+            return False
         print(f"Node {node_id} is online.")
 
         if not self._set_node_timezone(group_id, node_id, shadow_name):
-            return
+            return False
 
         print(f"\nProvisioning complete for node {node_id} in group {group_id}.")
         self._print_stats()
+        return True
 
-    async def _prov_ble_phase(self, group_id, name_prefix):
+    async def _prov_ble_phase(self, group_id, name_prefix, devname=None, pop=None, ssid=None, passphrase=None):
         """Run the BLE-dependent portion of provisioning. Returns the node_id on
         success, or None if discovery/selection was aborted. Raises on hard failure."""
-        # 1. Discover and select
+        # 1. Discover and select, unless the device is already named
+        if not devname:
+            devname = await self._select_ble_device(name_prefix)
+            if not devname:
+                return None
+
+        # 2. Connect and establish session at the auto-detected security version
+        print(f"\nConnecting to {devname}...")
+        tp = await prov_ble.connect(devname)
+        try:
+            secver, sec_patch_ver = await prov_ble.detect_secver(tp)
+            print(f"==== Security Scheme: {secver} ====")
+            if secver not in (1, 2):
+                pop = ''
+            elif pop is None:
+                pop = await PromptSession().prompt_async('Proof of Possession required: ', is_password=True)
+            sec = prov_ble.make_security(secver, sec_patch_ver, pop)
+
+            print("Establishing session...")
+            if not await prov_ble.establish_session(tp, sec):
+                raise RuntimeError(
+                    'Failed to establish session (check security scheme / proof of possession)'
+                )
+
+            # 3. Wi-Fi credentials
+            if ssid is None:
+                ssid = (await PromptSession().prompt_async('Wi-Fi SSID: ')).strip()
+            if passphrase is None:
+                passphrase = await PromptSession().prompt_async('Wi-Fi passphrase: ', is_password=True)
+
+            # 4. Assisted claiming, which must finish before ch_resp since it assigns the node ID
+            if await prov_ble.has_claim_capability(tp):
+                await self._claim_ble_device(tp, sec)
+
+            # 5. Challenge / association
+            print("\nInitiating node association...")
+            request_id, challenge = self.user.initiate_node_assoc(group_id)
+            self.http_api_count += 1
+            self._print_stats()
+            if not request_id:
+                raise RuntimeError(f'Node association initiate failed: {challenge}')
+
+            print("Requesting signed challenge from device (ch_resp)...")
+            sig_hex, node_id = await prov_ble.ch_resp_get_signed(tp, sec, challenge)
+            if not node_id:
+                raise RuntimeError('Device did not return a node_id from ch_resp')
+
+            verify_result = self.user.verify_node_assoc(group_id, request_id, sig_hex, node_id)
+            self.http_api_count += 1
+            self._print_stats()
+            if isinstance(verify_result, str):
+                raise RuntimeError(f'Node association verify failed: {verify_result}')
+            print(f"Associated node {node_id} with group {group_id}.")
+
+            # 6. Send Wi-Fi credentials and wait for connection
+            print("\nSending Wi-Fi credentials...")
+            if not await prov_ble.send_wifi(tp, sec, ssid, passphrase):
+                raise RuntimeError('Device failed to connect to Wi-Fi')
+            print("Device connected to Wi-Fi.")
+            return node_id
+        finally:
+            await prov_ble.disconnect(tp)
+
+    async def _select_ble_device(self, name_prefix):
+        """Scan, list the matches and ask which one to provision. Returns its name, or None when cancelled."""
         print("Discovering BLE devices...")
         devices = await prov_ble.discover_devices(name_prefix)
         if not devices:
@@ -1282,57 +1349,42 @@ class AppSim:
         if sel == 0:
             print("Cancelled.")
             return None
-        devname = devices[sel - 1][0]
+        return devices[sel - 1][0]
 
-        # 2. Connect and establish session at the auto-detected security version
-        print(f"\nConnecting to {devname}...")
-        tp = await prov_ble.connect(devname)
+    async def _claim_ble_device(self, tp, sec):
+        """Relay the device's assisted claim to the cloud: initiate with its MAC, then exchange its CSR for a certificate."""
+        print("\nDevice is unclaimed. Running assisted claiming...")
         try:
-            secver, sec_patch_ver = await prov_ble.detect_secver(tp)
-            print(f"==== Security Scheme: {secver} ====")
-            pop = ''
-            if secver in (1, 2):
-                pop = await PromptSession().prompt_async('Proof of Possession required: ', is_password=True)
-            sec = prov_ble.make_security(secver, sec_patch_ver, pop)
+            start = await prov_ble.claim_start(tp, sec)
+            mac_addr = start['mac_addr']
 
-            print("Establishing session...")
-            if not await prov_ble.establish_session(tp, sec):
-                raise RuntimeError(
-                    'Failed to establish session (check security scheme / proof of possession)'
-                )
-
-            # 3. Wi-Fi credentials
-            ssid = (await PromptSession().prompt_async('Wi-Fi SSID: ')).strip()
-            passphrase = await PromptSession().prompt_async('Wi-Fi passphrase: ', is_password=True)
-
-            # 4. Challenge / association
-            print("\nInitiating node association...")
-            request_id, challenge = self.user.initiate_node_assoc(group_id)
+            try:
+                init = self.user.claim_initiate(mac_addr)
+            except AssertionError as e:
+                # The claim routes exist only on a deployment with claiming enabled, so their CORS preflight fails elsewhere.
+                raise RuntimeError(f'{CLAIM_DISABLED_MSG} ({e})') from e
             self.http_api_count += 1
             self._print_stats()
-            if not request_id:
-                raise RuntimeError(f'Node association initiate failed: {challenge}')
+            if init.status_code == 404:
+                raise RuntimeError(f'{CLAIM_DISABLED_MSG} (claim initiate returned 404)')
+            if init.status_code not in (200, 201):
+                raise RuntimeError(f'Claim initiate failed ({init.status_code}): {init.text}')
+            node_id = init.json()['node_id']
+            print(f"Cloud assigned node ID {node_id} to MAC {mac_addr}.")
 
-            print("Requesting signed challenge from device (ch_resp)...")
-            sig_hex, node_id = await prov_ble.ch_resp_get_signed(tp, sec, challenge)
-            if not node_id:
-                raise RuntimeError('Device did not return a node_id from ch_resp')
+            csr, capabilities = await prov_ble.claim_init(tp, sec, node_id)
 
-            verify_result = self.user.verify_node_assoc(group_id, request_id, sig_hex, node_id)
+            resp = self.user.claim_verify(mac_addr, csr, capabilities=capabilities)
             self.http_api_count += 1
             self._print_stats()
-            if isinstance(verify_result, str):
-                raise RuntimeError(f'Node association verify failed: {verify_result}')
-            print(f"Associated node {node_id} with group {group_id}.")
+            if resp.status_code != 201:
+                raise RuntimeError(f'Claim verify failed ({resp.status_code}): {resp.text}')
 
-            # 5. Send Wi-Fi credentials and wait for connection
-            print("\nSending Wi-Fi credentials...")
-            if not await prov_ble.send_wifi(tp, sec, ssid, passphrase):
-                raise RuntimeError('Device failed to connect to Wi-Fi')
-            print("Device connected to Wi-Fi.")
-            return node_id
-        finally:
-            await prov_ble.disconnect(tp)
+            await prov_ble.claim_verify(tp, sec, resp.json()['certificate'], self.iot_endpoint)
+        except Exception:
+            await prov_ble.claim_abort(tp, sec)
+            raise
+        print(f"Claimed node {node_id}.")
 
     def _wait_node_online(self, node_id, shadow_name, timeout=60, interval=5):
         """Poll the node's named shadow until its reported state shows online: true."""
@@ -1370,13 +1422,13 @@ class AppSim:
         svc = next((s for s in cfg.get('services', [])
                     if s.get('type') == 'esp.service.time'), None)
         if not svc:
-            print("Node has no esp.service.time service; skipping timezone update.")
-            return False
+            print("Warning: Node has no esp.service.time service; skipping timezone update.")
+            return True
         tz_param = next((p for p in svc.get('params', [])
                          if p.get('type') == 'esp.param.tz'), None)
         if not tz_param:
-            print("Time service has no esp.param.tz parameter; skipping timezone update.")
-            return False
+            print("Warning: Time service has no esp.param.tz parameter; skipping timezone update.")
+            return True
 
         svc_name = svc['id']
         param_name = tz_param['id']

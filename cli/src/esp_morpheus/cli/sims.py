@@ -183,13 +183,25 @@ def automation_delete(automation_id):
 
 @app_shell.command('prov')
 @click.argument('name_prefix', required=False)
-@needs_group
-def app_prov(name_prefix):
-    """Provision a discovered BLE device into the selected group.
+@click.option('--group', 'group_id', help='Select this group first.')
+@click.option('--device', help='Exact BLE name of the device. Skips the scan and the picker.')
+@click.option('--pop', envvar='RMNG_PROV_POP', help='Proof of possession. Also read from RMNG_PROV_POP.')
+@click.option('--ssid', help='Wi-Fi SSID.')
+@click.option('--passphrase', envvar='RMNG_WIFI_PASSPHRASE', help='Wi-Fi passphrase. Also read from RMNG_WIFI_PASSPHRASE.')
+@click.pass_context
+def app_prov(ctx, name_prefix, group_id, device, pop, ssid, passphrase):
+    """Provision a BLE device into the selected group. Any value not given as an option is prompted for.
 
-    Needs IDF_PATH, and vendors esp_prov on first use.
+    Vendors esp_prov on first use. IDF_PATH, when set, supplies the protocomm protobuf files.
     """
-    _sim().handle_prov_command([name_prefix] if name_prefix else [])
+    simulator = _sim()
+    if group_id and not simulator.select_home(group_id):
+        output.fail(f"Could not select group {group_id}")
+    if not simulator.selected_group:
+        output.fail("No group selected. Run `select` first, or pass --group.")
+    if not simulator.handle_prov_command([name_prefix] if name_prefix else [], device=device, pop=pop,
+                                         ssid=ssid, passphrase=passphrase):
+        ctx.exit(1)
 
 
 # --- device simulator -------------------------------------------------------
@@ -225,6 +237,19 @@ def device_update_tags(payload, file_path):
                                                 simulator._tags_to_update_payload(data)):
         output.fail('Failed to update the tags')
     output.ok('Updated the tags')
+
+
+def run_once(simulator, group, args):
+    """Start a simulator, run one command line against `group`, and stop it; errors keep their exit code."""
+    if not simulator.start():
+        output.fail('Failed to start the simulator')
+    try:
+        with click.Context(group, obj=simulator, info_name=group.name) as ctx:
+            name, command, rest = group.resolve_command(ctx, list(args))
+            with command.make_context(name, rest, parent=ctx) as sub:
+                command.invoke(sub)
+    finally:
+        simulator.stop()
 
 
 def run(simulator, group, label, history):

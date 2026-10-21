@@ -69,4 +69,4 @@ version = { attr = "esp_morpheus.__version__" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-esp_morpheus = ["data/**/*.json", "sims/chal_resp_proto/*"]
+esp_morpheus = ["data/**/*.json", "sims/chal_resp_proto/*", "sims/idf_protocomm/**/*"]
