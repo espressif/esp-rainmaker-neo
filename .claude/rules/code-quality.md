@@ -13,7 +13,7 @@ Structure code consistently. Suggest improvements if you see inconsistencies. Gr
 Write maintainable code. Avoid code duplication — refactor when the same logic appears more than once.
 
 ## Parallelise
-Parallelise wherever possible (Use util/parallel.go).
+Parallelise wherever possible (Use src/utils/parallel).
 
 ## Industry Standards & AI-Friendly Code
 Follow industry-standard patterns. Keep code AI-compatible: self-documenting names, small focused functions, explicit types, predictable structure.

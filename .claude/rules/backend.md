@@ -24,11 +24,11 @@ testability.
 - **Pair calls that are always paired — unless an asymmetry is intentional.** If two side-effect calls appear together at every user-flow call site, wrap them. Before folding, audit whether any path intentionally skips one (e.g. system-flow entry points that would otherwise recurse).
 
 ## Project Structure
-- `src/db`: database interfaces
-- `src/services`: AWS service implementations  
-- `src/mock`: test mocks for AWS services
-- `src/<feature>`: feature-specific code (group, node, user)
-- `test/`: integration test utilities
+- `src/rmneo/db`: one package per DynamoDB table, plus the shared core
+- `src/awsutils`: AWS SDK wrappers
+- `src/test/mock`: test mocks for AWS services
+- `src/rmneo/<feature>`: feature-specific code (group, node, user)
+- `test/`: integration tests (`test/itest/`) and their infra stacks (`test/infra/`)
 - Group code by feature when it improves clarity and cohesion. Keep logic decoupled from framework-specific code.
 
 ## Development Practices
@@ -50,16 +50,16 @@ testability.
 - Always add unit and integration tests
 - Use the same python functions for CI and client simulators
 - Test-driven development; readable, maintainable tests
-- Unit tests (`_test.go` suffix) with mocks from `src/mock`
-- Integration tests in `test/` folder (Python scripts):
-  - Add **API** integration tests to the feature-specific `test/test_<feature>.py` (e.g. [test/test_user.py](test/test_user.py), [test/test_group.py](test/test_group.py), [test/test_device.py](test/test_device.py))
-  - Add **Simulator** calls to `*_sim.py` files
+- Unit tests (`_test.go` suffix) with mocks from `src/test/mock`
+- Integration tests in `test/itest/` (pytest):
+  - Add **API** integration tests to the feature-specific `test/itest/test_<feature>.py` (e.g. [test_get_user.py](../../test/itest/test_get_user.py), [test_groups.py](../../test/itest/test_groups.py), [test_device_status.py](../../test/itest/test_device_status.py))
+  - Add **Simulator** calls to the `esp-morpheus` simulators in [cli/src/esp_morpheus/sims/](../../cli/src/esp_morpheus/sims/) (`app.py`, `device.py`)
 - Test edge cases and error conditions (include negative cases)
 - When asserting more than 2 fields, compare the whole struct rather than individual members for readability
 
 ## API Handlers
 - When adding a new API:
-  - Add the spec to `docs/api/*_swagger.yaml`
+  - Add the spec to `docs/api/*_Swagger.yaml`
   - Call `ExtractRequestStruct()` to parse the request
   - Call `rmlog` in the top-level lambda handler instead of sprinking it throughout the internal code base. Other calls can just wrap the error and return
   - Return `APIGwRespJSON` **exactly once** (as the last step after the single `rmlog` call)
