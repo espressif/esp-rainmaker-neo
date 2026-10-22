@@ -1220,7 +1220,9 @@ paths:
   /v1/groups/{groupId}/subgroups/{subGroupId}/nodes/{nodeId}:
     put:
       summary: Add a node to a subgroup
-      description: Adds a node to a specified subgroup
+      description: |
+        Adds a node to a specified subgroup. Requires primary access to the group;
+        secondary and subgroup-only callers are rejected with 403.
       tags:
         - Group Management
       security:
@@ -1236,12 +1238,22 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/GroupEditResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          description: Failed to add node to subgroup
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
     delete:
       summary: Remove a node from a subgroup
       description: |
         Removes a node from a specific subgroup while keeping it in the main group.
         The node must already be in the subgroup for this operation to succeed.
+        Requires primary access to the group; secondary and subgroup-only callers
+        are rejected with 403.
       tags:
         - Group Management
       security:
@@ -1257,6 +1269,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/GroupEditResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "500":
           description: Failed to remove node from subgroup
           content:

@@ -87,10 +87,15 @@ func (g *Group) LoadNodes(ctx *rmngctx.RmngContext) error {
 // UpdateNodeAndSubgroup updates a node's subgroup membership - add or remove
 // Returns the old groups and subgroups the node was in
 func UpdateNodeAndSubgroup(ctx *rmngctx.RmngContext, groupID, nodeID, subGroupID string, operationType group_node_db.SubGroupOperationType) (group_node_db.NodesGroups, error) {
-	// check if we have permission to access the group
-	_, err := GetUserGroupAccess(ctx, groupID)
+	// Subgroup-scoped load so a subentity member reaches the permission check below instead of failing as a non-member.
+	_, err := GetUserSubGroupAccess(ctx, groupID, subGroupID)
 	if err != nil {
 		return group_node_db.NodesGroups{}, rmerror.NewRMError(err, "parent group does not exist")
+	}
+
+	// Early exit; the DB layer repeats this check but its failure is indistinguishable from any other.
+	if err := ctx.IsAuthorized(utils.GroupEditNodes, groupID); err != nil {
+		return group_node_db.NodesGroups{}, rmerror.NewRMError(errors.Join(ErrSubGroupNodesForbidden, err), "insufficient permissions to edit subgroup nodes")
 	}
 
 	// Validate that the subGroupID is a subgroup of the current group

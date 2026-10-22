@@ -715,6 +715,53 @@ var _ = Describe("Group Main", func() {
 			Expect(response.Body).To(ContainSubstring("Failed to remove node from subgroup"))
 		})
 
+		DescribeTable("returns 403 when a caller without group:editnodes adds or removes a subgroup node",
+			func(share func(groupID, subgroupID string), method string) {
+				groupID := CreateGroup(ctx, "Main Group", userID)
+				subgroupID := CreateSubgroup(ctx, groupID, "Subgroup", userID)
+				nodeID := "test-node-id"
+				test_utils.ManuallyAddNodeToGroup(ctx, groupID, nodeID)
+				if method == "DELETE" {
+					AddNodeToSubgroup(ctx, groupID, nodeID, subgroupID, userID)
+				}
+				share(groupID, subgroupID)
+
+				var response events.APIGatewayProxyResponse
+				var err error
+				if method == "PUT" {
+					response, err = _AddNodeToSubgroup(ctx, groupID, nodeID, subgroupID, otherUserID)
+				} else {
+					response, err = RemoveNodeFromSubgroup(ctx, groupID, nodeID, subgroupID, otherUserID)
+				}
+				Expect(err).To(BeNil())
+				Expect(response.StatusCode).To(Equal(http.StatusForbidden))
+				Expect(response.Body).To(ContainSubstring("Insufficient permissions to edit subgroup nodes"))
+
+				row := map[string]types.AttributeValue{
+					"group_id": &types.AttributeValueMemberS{Value: groupID},
+					"node_id":  &types.AttributeValueMemberS{Value: nodeID},
+					"subgrp1":  &types.AttributeValueMemberS{Value: subgroupID},
+				}
+				if method == "PUT" {
+					test_utils.AssertRowNotInDB(group_node_db.GroupDeviceMappingTable, row)
+				} else {
+					test_utils.AssertRowInDB(group_node_db.GroupDeviceMappingTable, row)
+				}
+			},
+			Entry("secondary user adding", func(groupID, _ string) {
+				ShareGroupAndApprove(ctx, groupID, userID, otherUserID, utils.GroupSecondaryAccess)
+			}, "PUT"),
+			Entry("secondary user removing", func(groupID, _ string) {
+				ShareGroupAndApprove(ctx, groupID, userID, otherUserID, utils.GroupSecondaryAccess)
+			}, "DELETE"),
+			Entry("sub-group user adding within their sub-group", func(groupID, subgroupID string) {
+				ShareSubgroupAndApprove(ctx, groupID, subgroupID, userID, otherUserID)
+			}, "PUT"),
+			Entry("sub-group user removing within their sub-group", func(groupID, subgroupID string) {
+				ShareSubgroupAndApprove(ctx, groupID, subgroupID, userID, otherUserID)
+			}, "DELETE"),
+		)
+
 		It("should not allow unauthorized users to remove nodes from subgroups", func() {
 			// Create a main group with first user
 			groupID := CreateGroup(ctx, "Main Group", userID)
@@ -3199,6 +3246,17 @@ func ListSubgroupUsersWithCode(ctx context.Context, groupID, subGroupID, userID 
 	err = json.Unmarshal([]byte(response.Body), &listResponse)
 	Expect(err).To(BeNil())
 	return listResponse
+}
+
+// ShareGroupAndApprove shares groupID (owned by ownerUserID) with targetUserID at accessType and approves the resulting sharing request on targetUserID's behalf.
+func ShareGroupAndApprove(ctx context.Context, groupID, ownerUserID, targetUserID string, accessType utils.GroupAccessType) {
+	_, err := group.ShareGroup(rmngctx.NewRmngContext(user.NewUser(ownerUserID)), groupID, targetUserID, accessType, auth.UserInfo{})
+	Expect(err).To(BeNil())
+	targetCtx := rmngctx.NewRmngContext(user.NewUser(targetUserID))
+	sharingRequests, err := group.GetMySharingRequests(targetCtx)
+	Expect(err).To(BeNil())
+	Expect(sharingRequests).ToNot(BeEmpty())
+	Expect(group.ApproveSharingRequest(targetCtx, sharingRequests[0].SharingRequestID)).To(Succeed())
 }
 
 // ShareSubgroupAndApprove shares subgroupID (under groupID, owned by ownerUserID) with

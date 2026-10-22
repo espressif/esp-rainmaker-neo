@@ -915,12 +915,11 @@ sequenceDiagram
 **Request**: No request body
 
 **Process**:
-1. Verify user has permission on the group
+1. Verify the caller may edit nodes in the subgroup
    - TableName: `rmng-user-group-assoc`
    - Query by `user_id` (PK) and `group_id` (SK)
-   - Verify user has:
-     - Primary or secondary `access_type` to the group (grants access to all subgroups), OR
-     - Sub-entity `access_type` with the specific `subGroupId` in `sub_entity_ids` list
+   - The caller must reach the subgroup: group-level (primary or secondary) `access_type`, or sub-entity `access_type` with `subGroupId` in `sub_entity_ids`
+   - The caller must also hold `group:editnodes`, which only primary access grants. Secondary and sub-entity callers are rejected with 403
 2. Verify node exists in the group
    - TableName: `rmng-group-node-assoc`
    - Query by `group_id` (PK) and `node_id` (SK)
@@ -966,6 +965,14 @@ sequenceDiagram
 }
 ```
 
+**Errors**:
+| Condition | Status |
+| --- | --- |
+| Caller has secondary or sub-entity access, which lacks `group:editnodes` | 403 |
+| Any other failure (no access to the group or subgroup, node not in the group, node already in 3 subgroups) | 500 |
+
+Only primary users can add nodes to or remove nodes from subgroups, as with adding nodes to or removing them from the group itself.
+
 ### Remove Node from Subgroup
 
 #### External Flow
@@ -984,12 +991,11 @@ sequenceDiagram
 **Request**: No request body
 
 **Process**:
-1. Verify user has permission on the group
+1. Verify the caller may edit nodes in the subgroup
    - TableName: `rmng-user-group-assoc`
    - Query by `user_id` (PK) and `group_id` (SK)
-   - Verify user has:
-     - Primary or secondary `access_type` to the group (grants access to all subgroups), OR
-     - Sub-entity `access_type` with the specific `subGroupId` in `sub_entity_ids` list
+   - The caller must reach the subgroup: group-level (primary or secondary) `access_type`, or sub-entity `access_type` with `subGroupId` in `sub_entity_ids`
+   - The caller must also hold `group:editnodes`, which only primary access grants. Secondary and sub-entity callers are rejected with 403
 2. Verify node exists in the group and subgroup
    - TableName: `rmng-group-node-assoc`
    - Operation: GetItem query by `group_id` (PK) and `node_id` (SK)
@@ -1006,6 +1012,12 @@ sequenceDiagram
   "message": "success"
 }
 ```
+
+**Errors**:
+| Condition | Status |
+| --- | --- |
+| Caller has secondary or sub-entity access, which lacks `group:editnodes` | 403 |
+| Any other failure (no access to the group or subgroup, node not in the subgroup) | 500 |
 
 ### Share Group
 
