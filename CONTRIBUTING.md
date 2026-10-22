@@ -10,6 +10,23 @@ By contributing, you agree that your contributions are licensed under the
 **Do not open a public issue for a security vulnerability.** See
 [SECURITY.md](SECURITY.md) for the private reporting process.
 
+## Working from a fork
+
+`src/esp-cloud-common` is a submodule with a relative URL, so in a clone of your
+fork Git looks for `esp-cloud-common` under your account and the clone fails.
+Point it at upstream before the first submodule update:
+
+```shell
+git config submodule.src/esp-cloud-common.url https://github.com/espressif/esp-cloud-common.git
+git submodule update --init --recursive
+```
+
+This setting lives in your local `.git/config`, so it does not reach GitHub
+Actions: CI runs on your fork's own branches fail at checkout unless you also
+fork `esp-cloud-common`. Pull requests into this repository are unaffected.
+
+See [BUILD.md](BUILD.md) for the rest of the setup.
+
 ## What we expect in a change
 
 ### Tests
