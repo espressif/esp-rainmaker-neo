@@ -4726,6 +4726,8 @@ components:
           enum: [primary, secondary]
           description: |
             Access level to grant. Defaults to `secondary` if omitted.
+            `secondary` is primary access without node management, group
+            delete, sharing, fabric conversion or the full member list.
             Ignored when sharing a subgroup.
 
     RegisterEndpointRequest:

@@ -27,7 +27,7 @@
 ### `rmng-user-group-assoc`
 | Field            | Type   | Purpose                                                                             |
 | ---------------- | ------ | ----------------------------------------------------------------------------------- |
-| `access_type`    | String | `"primary"` (full + share), `"secondary"` (limited), `"subentity"` (subgroups only) |
+| `access_type`    | String | `"primary"` (full, including node management and share), `"secondary"` (no node management, delete, share, fabric conversion or full member list), `"subentity"` (subgroups only, no node management) |
 | `group_id` (SK)  | String | Group identifier                                                                    |
 | `sub_entity_ids` | List   | Subgroup IDs for subentity access                                                   |
 | `user_id` (PK)   | String | User identifier                                                                     |

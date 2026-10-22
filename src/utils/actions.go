@@ -62,7 +62,7 @@ func GetGroupPermissions(accessType GroupAccessType) []string {
 	case GroupPrimaryAccess:
 		return []string{GroupAll.String()}
 	case GroupSecondaryAccess:
-		// No delete or share permissions
+		// Primary minus group:editnodes, group:delete, group:share, group:updatecapabilities and group:listusers
 		return []string{GroupCreateSubGroup.String(), GroupGet.String(), GroupListSubEntities.String(), GroupUpdate.String(), GroupUpdateSubGroup.String(), GroupGetAutomation.String(), GroupEditAutomation.String(), GroupDeleteAutomation.String(), GroupDeleteSubGroup.String(), GroupListPrimaryUsers.String()}
 	case GroupSubEntityAccess:
 		return []string{GroupListSubEntities.String(), GroupUpdateSubGroup.String(), GroupListPrimaryUsers.String()}

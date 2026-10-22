@@ -18,20 +18,24 @@ Groups simplify user access control: what nodes a user can reach is scoped by th
 
 - **Primary Access**: Full access to group and all subgroups
   - Can create subgroups
-  - Can add/remove nodes
+  - Can add/remove nodes in the group and its subgroups
   - Can update group/subgroup names
   - Can delete group
   - Can share/unshare group/subgroups with others
+  - Can convert the group into a Matter fabric
+  - Can list every member of the group
   - Can obtain a device NOC for the group's Matter fabric
   - Receives the group's Matter fabric material (root CA, IPK, CAT ids)
   
-- **Secondary Access**: Limited access to group
+- **Secondary Access**: Primary access without node management (`group:editnodes`), group delete, sharing, fabric conversion or the full member list
   - Can create subgroups
   - Can delete subgroups
-  - Cannot add/remove nodes
+  - Cannot add/remove nodes, in the group or any of its subgroups
   - Can update group/subgroup names
   - Cannot delete group
   - Cannot share/unshare group/subgroups
+  - Cannot convert the group into a Matter fabric
+  - Can list only the group's primary users
   - Cannot obtain a device NOC
   - Receives the group's Matter fabric material (root CA, IPK, CAT ids)
   
@@ -39,7 +43,7 @@ Groups simplify user access control: what nodes a user can reach is scoped by th
   - Can update subgroup names
   - Can list nodes in accessible subgroups
   - Cannot create subgroups
-  - Cannot add/remove nodes
+  - Cannot add/remove nodes, even within their own subgroups
   - Cannot delete subgroups
   - Cannot share/unshare subgroups
   - Cannot obtain a device NOC
