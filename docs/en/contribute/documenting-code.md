@@ -27,7 +27,7 @@ make html     # -> _build/en/generic/html/index.html
 
 ## 2. API references
 
-- **HTTP APIs** — OpenAPI documents in `misc/swagger/`. Any change to a
+- **HTTP APIs** — OpenAPI documents in `docs/api/`. Any change to a
   public HTTP API must be reflected there; a Swagger UI ships alongside for
   viewing.
 - **MQTT** — AsyncAPI specs, same directory. Device↔cloud topic or payload
@@ -42,5 +42,5 @@ make html     # -> _build/en/generic/html/index.html
 
 ## Glossary
 
-Domain terms are defined once, in `misc/GLOSSARY.md`. If your change
+Domain terms are defined once, in `docs/GLOSSARY.md`. If your change
 introduces a new concept, add it there rather than redefining it per-page.

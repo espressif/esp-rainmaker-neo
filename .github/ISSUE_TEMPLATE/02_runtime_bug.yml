@@ -37,7 +37,7 @@ body:
       description: >-
         Link the spec section that defines the expected behavior
         (`docs/en/specs/...`), or the OpenAPI/AsyncAPI definition in
-        `misc/swagger/` for API-contract issues. If the behavior isn't
+        `docs/api/` for API-contract issues. If the behavior isn't
         specified anywhere, say so — that's useful too: it may be a spec gap
         rather than a code bug.
     validations:

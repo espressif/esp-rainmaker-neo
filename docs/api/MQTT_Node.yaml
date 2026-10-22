@@ -1766,7 +1766,7 @@ components:
                     Brand the node reports for itself. Optional, and absent on most
                     firmware. When present it overrides the brand configured for the
                     deployment in voice-assistant integrations (see
-                    misc/specs/alexa.md), so one firmware image can ship under several
+                    docs/en/specs/alexa.md), so one firmware image can ship under several
                     brands. Report it only if the OEM deliberately enables doing so.
                   example: "Espressif"
 

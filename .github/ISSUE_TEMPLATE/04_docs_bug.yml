@@ -19,7 +19,7 @@ body:
       label: Which document?
       description: >-
         Path or URL — a spec page (`docs/en/specs/...`), an API definition
-        (`misc/swagger/...`), the README, or the glossary (`misc/GLOSSARY.md`).
+        (`docs/api/...`), the README, or the glossary (`docs/GLOSSARY.md`).
       placeholder: docs/en/specs/node_assoc.md — section "Claim verification"
     validations:
       required: true
