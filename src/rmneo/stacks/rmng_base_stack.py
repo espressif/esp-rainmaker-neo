@@ -56,7 +56,7 @@ from src.rmneo.stacks.base_res_constants import (
 )
 
 # Placeholder URL used during CDK deployment to satisfy validation requirements
-# This must match PlaceholderCallbackURL in test/testutil/cognito_utils.go
+# This must match PlaceholderCallbackURL in src/awsutils/cognitoutil/cognito_app_client.go
 PLACEHOLDER_CALLBACK_URL = "https://placeholder.example.com/callback"
 
 

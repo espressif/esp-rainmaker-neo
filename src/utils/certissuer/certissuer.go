@@ -21,7 +21,7 @@ enough that flag-driven construction drifts out of conformance; keeping the
 differences declarative means a new profile cannot silently inherit the wrong
 extension set.
 
-See misc/specs/assisted-claiming.md.
+See docs/en/specs/assisted-claiming.md.
 */
 package certissuer
 

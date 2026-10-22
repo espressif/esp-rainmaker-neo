@@ -4,7 +4,7 @@
 
 """The session one `esp-morpheus` run drives: one deployment, one test_config.json, one identity.
 
-Everything here was a module global in cli/morpheus.py, which forced the outputs file to be read and
+Everything here was a module global in the pre-package cli/morpheus.py, which forced the outputs file to be read and
 the AWS identity to be checked before argparse had even chosen a command. The deployment now
 resolves on first use, so `esp-morpheus --help` and `esp-morpheus admin guide alexa` need no credentials.
 """

@@ -92,9 +92,7 @@ class DeviceSim:
         }
 
     def _read_json_file(self, file_path):
-        # node_cfg/node_tags in test_config.json are stored repo-relative (e.g. "cli/cli_data/..."),
-        # which resolves against the checkout when there is one and against the packaged data
-        # directory when there is not.
+        # node_cfg/node_tags in test_config.json are bare names or checkout paths; see paths.resolve_data.
         file_path = paths.resolve_data(file_path)
         with open(file_path) as config_file:
             return json.load(config_file)

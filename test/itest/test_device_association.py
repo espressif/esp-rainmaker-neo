@@ -573,8 +573,9 @@ def test_node_config_cross_tenant_denied(two_tenants):
 # The app reads every node's shadow on launch anyway, so ncfg_ver is a one-string
 # cache key that lets it skip refetching a
 # heavy, mostly-static node config from
-# GET /v1/groups/{groupId}/nodes/{nodeId}/config. See test/app_sim.py for the
-# caching flow and test/device_sim.py for the producer; the device, not the
+# GET /v1/groups/{groupId}/nodes/{nodeId}/config. See
+# cli/src/esp_morpheus/sims/app.py for the caching flow and
+# cli/src/esp_morpheus/sims/device.py for the producer; the device, not the
 # cloud, owns the value today.
 
 

@@ -32,9 +32,9 @@ Access Control:
 - This table is never reachable from regular user-facing APIs.
 
 See:
-- misc/specs/iot_event_mode.md §4.4 for the drift-correction reapply
+- docs/en/specs/iot_event_mode.md §4.4 for the drift-correction reapply
   flow that consumes this table.
-- src/admin/admin_config/base.py for the CDK provisioning.
+- src/rmneo/handlers/admin/admin_config/base.py for the CDK provisioning.
 */
 
 package admin_config_db

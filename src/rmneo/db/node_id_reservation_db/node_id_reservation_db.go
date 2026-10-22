@@ -4,7 +4,7 @@
 
 /*
 The node_id_reservations table binds a claim key to the node ID the cloud
-assigned to it (see misc/specs/assisted-claiming.md). It is the record
+assigned to it (see docs/en/specs/assisted-claiming.md). It is the record
 that makes certificate identity server-determined: claim-verify reads the node
 ID from here, never from anything the caller submits.
 
