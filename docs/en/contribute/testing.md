@@ -30,6 +30,7 @@ they need a `make deploy`ed environment and AWS credentials.
 make itest-setup  # One-time: setup integration test environment (deploy test infrastructure)
 make itest                              # full suite
 make itest ITEST_ARGS='-k notifications'  # subset by keyword
+make itest ITEST_MARKERS='cognito'        # opt-in suites; the default deselects unsafe and cognito
 ```
 
 The shared harness and fixtures live in `test/itest/conftest.py`; new itests

@@ -61,7 +61,7 @@ from test.itest.email_utils import (
 
 # This suite is opt-in: it makes many real signup calls that burn the pool's daily Cognito email
 # quota, so the default `make itest` deselects it (`-m "not ... and not cognito"`). Run it on its
-# own with `make itest ITEST_ARGS='-n 12 -m cognito'` (or `-k cognito_auth_matrix`).
+# own with `make itest ITEST_MARKERS=cognito`.
 #
 # xdist_group("env_mut"): registering the external provider row swaps the password provider for the
 # whole deployment, so no test in this module may run beside another that touches the auth surface.
