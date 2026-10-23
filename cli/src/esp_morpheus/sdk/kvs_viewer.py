@@ -41,7 +41,13 @@ def _import_with_suppressed_stderr(import_func):
         return import_func()
 
 def _import_cv2():
-    import cv2
+    saved_path = list(sys.path)
+    try:
+        import cv2
+    except ImportError:
+        # A failed cv2 load leaves cv2/ on sys.path, where cv2/typing hides the stdlib typing in spawned processes.
+        sys.path[:] = saved_path
+        raise
     import numpy as np
     return cv2, np
 
