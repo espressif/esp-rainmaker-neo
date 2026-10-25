@@ -1362,7 +1362,7 @@ func TestMCP(t *testing.T) {
 }
 
 // seedNodeConfig gives a node the config a real one would report. It mirrors
-// cli_data/node_config_va_multi.json: a colour light whose hue is named "H", which is what makes
+// cli/src/esp_morpheus/data/node_config_va_multi.json: a colour light whose hue is named "H", which is what makes
 // it worth validating — the obvious guess for that parameter is wrong.
 func seedNodeConfig(ctx context.Context, nodeID string) {
 	nodeCtx := rmngctx.NewRmngContextWithCtx(ctx, node.NewNode(nodeID))

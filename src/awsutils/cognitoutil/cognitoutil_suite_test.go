@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package cognitoutil_test is an external test package. test/testutil reaches
-// cognitoutil transitively through src/mock, so an in-package test could not import the
+// Package cognitoutil_test is an external test package. src/test/testutil reaches
+// cognitoutil transitively through src/test/mock, so an in-package test could not import the
 // shared harness. Testing from outside also confines these specs to the exported surface
 // callers actually use.
 package cognitoutil_test

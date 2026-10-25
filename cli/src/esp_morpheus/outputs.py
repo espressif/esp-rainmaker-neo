@@ -4,7 +4,7 @@
 
 """Single entry point for reading a deployment's merged CDK outputs (rmng-outputs.json).
 
-Every client — cli/morpheus.py, the device/app simulators, alexa_setup — resolves
+Every client — the esp-morpheus commands, the device/app simulators, alexa_setup — resolves
 and parses outputs through here, so output key names, the espuser-base -> rmng-base fallbacks, and
 relative-path resolution each exist in exactly one place.
 

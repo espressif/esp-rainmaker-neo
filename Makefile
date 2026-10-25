@@ -177,7 +177,7 @@ $(DASHBOARD_STAMP): $(DASHBOARD_NPM_STAMP) $(DASHBOARD_SRCS)
 # .gitlab-ci.yml (dashboard_check) invokes this name directly.
 admin-dashboard-build: $(DASHBOARD_STAMP)  ## Build admin dashboard static assets
 
-# These source files are inputs, never something make should try to build. Empty recipes say so, and that matters here: when matching a slash-free pattern make strips the target's directory first, so a real file such as src/admin/dashboard/src/utils/matter-gen/setup-payload.ts matches the `setup-%` verb rule below. Its phony go_build prerequisite would then make that file look perpetually out of date, firing one bogus scripts/deploy.sh sweep per shadowed file.
+# These source files are inputs, never something make should try to build. Empty recipes say so, and that matters here: when matching a slash-free pattern make strips the target's directory first, so a real file such as dashboard/src/utils/matter-gen/setup-payload.ts matches the `setup-%` verb rule below. Its phony go_build prerequisite would then make that file look perpetually out of date, firing one bogus scripts/deploy.sh sweep per shadowed file.
 # patsubst normalises the leading ./ that `find .` emits but `find src/tools/rmng-lint` does not, so the one file in both lists is not declared twice.
 $(sort $(patsubst ./%,%,$(MAIN_FILES) $(DASHBOARD_SRCS) $(LINT_SRCS))): ;
 

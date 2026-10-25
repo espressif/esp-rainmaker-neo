@@ -18,8 +18,8 @@ Schema:
 - group_id (String): ID of the group being shared
 - sub_entity_id (String): ID of subgroup if sharing subgroup, "NONE" for full group
 - access_type (String): Type of access being granted
-  - "primary": Full access with sharing rights
-  - "secondary": Limited access without sharing
+  - "primary": Full access, including node management and sharing
+  - "secondary": Primary without node management, group delete, sharing, fabric conversion or the full member list
   - "subentity": Access only to specific subgroup
 
 Example Records:

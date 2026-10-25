@@ -794,6 +794,9 @@ func handleUpdateSubgroupNodeOperation(context context.Context, request events.A
 	err := node.ShadowNodeUpdateSubGroup(ctx, nodeID, groupID, subGroupID, operationType)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Send()
+		if errors.Is(err, group.ErrSubGroupNodesForbidden) {
+			return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("Insufficient permissions to edit subgroup nodes")), nil
+		}
 		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err_str)), nil
 	}
 

@@ -233,7 +233,7 @@ EVENTS_PERMISSION = "alexa::async_event:write"
 # --------------------------------------------------------------------------- config
 
 def load_outputs():
-    """RMNG_OUTPUTS is how cli/morpheus.py hands over the source it already resolved from
+    """RMNG_OUTPUTS is how `esp-morpheus admin integrations` hands over the source it already resolved from
     --client-outputs; a bare relative path falls back to the repo root, not the CWD."""
     path = resolve_source(os.environ.get("RMNG_OUTPUTS"))
     if not path.startswith(("http://", "https://")) and not os.path.exists(path):
@@ -393,7 +393,7 @@ def resolve_cfgd(outputs, skill_name):
     # Account linking targets the espuser OIDC broker, not Cognito directly: the
     # EspUserAuthorizeUrl/EspUserTokenUrl outputs already carry the API's custom
     # domain when one is mapped, so no URL construction is needed here. Shared with
-    # cli/morpheus.py's instruction printers so the two cannot report different endpoints.
+    # cli/guide.py's instruction printers so the two cannot report different endpoints.
     outputs_auth_url, outputs_token_url = oidc_endpoints(outputs)
     auth_url = os.environ.get("ESP_AUTH_URL") or outputs_auth_url
     token_url = os.environ.get("ESP_TOKEN_URL") or outputs_token_url

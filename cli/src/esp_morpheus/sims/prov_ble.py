@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-prov_ble.py — esp_prov / protocomm glue for app_sim's interactive `prov` command.
+prov_ble.py — esp_prov / protocomm glue for app-sim's interactive `prov` command.
 
-Keeps the async, esp_prov-specific BLE plumbing out of app_sim.py.
+Keeps the async, esp_prov-specific BLE plumbing out of sims/app.py.
 
 BLE provisioning is opt-in. The esp_prov dependency is heavy — it vendors esp_prov
 from idf-extra-components (a network clone) — so it is NOT pulled in when

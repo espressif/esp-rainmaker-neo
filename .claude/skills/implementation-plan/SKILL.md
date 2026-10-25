@@ -28,7 +28,7 @@ Handle `$ARGUMENTS` as follows:
 ### Step 1: Discover Design Documents
 
 Search the project for planning/design/brainstorming documents:
-- `misc/specs` `docs/api` `misc/aws_resources.puml` 
+- `docs/en/specs` `docs/api`
 - `*.md` files in `docs/` root
 - `ARCHITECTURE.md`, `DESIGN.md`, `ROADMAP.md`, `TODO.md` in project root
 - `CLAUDE.md` and memory files for project conventions and prior decisions

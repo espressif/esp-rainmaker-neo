@@ -18,20 +18,24 @@ Groups simplify user access control: what nodes a user can reach is scoped by th
 
 - **Primary Access**: Full access to group and all subgroups
   - Can create subgroups
-  - Can add/remove nodes
+  - Can add/remove nodes in the group and its subgroups
   - Can update group/subgroup names
   - Can delete group
   - Can share/unshare group/subgroups with others
+  - Can convert the group into a Matter fabric
+  - Can list every member of the group
   - Can obtain a device NOC for the group's Matter fabric
   - Receives the group's Matter fabric material (root CA, IPK, CAT ids)
   
-- **Secondary Access**: Limited access to group
+- **Secondary Access**: Primary access without node management (`group:editnodes`), group delete, sharing, fabric conversion or the full member list
   - Can create subgroups
   - Can delete subgroups
-  - Cannot add/remove nodes
+  - Cannot add/remove nodes, in the group or any of its subgroups
   - Can update group/subgroup names
   - Cannot delete group
   - Cannot share/unshare group/subgroups
+  - Cannot convert the group into a Matter fabric
+  - Can list only the group's primary users
   - Cannot obtain a device NOC
   - Receives the group's Matter fabric material (root CA, IPK, CAT ids)
   
@@ -39,7 +43,7 @@ Groups simplify user access control: what nodes a user can reach is scoped by th
   - Can update subgroup names
   - Can list nodes in accessible subgroups
   - Cannot create subgroups
-  - Cannot add/remove nodes
+  - Cannot add/remove nodes, even within their own subgroups
   - Cannot delete subgroups
   - Cannot share/unshare subgroups
   - Cannot obtain a device NOC
@@ -915,12 +919,11 @@ sequenceDiagram
 **Request**: No request body
 
 **Process**:
-1. Verify user has permission on the group
+1. Verify the caller may edit nodes in the subgroup
    - TableName: `rmng-user-group-assoc`
    - Query by `user_id` (PK) and `group_id` (SK)
-   - Verify user has:
-     - Primary or secondary `access_type` to the group (grants access to all subgroups), OR
-     - Sub-entity `access_type` with the specific `subGroupId` in `sub_entity_ids` list
+   - The caller must reach the subgroup: group-level (primary or secondary) `access_type`, or sub-entity `access_type` with `subGroupId` in `sub_entity_ids`
+   - The caller must also hold `group:editnodes`, which only primary access grants. Secondary and sub-entity callers are rejected with 403
 2. Verify node exists in the group
    - TableName: `rmng-group-node-assoc`
    - Query by `group_id` (PK) and `node_id` (SK)
@@ -966,6 +969,14 @@ sequenceDiagram
 }
 ```
 
+**Errors**:
+| Condition | Status |
+| --- | --- |
+| Caller has secondary or sub-entity access, which lacks `group:editnodes` | 403 |
+| Any other failure (no access to the group or subgroup, node not in the group, node already in 3 subgroups) | 500 |
+
+Only primary users can add nodes to or remove nodes from subgroups, as with adding nodes to or removing them from the group itself.
+
 ### Remove Node from Subgroup
 
 #### External Flow
@@ -984,12 +995,11 @@ sequenceDiagram
 **Request**: No request body
 
 **Process**:
-1. Verify user has permission on the group
+1. Verify the caller may edit nodes in the subgroup
    - TableName: `rmng-user-group-assoc`
    - Query by `user_id` (PK) and `group_id` (SK)
-   - Verify user has:
-     - Primary or secondary `access_type` to the group (grants access to all subgroups), OR
-     - Sub-entity `access_type` with the specific `subGroupId` in `sub_entity_ids` list
+   - The caller must reach the subgroup: group-level (primary or secondary) `access_type`, or sub-entity `access_type` with `subGroupId` in `sub_entity_ids`
+   - The caller must also hold `group:editnodes`, which only primary access grants. Secondary and sub-entity callers are rejected with 403
 2. Verify node exists in the group and subgroup
    - TableName: `rmng-group-node-assoc`
    - Operation: GetItem query by `group_id` (PK) and `node_id` (SK)
@@ -1006,6 +1016,12 @@ sequenceDiagram
   "message": "success"
 }
 ```
+
+**Errors**:
+| Condition | Status |
+| --- | --- |
+| Caller has secondary or sub-entity access, which lacks `group:editnodes` | 403 |
+| Any other failure (no access to the group or subgroup, node not in the subgroup) | 500 |
 
 ### Share Group
 

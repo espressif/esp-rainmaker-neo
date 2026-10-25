@@ -15,8 +15,8 @@ Schema:
 - group_id (String): Sort key, identifies the group
 - sub_entity_id (List of Strings): Identifies subentities if shared, empty list for main group access
 - access_type (String): Type of access granted to the user
-  - "primary": Full access, can share group/subgroup
-  - "secondary": Limited access, cannot share further
+  - "primary": Full access, including node management and sharing
+  - "secondary": Primary without node management, group delete, sharing, fabric conversion or the full member list
   - "subentity": Access only to specific subentities
 Secondary Indexes:
 - user_group_mapping_group_id_index:

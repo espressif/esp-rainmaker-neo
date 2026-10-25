@@ -122,8 +122,8 @@ def data_dir():
 def resolve_data(relative):
     """Resolve a data path from disk first, then from the packaged data directory.
 
-    test_config.json records paths like ``cli/cli_data/node_config_va_multi.json``, which exist in a
-    checkout but not in an install, so the packaged copy is the fallback rather than the primary.
+    test_config.json records bare names like ``node_config_va_multi.json``, or a path that exists only in
+    a checkout, so the packaged copy is the fallback rather than the primary.
     """
     candidate = pathlib.Path(relative).expanduser()
     if candidate.is_absolute() and candidate.exists():

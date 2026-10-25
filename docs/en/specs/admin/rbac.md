@@ -53,9 +53,15 @@ that group:
 | `secondary` | `group:get`, `group:createsubgroup`, `group:listsubentities`, `group:update`, `group:updatesubgroup`, `group:deletesubgroup`, `group:listprimaryusers`, `group:getautomation`, `group:editautomation`, `group:deleteautomation` |
 | `subentity` | `group:listsubentities`, `group:updatesubgroup`, `group:listprimaryusers` |
 
-A secondary user gets **no** `group:delete`, `group:share`, or
-`group:editnodes` — it can manage subgroups and automations but cannot add or
-remove nodes, share the group onward, or delete it.
+A secondary user is a primary user without `group:editnodes`, `group:delete`,
+`group:share`, `group:updatecapabilities` and `group:listusers` — it can manage
+subgroups and automations but cannot add or remove nodes in the group or any of
+its subgroups, delete the group, share it onward, convert it into a Matter
+fabric, or list members other than the primary users.
+
+`group:editnodes` is held by primary access alone, so node management is what
+separates primary access from both other types: neither a secondary user nor a
+sub-entity user, even within its own subgroup, can add or remove nodes.
 
 ## Admin Check
 

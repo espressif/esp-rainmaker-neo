@@ -18,7 +18,7 @@ import (
 // validator; the fail-open cases are what keeps it from bricking devices whose firmware reports a
 // sparse config, which — since config ingest is never schema-checked — is most of them.
 
-// richLight mirrors cli_data/node_config_va_multi.json: a colour light whose hue, saturation and
+// richLight mirrors cli/src/esp_morpheus/data/node_config_va_multi.json: a colour light whose hue, saturation and
 // brightness are named H, S and V. It is the motivating case — a model asked to make the light red
 // will send "Hue", which is semantically right and completely wrong as a key.
 func richLight() config.NodeCfg {

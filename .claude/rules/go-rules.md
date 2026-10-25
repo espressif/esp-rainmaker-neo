@@ -47,9 +47,9 @@ aws-sdk-go-v2/service/acmpca/types")
 - Follow the **[Uber Go Style Guide](https://github.com/uber-go/guide/blob/master/style.md)** for all Go code, with the same carve-out for comments.
 
 ## AWS SDK Integration
-- Define AWS SDK interfaces in [util/aws_interfaces.go](util/aws_interfaces.go)
-- Initialise concrete clients in [util/clients.go](util/clients.go) and in [test/testutil/test_setup.go](test/testutil/test_setup.go) for tests
-- For new AWS SDK functions: add them under `util/` in a package prefixed `aws` (create the package if it does not exist), add the mocker under `test/mock/`, and add unit tests
+- Define AWS SDK interfaces in [src/utils/awscommon/aws_interfaces.go](../../src/utils/awscommon/aws_interfaces.go)
+- Initialise concrete clients in [src/utils/awscommon/clients.go](../../src/utils/awscommon/clients.go) and in [src/test/testutil/test_setup.go](../../src/test/testutil/test_setup.go) for tests
+- For new AWS SDK functions: add them under `src/awsutils/` in a `<service>util` package (create the package if it does not exist), add the mocker under `src/test/mock/`, and add unit tests
 
 ## DynamoDB Access
 - Single item: if the item doesn't exist, return an error.

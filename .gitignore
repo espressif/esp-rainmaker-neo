@@ -30,24 +30,24 @@ agent/
 .claude/settings*json
 rmng-inputs.json
 dist/
-src/admin/dashboard/outputs/
 misc/plans/IMPLEMENTATION_PLAN.md
 
 
-# Alexa setup config (holds LWA secret) — copy from alexa_skills_config.example.json
-config_data/alexa_skills_config.json
+# Alexa setup config (holds LWA secret) — copy from cli/src/esp_morpheus/data/examples/alexa_skills_config.example.json
+alexa_skills_config.json
 
 cli/test_config.json
 test/itest/itest_config.json
 test_config.json
 
-# Local secret configs — provisioned per developer, never committed (see scripts/dev_env.example.sh)
+# Local secret configs — provisioned per developer, never committed
 config_data/gva_config.json
 config_data/alexa_config.json
 scripts/dev_env.sh
 test/test_data/notify_data.json
 
 # Dashboard build-time env (may hold account-specific URLs); .env.development.local is npm-run-dev derived
+dashboard/.env.development
 dashboard/.env.development.local
 
 # Generated at build time by docs/conf_common.py.

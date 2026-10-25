@@ -9,7 +9,8 @@ touches. All commands run from the repo root.
 alongside the code they test.
 
 ```shell
-go install github.com/onsi/ginkgo/v2/ginkgo@latest
+# Match the CLI to the library in go.mod; a newer CLI fails confusingly
+go install github.com/onsi/ginkgo/v2/ginkgo@$(go list -m -f '{{.Version}}' github.com/onsi/ginkgo/v2)
 make test
 ```
 
@@ -17,8 +18,8 @@ Expectations:
 
 - New behavior needs the happy path **and** the negative cases: error paths,
   permission denials, malformed input.
-- AWS SDK calls are mocked through the interfaces in `src/utils` /
-  `src/mock` — unit tests never touch real AWS.
+- AWS SDK calls go through the wrappers in `src/awsutils` and are mocked
+  with `src/test/mock` — unit tests never touch real AWS.
 - `make test` also runs submodule suites.
 
 ## Python integration tests
@@ -88,7 +89,7 @@ The admin dashboard uses [Vitest](https://vitest.dev/); tests are
 `*.test.ts(x)` files alongside the component.
 
 ```shell
-cd src/admin/dashboard
+cd dashboard
 npm install
 npm test                       # vitest run — full suite, once
 npm run test:watch             # vitest watch mode, for development

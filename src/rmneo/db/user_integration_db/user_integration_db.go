@@ -42,7 +42,7 @@ import (
 
 const (
 	UserEndpointsTable = "rmng-user-endpoints"
-	// user_details lives in the espuser-base CDK stack (owned by src_esp_user), not the rmng base. The names here mirror that stack so mocks and any reads from rmng-side code stay in sync.
+	// user_details lives in the espuser-base CDK stack (owned by src/espuser), not the rmng base. The names here mirror that stack so mocks and any reads from rmng-side code stay in sync.
 	UserDetailsTable        = "espuser-user-details"
 	UserDetailsByEmailIndex = "espuser-user-details-by-email"
 )

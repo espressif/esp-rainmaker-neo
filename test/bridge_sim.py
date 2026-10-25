@@ -176,7 +176,7 @@ class BridgeMQTT:
 
 def _shadow_name(group: str, subgroups: list[str]) -> str:
     """Compute the params shadow name from a group + sorted subgroups.
-    Mirrors `device_sim.py.handle_group_info_update`."""
+    Mirrors `esp_morpheus.sims.device.handle_group_info_update`."""
     name = f"params-{group}"
     for sg in sorted(subgroups):
         name += f"-{sg}"

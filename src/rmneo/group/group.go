@@ -35,6 +35,7 @@ import (
 // group/subgroup but lacks delete permission (e.g. secondary or subentity access), distinct
 // from "not found/no access".
 // ErrNodeAddForbidden is mapped to 403: the caller lacks group:editnodes on the target group (e.g. secondary access).
+// ErrSubGroupNodesForbidden is mapped to 403: the caller can reach the subgroup but lacks group:editnodes (secondary or subentity access).
 var (
 	ErrGroupNotEmpty           = errors.New("group not empty")
 	ErrSubGroupNotEmpty        = errors.New("subgroup not empty")
@@ -43,6 +44,7 @@ var (
 	ErrGroupDeleteForbidden    = errors.New("insufficient permissions to delete group")
 	ErrSubGroupDeleteForbidden = errors.New("insufficient permissions to delete subgroup")
 	ErrNodeAddForbidden        = errors.New("insufficient permissions to add node to group")
+	ErrSubGroupNodesForbidden  = errors.New("insufficient permissions to edit subgroup nodes")
 	ErrNotMatterCapable        = errors.New("group does not have Matter capability")
 	ErrCapabilityAlreadyExists = errors.New("group already has capability")
 	ErrSelfSharingRequest      = errors.New("cannot accept your own sharing request")

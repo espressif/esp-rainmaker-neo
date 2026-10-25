@@ -44,9 +44,9 @@ Needs Python 3.12 or later.
 The outputs are a JSON file keyed by stack name (`espuser-base`, `espuser-core`, `rmng-base`,
 `rmng-core`, ...). Give `esp-morpheus` a path or a URL.
 
-**A local file (default).** With no flag, `esp-morpheus` reads `rmng-outputs.json`. Inside a checkout,
-a relative path resolves against the repo root, so it resolves the same from every directory;
-outside one, it resolves against the working directory.
+**A local file (default).** With no flag, `esp-morpheus` reads `rmng-outputs.json`. Run from
+anywhere inside a checkout, a relative path resolves against the repo root (`MORPHEUS_REPO_ROOT`
+overrides the detected root); run from outside one, it resolves against the working directory.
 
 ```bash
 esp-morpheus user someone@example.com

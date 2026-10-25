@@ -30,7 +30,7 @@ esp-rainmaker-neo/
 │   ├── tools/rmng-lint/      repo-specific static analysers
 │   └── esp-cloud-common/     shared Go module (git submodule)
 ├── cdk/                      apps/ (one per stack group) · utils/ (shared
-│                             constructs) · cdk/Stackfile.yaml · outputs/ · cdk.out/
+│                             constructs) · Stackfile.yaml · cdk.out/
 ├── dashboard/                admin dashboard (React + Vite + Tailwind)
 ├── cli/                      the installable `esp-morpheus` console client
 ├── py_sdk/                   pre-rename SDK import path; binds cli/src/esp_morpheus/sdk
@@ -103,7 +103,7 @@ To understand the backend, start from the [specs and API references](README.md#s
 **Tests**
 
 ```shell
-make lint        # rmng-lint over ./src/...
+make lint        # rmng-lint over ./src/... and ./test/...
 make test        # Ginkgo unit tests + coverage, for rmng and its submodules
 
 # Integration tests: one-time setup per environment — deploys the test infra
@@ -139,15 +139,15 @@ npm test             # vitest run
 
 The **ESP RainMaker Home** app (React Native + Expo, built on TypeScript SDKs) is released from [espressif/esp-rainmaker-home](https://github.com/espressif/esp-rainmaker-home) — install it from the store links in the [README](README.md), select the **ESP RainMaker Neo** platform, then point it at your own deployment by scanning the QR code displayed in the admin dashboard.
 
-**Tests** — none here; the app is tested in its own repo. What this repo can do is exercise the same APIs the app uses, via the integration suite and the CLI. You can also use the app simulator, [test/app_sim.py](test/app_sim.py), to test your own deployment.
+**Tests** — none here; the app is tested in its own repo. What this repo can do is exercise the same APIs the app uses, via the integration suite and the CLI. You can also use the app simulator, `esp-morpheus app-sim`, to test your own deployment.
 
 ## Firmware
 
 Device firmware lives in the [firmware SDK](https://github.com/espressif/esp-rainmaker-neo-firmware). To try a device against the public deployment, flash a prebuilt binary with [ESP Launchpad](https://espressif.github.io/esp-launchpad/?flashConfigURL=https://espressif.github.io/esp-rainmaker-neo-firmware/launchpad.toml) — it flashes over WebSerial, so use a Chrome- or Edge-based browser.
 
-For a device on *your* deployment, build an example from the SDK and flash it alongside a **factory partition** — the `rmaker_creds` NVS binary carrying the node id, its IoT certificate and key, and your endpoints. Generate it from the admin dashboard, flash `bin/<node-id>.bin` per device, and upload the `node_certs.csv` to register the nodes.
+For a device on *your* deployment, build an example from the SDK and flash it alongside a **factory partition** — the `rmaker_creds` NVS binary carrying the node id, its IoT certificate and key, and your endpoints. Generate it from the admin dashboard, flash `bin/node-<index>-<node-id>.bin` per device, and upload `common/node_certs.csv` to register the nodes.
 
-**Tests** — no hardware needed: [test/device_sim.py](test/device_sim.py) and the CLI's simulated-device mode speak the same MQTT protocol a real node does.
+**Tests** — no hardware needed: the device simulator, `esp-morpheus device-sim`, speaks the same MQTT protocol a real node does.
 
 ## Voice assistants (Optional)
 

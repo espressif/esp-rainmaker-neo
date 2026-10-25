@@ -8,7 +8,7 @@ Bring the documentation in line with the code on the **current branch**.
 
 ## What "docs" means here
 
-- **API definitions** — the OpenAPI/AsyncAPI YAMLs in `misc/swagger/`:
+- **API definitions** — the OpenAPI/AsyncAPI YAMLs in `docs/api/`:
   `Api_Swagger.yaml` (platform API), `User_Api_Swagger.yaml` (sign-up/auth),
   `MQTT_Node.yaml`, `MQTT_User.yaml`, `Push_User.yaml`, `Test_Webhook.yaml`.
 - **Specs** — the feature specs in `docs/en/specs/` (one markdown file per feature area,
@@ -96,7 +96,7 @@ understand a constraint without reading the code.
    - Every user-visible behaviour change is reflected in the relevant spec.
    - Remove/adjust doc content for anything the branch deleted or renamed.
 4. **Validate**: if the swagger YAML was touched, sanity-check it parses
-   (`python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1]))" misc/swagger/<file>`).
+   (`python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1]))" docs/api/<file>`).
 
 ## Rules
 

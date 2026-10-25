@@ -4,7 +4,7 @@
 
 // Package sender resolves which SES identity the IdP sends mail from. SES owns which identities
 // exist and whether each is verified; espuser-admin-config records which one is active per email
-// category. Spec: src_esp_user/misc/specs/email-sender.md.
+// category. Spec: src/espuser/docs/specs/email-sender.md.
 package sender
 
 import (
