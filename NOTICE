@@ -80,6 +80,10 @@ this software does not grant permission to use these marks except as
 required for reasonable and customary use in describing the origin of
 this work.
 
+The ESP RainMaker® NEO logo files under assets/neo/ are Espressif brand
+assets. They are provided for identifying this project and are not
+licensed under Apache-2.0; see Espressif's brand guidelines for permitted use.
+
 This project integrates with third-party voice-assistant and smart-home
 platforms. "Amazon", "Alexa", "Google", "Google Home", "Samsung", and
 "SmartThings" are trademarks of their respective owners.
