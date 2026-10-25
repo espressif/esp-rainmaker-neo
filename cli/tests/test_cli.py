@@ -10,6 +10,7 @@ codes, and the shell's error containment — holds without one.
 
 import json
 import os
+import sys
 import tomllib
 from pathlib import Path
 
@@ -1597,3 +1598,20 @@ def test_stream_views_the_nodes_channel_with_its_kvs_credentials(run, stream_use
     assert channel == 'rmng-v1-n-1'
     assert (credentials.access_key_id, credentials.region, credentials.expiration) == ('a', 'us-east-1', 7)
     assert kwargs == {'save_path': None, 'duration': 5, 'stats_only': True}
+
+
+def test_a_failed_cv2_import_leaves_sys_path_unchanged(tmp_path, monkeypatch):
+    """The cv2 loader puts cv2/ on sys.path before its native import, which fails without libGL."""
+    from esp_morpheus.sdk import kvs_viewer
+
+    package = tmp_path / 'cv2'
+    package.mkdir()
+    (package / '__init__.py').write_text(
+        'import os, sys\nsys.path.insert(1, os.path.dirname(__file__))\nraise ImportError("libGL.so.1")\n')
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delitem(sys.modules, 'cv2', raising=False)
+    before = list(sys.path)
+
+    with pytest.raises(ImportError):
+        kvs_viewer._import_cv2()
+    assert sys.path == before
