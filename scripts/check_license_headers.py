@@ -79,6 +79,7 @@ EXCLUDED_PREFIXES = (
     "assets/alexa_logo",
     "assets/gva_logo",
     "assets/smartthings_logo",
+    "assets/neo/",
 )
 
 EXCLUDED_SUFFIXES = (
