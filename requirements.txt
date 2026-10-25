@@ -56,7 +56,7 @@ iniconfig==2.3.0
 # Optional: Additional testing tools (not in Jenkins base)
 pytest-xdist==3.8.0
 pytest-subtests==0.15.0
-fastmcp==3.4.5
+fastmcp==3.4.10
 playwright==1.55.0
 pytest-playwright==0.8.0
 
