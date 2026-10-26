@@ -6,6 +6,7 @@ import json
 import os
 
 from aws_cdk import (
+    Aws,
     CfnCondition,
     CfnOutput,
     CfnParameter,
@@ -224,6 +225,17 @@ class CreateAdminDeviceUsersRole(Construct):
                 f"arn:aws:s3:::{files_bucket}",
                 f"arn:aws:s3:::{files_bucket}/ota/*",
                 f"arn:aws:s3:::{files_bucket}/system/node_certs/*",
+            ]
+        ))
+
+        # Admin-specific: the dashboard's Branding page writes and deletes the app brand; it and phones read it through the public URL.
+        public_assets_bucket = f"rmng-public-assets-{Aws.ACCOUNT_ID}"
+        admin_device_users_role.add_to_policy(iam.PolicyStatement(
+            effect=iam.Effect.ALLOW,
+            actions=["s3:PutObject", "s3:DeleteObject"],
+            resources=[
+                get_s3_object_arn(public_assets_bucket, f"{region}/brand/brand.json"),
+                get_s3_object_arn(public_assets_bucket, f"{region}/brand/images/*.png"),
             ]
         ))
 

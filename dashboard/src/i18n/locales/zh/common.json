@@ -106,6 +106,7 @@
     "gva": "GVA",
     "pushNotifications": "推送通知",
     "postDeployment": "部署后配置",
+    "branding": "品牌定制",
     "smartthings": "SmartThings"
   },
   "deploymentQr": {

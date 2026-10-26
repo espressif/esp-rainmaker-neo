@@ -14,6 +14,7 @@ import {
   Group,
   Pencil,
   Package,
+  Palette,
   Server,
   Settings,
   ShieldCheck,
@@ -51,6 +52,7 @@ export const sidebarIcons = {
       "voice-assistants": Bot,
       "push-notifications": BellRing,
       "post-deployment": ShieldCheck,
+      branding: Palette,
     },
   },
 } as const satisfies Record<

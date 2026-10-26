@@ -49,6 +49,7 @@ const NAMESPACE_OWNERS = {
   "voice-assistants": "/home/settings/voice-assistants",
   "push-notifications": "/home/settings/push-notifications",
   "post-deployment": "/home/settings/post-deployment",
+  branding: "/home/settings/branding",
   "account-settings": "/home/account-settings",
 };
 
