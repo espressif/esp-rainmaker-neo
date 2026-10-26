@@ -126,7 +126,7 @@ Returns every client. By default the `secret` is omitted; pass **`?get_secret=tr
 
 **API**: `PUT /v1/admin/clients/{client_id}`
 
-**Full replace** of the mutable fields (client name, redirect URIs, grant types, scopes, `require_pkce`, `first_party`): the body is the complete desired state, so an omitted field resets to empty/default. `client_id`, `client_type`, and the secret are immutable and rejected in the body. `client_name` is required. Re-runs the Key-Rule validation on the result. `404` if unknown.
+**Full replace** of the mutable fields (client name, redirect URIs, post-logout redirect URIs, grant types, scopes, allowed resources, allowed providers, `require_pkce`, `first_party`): the body is the complete desired state, so an omitted field resets to empty/default. `client_id`, `client_type`, and the secret are immutable and rejected in the body. `client_name` is required. Re-runs the Key-Rule validation on the result. `404` if unknown.
 
 ### Delete Client
 

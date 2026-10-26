@@ -15,7 +15,9 @@ import (
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/sessions_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/session"
+	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -228,14 +230,31 @@ var _ = Describe("session service", func() {
 			Expect(after.ExpiresAt).To(Equal(authTime + 3600))
 		})
 
-		It("is a no-op, not an error, when the user agent is gone (a refresh outliving its session)", func() {
+		It("reports the session ended once the user agent is signed out (a refresh outliving its session)", func() {
 			_, sid, err := svc.Establish(session.EstablishInput{UserID: "u1", AuthTime: time.Now().Unix()})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(svc.DeleteSessionBySID("u1", sid)).To(Succeed())
 
 			expiresAt, err := svc.BumpRetentionBySID("u1", sid)
-			Expect(err).NotTo(HaveOccurred(), "a family that outlived its browser session must not fail its refresh")
+			Expect(err).To(MatchError(sessions_db.ErrSessionNotFound), "Rotate refuses the family on this error")
 			Expect(expiresAt).To(BeZero())
+		})
+
+		It("does not revive an expired row the TTL sweep has not removed yet, and reports the session gone (negative)", func() {
+			cookie, sid, err := svc.Establish(session.EstablishInput{UserID: "u1", AuthTime: time.Now().Unix()})
+			Expect(err).NotTo(HaveOccurred())
+			entry, err := entryFor(cookie)
+			Expect(err).NotTo(HaveOccurred())
+			expired := *entry
+			expired.ExpiresAt = time.Now().Add(-time.Minute).Unix()
+			rewrite(&expired)
+
+			expiresAt, err := svc.BumpRetentionBySID("u1", sid)
+			Expect(err).To(MatchError(sessions_db.ErrSessionNotFound))
+			Expect(expiresAt).To(BeZero())
+			var row sessions_db.SessionEntry
+			Expect(awscommon.GetDynamoDBClient().(*mock.DynamoDBMock).GetDirect("espuser-sessions", entry.SessionHash, "", &row)).To(Succeed())
+			Expect(row.ExpiresAt).To(Equal(expired.ExpiresAt), "a session past expires_at has ended, whatever is still on disk")
 		})
 
 		It("is a no-op for an empty sid (a pre-feature family)", func() {

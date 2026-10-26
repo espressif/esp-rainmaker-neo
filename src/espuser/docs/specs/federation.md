@@ -70,7 +70,8 @@ sequenceDiagram
     Start-->>Browser: 302 to IdP authorize (broker client_id, OUR state/nonce/challenge)
     Browser->>IdP: hosted-UI login (user authenticates upstream)
     IdP-->>Browser: 302 to federation/callback?code=&state=
-    Browser->>CB: GET /oauth2/federation/callback
+    Browser->>CB: GET /oauth2/federation/callback?code=&state= (cookie: __Host-esp_flow_id)
+    Note over CB: the cookie must name the flow in state, else 400 before any read
     CB->>Flows: Recover flow by HMAC state — exact-match stored state
     CB->>IdP: POST token endpoint (broker secret + OUR PKCE verifier) — server side
     IdP-->>CB: upstream id_token (validated: iss/aud/nonce/exp/signature)
@@ -106,18 +107,15 @@ Begins the upstream leg for an in-flight authorization flow.
   `state`, `nonce`, `code_challenge`).
 - **Output:** `302` to the provider `authorization_endpoint`.
 
-State is `flow_id` + an HMAC tag (keyed by a domain-separated derivation of the
-refresh-token secret) so the callback can trust it without a new GSI, and it is
-*also* compared to the value stored on the flow — a tamper-evident, self-contained
-correlation that defends CSRF and issuer mix-up (RFC 9207).
+State is `flow_id` + an HMAC tag (keyed by a domain-separated derivation of the refresh-token secret) so the callback can trust it without a new GSI, and it is *also* compared to the value stored on the flow. That proves we issued it and nobody altered it, and defends against issuer mix-up (RFC 9207). It does not say which browser is returning: the `__Host-esp_flow_id` cookie set at `/oauth2/authorize` does, so a callback URL copied from someone else's sign-in fails in every browser but the one that started the flow (RFC 6749 §10.12).
 
 ### `GET /oauth2/federation/callback`
 
 Completes the upstream leg and issues **our** code.
 
-- **Input:** `code`, `state` (+ optional `iss`).
+- **Input:** `code`, `state` (+ optional `iss`), and the `__Host-esp_flow_id` cookie.
 - **Process:**
-  1. Verify the `state` HMAC; load the flow; confirm it matches the flow's stored
+  1. Verify the `state` HMAC. The `__Host-esp_flow_id` cookie must name the same flow, else `400` with no cookie set and no flow read, so an attacker's own sign-in cannot be finished in a victim's browser (RFC 6749 §10.12). Load the flow; confirm it matches the flow's stored
      upstream `state`. Reject on any mismatch (CSRF/replay). If `iss` is present,
      assert it equals the provider's issuer (RFC 9207).
   2. Exchange `code` at the provider `token_endpoint` server-side, authenticating

@@ -32,6 +32,7 @@ class SessionsAPI(Construct):
         DELETE /v1/user/sessions/{sessionId}    end one -- the lost-phone case
         DELETE /v1/user/sessions          end all of them, this browser included
         GET    /oauth2/logout             RP-Initiated Logout 1.0, advertised in discovery
+        POST   /oauth2/logout             the same, as a form; answered with a 303 to the GET
 
     One binary, two trees. They share every dependency: the same two tables, the same token
     verification, the same session-to-family join. Splitting them would be two cold starts
@@ -147,7 +148,7 @@ class SessionsAPI(Construct):
             )
 
         # ── /oauth2/logout ───────────────────────────────────────────────────────────
-        # GET only: __Host-esp_session is SameSite=Lax, so a cross-site POST would carry no session and end nothing.
+        # POST is required by RP-Initiated Logout 1.0 s2; the lambda answers it with a 303 to the GET, which is the request that carries the SameSite=Lax session cookie.
         oauth2_id = get_or_create_api_resource(
             self, "OAuth2Resource", common_resources,
             common_resources.esp_user_api_root_resource_id, "oauth2",
@@ -157,15 +158,16 @@ class SessionsAPI(Construct):
             self, "OAuth2LogoutResource", common_resources, oauth2_id, "logout",
             api_id=common_resources.esp_user_api_id,
         )
-        create_cfn_api_method(
-            self, "OAuth2LogoutGetMethod", common_resources,
-            logout_id, "GET", self.sessions_function,
-            authorization_type="NONE",
-            api_id=common_resources.esp_user_api_id,
-        )
+        for verb in ("GET", "POST"):
+            create_cfn_api_method(
+                self, f"OAuth2Logout{verb.title()}Method", common_resources,
+                logout_id, verb, self.sessions_function,
+                authorization_type="NONE",
+                api_id=common_resources.esp_user_api_id,
+            )
         add_cors_options(
             self, "OAuth2LogoutOptionsMethod", common_resources,
-            logout_id, allowed_methods=["GET"],
+            logout_id, allowed_methods=["GET", "POST"],
             api_id=common_resources.esp_user_api_id,
         )
 

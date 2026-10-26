@@ -136,6 +136,10 @@ func handleFederationCallback(ctx context.Context, request events.APIGatewayProx
 	if err != nil {
 		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Invalid or expired sign-in state."), nil
 	}
+	// RFC 6749 s10.12: the callback must come from the browser that started this flow, or an attacker's own sign-in can be finished in the victim's browser.
+	if rmngrequest.Cookie(request, flowCookieName) != flowID {
+		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Invalid sign-in state."), nil
+	}
 	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, nil)
 	flow, err := auth_flows_db.NewAuthFlowsDB(rmngCtx).GetFlow(flowID)
 	if err != nil {
@@ -184,6 +188,11 @@ func handleFederationCallback(ctx context.Context, request events.APIGatewayProx
 	// session layer, it only loses SSO until the next login.
 	sid, sessionCookie := "", ""
 	sess := session.NewService(rmngCtx)
+	// The upstream's auth_time is when the person signed in (OIDC Core s2); a provider that omits it authenticated them on this request.
+	authTime := identity.AuthTime
+	if authTime <= 0 {
+		authTime = time.Now().Unix()
+	}
 	// The per-provider cap lives only on OIDC rows; other provider kinds fall back to the
 	// global cap (see idp.OIDCProvider.SessionMaxTTL on why this is a type assertion).
 	var providerMaxTTL int64
@@ -196,7 +205,7 @@ func handleFederationCallback(ctx context.Context, request events.APIGatewayProx
 	cookieValue, newSID, err := sess.Establish(session.EstablishInput{
 		UserID:                userID,
 		Provider:              identity.Profile.Provider,
-		AuthTime:              identity.AuthTime,
+		AuthTime:              authTime,
 		AMR:                   identity.AMR,
 		ACR:                   identity.ACR,
 		ProviderMaxTTLSeconds: providerMaxTTL,
@@ -213,7 +222,7 @@ func handleFederationCallback(ctx context.Context, request events.APIGatewayProx
 		sessionCookie = session.SetCookieHeader(cookieValue, sess.MaxAge())
 	}
 
-	redirectTo, err := svc.CompleteStartedAuthFlow(ctx, flowID, userID, sid, flow.RequestedScope, time.Now().Unix())
+	redirectTo, err := svc.CompleteStartedAuthFlow(ctx, flowID, userID, sid, flow.RequestedScope, authTime)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Msg("federation callback: issue code")
 		return errorPage(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil

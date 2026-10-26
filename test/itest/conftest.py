@@ -2006,7 +2006,7 @@ def chromium_browser():
 
 def complete_federation_login(client_id, redirect_uri, username, password, scope,
                               provider="cognito", follow_final=False,
-                              client_secret=None, secret_via="basic"):
+                              client_secret=None, secret_via="basic", before_callback=None):
     """Drive a full brokered login and return the token response JSON.
 
     authorize -> federation start -> the provider's hosted UI -> our callback -> code exchange.
@@ -2014,7 +2014,8 @@ def complete_federation_login(client_id, redirect_uri, username, password, scope
     follow_final to get the callback response instead of exchanging, for tests that expect no code.
     A confidential client passes client_secret; secret_via picks how it authenticates at the token
     endpoint — "basic" (HTTP Basic, what Alexa sends) or "post" (form-body credentials, what Google
-    account linking sends).
+    account linking sends). before_callback(callback_url) runs between the provider's login and our
+    callback, for tests that need a pause there or a probe of the callback from another browser.
     """
     from urllib.parse import parse_qs as _parse_qs, urlparse as _urlparse
 
@@ -2040,6 +2041,8 @@ def complete_federation_login(client_id, redirect_uri, username, password, scope
     assert fed.status_code == 302, f"federation start: {fed.status_code} {fed.text[:200]}"
 
     our_callback = cognito_hosted_login(session, fed.headers["Location"], username, password)
+    if before_callback:
+        before_callback(our_callback)
     cb = session.get(our_callback, allow_redirects=False)
     if follow_final:
         return cb

@@ -82,7 +82,7 @@ client_id=rm_mobile
 **Errors** — the OAuth token endpoint uses the RFC 6749 §5.2 error object `{ "error": "<code>", "error_description": "<detail>" }`, NOT the API's generic `{ "message": ... }`. `error` is one of the RFC-defined codes below; the OTP endpoints (`/v1/auth/otp/*`) are our own non-OAuth surface and keep `{ "message": ... }`.
 
 - `400 invalid_request` — missing/malformed `grant_type`, `refresh_token`, or `client_id`.
-- `400 invalid_grant` — unknown, expired, spent, or revoked refresh token (uniform; no distinction between them, no reuse oracle).
+- `400 invalid_grant` — unknown, expired, spent, or revoked refresh token, or one whose session has ended (uniform; no distinction between them, no reuse oracle).
 - `400 unsupported_grant_type` — any `grant_type` outside `authorization_code`, `refresh_token` and `client_credentials`; token exchange (RFC 8693) is not built yet and lands here.
 - `401 invalid_client` — a confidential client that fails its auth method.
 

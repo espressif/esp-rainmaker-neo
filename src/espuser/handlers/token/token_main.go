@@ -13,7 +13,6 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/oauth_clients_db"
-	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/collections"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
@@ -147,7 +146,7 @@ func handleClientCredentialsGrant(ctx context.Context, request events.APIGateway
 		rlog.Error(ctx).Err(err).Str("client_id", req.ClientID).Msg("Failed to mint client_credentials token")
 		return oidc.OAuthErrorResp(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
 	}
-	return utils.APIGwRespJSON(http.StatusOK, tokens), nil
+	return oidc.OAuthTokenResp(tokens), nil
 }
 
 // resolveResource validates the RFC 8707 resource parameter against the client's registry
@@ -198,7 +197,7 @@ func handleAuthorizationCodeGrant(ctx context.Context, req TokenRequest) (events
 		return oidc.OAuthErrorResp(http.StatusBadRequest, oidc.OAuthErrInvalidGrant, "The authorization code is invalid, expired, or already used."), nil
 	}
 
-	return utils.APIGwRespJSON(http.StatusOK, tokens), nil
+	return oidc.OAuthTokenResp(tokens), nil
 }
 
 func handleRefreshTokenGrant(ctx context.Context, req TokenRequest) (events.APIGatewayProxyResponse, error) {
@@ -228,7 +227,7 @@ func handleRefreshTokenGrant(ctx context.Context, req TokenRequest) (events.APIG
 		return oidc.OAuthErrorResp(http.StatusBadRequest, oidc.OAuthErrInvalidGrant, "The refresh token is invalid, expired, or revoked."), nil
 	}
 
-	return utils.APIGwRespJSON(http.StatusOK, tokens), nil
+	return oidc.OAuthTokenResp(tokens), nil
 }
 
 func handleTokenRequest(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {

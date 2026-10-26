@@ -27,6 +27,7 @@ import (
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/ssmutil"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/refresh_tokens_db"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/sessions_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/session"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
@@ -156,7 +157,7 @@ func expiresOn() int64 {
 }
 
 // clampedExpiry is the family lifetime under the invariant "a grant may not outlive its user agent":
-// it bumps the user agent's expires_at (a no-op when the family has no sid, or its user agent is gone)
+// it bumps the user agent's expires_at (a no-op when the family has no sid; sessionGone when its user agent is gone)
 // and returns min(now + TokenTTL, expires_at). The bump and the clamp together hold
 // expires_at >= every live family's expires_on by construction, for every provider -- a
 // provider cap that shortens expires_at genuinely ends the app logins opened through it,
@@ -165,20 +166,24 @@ func expiresOn() int64 {
 // A bump error degrades to the plain TTL rather than failing the mint: a login must never be
 // blocked by the session layer. It is logged because a persistent failure (an IAM misgrant on
 // espuser-sessions) would otherwise silently let families outlive their user agents.
-func (s *Service) clampedExpiry(userID, sid string) int64 {
+func (s *Service) clampedExpiry(userID, sid string) (expires int64, sessionGone bool) {
 	base := expiresOn()
 	if sid == "" {
-		return base
+		return base, false
 	}
 	expiresAt, err := session.NewService(rmngctx.NewRmngContextWithCtx(s.ctx, nil)).BumpRetentionBySID(userID, sid)
+	if errors.Is(err, sessions_db.ErrSessionNotFound) {
+		return base, true
+	}
 	if err != nil {
 		rlog.Warn(s.ctx).Err(err).Str("sid", sid).Msg("refreshtoken: retention bump failed; family left at the plain TTL")
-		return base
+		return base, false
 	}
-	if expiresAt > 0 && expiresAt < base {
-		return expiresAt
+	// 0 means the session could not be confirmed (a re-sign-in mid-flight), so the family keeps the plain TTL.
+	if expiresAt == 0 {
+		return base, false
 	}
-	return base
+	return min(expiresAt, base), false
 }
 
 func withinRotationGrace(rotatedAt int64) bool {
@@ -195,6 +200,8 @@ func (s *Service) MintRefreshtoken(userID, clientID, scope, resource, sid string
 	}
 	// AdvanceCounter must not touch created_at: it is "connected since" and must survive every rotation.
 	now := time.Now().Unix()
+	// A code redeemed after sign-out still mints; Rotate refuses the family at its first refresh.
+	expires, _ := s.clampedExpiry(userID, sid)
 	if err := s.db.CreateFamily(&refresh_tokens_db.FamilyEntry{
 		UserID:    userID,
 		ClientID:  clientID,
@@ -204,7 +211,7 @@ func (s *Service) MintRefreshtoken(userID, clientID, scope, resource, sid string
 		Resource:  resource,
 		SID:       sid,
 		AuthTime:  authTime,
-		ExpiresOn: s.clampedExpiry(userID, sid),
+		ExpiresOn: expires,
 		CreatedAt: now,
 		RotatedAt: now,
 	}); err != nil {
@@ -260,7 +267,12 @@ func (s *Service) Rotate(clientID, refreshToken string, precheck ...func(*refres
 	// Re-stamp the family lifetime clamped to its user agent on every rotation, so the same events
 	// that reset the family's expiry also bump the user agent's expires_at -- the two clocks move
 	// together and the family can never rotate past the user agent it belongs to.
-	if err := s.db.AdvanceCounter(c.UserID, c.ClientID, c.FamilyID, family.Counter, s.clampedExpiry(family.UserID, family.SID), now.Unix()); err != nil {
+	expires, sessionGone := s.clampedExpiry(family.UserID, family.SID)
+	if sessionGone {
+		_ = s.db.DeleteFamily(c.UserID, c.ClientID, c.FamilyID)
+		return nil, rmerror.NewRMError(refresh_tokens_db.ErrRefreshExpired, "refresh token's session has ended")
+	}
+	if err := s.db.AdvanceCounter(c.UserID, c.ClientID, c.FamilyID, family.Counter, expires, now.Unix()); err != nil {
 		// Lost the conditional race (a concurrent rotation already advanced it): reuse.
 		return nil, rmerror.NewRMError(err, "refresh token rejected")
 	}

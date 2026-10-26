@@ -152,7 +152,7 @@ func handleSignin(ctx context.Context, request events.APIGatewayProxyRequest, sv
 		// Uniform 401 so the response is no oracle; operators get the real cause from the log.
 		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Authentication failed")), nil
 	}
-	return utils.APIGwRespJSON(http.StatusOK, withBearer(tokens)), nil
+	return oidc.OAuthTokenResp(withBearer(tokens)), nil
 }
 
 func handleRefresh(ctx context.Context, request events.APIGatewayProxyRequest, svc *legacyauth.Service) (events.APIGatewayProxyResponse, error) {
@@ -165,7 +165,7 @@ func handleRefresh(ctx context.Context, request events.APIGatewayProxyRequest, s
 		rlog.Error(ctx).Err(err).Msg("legacy refresh failed")
 		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Invalid refresh token")), nil
 	}
-	return utils.APIGwRespJSON(http.StatusOK, withBearer(tokens)), nil
+	return oidc.OAuthTokenResp(withBearer(tokens)), nil
 }
 
 func handleSignup(ctx context.Context, request events.APIGatewayProxyRequest, svc *legacyauth.Service) (events.APIGatewayProxyResponse, error) {

@@ -58,6 +58,7 @@ point at `jwks.json` for the public keys.
   Generated once and served from S3; no Lambda on the read path.
 - **Issuer is fixed once chosen.** It is signed into every token, so changing it
   is a migration, not a toggle.
+- **Token responses are never cached.** Every response carrying tokens (`/oauth2/token` and the legacy `/v1/user/auth/token` and `/token/refresh`) sends `Cache-Control: no-store` and `Pragma: no-cache` (RFC 6749 §5.1).
 
 ## Token usage: id token vs access token
 

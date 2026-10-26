@@ -9,10 +9,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/refresh_tokens_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/sessions_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/refreshtoken"
+	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -38,6 +44,41 @@ func tamper(token string) string {
 		b[0] = 'A'
 	}
 	return string(b)
+}
+
+// staleIndex lists a retired session row ahead of the live ones, as the by-user index does for a moment after a re-sign-in deletes the old row; retiredOnly lists it alone, as when the index has not seen the new row yet either.
+type staleIndex struct {
+	*mock.DynamoDBMock
+	retired     sessions_db.SessionEntry
+	retiredOnly bool
+}
+
+func (s *staleIndex) Query(ctx context.Context, in *dynamodb.QueryInput, opts ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
+	out, err := s.DynamoDBMock.Query(ctx, in, opts...)
+	if err != nil || aws.ToString(in.IndexName) != sessions_db.SessionsByUserIndex {
+		return out, err
+	}
+	item, err := attributevalue.MarshalMap(s.retired)
+	if err != nil {
+		return nil, err
+	}
+	if s.retiredOnly {
+		out.Items = nil
+	}
+	out.Items = append([]map[string]types.AttributeValue{item}, out.Items...)
+	return out, nil
+}
+
+// failingIndex fails every query on the sessions by-user index, as a throttled table would.
+type failingIndex struct {
+	*mock.DynamoDBMock
+}
+
+func (f *failingIndex) Query(ctx context.Context, in *dynamodb.QueryInput, opts ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
+	if aws.ToString(in.IndexName) == sessions_db.SessionsByUserIndex {
+		return nil, &types.ProvisionedThroughputExceededException{Message: aws.String("throttled")}
+	}
+	return f.DynamoDBMock.Query(ctx, in, opts...)
 }
 
 var _ = Describe("refreshtoken.Service", func() {
@@ -107,6 +148,9 @@ var _ = Describe("refreshtoken.Service", func() {
 		})
 
 		It("carries the family's resource and sid forward on rotation, so a silent renewal keeps the same audience and session", func() {
+			Expect(sessions_db.NewSessionsDB(&rmngctx.RmngContext{Context: context.Background()}).CreateSession(&sessions_db.SessionEntry{
+				SessionHash: "hash_sid-9", SID: "sid-9", UserID: "user-123", ExpiresAt: time.Now().Add(time.Hour).Unix(),
+			})).To(Succeed())
 			token, err := svc.MintRefreshtoken("user-123", clientID, "openid", "https://api.example.com", "sid-9", 0)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -361,12 +405,63 @@ var _ = Describe("refreshtoken.Service", func() {
 				"a pre-feature family carries no sid and stays at the plain TTL")
 		})
 
-		It("leaves a family unclamped when its user agent is gone — a refresh outliving its session (negative)", func() {
-			// sid set, but no user agent row exists: the bump is a no-op and the family keeps its TTL.
-			_, err := svc.MintRefreshtoken("user-ghost", clientID, "openid", "", "sid_missing", 0)
+		It("refuses a rotation once the family's session has been signed out, and leaves no family (negative)", func() {
+			putCappedUserAgent("user-ended", "sid_ended", time.Now().Add(time.Hour).Unix())
+			token, err := svc.MintRefreshtoken("user-ended", clientID, "openid", "", "sid_ended", 0)
 			Expect(err).NotTo(HaveOccurred())
-			fam := familyFor("user-ghost")
-			Expect(fam.ExpiresOn).To(BeNumerically(">", time.Now().Add(refreshtoken.TokenTTL-time.Minute).Unix()))
+			Expect(db().DeleteByUserAndSID("user-ended", "sid_ended")).To(Succeed())
+
+			_, err = svc.Rotate(clientID, token)
+			Expect(err).To(MatchError(refresh_tokens_db.ErrRefreshExpired))
+			rows, err := refresh_tokens_db.NewRefreshTokensDB(&rmngctx.RmngContext{Context: context.Background()}).ListByUser("user-ended")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(rows).To(BeEmpty(), "a family with no session left to end it must not live on")
+		})
+
+		It("keeps the family when the index still lists the row a re-sign-in retired ahead of the live one", func() {
+			putCappedUserAgent("user-reauth", "sid_reauth", time.Now().Add(time.Hour).Unix())
+			token, err := svc.MintRefreshtoken("user-reauth", clientID, "openid", "", "sid_reauth", 0)
+			Expect(err).NotTo(HaveOccurred())
+			awscommon.SetDynamoDBClient(&staleIndex{
+				DynamoDBMock: awscommon.GetDynamoDBClient().(*mock.DynamoDBMock),
+				retired:      sessions_db.SessionEntry{SessionHash: "hash_retired", SID: "sid_reauth", UserID: "user-reauth"},
+			})
+
+			_, err = svc.Rotate(clientID, token)
+			Expect(err).NotTo(HaveOccurred(), "a live session must not be read as ended while the index catches up with a re-sign-in")
+			Expect(familyFor("user-reauth").Counter).To(Equal(int64(1)))
+		})
+
+		It("keeps the family at the plain TTL when the index lists only the row a re-sign-in retired", func() {
+			putCappedUserAgent("user-reauth2", "sid_reauth2", time.Now().Add(time.Hour).Unix())
+			token, err := svc.MintRefreshtoken("user-reauth2", clientID, "openid", "", "sid_reauth2", 0)
+			Expect(err).NotTo(HaveOccurred())
+			awscommon.SetDynamoDBClient(&staleIndex{
+				DynamoDBMock: awscommon.GetDynamoDBClient().(*mock.DynamoDBMock),
+				retired:      sessions_db.SessionEntry{SessionHash: "hash_retired", SID: "sid_reauth2", UserID: "user-reauth2"},
+				retiredOnly:  true,
+			})
+
+			_, err = svc.Rotate(clientID, token)
+			Expect(err).NotTo(HaveOccurred(), "sign-out deletes the families before the row, so a listed row that is missing was replaced, not signed out")
+			fam := familyFor("user-reauth2")
+			Expect(fam.Counter).To(Equal(int64(1)))
+			Expect(fam.ExpiresOn).To(BeNumerically(">", time.Now().Add(refreshtoken.TokenTTL-time.Minute).Unix()),
+				"the session could not be confirmed, so the family keeps the plain TTL")
+		})
+
+		It("rotates at the plain TTL when the session lookup fails, so a DynamoDB error never signs anyone out", func() {
+			putCappedUserAgent("user-dberr", "sid_dberr", time.Now().Add(time.Hour).Unix())
+			token, err := svc.MintRefreshtoken("user-dberr", clientID, "openid", "", "sid_dberr", 0)
+			Expect(err).NotTo(HaveOccurred())
+			awscommon.SetDynamoDBClient(&failingIndex{DynamoDBMock: awscommon.GetDynamoDBClient().(*mock.DynamoDBMock)})
+
+			_, err = svc.Rotate(clientID, token)
+			Expect(err).NotTo(HaveOccurred())
+			fam := familyFor("user-dberr")
+			Expect(fam.Counter).To(Equal(int64(1)))
+			Expect(fam.ExpiresOn).To(BeNumerically(">", time.Now().Add(refreshtoken.TokenTTL-time.Minute).Unix()),
+				"the clamp could not run, so the family keeps the plain TTL rather than failing the refresh")
 		})
 	})
 })

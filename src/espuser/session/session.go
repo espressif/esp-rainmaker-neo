@@ -222,8 +222,7 @@ func (s *Service) Lookup(cookieValue string) *Session {
 
 // BumpRetentionBySID rolls a user agent's expires_at forward from a BACK-channel token event and
 // returns the new expires_at so the token path can clamp the refresh family's expiry to it.
-// A no-op returning (0, nil) when sid is empty (a pre-feature family) or the user agent is gone (a
-// refresh that outlived its browser session); cookie_expires_at is never touched here.
+// Returns sessions_db.ErrSessionNotFound when the session has ended, and (0, nil) when sid is empty (a pre-feature family) or the session cannot be confirmed either way; cookie_expires_at is never touched here.
 func (s *Service) BumpRetentionBySID(userID, sid string) (expiresAt int64, err error) {
 	if sid == "" {
 		return 0, nil
