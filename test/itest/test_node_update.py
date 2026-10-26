@@ -102,6 +102,23 @@ def _poll_until_completed(user, request_id, status_fn, max_attempts=20, sleep_se
                 f"{max_attempts * sleep_seconds}s; last status: {last_status}")
 
 
+def _assert_job_listed_in_own_flow_only(user, request_id, job_type, status=None):
+    """Page the job_type's collection list until request_id shows up, asserting every row seen belongs to that flow (legacy register rows omit job_type)."""
+    allowed = {"update"} if job_type == "update" else {"register", None}
+    next_key = None
+    while True:
+        page = user.list_registration_jobs(page_size=20, start_key=next_key, job_type=job_type, status=status)
+        assert page is not None, f"List {job_type} jobs returned None"
+        for job in page["jobs"]:
+            assert job.get("job_type") in allowed, f"{job_type} list leaked a foreign job: {job}"
+            if status:
+                assert job.get("status") == status, f"status filter ignored: {job}"
+            if job.get("request_id") == request_id:
+                return
+        next_key = page.get("next_key")
+        assert next_key, f"Job {request_id} missing from the {job_type} list"
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -117,6 +134,7 @@ def test_update_node_metadata(admin_user, node_csv_uploader):
       - it kicks off the shared Fargate task with JOB_TYPE=update and the
         container actually runs the update path
       - real IoT AddThingToGroup and shadow-tag writes succeed
+      - GET /update-jobs and GET /registration-jobs each list only their own flow's jobs
     """
     node_id = f"updnode_{os.urandom(6).hex()}"
     register_nodes = [{
@@ -166,6 +184,9 @@ def test_update_node_metadata(admin_user, node_csv_uploader):
         assert terminal.get("total_nodes") == 1
         assert terminal.get("success_count") == 1
         assert terminal.get("failed_count") == 0
+
+        _assert_job_listed_in_own_flow_only(admin_user, update_request_id, "update", status="completed")
+        _assert_job_listed_in_own_flow_only(admin_user, reg_resp["request_id"], "register")
 
         # Verify the new admin group exists and contains the node.
         # Allow brief eventual-consistency window.

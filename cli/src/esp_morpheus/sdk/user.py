@@ -2698,22 +2698,30 @@ class User:
             user_log(f"Error getting bulk register status: {str(e)}")
             return None
 
-    def list_registration_jobs(self, page_size=None, start_key=None):
-        """List bulk node registration jobs.
+    def list_registration_jobs(self, page_size=None, start_key=None, job_type='register', status=None):
+        """List bulk node jobs of one job_type.
         Args:
             page_size (int, optional): Maximum number of jobs per page
             start_key (str, optional): Pagination token from a previous response
+            job_type (str): 'register' lists /registration-jobs, 'update' lists /update-jobs
+            status (str, optional): Filter by job status, e.g. 'completed'
         Returns:
             dict: Response with 'jobs' list and optional 'next_key', or None if failed
         """
+        if job_type not in ('register', 'update'):
+            user_log(f"Invalid job_type: {job_type}")
+            return None
         try:
             params = {}
             if page_size is not None:
                 params["page_size"] = str(page_size)
             if start_key is not None:
                 params["start_key"] = start_key
+            if status is not None:
+                params["status"] = status
             query_string = "&".join(f"{k}={v}" for k, v in params.items())
-            path = "/v1/admin/nodes/registration-jobs"
+            jobs_segment = "registration-jobs" if job_type == "register" else "update-jobs"
+            path = f"/v1/admin/nodes/{jobs_segment}"
             if query_string:
                 path = f"{path}?{query_string}"
             response = self.make_api_request('GET', path)
