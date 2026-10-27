@@ -9,8 +9,9 @@ package main
 import (
 	"context"
 	"errors"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"net/http"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/legacyauth"

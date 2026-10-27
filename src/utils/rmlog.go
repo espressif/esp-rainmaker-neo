@@ -8,9 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"io"
 	"os"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/rs/zerolog"
 )
@@ -119,7 +120,7 @@ func RMErrorMarshaler(err error) interface{} {
 	var frames []map[string]interface{}
 
 	for err != nil {
-		if rmErr, ok := err.(*rmerror.RMError); ok {
+		if rmErr, ok := err.(*rmerror.RMError); ok { //nolint:errorlint // inspects one layer at a time; errors.As would match a deeper RMError
 			frame := map[string]interface{}{
 				"file":    rmErr.File,
 				"line":    rmErr.Line,

@@ -8,14 +8,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/utils"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/collections"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/collections"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils/httpclient"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/jwtutil"

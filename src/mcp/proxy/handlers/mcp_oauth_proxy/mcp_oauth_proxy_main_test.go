@@ -5,12 +5,12 @@
 package main
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +19,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils/httpclient"
 
@@ -49,7 +51,7 @@ func validCIMDDoc(clientIDURL, redirectURI string) *CIMDDocument {
 
 func mockFetchCIMD(doc *CIMDDocument, err error) func() {
 	original := fetchCIMD
-	fetchCIMD = func(clientIDURL string) (*CIMDDocument, error) {
+	fetchCIMD = func(_ context.Context, clientIDURL string) (*CIMDDocument, error) {
 		return doc, err
 	}
 	return func() { fetchCIMD = original }
@@ -118,7 +120,7 @@ var _ = Describe("OAuth Proxy", func() {
 		It("returns correct metadata", func() {
 			request := httpReq("GET", "/.well-known/oauth-protected-resource")
 
-			response, err := handleRequest(request)
+			response, err := handleRequest(context.TODO(), request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusOK))
 			Expect(response.Headers["Cache-Control"]).To(Equal("no-store"))
@@ -137,7 +139,7 @@ var _ = Describe("OAuth Proxy", func() {
 		It("returns correct metadata", func() {
 			request := httpReq("GET", "/.well-known/oauth-authorization-server")
 
-			response, err := handleRequest(request)
+			response, err := handleRequest(context.TODO(), request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusOK))
 			Expect(response.Headers["Cache-Control"]).To(Equal("no-store"))
@@ -181,7 +183,7 @@ var _ = Describe("OAuth Proxy", func() {
 			request := httpReq("GET", "/oauth2/authorize")
 			request.QueryStringParameters = baseQuery
 
-			response, err := handleRequest(request)
+			response, err := handleRequest(context.TODO(), request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusFound))
 
@@ -200,7 +202,7 @@ var _ = Describe("OAuth Proxy", func() {
 			request := httpReq("GET", "/oauth2/authorize")
 			request.QueryStringParameters = baseQuery
 
-			response, err := handleRequest(request)
+			response, err := handleRequest(context.TODO(), request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusBadRequest))
 			Expect(response.Body).To(ContainSubstring("code_challenge is required"))
@@ -211,7 +213,7 @@ var _ = Describe("OAuth Proxy", func() {
 			request := httpReq("GET", "/oauth2/authorize")
 			request.QueryStringParameters = baseQuery
 
-			response, err := handleRequest(request)
+			response, err := handleRequest(context.TODO(), request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusBadRequest))
 			Expect(response.Body).To(ContainSubstring("code_challenge_method must be 'S256'"))
@@ -227,7 +229,7 @@ var _ = Describe("OAuth Proxy", func() {
 			request := httpReq("GET", "/oauth2/authorize")
 			request.QueryStringParameters = baseQuery
 
-			response, err := handleRequest(request)
+			response, err := handleRequest(context.TODO(), request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusBadRequest))
 			Expect(response.Body).To(ContainSubstring("redirect_uri not allowed"))
@@ -240,7 +242,7 @@ var _ = Describe("OAuth Proxy", func() {
 			request := httpReq("GET", "/oauth2/authorize")
 			request.QueryStringParameters = baseQuery
 
-			response, err := handleRequest(request)
+			response, err := handleRequest(context.TODO(), request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusBadRequest))
 			Expect(response.Body).To(ContainSubstring("CIMD validation failed"))
@@ -253,7 +255,7 @@ var _ = Describe("OAuth Proxy", func() {
 			request := httpReq("GET", "/oauth2/authorize")
 			request.QueryStringParameters = baseQuery
 
-			response, err := handleRequest(request)
+			response, err := handleRequest(context.TODO(), request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusBadRequest))
 			Expect(response.Body).To(ContainSubstring("client_id mismatch"))
@@ -264,7 +266,7 @@ var _ = Describe("OAuth Proxy", func() {
 			request := httpReq("GET", "/oauth2/authorize")
 			request.QueryStringParameters = baseQuery
 
-			response, err := handleRequest(request)
+			response, err := handleRequest(context.TODO(), request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusBadRequest))
 			Expect(response.Body).To(ContainSubstring("client_id must be a valid HTTPS URL"))
@@ -288,7 +290,7 @@ var _ = Describe("OAuth Proxy", func() {
 				"state": validState,
 			}
 
-			response, err := handleRequest(request)
+			response, err := handleRequest(context.TODO(), request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusFound))
 
@@ -316,7 +318,7 @@ var _ = Describe("OAuth Proxy", func() {
 				"state":             validState,
 			}
 
-			response, err := handleRequest(request)
+			response, err := handleRequest(context.TODO(), request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusFound))
 
@@ -332,7 +334,7 @@ var _ = Describe("OAuth Proxy", func() {
 				"state": "tampered-state.invalid-sig",
 			}
 
-			response, err := handleRequest(request)
+			response, err := handleRequest(context.TODO(), request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusBadRequest))
 			Expect(response.Body).To(ContainSubstring("invalid state"))
@@ -357,7 +359,7 @@ var _ = Describe("OAuth Proxy", func() {
 				"state": expiredState,
 			}
 
-			response, err := handleRequest(request)
+			response, err := handleRequest(context.TODO(), request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusBadRequest))
 			Expect(response.Body).To(ContainSubstring("expired"))
@@ -409,7 +411,7 @@ var _ = Describe("OAuth Proxy", func() {
 			request := httpReq("POST", "/oauth2/token")
 			request.Body = formBody
 
-			response, err := handleRequest(request)
+			response, err := handleRequest(context.TODO(), request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusOK))
 
@@ -452,7 +454,7 @@ var _ = Describe("OAuth Proxy", func() {
 			request := httpReq("POST", "/oauth2/token")
 			request.Body = formBody
 
-			response, err := handleRequest(request)
+			response, err := handleRequest(context.TODO(), request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusBadRequest))
 			Expect(response.Body).To(ContainSubstring("invalid_grant"))
@@ -478,7 +480,7 @@ var _ = Describe("OAuth Proxy", func() {
 			request := httpReq("POST", "/oauth2/token")
 			request.Body = formBody
 
-			response, err := handleRequest(request)
+			response, err := handleRequest(context.TODO(), request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusBadRequest))
 			Expect(response.Body).To(ContainSubstring("invalid_grant"))
@@ -506,7 +508,7 @@ var _ = Describe("OAuth Proxy", func() {
 			request := httpReq("POST", "/oauth2/token")
 			request.Body = formBody
 
-			response, err := handleRequest(request)
+			response, err := handleRequest(context.TODO(), request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusOK))
 
@@ -537,7 +539,7 @@ var _ = Describe("OAuth Proxy", func() {
 			request := httpReq("POST", "/oauth2/token")
 			request.Body = formBody
 
-			response, err := handleRequest(request)
+			response, err := handleRequest(context.TODO(), request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusBadRequest))
 			Expect(response.Body).To(ContainSubstring("invalid_grant"))
@@ -561,7 +563,7 @@ var _ = Describe("OAuth Proxy", func() {
 			request := httpReq("POST", "/oauth2/token")
 			request.Body = formBody
 
-			response, err := handleRequest(request)
+			response, err := handleRequest(context.TODO(), request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusBadRequest))
 			Expect(response.Body).To(ContainSubstring("invalid_grant"))
@@ -575,7 +577,7 @@ var _ = Describe("OAuth Proxy", func() {
 
 			request := httpReq("GET", "/.well-known/test-cimd.json")
 
-			response, err := handleRequest(request)
+			response, err := handleRequest(context.TODO(), request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusOK))
 			Expect(response.Headers["Content-Type"]).To(Equal("application/json"))
@@ -594,7 +596,7 @@ var _ = Describe("OAuth Proxy", func() {
 
 			request := httpReq("GET", "/.well-known/test-cimd.json")
 
-			response, err := handleRequest(request)
+			response, err := handleRequest(context.TODO(), request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusNotFound))
 		})
@@ -651,7 +653,7 @@ var _ = Describe("OAuth Proxy", func() {
 				"scope":                 "openid email",
 			}
 
-			response, err := handleRequest(request)
+			response, err := handleRequest(context.TODO(), request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusFound))
 			Expect(response.Headers["Location"]).To(ContainSubstring("espuser.example.com/oauth2/authorize"))
@@ -671,7 +673,7 @@ var _ = Describe("OAuth Proxy", func() {
 				"code_challenge_method": "S256",
 			}
 
-			response, err := handleRequest(request)
+			response, err := handleRequest(context.TODO(), request)
 			Expect(err).To(BeNil())
 			return response
 		}
@@ -724,7 +726,7 @@ var _ = Describe("OAuth Proxy", func() {
 		It("returns 404 for unknown path", func() {
 			request := httpReq("GET", "/unknown/path")
 
-			response, err := handleRequest(request)
+			response, err := handleRequest(context.TODO(), request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusNotFound))
 		})
@@ -732,7 +734,7 @@ var _ = Describe("OAuth Proxy", func() {
 		It("returns CORS headers for OPTIONS", func() {
 			request := httpReq("OPTIONS", "/oauth2/authorize")
 
-			response, err := handleRequest(request)
+			response, err := handleRequest(context.TODO(), request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusOK))
 			Expect(response.Headers["Access-Control-Allow-Origin"]).To(Equal("*"))

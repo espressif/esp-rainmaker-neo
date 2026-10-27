@@ -15,7 +15,7 @@ func CreateResponse(messageID, namespace, name string, payload interface{}, corr
 	response.Event.Header.Name = name
 	response.Event.Header.PayloadVersion = "3"
 	response.Event.Header.CorrelationID = correlationID
-	var p interface{} = payload
+	var p = payload
 	response.Event.Payload = &p
 	response.Event.Endpoint = endpoint
 	return response

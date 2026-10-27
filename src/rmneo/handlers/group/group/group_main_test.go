@@ -11,22 +11,23 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_db"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_group_db"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_integration_db"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"testing"
 
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_db"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_group_db"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_integration_db"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
+
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
@@ -1517,7 +1518,7 @@ var _ = Describe("Group Main", func() {
 				"groups":    []string{groupID},
 				"subgroups": map[string][]string{},
 			}
-			groups, err := group.ListUserAccessableGroups(rmngctx.NewRmngContext(user.NewUser(otherUserID)))
+			groups, err := group.ListUserAccessibleGroups(rmngctx.NewRmngContext(user.NewUser(otherUserID)))
 			Expect(err).To(BeNil())
 			Expect(groups).To(Equal(expectedGroups))
 		})
@@ -1608,7 +1609,7 @@ var _ = Describe("Group Main", func() {
 				"subgroups": map[string][]string{},
 			}
 
-			groups, err := group.ListUserAccessableGroups(otherUserContext)
+			groups, err := group.ListUserAccessibleGroups(otherUserContext)
 			Expect(err).To(BeNil())
 			Expect(groups).To(Equal(expectedGroups))
 		})
@@ -1649,7 +1650,7 @@ var _ = Describe("Group Main", func() {
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusOK))
 
-			groups, err := group.ListUserAccessableGroups(rmngctx.NewRmngContext(user.NewUser(otherUserID)))
+			groups, err := group.ListUserAccessibleGroups(rmngctx.NewRmngContext(user.NewUser(otherUserID)))
 			Expect(err).To(BeNil())
 			Expect(groups).To(Equal(map[string]interface{}{
 				"groups":    []string{},
@@ -1689,7 +1690,7 @@ var _ = Describe("Group Main", func() {
 				Expect(response.StatusCode).To(Equal(http.StatusNotFound))
 
 				// The member keeps their access — the name was not resolved.
-				groups, err := group.ListUserAccessableGroups(otherUserContext)
+				groups, err := group.ListUserAccessibleGroups(otherUserContext)
 				Expect(err).To(BeNil())
 				Expect(groups["groups"]).To(ConsistOf(groupID))
 			},
@@ -2026,7 +2027,7 @@ var _ = Describe("Group Main", func() {
 				},
 			}
 
-			groups, err := group.ListUserAccessableGroups(rmngctx.NewRmngContext(user.NewUser(otherUserID)))
+			groups, err := group.ListUserAccessibleGroups(rmngctx.NewRmngContext(user.NewUser(otherUserID)))
 			Expect(err).To(BeNil())
 			Expect(groups).To(Equal(expectedGroups))
 		})
@@ -2060,7 +2061,7 @@ var _ = Describe("Group Main", func() {
 					groupID: {subgroupID},
 				},
 			}
-			groups, err := group.ListUserAccessableGroups(rmngctx.NewRmngContext(user.NewUser(otherUserID)))
+			groups, err := group.ListUserAccessibleGroups(rmngctx.NewRmngContext(user.NewUser(otherUserID)))
 			Expect(err).To(BeNil())
 			Expect(groups).To(Equal(expectedGroups))
 
@@ -2087,7 +2088,7 @@ var _ = Describe("Group Main", func() {
 				"subgroups": map[string][]string{},
 			}
 
-			groups, err = group.ListUserAccessableGroups(rmngctx.NewRmngContext(user.NewUser(otherUserID)))
+			groups, err = group.ListUserAccessibleGroups(rmngctx.NewRmngContext(user.NewUser(otherUserID)))
 			Expect(err).To(BeNil())
 			Expect(groups).To(Equal(expectedGroups))
 		})

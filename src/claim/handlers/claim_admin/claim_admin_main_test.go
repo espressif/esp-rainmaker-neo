@@ -6,9 +6,10 @@ package main
 
 import (
 	"context"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"net/http"
 	"testing"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 
 	"github.com/aws/aws-lambda-go/events"
 	ssm_types "github.com/aws/aws-sdk-go-v2/service/ssm/types"
@@ -19,7 +20,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/ssmutil"
 	"github.com/espressif/esp-rainmaker-neo/src/claim/ca_bootstrap"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 )
 
 func TestClaimAdmin(t *testing.T) {

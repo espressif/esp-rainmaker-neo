@@ -189,10 +189,8 @@ var _ = Describe("Matter Utils", func() {
 			// by checking that the public keys match
 			knownPubKey := knownCert.PublicKey.(*ecdsa.PublicKey)
 			generatedPubKey := generatedCert.PublicKey.(*ecdsa.PublicKey)
-			Expect(knownPubKey.X.Cmp(generatedPubKey.X)).To(Equal(0),
-				"Public key X coordinate should match")
-			Expect(knownPubKey.Y.Cmp(generatedPubKey.Y)).To(Equal(0),
-				"Public key Y coordinate should match")
+			Expect(knownPubKey.Equal(generatedPubKey)).To(BeTrue(),
+				"Public keys should match")
 		})
 	})
 
@@ -421,7 +419,7 @@ var _ = Describe("Matter Utils", func() {
 			Expect(err).To(BeNil())
 
 			// Verify the keys match
-			Expect(parsedKey.D.Cmp(origKey.D)).To(Equal(0))
+			Expect(parsedKey.Equal(origKey)).To(BeTrue())
 		})
 	})
 

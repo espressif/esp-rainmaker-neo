@@ -13,7 +13,7 @@ func InterfaceToSlice(slice interface{}) ([]interface{}, error) {
 	sliceVal := reflect.ValueOf(slice)
 
 	if sliceVal.Kind() != reflect.Slice {
-		return make([]interface{}, 0), errors.New("Invalid data type")
+		return make([]interface{}, 0), errors.New("invalid data type")
 	}
 
 	interfaceSlice := make([]interface{}, sliceVal.Len())

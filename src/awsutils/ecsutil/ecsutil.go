@@ -6,16 +6,13 @@ package ecsutil
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"io"
-	"net/http"
 	"os"
 	"strings"
 
-	"github.com/espressif/esp-rainmaker-neo/src/utils/httpclient"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
+
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -70,42 +67,4 @@ func GetTaskId(taskArn string) string {
 		return strings.Split(taskArn, "/")[2]
 	}
 	return ""
-}
-
-// ECS task metdata https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-metadata-endpoint.html
-// ${ECS_CONTAINER_METADATA_URI_V4}
-// ${ECS_CONTAINER_METADATA_URI_V4}/task
-// ${ECS_CONTAINER_METADATA_URI_V4}/taskWithTags
-// ${ECS_CONTAINER_METADATA_URI_V4}/stats
-// ${ECS_CONTAINER_METADATA_URI_V4}/task/stats
-
-func GetTaskArn() (string, error) {
-	ecsEndpointUrl := os.Getenv("ECS_CONTAINER_METADATA_URI_V4")
-	if ecsEndpointUrl == "" {
-		return "", rmerror.NewRMError(nil, "ECS_CONTAINER_METADATA_URI_V4 environment variable not set")
-	}
-
-	httpClient := httpclient.Get()
-
-	req, err := http.NewRequest("GET", ecsEndpointUrl+"/task", nil)
-	if err != nil {
-		return "", rmerror.NewRMError(err, "failed to create request")
-	}
-	response, err := httpClient.Do(req)
-	if err != nil {
-		return "", rmerror.NewRMError(err, "failed to get task metadata")
-	}
-
-	responseBody, err := io.ReadAll(response.Body)
-	if err != nil {
-		return "", rmerror.NewRMError(err, "failed to read response body")
-	}
-
-	var taskArn map[string]interface{}
-	err = json.Unmarshal(responseBody, &taskArn)
-	if err != nil {
-		return "", rmerror.NewRMError(err, "failed to unmarshal response body")
-	}
-
-	return taskArn["TaskARN"].(string), nil
 }

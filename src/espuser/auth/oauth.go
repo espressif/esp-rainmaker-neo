@@ -7,9 +7,10 @@ package auth
 import (
 	"context"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"net/url"
 	"strings"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/auth_flows_db"

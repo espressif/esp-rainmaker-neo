@@ -53,10 +53,11 @@ package db
 import (
 	"errors"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	basedb "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"

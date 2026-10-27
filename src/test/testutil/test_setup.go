@@ -7,6 +7,9 @@ package test_utils
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
+
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/admin_config_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/assoc_request_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/automation_db"
@@ -19,8 +22,6 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_group_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_integration_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
-	"os"
-	"strings"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/ssmutil"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_details_db"

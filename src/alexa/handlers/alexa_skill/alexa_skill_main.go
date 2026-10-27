@@ -8,7 +8,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/espressif/esp-rainmaker-neo/src/alexa"
+	alexa_skill "github.com/espressif/esp-rainmaker-neo/src/alexa"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 
 	"github.com/aws/aws-lambda-go/lambda"

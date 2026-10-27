@@ -7,12 +7,13 @@ package timeseries_test
 import (
 	"context"
 	"encoding/json"
+	"testing"
+	"time"
+
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/processed_ts_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/timeseries_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
-	"testing"
-	"time"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_details_db"
@@ -23,7 +24,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/timeseries/timewindow"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
@@ -944,8 +945,8 @@ var _ = Describe("Timeseries Service Integration", func() {
 				"key":       "temperature",
 				"data_type": "float",
 			}
-			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
-			rmngCtx.Context = context.WithValue(rmngCtx.Context, "timeseries_type", "latest")
+			rmngCtx.Context = timeseries.WithQueryParams(rmngCtx.Context, queryParams)
+			rmngCtx.Context = timeseries.WithType(rmngCtx.Context, "latest")
 
 			data, err := timeseriesService.Get(rmngCtx, testNodeID)
 			Expect(err).To(BeNil())
@@ -972,7 +973,7 @@ var _ = Describe("Timeseries Service Integration", func() {
 			queryParams := map[string]string{
 				"data_type": "float",
 			}
-			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+			rmngCtx.Context = timeseries.WithQueryParams(rmngCtx.Context, queryParams)
 
 			_, err := timeseriesService.Get(rmngCtx, testNodeID)
 			Expect(err).ToNot(BeNil())
@@ -985,7 +986,7 @@ var _ = Describe("Timeseries Service Integration", func() {
 				"data_type": "float",
 				"page_size": "invalid",
 			}
-			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+			rmngCtx.Context = timeseries.WithQueryParams(rmngCtx.Context, queryParams)
 
 			// Invalid page_size is silently replaced with the default;
 			// the call should succeed rather than surface an error.
@@ -998,7 +999,7 @@ var _ = Describe("Timeseries Service Integration", func() {
 				"key":       "temperature",
 				"data_type": "float",
 			}
-			unauthorizedCtx.Context = context.WithValue(unauthorizedCtx.Context, "query_params", queryParams)
+			unauthorizedCtx.Context = timeseries.WithQueryParams(unauthorizedCtx.Context, queryParams)
 
 			_, err := timeseriesService.Get(unauthorizedCtx, testNodeID)
 			Expect(err).ToNot(BeNil())
@@ -1011,7 +1012,7 @@ var _ = Describe("Timeseries Service Integration", func() {
 				"data_type": "float",
 				"type":      "aggregates",
 			}
-			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+			rmngCtx.Context = timeseries.WithQueryParams(rmngCtx.Context, queryParams)
 
 			data, err := timeseriesService.Get(rmngCtx, testNodeID)
 			Expect(err).To(BeNil())
@@ -1040,7 +1041,7 @@ var _ = Describe("Timeseries Service Integration", func() {
 				"type":      "aggregates",
 				"window":    "daily",
 			}
-			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+			rmngCtx.Context = timeseries.WithQueryParams(rmngCtx.Context, queryParams)
 
 			data, err := timeseriesService.Get(rmngCtx, testNodeID)
 			Expect(err).To(BeNil())
@@ -1064,7 +1065,7 @@ var _ = Describe("Timeseries Service Integration", func() {
 				"type":      "aggregates",
 				"window":    "invalid",
 			}
-			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+			rmngCtx.Context = timeseries.WithQueryParams(rmngCtx.Context, queryParams)
 
 			_, err := timeseriesService.Get(rmngCtx, testNodeID)
 			Expect(err).ToNot(BeNil())
@@ -1077,7 +1078,7 @@ var _ = Describe("Timeseries Service Integration", func() {
 				"data_type": "float",
 				"type":      "invalid",
 			}
-			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+			rmngCtx.Context = timeseries.WithQueryParams(rmngCtx.Context, queryParams)
 
 			_, err := timeseriesService.Get(rmngCtx, testNodeID)
 			Expect(err).ToNot(BeNil())
@@ -1089,7 +1090,7 @@ var _ = Describe("Timeseries Service Integration", func() {
 				"key":       "temperature",
 				"data_type": "float",
 			}
-			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+			rmngCtx.Context = timeseries.WithQueryParams(rmngCtx.Context, queryParams)
 
 			data, err := timeseriesService.Get(rmngCtx, testNodeID)
 			Expect(err).To(BeNil())
@@ -1109,7 +1110,7 @@ var _ = Describe("Timeseries Service Integration", func() {
 				"data_type": "float",
 				"type":      "raw",
 			}
-			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+			rmngCtx.Context = timeseries.WithQueryParams(rmngCtx.Context, queryParams)
 
 			data, err := timeseriesService.Get(rmngCtx, testNodeID)
 			Expect(err).To(BeNil())
@@ -1131,7 +1132,7 @@ var _ = Describe("Timeseries Service Integration", func() {
 				"window":    "daily",
 				"date":      "2025-01-01",
 			}
-			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+			rmngCtx.Context = timeseries.WithQueryParams(rmngCtx.Context, queryParams)
 
 			data, err := timeseriesService.Get(rmngCtx, testNodeID)
 			Expect(err).To(BeNil())
@@ -1157,7 +1158,7 @@ var _ = Describe("Timeseries Service Integration", func() {
 				"type":      "aggregates",
 				"date":      "2025-01-01",
 			}
-			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+			rmngCtx.Context = timeseries.WithQueryParams(rmngCtx.Context, queryParams)
 
 			_, err := timeseriesService.Get(rmngCtx, testNodeID)
 			Expect(err).ToNot(BeNil())
@@ -1172,7 +1173,7 @@ var _ = Describe("Timeseries Service Integration", func() {
 				"window":    "daily",
 				"date":      "invalid-date",
 			}
-			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+			rmngCtx.Context = timeseries.WithQueryParams(rmngCtx.Context, queryParams)
 
 			_, err := timeseriesService.Get(rmngCtx, testNodeID)
 			Expect(err).ToNot(BeNil())
@@ -1187,7 +1188,7 @@ var _ = Describe("Timeseries Service Integration", func() {
 				"start_time": "1640995200000", // 2022-01-01 00:00:00 UTC (ms)
 				"end_time":   "1640995260000", // 2022-01-01 00:01:00 UTC (ms)
 			}
-			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+			rmngCtx.Context = timeseries.WithQueryParams(rmngCtx.Context, queryParams)
 
 			data, err := timeseriesService.Get(rmngCtx, testNodeID)
 			Expect(err).To(BeNil())
@@ -1208,7 +1209,7 @@ var _ = Describe("Timeseries Service Integration", func() {
 				"type":       "raw",
 				"start_time": "invalid_timestamp",
 			}
-			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+			rmngCtx.Context = timeseries.WithQueryParams(rmngCtx.Context, queryParams)
 
 			_, err := timeseriesService.Get(rmngCtx, testNodeID)
 			Expect(err).ToNot(BeNil())
@@ -1222,7 +1223,7 @@ var _ = Describe("Timeseries Service Integration", func() {
 				"type":      "raw",
 				"end_time":  "invalid_timestamp",
 			}
-			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+			rmngCtx.Context = timeseries.WithQueryParams(rmngCtx.Context, queryParams)
 
 			_, err := timeseriesService.Get(rmngCtx, testNodeID)
 			Expect(err).ToNot(BeNil())
@@ -1355,7 +1356,7 @@ var _ = Describe("Timeseries Service Integration", func() {
 				"start_date": "2026-02-22",
 				"end_date":   "2026-02-22",
 			}
-			rmngCtx.Context = context.WithValue(rmngCtx.Context, "query_params", queryParams)
+			rmngCtx.Context = timeseries.WithQueryParams(rmngCtx.Context, queryParams)
 
 			data, err := timeseriesService.Get(rmngCtx, testNodeID)
 			Expect(err).To(BeNil())
@@ -1536,8 +1537,8 @@ var _ = Describe("Timeseries historical aggregates window range", func() {
 	query := func(params map[string]string) []map[string]interface{} {
 		params["key"] = "temperature"
 		params["data_type"] = "float"
-		ctx := context.WithValue(rmngCtx.Context, "query_params", params)
-		rmngCtx.Context = context.WithValue(ctx, "timeseries_type", "aggregates")
+		ctx := timeseries.WithQueryParams(rmngCtx.Context, params)
+		rmngCtx.Context = timeseries.WithType(ctx, "aggregates")
 
 		data, err := svc.Get(rmngCtx, nodeID)
 		Expect(err).ToNot(HaveOccurred())
@@ -1705,8 +1706,8 @@ var _ = Describe("Timeseries historical aggregates window range", func() {
 			func(params map[string]string, wantMessage string) {
 				params["key"] = "temperature"
 				params["data_type"] = "float"
-				ctx := context.WithValue(rmngCtx.Context, "query_params", params)
-				rmngCtx.Context = context.WithValue(ctx, "timeseries_type", "aggregates")
+				ctx := timeseries.WithQueryParams(rmngCtx.Context, params)
+				rmngCtx.Context = timeseries.WithType(ctx, "aggregates")
 
 				_, err := svc.Get(rmngCtx, nodeID)
 

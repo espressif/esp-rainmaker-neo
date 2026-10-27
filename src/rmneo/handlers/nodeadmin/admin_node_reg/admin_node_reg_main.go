@@ -11,11 +11,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	_ "github.com/espressif/esp-rainmaker-neo/src/bridge/hooks"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"net/http"
 	"os"
 	"strings"
+
+	_ "github.com/espressif/esp-rainmaker-neo/src/bridge/hooks"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_reg_req_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
@@ -73,8 +74,9 @@ func handleRegisterSingleNode(rctx *rmngctx.RmngContext, request events.APIGatew
 	var req RegisterSingleNodeRequest
 
 	// TODO: Once we figure out rbac for admins, remove this
-	rctx.SetAllow(utils.NodeAdminAll, "*")
-	rctx.SetAllow(utils.NodeWriteShadow, "*")
+	if err := rctx.SetAllowMultiple([]string{utils.NodeAdminAll.String(), utils.NodeWriteShadow.String()}, "*"); err != nil {
+		return RegisterSingleNodeResponse{}, rmerror.NewRMError(err, "failed to grant permissions")
+	}
 
 	if err := rmngrequest.ExtractRequestStruct(request, &req); err != nil {
 		return RegisterSingleNodeResponse{}, rmerror.NewRMError(err, "failed to extract request")
@@ -105,8 +107,9 @@ func handleRegisterBulkNodes(rctx *rmngctx.RmngContext, request events.APIGatewa
 	var req RegisterBulkNodesRequest
 
 	// TODO: Once we figure out rbac for admins, remove this
-	rctx.SetAllow(utils.NodeAdminAll, "*")
-	rctx.SetAllow(utils.NodeWriteShadow, "*")
+	if err := rctx.SetAllowMultiple([]string{utils.NodeAdminAll.String(), utils.NodeWriteShadow.String()}, "*"); err != nil {
+		return RegisterBulkNodesResponse{}, rmerror.NewRMError(err, "failed to grant permissions")
+	}
 
 	if err := rmngrequest.ExtractRequestStruct(request, &req); err != nil {
 		return RegisterBulkNodesResponse{}, rmerror.NewRMError(err, "failed to extract request")

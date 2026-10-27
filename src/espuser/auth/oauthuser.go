@@ -39,10 +39,6 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jwk"
 )
 
-// errPasswordlessUnsupported is returned by the password-shaped operations that
-// do not apply to passwordless OAuth users (they authenticate via OTP/social).
-var errPasswordlessUnsupported = fmt.Errorf("operation not supported for passwordless oauth users")
-
 // OAuthUserAuthService handles authentication for passwordless OIDC users. issuer and jwks are
 // resolved once at construction. There is intentionally no single client id: this service verifies
 // tokens from every registered client (rm_mobile, va-client, mcp-oauth-client, ...); the per-call
@@ -58,16 +54,16 @@ func NewOAuthUserAuthService(ctx context.Context) (*OAuthUserAuthService, error)
 	// Fetch JWKS from SSM Parameter Store
 	userPoolJWKS, err := ssmutil.GetParameterWithCaching(ctx, os.Getenv("USER_JWKS_PARA_NAME"), false) // Caching as the info is not expected to change frequently and leads to throttling errors for sign in
 	if err != nil {
-		return nil, rmerror.NewRMError(err, fmt.Sprintf("failed to get JWKS from SSM parameter"))
+		return nil, rmerror.NewRMError(err, "failed to get JWKS from SSM parameter")
 	}
 	if userPoolJWKS == "" {
-		return nil, rmerror.NewRMError(nil, fmt.Sprintf("JWKS value is empty for parameter"))
+		return nil, rmerror.NewRMError(nil, "JWKS value is empty for parameter")
 	}
 
 	// Parse JWKS
 	keySet, err := jwk.Parse([]byte(userPoolJWKS))
 	if err != nil {
-		return nil, rmerror.NewRMError(err, fmt.Sprintf("failed to parse JWKS for parameter"))
+		return nil, rmerror.NewRMError(err, "failed to parse JWKS for parameter")
 	}
 
 	return &OAuthUserAuthService{issuer: os.Getenv("USER_ISSUER"), jwks: keySet}, nil

@@ -6,17 +6,18 @@ package node_test
 
 import (
 	"fmt"
+	"os"
+	"strings"
+
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"os"
-	"strings"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	rmngctx "github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
@@ -30,7 +31,7 @@ func VerifyGetGroupInfo(iotDataClient *mock.IoTDataPlaneMock, nodeID string, gro
 	topic := "rainmaker/nodes/" + nodeID + "/from_cloud"
 	Expect(iotDataClient.PublishCalls[0].Topic).To(Equal(&topic))
 
-	expectedPayload := ""
+	var expectedPayload string
 	if len(subGroupIDs) > 0 {
 		expectedPayload = fmt.Sprintf(`{"event":["getGroupInfo"],"getGroupInfo":{"pgrp":"%s","subgrps":["%s"]}}`, groupID, strings.Join(subGroupIDs, `","`))
 	} else {

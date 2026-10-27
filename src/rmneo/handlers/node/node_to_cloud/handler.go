@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"fmt"
+
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_details_db"
@@ -173,20 +174,5 @@ func handlePublishInputEvent(ctx context.Context, event node.PublishInputEvent) 
 	if nodeDetailsErr != nil {
 		return rmerror.NewRMError(nodeDetailsErr, fmt.Sprintf("could not read node details for %s; details-dependent events left unanswered", event.ThingName))
 	}
-	return nil
-}
-
-// handleHello is a helper function to handle hello events
-func handleHello(data map[string]interface{}, responseData *node.DataToDevice) error {
-	id, ok := data["id"]
-	if !ok {
-		return rmerror.NewRMError(fmt.Errorf("id is missing in hello data"), "")
-	}
-	response := map[string]interface{}{
-		"id": id,
-	}
-
-	responseData.Event = append(responseData.Event, "hello")
-	responseData.Data["hello"] = response
 	return nil
 }

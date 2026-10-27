@@ -6,8 +6,9 @@ package test_utils
 
 import (
 	"context"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"reflect"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 

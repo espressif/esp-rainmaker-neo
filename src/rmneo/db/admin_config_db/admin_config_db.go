@@ -41,9 +41,10 @@ package admin_config_db
 
 import (
 	"fmt"
+	"time"
+
 	dbcore "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"

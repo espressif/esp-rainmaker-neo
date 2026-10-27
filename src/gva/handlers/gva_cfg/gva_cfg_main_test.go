@@ -8,15 +8,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"net/http"
 	"os"
 	"testing"
 
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
+
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
 	"github.com/espressif/esp-rainmaker-neo/src/gva"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
 	"github.com/aws/aws-lambda-go/events"

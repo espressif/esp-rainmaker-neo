@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+
 	"github.com/espressif/esp-rainmaker-neo/src/smartthings"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 

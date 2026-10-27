@@ -8,7 +8,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec // RFC 5280 §4.2.1.2 subject key identifier, not a security use
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -162,7 +162,7 @@ func DeriveMatterUserNodeID(fabricID, rmngUserID string, publicKey *ecdsa.Public
 		publicKeyDER,
 	} {
 		var length [4]byte
-		binary.BigEndian.PutUint32(length[:], uint32(len(field)))
+		binary.BigEndian.PutUint32(length[:], uint32(len(field))) //nolint:gosec // G115: fields are a domain tag, IDs and a public key, far below 4 GiB
 		_, _ = h.Write(length[:])
 		_, _ = h.Write(field)
 	}
@@ -253,7 +253,7 @@ func GenerateSubjectKeyID(pubKey *ecdsa.PublicKey) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert public key for subject key ID: %w", err)
 	}
-	hashed := sha1.Sum(ecdhKey.Bytes())
+	hashed := sha1.Sum(ecdhKey.Bytes()) //nolint:gosec // RFC 5280 §4.2.1.2 subject key identifier, not a security use
 	return hashed[:], nil
 }
 

@@ -8,11 +8,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"strings"
 	"time"
 
-	"github.com/espressif/esp-rainmaker-neo/src/alexa"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
+
+	alexa_skill "github.com/espressif/esp-rainmaker-neo/src/alexa"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/config"
@@ -360,7 +361,7 @@ func buildModesAttribute(param config.NodeCfgDeviceParam) interface{} {
 		max := *param.Bounds.Max
 
 		if max-min+1 > maxModeSettings {
-			rlog.Warn(nil).Int("min", min).Int("max", max).Msg("mode range too large, skipping modes attribute")
+			rlog.Warn(context.TODO()).Int("min", min).Int("max", max).Msg("mode range too large, skipping modes attribute")
 			return nil
 		}
 

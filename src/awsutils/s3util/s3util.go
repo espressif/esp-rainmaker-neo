@@ -6,11 +6,12 @@ package s3util
 
 import (
 	"context"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"io"
 	"strings"
 	"time"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"

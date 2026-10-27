@@ -6,11 +6,12 @@ package config
 
 import (
 	"errors"
+	"reflect"
+
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/timeseries_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/collections"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"reflect"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_details_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
@@ -116,10 +117,12 @@ func ToNodeCfg(source any) (NodeCfg, error) {
 }
 
 // ToMap converts NodeCfg struct to map[string]interface{} for database storage
-func (nc NodeCfg) ToMap() map[string]interface{} {
+func (nc NodeCfg) ToMap() (map[string]interface{}, error) {
 	var result map[string]interface{}
-	utils.ConvertAnyToAny(nc, &result)
-	return result
+	if err := utils.ConvertAnyToAny(nc, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 // ConfigService implements the NodeService interface for config functionality

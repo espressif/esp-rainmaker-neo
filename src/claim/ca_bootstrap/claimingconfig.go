@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/ssmutil"

@@ -17,13 +17,14 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
 	"github.com/espressif/esp-cloud-common/go/rbac/rbac"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/assoc_request_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/ids"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"net/http"
-	"strings"
-	"time"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/lambdautil"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"

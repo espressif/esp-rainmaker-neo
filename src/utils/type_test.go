@@ -33,6 +33,18 @@ var _ = Describe("Type Utilities", func() {
 		})
 	})
 
+	Describe("ClampInt32", func() {
+		DescribeTable("saturates at the int32 range instead of wrapping",
+			func(in int64, want int32) {
+				Expect(ClampInt32(in)).To(Equal(want))
+			},
+			Entry("in range", int64(20), int32(20)),
+			Entry("one past max", int64(math.MaxInt32)+1, int32(math.MaxInt32)),
+			Entry("wraps to 1 without clamping", int64(1)<<32+1, int32(math.MaxInt32)),
+			Entry("below min", int64(math.MinInt32)-1, int32(math.MinInt32)),
+		)
+	})
+
 	Describe("ToNumber", func() {
 		DescribeTable("reads a number out of a decoded value",
 			func(value interface{}, want float64, readable bool) {
@@ -310,8 +322,7 @@ var _ = Describe("Type Utilities", func() {
 					Extra: "extra",
 				}
 
-				var dest map[string]interface{}
-				dest = make(map[string]interface{})
+				dest := make(map[string]interface{})
 				dest["extra_in_map"] = "extra_in_map"
 				err := ConvertAnyToAny(source, &dest)
 				Expect(err).NotTo(HaveOccurred())

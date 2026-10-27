@@ -6,11 +6,12 @@ package mcpserver
 
 import (
 	"context"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"testing"
 	"time"
 
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
+
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/jwtutil"
 
 	"github.com/aws/aws-lambda-go/events"

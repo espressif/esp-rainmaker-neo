@@ -8,6 +8,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"os"
+
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/ssmutil"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
@@ -15,8 +18,6 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
-	"net/http"
-	"os"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"

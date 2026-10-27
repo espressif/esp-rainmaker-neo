@@ -7,9 +7,10 @@ package mock_test
 import (
 	"context"
 	"errors"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"io"
 	"strings"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 

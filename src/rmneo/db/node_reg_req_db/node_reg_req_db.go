@@ -43,9 +43,10 @@ package node_reg_req_db
 
 import (
 	"errors"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"strconv"
 	"time"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/espdynamodb"
 	dbpkg "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
@@ -275,7 +276,7 @@ func (db *NodeRegRequestsDB) ListNodeRegRequests(limit int64, startKey string, s
 	}
 
 	output := &ListNodeRegRequestsOutput{Entries: entries}
-	if lastKey != nil && len(lastKey) > 0 {
+	if len(lastKey) > 0 {
 		output.NextKey, err = dbpkg.EncodePaginationToken(lastKey)
 		if err != nil {
 			return nil, rmerror.NewRMError(err, "failed to encode next key")

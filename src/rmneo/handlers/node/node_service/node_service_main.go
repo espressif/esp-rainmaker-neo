@@ -43,7 +43,7 @@ func HandleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 
 	// Add query parameters to the context for services that need them
 	if len(request.QueryStringParameters) > 0 {
-		userCtx.Context = context.WithValue(userCtx.Context, "query_params", request.QueryStringParameters)
+		userCtx.Context = timeseries.WithQueryParams(userCtx.Context, request.QueryStringParameters)
 	}
 
 	// Get path parameters and other request details
@@ -58,13 +58,13 @@ func HandleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 	// 1. Handle Timeseries (Must be explicit because of sub-paths /raw, /latest)
 	case "/v1/groups/{groupId}/nodes/{nodeId}/timeseries/raw":
 		serviceName = "timeseries"
-		userCtx.Context = context.WithValue(userCtx.Context, "timeseries_type", "raw")
+		userCtx.Context = timeseries.WithType(userCtx.Context, "raw")
 	case "/v1/groups/{groupId}/nodes/{nodeId}/timeseries/latest":
 		serviceName = "timeseries"
-		userCtx.Context = context.WithValue(userCtx.Context, "timeseries_type", "latest")
+		userCtx.Context = timeseries.WithType(userCtx.Context, "latest")
 	case "/v1/groups/{groupId}/nodes/{nodeId}/timeseries/aggregates":
 		serviceName = "timeseries"
-		userCtx.Context = context.WithValue(userCtx.Context, "timeseries_type", "aggregates")
+		userCtx.Context = timeseries.WithType(userCtx.Context, "aggregates")
 
 	case "/v1/groups/{groupId}/nodes/{nodeId}/{serviceName}":
 		serviceName = request.PathParameters["serviceName"]

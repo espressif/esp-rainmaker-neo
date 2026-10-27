@@ -6,11 +6,12 @@ package node
 
 import (
 	"fmt"
+	"os"
+
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/convert"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/parallel"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"os"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/lambdautil"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"

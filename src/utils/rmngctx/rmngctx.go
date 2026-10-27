@@ -7,10 +7,11 @@ package rmngctx
 import (
 	"context"
 	"fmt"
-	"github.com/espressif/esp-cloud-common/go/rbac/rbac"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"sync"
 	"time"
+
+	"github.com/espressif/esp-cloud-common/go/rbac/rbac"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 

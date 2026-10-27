@@ -7,9 +7,10 @@ package main
 import (
 	"context"
 	"errors"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"net/http"
 	"strings"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_reg_req_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
@@ -57,9 +58,9 @@ func handleBulkUpdateNodes(rctx *rmngctx.RmngContext, request events.APIGatewayP
 	var req BulkUpdateNodesRequest
 
 	// TODO: Once we figure out rbac for admins, remove this
-	rctx.SetAllow(utils.NodeAdminAll, "*")
-	rctx.SetAllow(utils.NodeWriteShadow, "*")
-	rctx.SetAllow(utils.NodeAll, "*")
+	if err := rctx.SetAllowMultiple([]string{utils.NodeAdminAll.String(), utils.NodeWriteShadow.String(), utils.NodeAll.String()}, "*"); err != nil {
+		return BulkUpdateNodesResponse{}, rmerror.NewRMError(err, "failed to grant permissions")
+	}
 
 	if err := rmngrequest.ExtractRequestStruct(request, &req); err != nil {
 		return BulkUpdateNodesResponse{}, rmerror.NewRMError(err, "failed to extract request")

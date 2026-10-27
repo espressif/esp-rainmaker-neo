@@ -8,6 +8,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"reflect"
+	"sort"
+	"strconv"
+	"time"
+
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/automation_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
@@ -16,17 +22,12 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/ids"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"os"
-	"reflect"
-	"sort"
-	"strconv"
-	"time"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
@@ -178,7 +179,7 @@ var _ = Describe("Group", func() {
 			groupID := ids.GenerateGroupID()
 			Expect(groupID).To(HaveLen(6))
 			Expect(string(groupID[0])).To(MatchRegexp("[a-z]"))
-			Expect(string(groupID)).To(MatchRegexp("^[a-z][a-z0-9]{5}$"))
+			Expect(groupID).To(MatchRegexp("^[a-z][a-z0-9]{5}$"))
 		})
 	})
 
@@ -1758,15 +1759,15 @@ var _ = Describe("Group Sharing", func() {
 			Expect(groups).To(HaveLen(1))
 			test_utils.AssertNormalizedEqual(expectedGroup, groups[0])
 		})
-		It("should correctly return the appropriate groups and subgroups in ListUserAccessableGroups", func() {
+		It("should correctly return the appropriate groups and subgroups in ListUserAccessibleGroups", func() {
 			// Create a group for testUser2
 			testUser2Group, err := group.CreateGroupForUser(rmngContext2, "Test User 2 Group")
 			Expect(err).To(BeNil())
 			// Share a subgroup with testUser2
 			ShareAndApproveSubGroup(rmngContext1, rmngContext2, parentGroupID, subGroupID)
 
-			// User2's accessable groups
-			group_access, err := group.ListUserAccessableGroups(rmngContext2)
+			// User2's accessible groups
+			group_access, err := group.ListUserAccessibleGroups(rmngContext2)
 			Expect(err).To(BeNil())
 			Expect(group_access).To(Equal(map[string]interface{}{
 				"groups": []string{testUser2Group.GroupID},
@@ -1775,8 +1776,8 @@ var _ = Describe("Group Sharing", func() {
 				},
 			}))
 
-			// User1's accessable groups
-			group_access, err = group.ListUserAccessableGroups(rmngContext1)
+			// User1's accessible groups
+			group_access, err = group.ListUserAccessibleGroups(rmngContext1)
 			Expect(err).To(BeNil())
 			test_utils.AssertNormalizedEqual(map[string]interface{}{
 				"groups":    []string{sharedGroupID.GroupID, parentGroupID},

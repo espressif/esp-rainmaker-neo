@@ -6,11 +6,12 @@ package file
 
 import (
 	"context"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"io"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/s3util"
 

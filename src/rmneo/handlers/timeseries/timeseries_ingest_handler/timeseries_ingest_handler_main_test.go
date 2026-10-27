@@ -15,7 +15,7 @@ import (
 	"github.com/onsi/gomega"
 
 	db "github.com/espressif/esp-rainmaker-neo/src/rmneo/db/timeseries_db"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )

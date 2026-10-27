@@ -186,7 +186,7 @@ func (u *User) IsAdmin(ctx *rmngctx.RmngContext) bool {
 // This is typically used before performing any operation on a node, so that the appropriate permissions are loaded
 func LoadNodePermissions(ctx *rmngctx.RmngContext, groupID string, nodeID string) error {
 	// This loads the user's access to groups and sub-groups
-	_, err := group.ListUserAccessableGroups(ctx)
+	_, err := group.ListUserAccessibleGroups(ctx)
 	if err != nil {
 		return err
 	}

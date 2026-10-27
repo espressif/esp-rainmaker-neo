@@ -8,10 +8,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"os"
 	"strings"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 
@@ -120,7 +122,9 @@ func GetParameterWithCaching(ctx context.Context, name string, withDecryption bo
 	}
 
 	if shouldCache && value != "" {
-		os.Setenv(cacheKey, value)
+		if err := os.Setenv(cacheKey, value); err != nil {
+			rlog.Warn(ctx).Err(err).Str("parameter", name).Msg("failed to cache SSM parameter")
+		}
 	}
 
 	return value, nil
@@ -129,8 +133,8 @@ func GetParameterWithCaching(ctx context.Context, name string, withDecryption bo
 // ClearCachedParameter drops a parameter's cached value so the next GetParameterWithCaching
 // re-reads it from SSM. Callers that delete or overwrite a cached parameter must use this;
 // otherwise the stale value is served for the rest of the process's life.
-func ClearCachedParameter(name string) {
-	os.Unsetenv(getCacheKey(name))
+func ClearCachedParameter(name string) error {
+	return os.Unsetenv(getCacheKey(name))
 }
 
 // DeleteParameter deletes a parameter from AWS SSM Parameter Store

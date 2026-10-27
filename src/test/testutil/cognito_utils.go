@@ -10,12 +10,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"math/big"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 
@@ -191,10 +192,7 @@ func tokenClientID(isAdmin bool) string {
 
 // splitIssuer splits an issuer URL to extract the user pool ID
 func splitIssuer(issuer string) []string {
-	// Remove https:// prefix if present
-	if strings.HasPrefix(issuer, "https://") {
-		issuer = strings.TrimPrefix(issuer, "https://")
-	}
+	issuer = strings.TrimPrefix(issuer, "https://")
 	// Split by /
 	return strings.Split(issuer, "/")
 }

@@ -12,11 +12,12 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"os"
 	"slices"
 	"strings"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 
@@ -251,7 +252,7 @@ func ListThingGroups(ctx context.Context) ([]string, error) {
 	listGroupsInput := &iot.ListThingGroupsInput{}
 	groups, err := iotClient.ListThingGroups(ctx, listGroupsInput)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list thing groups: %v", err)
+		return nil, fmt.Errorf("failed to list thing groups: %w", err)
 	}
 
 	groupNames := make([]string, 0)
@@ -343,7 +344,7 @@ func GetThingCertificates(ctx context.Context, thingName string) ([]*types.Certi
 		}
 		certOutput, err := iotClient.DescribeCertificate(ctx, describeCertInput)
 		if err != nil {
-			return nil, rmerror.NewRMError(fmt.Errorf("failed to describe certificate %s: %v", certID, err), "")
+			return nil, rmerror.NewRMError(fmt.Errorf("failed to describe certificate %s: %w", certID, err), "")
 		}
 		// Only append certificates with Active status
 		if certOutput.CertificateDescription.Status == types.CertificateStatusActive {

@@ -14,6 +14,10 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
+	"time"
+
 	"github.com/espressif/esp-cloud-common/go/rbac/rbac"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
@@ -21,9 +25,6 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/certutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"sort"
-	"strings"
-	"time"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/iotdputil"
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/iotutil"
@@ -414,19 +415,20 @@ func (n *Node) ClearUserTags(rmngCtx *rmngctx.RmngContext) error {
 // writeToShadow is a helper function to write data to a specific shadow
 func (n *Node) writeToShadow(rmngCtx *rmngctx.RmngContext, shadowName string, target string, data ReportedOrDesiredShadow) error {
 	var updatePayload IoTNodeShadow
-	if target == "reported" {
+	switch target {
+	case "reported":
 		updatePayload = IoTNodeShadow{
 			State: &ShadowState{
 				Reported: &data,
 			},
 		}
-	} else if target == "desired" {
+	case "desired":
 		updatePayload = IoTNodeShadow{
 			State: &ShadowState{
 				Desired: &data,
 			},
 		}
-	} else {
+	default:
 		return rmerror.NewRMError(fmt.Errorf("invalid shadow target"), "")
 	}
 
@@ -1550,7 +1552,9 @@ func RegisterNodeInRmng(rmngCtx *rmngctx.RmngContext, cert string, caCert string
 	// Read scoped to this one node: the callers hold nodeadmin:*, which does not
 	// cover node:get, and granting it deployment-wide would be far wider than the
 	// check needs.
-	rmngCtx.SetAllow(utils.NodeGet, nodeId)
+	if err := rmngCtx.SetAllow(utils.NodeGet, nodeId); err != nil {
+		return "", rmerror.NewRMError(err, "failed to grant permissions")
+	}
 
 	detailsDB := node_details_db.NewNodeDetailsDB(rmngCtx)
 	if existing, err := detailsDB.GetNodeDetails(nodeId); err != nil {

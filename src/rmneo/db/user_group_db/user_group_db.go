@@ -72,10 +72,11 @@ package user_group_db
 
 import (
 	"fmt"
+	"slices"
+
 	dbcore "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/sharing_request_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"slices"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
@@ -220,7 +221,9 @@ func (db *UserGroupDB) createUserGroupEntry(groupID string, userId string, subEn
 	}
 
 	// Allow access based on the permissions for the access type
-	db.Ctx.SetAllowMultiple(utils.GetGroupPermissions(accessType), groupID)
+	if err := db.Ctx.SetAllowMultiple(utils.GetGroupPermissions(accessType), groupID); err != nil {
+		return rmerror.NewRMError(err, "failed to grant permissions")
+	}
 	return nil
 }
 
@@ -276,8 +279,10 @@ func (db *UserGroupDB) GetUserGroup(groupID string) (*UserGroupEntry, error) {
 		return nil, rmerror.NewRMError(nil, "user group not found")
 	}
 
-	accessType := utils.GroupAccessType(entry.AccessType)
-	db.Ctx.SetAllowMultiple(utils.GetGroupPermissions(accessType), groupID)
+	accessType := entry.AccessType
+	if err := db.Ctx.SetAllowMultiple(utils.GetGroupPermissions(accessType), groupID); err != nil {
+		return nil, rmerror.NewRMError(err, "failed to grant permissions")
+	}
 	return entry, nil
 }
 
@@ -309,11 +314,15 @@ func (db *UserGroupDB) GetUserSubGroup(parentGroupID, subGroupID string) (*UserG
 		entry.SubEntityIDs = []string{subGroupID}
 	}
 
-	db.Ctx.SetAllowMultiple(utils.GetGroupPermissions(entry.AccessType), parentGroupID)
+	if err := db.Ctx.SetAllowMultiple(utils.GetGroupPermissions(entry.AccessType), parentGroupID); err != nil {
+		return nil, rmerror.NewRMError(err, "failed to grant permissions")
+	}
 
 	// The grant above is parent-group-wide, so a subgroup-scoped caller needs the narrowing registered here too — otherwise any enumeration later in the same request sees every sub-entity.
 	if entry.AccessType == utils.GroupSubEntityAccess {
-		db.Ctx.SetScopedConditions(utils.GroupListSubEntities, parentGroupID, entry.SubEntityIDs)
+		if err := db.Ctx.SetScopedConditions(utils.GroupListSubEntities, parentGroupID, entry.SubEntityIDs); err != nil {
+			return nil, rmerror.NewRMError(err, "failed to grant permissions")
+		}
 	}
 	return entry, nil
 }
@@ -353,9 +362,13 @@ func (db *UserGroupDB) ListGroupsForUser(groupId string) ([]UserGroupEntry, erro
 			return nil
 		}
 
-		db.Ctx.SetAllowMultiple(utils.GetGroupPermissions(entry.AccessType), entry.GroupID)
+		if err := db.Ctx.SetAllowMultiple(utils.GetGroupPermissions(entry.AccessType), entry.GroupID); err != nil {
+			return rmerror.NewRMError(err, "failed to grant permissions")
+		}
 		if entry.AccessType == utils.GroupSubEntityAccess {
-			db.Ctx.SetScopedConditions(utils.GroupListSubEntities, entry.GroupID, entry.SubEntityIDs)
+			if err := db.Ctx.SetScopedConditions(utils.GroupListSubEntities, entry.GroupID, entry.SubEntityIDs); err != nil {
+				return rmerror.NewRMError(err, "failed to grant permissions")
+			}
 		}
 
 		groups = append(groups, UserGroupEntry{

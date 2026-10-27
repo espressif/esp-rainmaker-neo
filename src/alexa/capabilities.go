@@ -8,8 +8,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"strconv"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
@@ -149,13 +150,14 @@ func (h *PowerControllerHandler) HandleDirective(directive *Directive, node *nod
 
 	var powerValue bool
 	var reportState string
-	if directive.Header.Name == "TurnOn" {
+	switch directive.Header.Name {
+	case "TurnOn":
 		powerValue = true
 		reportState = "ON"
-	} else if directive.Header.Name == "TurnOff" {
+	case "TurnOff":
 		powerValue = false
 		reportState = "OFF"
-	} else {
+	default:
 		return rmerror.NewRMError(fmt.Errorf("unsupported directive: %s", directive.Header.Name), "")
 	}
 
@@ -481,13 +483,14 @@ func (h *ToggleControllerHandler) HandleDirective(directive *Directive, node *no
 
 	var toggleValue bool
 	var reportState string
-	if directive.Header.Name == "TurnOn" {
+	switch directive.Header.Name {
+	case "TurnOn":
 		toggleValue = true
 		reportState = "ON"
-	} else if directive.Header.Name == "TurnOff" {
+	case "TurnOff":
 		toggleValue = false
 		reportState = "OFF"
-	} else {
+	default:
 		return rmerror.NewRMError(fmt.Errorf("unsupported directive: %s", directive.Header.Name), "")
 	}
 

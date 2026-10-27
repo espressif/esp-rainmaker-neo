@@ -6,8 +6,9 @@ package timeutil
 
 import (
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"strconv"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 )
 
 // millisTimestampDigits is the digit width of a millisecond Unix timestamp; shorter values (e.g. seconds) are padded up to it.

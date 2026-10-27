@@ -7,9 +7,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"time"
+
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/timeseries_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"time"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/timeseries"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"

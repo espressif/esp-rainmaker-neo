@@ -6,11 +6,12 @@ package claim_test
 
 import (
 	"context"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"

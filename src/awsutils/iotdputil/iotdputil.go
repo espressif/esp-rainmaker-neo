@@ -6,6 +6,7 @@ package iotdputil
 
 import (
 	"context"
+
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
@@ -23,7 +24,7 @@ func UpdateThingShadow(ctx context.Context, thingName, shadowName string, shadow
 	updateInput := &iotdataplane.UpdateThingShadowInput{
 		ThingName:  aws.String(thingName),
 		ShadowName: aws.String(shadowName),
-		Payload:    []byte(shadowDoc),
+		Payload:    shadowDoc,
 	}
 
 	_, err := iotDataClient.UpdateThingShadow(ctx, updateInput)

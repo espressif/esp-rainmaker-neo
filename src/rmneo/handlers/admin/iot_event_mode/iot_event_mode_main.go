@@ -8,10 +8,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/admin_config_db"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"net/http"
 	"os"
+
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/admin_config_db"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 
 	"github.com/aws/aws-lambda-go/events"
 	awslambda "github.com/aws/aws-lambda-go/lambda"

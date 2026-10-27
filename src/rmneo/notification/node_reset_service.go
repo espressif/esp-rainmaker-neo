@@ -6,6 +6,7 @@ package notification
 
 import (
 	"context"
+
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
@@ -49,26 +50,26 @@ func (s *NodeResetService) GetType() NotificationServiceType {
 // data cleanup. node_reset is only valid as a direct notification; the node
 // ID comes from DirectNotificationData (NOT ShadowUpdateData, which is nil
 // for direct notifications).
-func (s *NodeResetService) Send(notificationData interface{}) error {
+func (s *NodeResetService) Send(ctx context.Context, notificationData interface{}) error {
 	notif, ok := notificationData.(*Notification)
 	if !ok {
-		rlog.Error(context.TODO()).Msg("Failed to cast notification to Notification")
+		rlog.Error(ctx).Msg("Failed to cast notification to Notification")
 		return nil
 	}
 
 	// Build a system context locally — the notifications Lambda already runs
 	// as a privileged system identity (same pattern as AutomationService).
 	s_actor := utils.NewSystemActor()
-	ctx := rmngctx.NewRmngContextWithCtx(context.Background(), s_actor)
+	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, s_actor)
 
 	if notif.NotificationType != NotificationTypeDirect || notif.DirectNotificationData == nil {
-		rlog.Debug(ctx).Msgf("node_reset ignoring notification type: %s", notif.NotificationType)
+		rlog.Debug(rmngCtx).Msgf("node_reset ignoring notification type: %s", notif.NotificationType)
 		return nil
 	}
 
 	nodeID := notif.DirectNotificationData.NodeID
 	if nodeID == "" {
-		rlog.Error(ctx).Msg("node_reset requires a node ID")
+		rlog.Error(rmngCtx).Msg("node_reset requires a node ID")
 		return nil
 	}
 
@@ -78,17 +79,17 @@ func (s *NodeResetService) Send(notificationData interface{}) error {
 		return err
 	}
 
-	if err := node.ShadowNodeRemoveFromGroupAuthorized(ctx, nodeID, groupID); err != nil {
+	if err := node.ShadowNodeRemoveFromGroupAuthorized(rmngCtx, nodeID, groupID); err != nil {
 		return rmerror.NewRMError(err, "Failed to remove reset node from group")
 	}
 
-	rlog.Info(ctx).Msgf("Successfully processed node_reset for node %s in group %s", nodeID, groupID)
+	rlog.Info(rmngCtx).Msgf("Successfully processed node_reset for node %s in group %s", nodeID, groupID)
 	return nil
 }
 
 // SendTo is unused for a generic service; node_reset is not user-specific.
-func (s *NodeResetService) SendTo(notificationData interface{}, userIDs []string) error {
-	return s.Send(notificationData)
+func (s *NodeResetService) SendTo(ctx context.Context, notificationData interface{}, userIDs []string) error {
+	return s.Send(ctx, notificationData)
 }
 
 // Marshal passes the notification through unchanged; Send reads it directly

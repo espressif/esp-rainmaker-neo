@@ -5,9 +5,10 @@
 package node_details_db
 
 import (
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"strconv"
 	"time"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/espdynamodb"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"

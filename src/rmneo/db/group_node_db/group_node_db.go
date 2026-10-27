@@ -80,6 +80,7 @@ package group_node_db
 
 import (
 	"fmt"
+
 	dbcore "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
@@ -274,7 +275,9 @@ func (g *GroupNodeDB) getGroupNodeEntry(groupID string, nodeID string) (map[stri
 		return nil, rmerror.NewRMError(err, "failed to get item from group_device_mapping in DynamoDB")
 	}
 	if result.Item != nil {
-		g.Ctx.SetAllow(utils.NodeAll, nodeID)
+		if err := g.Ctx.SetAllow(utils.NodeAll, nodeID); err != nil {
+			return nil, rmerror.NewRMError(err, "failed to grant permissions")
+		}
 	}
 
 	return result.Item, nil
@@ -388,7 +391,9 @@ func (g *GroupNodeDB) ListGroupNodesWithDBEntry(groupID string) (map[string]*Gro
 
 	// Set allow for the nodes that are accessible to the user
 	for nodeID := range grpNodes {
-		g.Ctx.SetAllow(utils.NodeAll, nodeID)
+		if err := g.Ctx.SetAllow(utils.NodeAll, nodeID); err != nil {
+			return nil, nil, rmerror.NewRMError(err, "failed to grant permissions")
+		}
 	}
 	return grpNodes, subgrpNodes, nil
 }

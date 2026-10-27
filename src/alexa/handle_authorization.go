@@ -8,13 +8,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_integration_db"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"io"
 	"net/http"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_integration_db"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/httpclient"
@@ -43,7 +44,7 @@ func HandleAcceptGrant(ctx context.Context, request AlexaRequest) (AlexaResponse
 	}
 
 	// Get LWA access token using the auth code
-	tokenResp, err := GetLWAAccessTokenfromAuthCode(payload.Grant.Code, alexaClientID, alexaClientSecret)
+	tokenResp, err := GetLWAAccessTokenfromAuthCode(ctx, payload.Grant.Code, alexaClientID, alexaClientSecret)
 	if err != nil {
 		return AlexaResponse{}, rmerror.NewRMError(err, "failed to get access token")
 	}
@@ -74,7 +75,7 @@ func HandleAcceptGrant(ctx context.Context, request AlexaRequest) (AlexaResponse
 	), nil
 }
 
-func GetLWAAccessTokenfromAuthCode(authCode, alexaClientID, alexaClientSecret string) (AlexaTokenResp, error) {
+func GetLWAAccessTokenfromAuthCode(ctx context.Context, authCode, alexaClientID, alexaClientSecret string) (AlexaTokenResp, error) {
 	if authCode == "" {
 		return AlexaTokenResp{}, fmt.Errorf("authorization code absent")
 	}
@@ -83,9 +84,9 @@ func GetLWAAccessTokenfromAuthCode(authCode, alexaClientID, alexaClientSecret st
 	awsReqqueryString := "grant_type=authorization_code" + "&" + "code" + "=" + authCode + "&" + "client_id" + "=" + alexaClientID + "&" + "client_secret" + "=" + alexaClientSecret + "&" + "redirect_uri" + "=" + ""
 	payload := strings.NewReader(awsReqqueryString)
 
-	rlog.Info(context.TODO()).Str("method", http.MethodPost).Strs("query_params", []string{"grant_type=authorization_code", "client_id=" + alexaClientID}).Str("url", AwsTokenUrl).Send()
+	rlog.Info(ctx).Str("method", http.MethodPost).Strs("query_params", []string{"grant_type=authorization_code", "client_id=" + alexaClientID}).Str("url", AwsTokenUrl).Send()
 
-	req, err := http.NewRequest(http.MethodPost, AwsTokenUrl, payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, AwsTokenUrl, payload)
 	if err != nil {
 		return AlexaTokenResp{}, rmerror.NewRMError(err, "error contacting the AWS server")
 	}
@@ -101,7 +102,7 @@ func GetLWAAccessTokenfromAuthCode(authCode, alexaClientID, alexaClientSecret st
 		return AlexaTokenResp{}, rmerror.NewRMError(err, "internal server error")
 	}
 
-	if res.StatusCode != 200 {
+	if res.StatusCode != http.StatusOK {
 		return AlexaTokenResp{}, rmerror.NewRMError(fmt.Errorf("error contacting the AWS server"), "error contacting the AWS server")
 	}
 

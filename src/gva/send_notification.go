@@ -7,10 +7,11 @@ package gva
 import (
 	"context"
 	"encoding/json"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"net/http"
 
-	"github.com/espressif/esp-rainmaker-neo/src/alexa"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
+
+	alexa_skill "github.com/espressif/esp-rainmaker-neo/src/alexa"
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/ssmutil"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification"
@@ -77,8 +78,8 @@ func GetGVAToken(ctx context.Context) (string, error) {
 }
 
 // getMockToken fetches a token from the mock token endpoint for testing.
-func (g *GVANotification) getMockToken() (string, error) {
-	respBody, err := notification.MakeHTTPPostRequest([]byte("{}"), g.tokenURI, func(req *http.Request) error {
+func (g *GVANotification) getMockToken(ctx context.Context) (string, error) {
+	respBody, err := notification.MakeHTTPPostRequest(ctx, []byte("{}"), g.tokenURI, func(req *http.Request) error {
 		req.Header.Set("Content-Type", "application/json")
 		return nil
 	})
@@ -111,7 +112,7 @@ func (g *GVANotification) NotifyOnConnectivityChange() bool {
 	return true
 }
 
-func (g *GVANotification) Send(notif interface{}) error {
+func (g *GVANotification) Send(ctx context.Context, notif interface{}) error {
 	return rmerror.NewRMError(nil, "GVA notifications must be sent to specific users")
 }
 
@@ -126,27 +127,27 @@ func filterLinkedUsers(userIDs []string) []string {
 	return linked
 }
 
-func (g *GVANotification) SendTo(notif interface{}, userIDs []string) error {
+func (g *GVANotification) SendTo(ctx context.Context, notif interface{}, userIDs []string) error {
 	userIDs = filterLinkedUsers(userIDs)
 	if len(userIDs) == 0 {
-		rlog.Info(context.TODO()).Msg("No GVA-linked users among the recipients, skipping")
+		rlog.Info(ctx).Msg("No GVA-linked users among the recipients, skipping")
 		return nil
 	}
-	rlog.Info(context.TODO()).Msgf("Sending GVA notification to %d users", len(userIDs))
+	rlog.Info(ctx).Msgf("Sending GVA notification to %d users", len(userIDs))
 
 	switch data := notif.(type) {
 	case GVANotificationBatch:
 		if len(data.Reports) > 0 {
-			if err := g.sendReportState(data.Reports, userIDs); err != nil {
+			if err := g.sendReportState(ctx, data.Reports, userIDs); err != nil {
 				return err
 			}
 		}
 		if data.RequestSync {
-			return g.sendRequestSync([]GVARequestSyncRequest{{Async: false}}, userIDs)
+			return g.sendRequestSync(ctx, []GVARequestSyncRequest{{Async: false}}, userIDs)
 		}
 		return nil
 	case []GVARequestSyncRequest:
-		return g.sendRequestSync(data, userIDs)
+		return g.sendRequestSync(ctx, data, userIDs)
 	default:
 		return rmerror.NewRMError(nil, "Failed to cast GVA notification to a known request type")
 	}
@@ -155,14 +156,13 @@ func (g *GVANotification) SendTo(notif interface{}, userIDs []string) error {
 // getToken returns the HomeGraph bearer token, using the mock endpoint in test mode.
 func (g *GVANotification) getToken(ctx context.Context) (string, error) {
 	if g.isTestMode {
-		return g.getMockToken()
+		return g.getMockToken(ctx)
 	}
 	return GetGVAToken(ctx)
 }
 
 // Makes Google re-run SYNC to reconcile the user's device list after a membership change or rename.
-func (g *GVANotification) sendRequestSync(requests []GVARequestSyncRequest, userIDs []string) error {
-	ctx := context.Background()
+func (g *GVANotification) sendRequestSync(ctx context.Context, requests []GVARequestSyncRequest, userIDs []string) error {
 	gvaToken, err := g.getToken(ctx)
 	if err != nil {
 		return rmerror.NewRMError(err, "failed to get GVA token for request sync")
@@ -182,7 +182,7 @@ func (g *GVANotification) sendRequestSync(requests []GVARequestSyncRequest, user
 				rlog.Error(ctx).Err(err).Str("userID", userID).Msg("Failed to marshal request sync")
 				continue
 			}
-			_, err = notification.MakeHTTPPostRequest(jsonData, endpoint, func(r *http.Request) error {
+			_, err = notification.MakeHTTPPostRequest(ctx, jsonData, endpoint, func(r *http.Request) error {
 				r.Header.Set("Content-Type", "application/json")
 				r.Header.Set("Authorization", gvaToken)
 				return nil
@@ -197,9 +197,8 @@ func (g *GVANotification) sendRequestSync(requests []GVARequestSyncRequest, user
 	return nil
 }
 
-func (g *GVANotification) sendReportState(reportStateRequests []GVAReportStateRequest, userIDs []string) error {
+func (g *GVANotification) sendReportState(ctx context.Context, reportStateRequests []GVAReportStateRequest, userIDs []string) error {
 	// Get token - use mock token endpoint in test mode, Google OAuth otherwise
-	ctx := context.Background()
 	gvaToken, err := g.getToken(ctx)
 	if err != nil {
 		return rmerror.NewRMError(err, "failed to get GVA token for report state")
@@ -219,7 +218,7 @@ func (g *GVANotification) sendReportState(reportStateRequests []GVAReportStateRe
 
 			rlog.Trace(ctx).Str("userID", userID).RawJSON("payload", jsonData).Msg("Sending GVA report state request")
 
-			respBody, err := notification.MakeHTTPPostRequest(jsonData, g.reportURI, func(req *http.Request) error {
+			respBody, err := notification.MakeHTTPPostRequest(ctx, jsonData, g.reportURI, func(req *http.Request) error {
 				req.Header.Set("Content-Type", "application/json")
 				req.Header.Set("Authorization", gvaToken)
 				return nil

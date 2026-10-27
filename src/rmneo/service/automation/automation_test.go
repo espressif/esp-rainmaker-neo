@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/automation_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
@@ -17,7 +18,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
@@ -131,7 +132,7 @@ var _ = Describe("AutomationService", func() {
 		Expect(resultMap).To(HaveKey("message"))
 		Expect(resultMap["message"]).To(Equal("success"))
 		automationID := resultMap["automation_id"]
-		Expect(automationID).To(HaveLen(3)) // Based on automationIDLength = 3
+		Expect(automationID).To(MatchRegexp("^[a-z][a-z0-9]{2}$"))
 
 		// Create an automation item for testing
 		automation := automation_db.AutomationItem{

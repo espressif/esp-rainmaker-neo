@@ -58,17 +58,17 @@ func (s *STNotification) NotifyOnConnectivityChange() bool {
 	return true
 }
 
-func (s *STNotification) Send(notif interface{}) error {
+func (s *STNotification) Send(ctx context.Context, notif interface{}) error {
 	return rmerror.NewRMError(nil, "SmartThings notifications must be sent to specific users")
 }
 
 // SendTo retrieves stored callback tokens for each user, refreshes if expired,
 // and sends the state callback payload to the SmartThings callback URL.
-func (s *STNotification) SendTo(notif interface{}, userIDs []string) error {
-	rlog.Debug(context.TODO()).Msgf("Sending SmartThings state callback to %d users", len(userIDs))
+func (s *STNotification) SendTo(ctx context.Context, notif interface{}, userIDs []string) error {
+	rlog.Debug(ctx).Msgf("Sending SmartThings state callback to %d users", len(userIDs))
 
 	if notif == nil {
-		rlog.Debug(context.TODO()).Msg("No SmartThings state callback payload, skipping")
+		rlog.Debug(ctx).Msg("No SmartThings state callback payload, skipping")
 		return nil
 	}
 
@@ -83,8 +83,6 @@ func (s *STNotification) SendTo(notif interface{}, userIDs []string) error {
 	default:
 		return rmerror.NewRMError(nil, "failed to cast notification to a SmartThings callback payload")
 	}
-
-	ctx := context.Background()
 
 	for _, userID := range userIDs {
 		// One row per regional SmartThings endpoint the user has linked.
@@ -111,7 +109,7 @@ func (s *STNotification) SendTo(notif interface{}, userIDs []string) error {
 			}
 
 			for _, callbackPayload := range callbackPayloads {
-				if err := sendCallback(callbackPayload, tokenData.AccessToken, callbackURL); err != nil {
+				if err := sendCallback(ctx, callbackPayload, tokenData.AccessToken, callbackURL); err != nil {
 					rlog.Error(ctx).Err(err).Str("userID", userID).Msg("failed to send callback, continuing with remaining users")
 					continue
 				}
@@ -398,7 +396,7 @@ func refreshCallbackToken(ctx context.Context, oauthTokenURL string) func(string
 			},
 		}
 
-		tokenResp, err := postAccessTokenRequest(reqBody, oauthTokenURL)
+		tokenResp, err := postAccessTokenRequest(ctx, reqBody, oauthTokenURL)
 		if err != nil {
 			return nil, rmerror.NewRMError(err, "failed to refresh callback token")
 		}
@@ -419,7 +417,7 @@ func refreshCallbackToken(ctx context.Context, oauthTokenURL string) func(string
 }
 
 // sendCallback sends a callback payload to the SmartThings callback URL.
-func sendCallback(payload stCallbackPayload, accessToken string, callbackURL string) error {
+func sendCallback(ctx context.Context, payload stCallbackPayload, accessToken string, callbackURL string) error {
 	// Set the per-user callback access token in the envelope's authentication block.
 	payload.setAuthentication(STAuthentication{
 		TokenType: "Bearer",
@@ -431,9 +429,9 @@ func sendCallback(payload stCallbackPayload, accessToken string, callbackURL str
 		return rmerror.NewRMError(err, "failed to marshal callback payload")
 	}
 
-	rlog.Trace(context.TODO()).RawJSON("payload", jsonData).Str("url", callbackURL).Msg("sending SmartThings callback")
+	rlog.Trace(ctx).RawJSON("payload", jsonData).Str("url", callbackURL).Msg("sending SmartThings callback")
 
-	_, err = notification.MakeHTTPPostRequest(jsonData, callbackURL, func(req *http.Request) error {
+	_, err = notification.MakeHTTPPostRequest(ctx, jsonData, callbackURL, func(req *http.Request) error {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+accessToken)
 		return nil

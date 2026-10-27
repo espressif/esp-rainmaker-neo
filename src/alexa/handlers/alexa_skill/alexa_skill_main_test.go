@@ -8,10 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_integration_db"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"io"
 	"net/http"
 	"os"
@@ -19,13 +15,18 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/espressif/esp-rainmaker-neo/src/alexa"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_integration_db"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
+
+	alexa_skill "github.com/espressif/esp-rainmaker-neo/src/alexa"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_details_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/httpclient"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
@@ -450,7 +451,7 @@ var _ = Describe("Alexa Skill", func() {
 				payload := (*response.Event.Payload).(alexa_skill.DiscoveryPayload)
 				for i := range payload.Endpoints {
 					Expect(payload.Endpoints[i].Cookie["groupID"]).To(Equal(testGroup.GroupID))
-					// Set to Nil so that the subsequent comparision works. Since the groupID is dynamic it is not part of the expected response in the static files
+					// Set to Nil so that the subsequent comparison works. Since the groupID is dynamic it is not part of the expected response in the static files
 					delete(payload.Endpoints[i].Cookie, "groupID")
 				}
 
@@ -483,7 +484,7 @@ var _ = Describe("Alexa Skill", func() {
 				payload := (*response.Event.Payload).(alexa_skill.DiscoveryPayload)
 				for i := range payload.Endpoints {
 					Expect(payload.Endpoints[i].Cookie["groupID"]).To(Equal(testGroup.GroupID))
-					// Set to Nil so that the subsequent comparision works. Since the groupID is dynamic it is not part of the expected response in the static files
+					// Set to Nil so that the subsequent comparison works. Since the groupID is dynamic it is not part of the expected response in the static files
 					delete(payload.Endpoints[i].Cookie, "groupID")
 				}
 

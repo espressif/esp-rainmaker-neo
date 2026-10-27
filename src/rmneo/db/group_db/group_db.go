@@ -84,6 +84,7 @@ package group_db
 
 import (
 	"encoding/json"
+
 	dbcore "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
@@ -199,7 +200,7 @@ func (gdb *GroupDB) ListRowsWithGroupID(parentGroupID string) ([]GroupInDB, erro
 
 	var groups []GroupInDB
 	err := gdb.QueryPaginated(gdb.Ctx.Context, queryInput, func(item map[string]types.AttributeValue) error {
-		addToGroups := false
+		var addToGroups bool
 		subGroupID, ok := dbcore.GetStringAttr(item, "sub_group_id")
 		if !ok {
 			// Sort key is mandatory; skip a malformed item rather than panic.

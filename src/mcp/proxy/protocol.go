@@ -57,9 +57,9 @@ func (s *Server) Tools() []Tool {
 // HandleRequest is the Lambda handler entry point for the MCP server.
 func (s *Server) HandleRequest(ctx context.Context, request events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
 	switch request.RequestContext.HTTP.Method {
-	case "GET":
+	case http.MethodGet:
 		return JSONRPCUnauthorizedResponse(request, nil, "Unauthorized: authentication required"), nil
-	case "POST":
+	case http.MethodPost:
 		return s.handleMCPPost(ctx, request)
 	default:
 		body, _ := json.Marshal(map[string]string{"status": "Method not allowed"})

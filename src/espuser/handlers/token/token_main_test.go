@@ -7,14 +7,15 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"net/url"
 	"testing"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/oauth_clients_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/refreshtoken"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 

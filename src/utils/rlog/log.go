@@ -11,9 +11,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"io"
 	"os"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 

@@ -7,8 +7,9 @@ package main
 import (
 	"context"
 	"errors"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"net/http"
+
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/sharing_request_db"
@@ -784,10 +785,11 @@ func handleUpdateSubgroupNodeOperation(context context.Context, request events.A
 	var err_str string
 
 	var operationType group_node_db.SubGroupOperationType
-	if action == "add" {
+	switch action {
+	case "add":
 		operationType = group_node_db.SubGroupOperationTypeAdd
 		err_str = "Failed to add node to subgroup"
-	} else if action == "remove" {
+	case "remove":
 		operationType = group_node_db.SubGroupOperationTypeRemove
 		err_str = "Failed to remove node from subgroup"
 	}

@@ -9,13 +9,14 @@ import (
 	"context"
 	"encoding/csv"
 	"errors"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/convert"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/parallel"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"os"
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/convert"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/parallel"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/s3util"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_reg_failed_nodes_db"
@@ -334,11 +335,14 @@ func HandleContainer(config *ContainerConfig) error {
 	rmngCtx = rmngctx.NewRmngContext(user)
 
 	// TODO: Once we figure out rbac for admins, remove this
-	rmngCtx.SetAllow(utils.NodeAdminAll, "*")
-	rmngCtx.SetAllow(utils.NodeWriteShadow, "*")
+	if err := rmngCtx.SetAllowMultiple([]string{utils.NodeAdminAll.String(), utils.NodeWriteShadow.String()}, "*"); err != nil {
+		return rmerror.NewRMError(err, "failed to grant permissions")
+	}
 	if resolvedJobType == node_reg_req_db.NODE_REG_JOB_TYPE_UPDATE {
 		// Update flow needs to read node_details for the existence check.
-		rmngCtx.SetAllow(utils.NodeAll, "*")
+		if err := rmngCtx.SetAllow(utils.NodeAll, "*"); err != nil {
+			return rmerror.NewRMError(err, "failed to grant permissions")
+		}
 	}
 
 	dbClient := node_reg_req_db.NewNodeRegRequestsDB(rmngCtx)

@@ -11,9 +11,10 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"strings"
+
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"strings"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/ssmutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/jwtutil"

@@ -18,7 +18,7 @@ import (
 
 	"github.com/espressif/esp-rainmaker-neo/src/claim"
 	"github.com/espressif/esp-rainmaker-neo/src/claim/ca_bootstrap"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 )
 
 // storeClaimingConfig writes the claiming configuration to the mocked SSM, the

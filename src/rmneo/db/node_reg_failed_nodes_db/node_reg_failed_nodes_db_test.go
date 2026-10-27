@@ -7,8 +7,9 @@ package node_reg_failed_nodes_db_test
 import (
 	"errors"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"testing"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/aws/smithy-go"
 	. "github.com/onsi/ginkgo/v2"
@@ -16,7 +17,7 @@ import (
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_reg_failed_nodes_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )

@@ -64,15 +64,15 @@ func NewAlexaNotification(ctx context.Context, baseURL string) *AlexaNotificatio
 	}
 }
 
-func (a *AlexaNotification) RefreshToken(refreshToken string) (*integrationauth.TokenResponse, error) {
+func (a *AlexaNotification) RefreshToken(ctx context.Context, refreshToken string) (*integrationauth.TokenResponse, error) {
 
-	clientId, clientSecret, err := GetAlexaClientDetails(context.Background())
+	clientId, clientSecret, err := GetAlexaClientDetails(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	body := []byte(fmt.Sprintf(`grant_type=refresh_token&refresh_token=%s&client_id=%s&client_secret=%s`, refreshToken, clientId, clientSecret))
-	respBody, err := notification.MakeHTTPPostRequest(body, a.alexa_refresh_uri, func(req *http.Request) error {
+	respBody, err := notification.MakeHTTPPostRequest(ctx, body, a.alexa_refresh_uri, func(req *http.Request) error {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
 		return nil
 	})
@@ -96,12 +96,12 @@ func (a *AlexaNotification) GetType() notification.NotificationServiceType {
 	return notification.NotificationServiceTypeUserSpecific
 }
 
-func (a *AlexaNotification) Send(notif interface{}) error {
+func (a *AlexaNotification) Send(ctx context.Context, notif interface{}) error {
 	return rmerror.NewRMError(nil, "Alexa notifications must be sent to specific users")
 }
 
-func (a *AlexaNotification) SendTo(notif interface{}, userIDs []string) error {
-	rlog.Info(context.TODO()).Msgf("Sending Alexa notification to users: %v\n", userIDs)
+func (a *AlexaNotification) SendTo(ctx context.Context, notif interface{}, userIDs []string) error {
+	rlog.Info(ctx).Msgf("Sending Alexa notification to users: %v\n", userIDs)
 
 	changeReports, ok := notif.([]AlexaResponse)
 	if !ok {
@@ -112,14 +112,16 @@ func (a *AlexaNotification) SendTo(notif interface{}, userIDs []string) error {
 		// Multi-endpoint fan-out: a Rainmaker user may have linked more than one Amazon account to the skill; send the ChangeReport to each linked endpoint.
 		endpoints, err := integrationauth.GetAllOAuthEndpoints(userID, AlexaPlatform)
 		if err != nil {
-			rlog.Error(context.TODO()).Err(err).Msgf("Failed to list Alexa endpoints for user %s", userID)
+			rlog.Error(ctx).Err(err).Msgf("Failed to list Alexa endpoints for user %s", userID)
 			continue
 		}
 
 		for _, endpoint := range endpoints {
-			tokenData, err := integrationauth.UpdateAndGetLatestToken(userID, AlexaPlatform, endpoint.EndpointID, a.RefreshToken)
+			tokenData, err := integrationauth.UpdateAndGetLatestToken(userID, AlexaPlatform, endpoint.EndpointID, func(refreshToken string) (*integrationauth.TokenResponse, error) {
+				return a.RefreshToken(ctx, refreshToken)
+			})
 			if err != nil {
-				rlog.Error(context.TODO()).Err(err).Msgf("Failed to get token data for user %s endpoint %s", userID, endpoint.EndpointID)
+				rlog.Error(ctx).Err(err).Msgf("Failed to get token data for user %s endpoint %s", userID, endpoint.EndpointID)
 				continue
 			}
 
@@ -131,7 +133,7 @@ func (a *AlexaNotification) SendTo(notif interface{}, userIDs []string) error {
 				}
 				gw, ok := alexaEventGatewayForRegion(region)
 				if !ok {
-					rlog.Error(context.TODO()).Msgf("No Alexa event gateway for user %s endpoint %s region %q, skipping", userID, endpoint.EndpointID, region)
+					rlog.Error(ctx).Msgf("No Alexa event gateway for user %s endpoint %s region %q, skipping", userID, endpoint.EndpointID, region)
 					continue
 				}
 				gateway = gw
@@ -142,14 +144,14 @@ func (a *AlexaNotification) SendTo(notif interface{}, userIDs []string) error {
 
 				jsonData, err := json.Marshal(changeReport)
 				if err != nil {
-					rlog.Error(context.TODO()).Err(err).Msg("Failed to marshal change report")
+					rlog.Error(ctx).Err(err).Msg("Failed to marshal change report")
 					continue
 				}
 
-				_, err = notification.MakeHTTPPostRequest(jsonData, gateway, func(req *http.Request) error {
+				_, err = notification.MakeHTTPPostRequest(ctx, jsonData, gateway, func(req *http.Request) error {
 					req.Header.Set("Content-Type", "application/json")
-					rlog.Info(context.TODO()).Msgf("Sending Alexa notification to user %s endpoint %s", userID, endpoint.EndpointID)
-					rlog.Info(context.TODO()).Msgf("the data is %s", string(jsonData))
+					rlog.Info(ctx).Msgf("Sending Alexa notification to user %s endpoint %s", userID, endpoint.EndpointID)
+					rlog.Info(ctx).Msgf("the data is %s", string(jsonData))
 					req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", tokenData.AccessToken))
 					if isTestMode {
 						req.Header.Set("x-alexa-uuid", userID)
@@ -158,12 +160,12 @@ func (a *AlexaNotification) SendTo(notif interface{}, userIDs []string) error {
 				})
 
 				if err != nil {
-					rlog.Error(context.TODO()).Err(err).Msgf("Failed to send Alexa notification to user %s endpoint %s", userID, endpoint.EndpointID)
+					rlog.Error(ctx).Err(err).Msgf("Failed to send Alexa notification to user %s endpoint %s", userID, endpoint.EndpointID)
 					continue
 				}
 			}
 		}
-		rlog.Info(context.TODO()).Msgf("Successfully sent Alexa notifications to user %s", userID)
+		rlog.Info(ctx).Msgf("Successfully sent Alexa notifications to user %s", userID)
 	}
 
 	return nil
@@ -255,7 +257,10 @@ func (a *AlexaNotification) Marshal(notif *notification.Notification) (interface
 		deltaDevState, ok := shadowUpdate.Delta.Params[device.ID]
 		if ok {
 			// Generate the Change Report from the delta state of the device
-			ConvertCurrentStateToCtxProperty(deltaDevState.(map[string]interface{}), cookie, &changeProperties)
+			if err := ConvertCurrentStateToCtxProperty(deltaDevState.(map[string]interface{}), cookie, &changeProperties); err != nil {
+				rlog.Error(rmngCtx).Err(err).Msgf("Failed to generate change report for device %s", device.ID)
+				return nil, rmerror.NewRMError(err, "Failed to generate change report")
+			}
 		} else {
 			rlog.Error(rmngCtx).Msgf("Device %s not found in delta, skipping", device.ID)
 			continue

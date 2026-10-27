@@ -7,13 +7,14 @@ package main
 import (
 	"context"
 	"errors"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/collections"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"maps"
 	"os"
 	"slices"
 
-	"github.com/espressif/esp-rainmaker-neo/src/alexa"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/collections"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
+
+	alexa_skill "github.com/espressif/esp-rainmaker-neo/src/alexa"
 	"github.com/espressif/esp-rainmaker-neo/src/gva"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
@@ -194,12 +195,10 @@ func Handler(ctx context.Context, event NotificationEvent) error {
 
 	var notif *notification.Notification
 	var err error
-	var nodeID string
-
-	// Create notification using the generic factory
-	nodeID = event.NodeID
+	nodeID := event.NodeID
 	rlog.Info(ctx).Msgf("Processing %s notification for node: %s, topic: %s", event.NotificationType, nodeID, event.TopicName)
 
+	// Create notification using the generic factory
 	if event.NotificationType == string(notification.NotificationTypeGroupMembership) {
 		// Control-plane membership change: group is supplied directly by the backend.
 		notif, err = notification.NewGroupMembershipNotification(nodeID, event.GroupID, event.SubGroupIDs, event.Action)
@@ -309,14 +308,14 @@ func Handler(ctx context.Context, event NotificationEvent) error {
 				continue
 			}
 			rlog.Info(rmngCtx).Msgf("Sending notification to %d users for service %s", len(userIDs), serviceName)
-			err = service.SendTo(notifData, userIDs)
+			err = service.SendTo(ctx, notifData, userIDs)
 			if err != nil {
 				rlog.Error(rmngCtx).Err(err).Msgf("Failed to send notification to users: %s", serviceName)
 				continue
 			}
 		} else {
 			rlog.Info(rmngCtx).Msgf("Sending notification for service %s", serviceName)
-			err = service.Send(notifData)
+			err = service.Send(ctx, notifData)
 			if err != nil {
 				rlog.Error(rmngCtx).Err(err).Msgf("Failed to send notification: %s", serviceName)
 				continue

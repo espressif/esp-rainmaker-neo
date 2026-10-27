@@ -7,9 +7,10 @@ package mock
 import (
 	"context"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"net/http"
 	"os"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/nodeadmin/bulk_container"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"

@@ -7,16 +7,18 @@
 package clients
 
 import (
+	"context"
 	"crypto/subtle"
 	"errors"
 	"fmt"
 	"net/url"
 
+	"strings"
+	"time"
+
 	"github.com/espressif/esp-rainmaker-neo/src/utils/collections"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"strings"
-	"time"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/oauth_clients_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
@@ -175,7 +177,7 @@ func (s *Service) Create(in CreateInput) (*CreateClientResponse, error) {
 func (s *Service) IsRegistered(clientID string) (bool, error) {
 	_, err := s.db.GetClient(clientID)
 	if err != nil {
-		if err == oauth_clients_db.ErrOAuthClientNotFound {
+		if errors.Is(err, oauth_clients_db.ErrOAuthClientNotFound) {
 			return false, nil
 		}
 		return false, err
@@ -190,7 +192,7 @@ func (s *Service) AuthenticateClient(clientID, clientSecret string) error {
 	}
 	entry, err := s.db.GetClient(clientID)
 	if err != nil {
-		if err == oauth_clients_db.ErrOAuthClientNotFound {
+		if errors.Is(err, oauth_clients_db.ErrOAuthClientNotFound) {
 			return ErrClientNotFound
 		}
 		return err
@@ -223,7 +225,7 @@ func (s *Service) AuthenticateForOAuth(clientID, clientSecret string) (errCode s
 	default:
 		// An unexpected (non-auth) error — e.g. a DynamoDB failure reading the registry. Log it:
 		// the caller collapses this to a generic server_error, so this is the only record of the cause.
-		rlog.Error(nil).Err(err).Str("client_id", clientID).Msg("Client authentication failed on an internal error")
+		rlog.Error(context.TODO()).Err(err).Str("client_id", clientID).Msg("Client authentication failed on an internal error")
 		return oidc.OAuthErrServerError, true
 	}
 }
@@ -232,7 +234,7 @@ func (s *Service) AuthenticateForOAuth(clientID, clientSecret string) (errCode s
 func (s *Service) Get(clientID string) (*ClientResponse, error) {
 	entry, err := s.db.GetClient(clientID)
 	if err != nil {
-		if err == oauth_clients_db.ErrOAuthClientNotFound {
+		if errors.Is(err, oauth_clients_db.ErrOAuthClientNotFound) {
 			return nil, ErrClientNotFound
 		}
 		return nil, err

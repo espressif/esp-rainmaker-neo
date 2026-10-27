@@ -5,7 +5,9 @@
 package push
 
 import (
+	"context"
 	"encoding/json"
+
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_integration_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 
@@ -13,7 +15,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
 	"github.com/aws/aws-sdk-go-v2/service/sns"
@@ -85,7 +87,7 @@ var _ = Describe("Mobile Push Service", func() {
 
 	Describe("Send method", func() {
 		It("should return error for generic send", func() {
-			err := mobilePushService.Send(testNotification)
+			err := mobilePushService.Send(context.TODO(), testNotification)
 			Expect(err).ToNot(BeNil())
 			Expect(err.Error()).To(ContainSubstring("must be sent to specific users"))
 		})
@@ -98,7 +100,7 @@ var _ = Describe("Mobile Push Service", func() {
 			result, err := mobilePushService.Marshal(testNotification)
 			Expect(err).To(BeNil())
 
-			err = mobilePushService.SendTo(result, []string{userID1})
+			err = mobilePushService.SendTo(context.TODO(), result, []string{userID1})
 			Expect(err).To(BeNil())
 
 			expectedMessage := ExpectedMessage{
@@ -186,7 +188,7 @@ var _ = Describe("Mobile Push Service", func() {
 
 			result, err := mobilePushService.Marshal(testNotification)
 			Expect(err).To(BeNil())
-			Expect(mobilePushService.SendTo(result, []string{userID1})).To(BeNil())
+			Expect(mobilePushService.SendTo(context.TODO(), result, []string{userID1})).To(BeNil())
 
 			verifyPublishedMessages(mockSNSClient, []ExpectedMessage{{
 				TargetArn:        "arn:aws:sns:us-east-1:123456789012:endpoint/APNS/MyApp/locale-es",
@@ -218,7 +220,7 @@ var _ = Describe("Mobile Push Service", func() {
 
 			result, err := mobilePushService.Marshal(testNotification)
 			Expect(err).To(BeNil())
-			Expect(mobilePushService.SendTo(result, []string{userID1})).To(BeNil())
+			Expect(mobilePushService.SendTo(context.TODO(), result, []string{userID1})).To(BeNil())
 
 			verifyPublishedMessages(mockSNSClient, []ExpectedMessage{{
 				TargetArn:        "arn:aws:sns:us-east-1:123456789012:endpoint/APNS/MyApp/locale-de",
@@ -252,7 +254,7 @@ var _ = Describe("Mobile Push Service", func() {
 
 			result, err := mobilePushService.Marshal(testNotification)
 			Expect(err).To(BeNil())
-			Expect(mobilePushService.SendTo(result, []string{userID1})).To(BeNil())
+			Expect(mobilePushService.SendTo(context.TODO(), result, []string{userID1})).To(BeNil())
 
 			verifyPublishedMessages(mockSNSClient, []ExpectedMessage{
 				{
@@ -336,7 +338,7 @@ var _ = Describe("Mobile Push Service", func() {
 					},
 				}
 
-				err := mobilePushService.SendTo(pushMessage, []string{userID1})
+				err := mobilePushService.SendTo(context.TODO(), pushMessage, []string{userID1})
 				Expect(err).To(BeNil())
 
 				verifyPublishedMessages(mockSNSClient, []ExpectedMessage{expectedMessage})
@@ -352,7 +354,7 @@ var _ = Describe("Mobile Push Service", func() {
 				pushMessage := NewPushMessageWithEvent("test", map[string]string{"nodeID": "test-node-id"})
 				pushMessage.PushMessage = &PushMessage{Category: "test"}
 
-				err := mobilePushService.SendTo(pushMessage, []string{userID1})
+				err := mobilePushService.SendTo(context.TODO(), pushMessage, []string{userID1})
 				Expect(err).To(BeNil())
 
 				published := mockSNSClient.GetPublishedMessages()
@@ -395,7 +397,7 @@ var _ = Describe("Mobile Push Service", func() {
 					},
 				}
 
-				err := mobilePushService.SendTo(pushMessage, []string{userID1})
+				err := mobilePushService.SendTo(context.TODO(), pushMessage, []string{userID1})
 				Expect(err).To(BeNil())
 
 				verifyPublishedMessages(mockSNSClient, []ExpectedMessage{expectedMessage})
@@ -460,7 +462,7 @@ var _ = Describe("Mobile Push Service", func() {
 					},
 				}
 
-				err := mobilePushService.SendTo(pushMessage, []string{userID1})
+				err := mobilePushService.SendTo(context.TODO(), pushMessage, []string{userID1})
 				Expect(err).To(BeNil())
 
 				verifyPublishedMessages(mockSNSClient, expectedMessages)
@@ -478,7 +480,7 @@ var _ = Describe("Mobile Push Service", func() {
 					Category: "test",
 				}
 
-				err := mobilePushService.SendTo(pushMessage, []string{userID1})
+				err := mobilePushService.SendTo(context.TODO(), pushMessage, []string{userID1})
 				Expect(err).To(BeNil())
 
 				publishedMessages := mockSNSClient.GetPublishedMessages()
@@ -540,7 +542,7 @@ var _ = Describe("Mobile Push Service", func() {
 					},
 				}
 
-				err := mobilePushService.SendTo(pushMessage, []string{userID1, userID2})
+				err := mobilePushService.SendTo(context.TODO(), pushMessage, []string{userID1, userID2})
 				Expect(err).To(BeNil())
 
 				verifyPublishedMessages(mockSNSClient, expectedMessages)
@@ -554,7 +556,7 @@ var _ = Describe("Mobile Push Service", func() {
 					Category: "test",
 				}
 
-				err := mobilePushService.SendTo(pushMessage, []string{userID1})
+				err := mobilePushService.SendTo(context.TODO(), pushMessage, []string{userID1})
 				Expect(err).To(BeNil())
 
 				publishedMessages := mockSNSClient.GetPublishedMessages()
@@ -564,7 +566,7 @@ var _ = Describe("Mobile Push Service", func() {
 
 		Context("with invalid notification type", func() {
 			It("should return error for invalid notification type", func() {
-				err := mobilePushService.SendTo("invalid-notification", []string{userID1})
+				err := mobilePushService.SendTo(context.TODO(), "invalid-notification", []string{userID1})
 				Expect(err).ToNot(BeNil())
 				Expect(err.Error()).To(ContainSubstring("Failed to cast notification to PushMessage"))
 			})
@@ -580,7 +582,7 @@ var _ = Describe("Mobile Push Service", func() {
 				pushMessage := NewPushMessageWithEvent("test", map[string]string{"nodeID": "test-node-id"})
 				pushMessage.PushMessage = &PushMessage{Category: "test"}
 
-				err := mobilePushService.SendTo(pushMessage, []string{userID1})
+				err := mobilePushService.SendTo(context.TODO(), pushMessage, []string{userID1})
 				Expect(err).To(BeNil())
 
 				deleteCalls := mockSNSClient.GetDeleteEndpointCalls()
@@ -603,7 +605,7 @@ var _ = Describe("Mobile Push Service", func() {
 				pushMessage := NewPushMessageWithEvent("test", map[string]string{"nodeID": "test-node-id"})
 				pushMessage.PushMessage = &PushMessage{Category: "test"}
 
-				err := mobilePushService.SendTo(pushMessage, []string{userID1})
+				err := mobilePushService.SendTo(context.TODO(), pushMessage, []string{userID1})
 				Expect(err).To(BeNil())
 
 				deleteCalls := mockSNSClient.GetDeleteEndpointCalls()
@@ -629,7 +631,7 @@ var _ = Describe("Mobile Push Service", func() {
 				pushMessage := NewPushMessageWithEvent("test", map[string]string{"nodeID": "test-node-id"})
 				pushMessage.PushMessage = &PushMessage{Category: "test"}
 
-				err := mobilePushService.SendTo(pushMessage, []string{userID1})
+				err := mobilePushService.SendTo(context.TODO(), pushMessage, []string{userID1})
 				Expect(err).To(BeNil())
 
 				// Both endpoints saw a disabled publish → both rows should be gone, both DeleteEndpoint calls fired.

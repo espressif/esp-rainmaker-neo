@@ -59,6 +59,8 @@ type loginView struct {
 }
 
 // renderLoginPage produces the sign-in page.
+//
+//nolint:gosec // G203: only compile-time constants and JSON-encoded values are marked safe here
 func renderLoginPage(providers []providerView, nonce, flowID string) (string, error) {
 	flowIDLit, err := json.Marshal(flowID)
 	if err != nil {
@@ -82,6 +84,8 @@ func renderLoginPage(providers []providerView, nonce, flowID string) (string, er
 // renderErrorPage produces the terminal error page. It carries the OAuth code and the
 // description and nothing else: no stack, no client id, no state, because this page is
 // reachable by anyone who can construct a URL.
+//
+//nolint:gosec // G203: only compile-time constants and JSON-encoded values are marked safe here
 func renderErrorPage(code, description string) (string, error) {
 	var out bytes.Buffer
 	err := errorTemplate.Execute(&out, struct {

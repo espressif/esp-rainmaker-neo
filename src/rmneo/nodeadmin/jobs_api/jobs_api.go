@@ -18,8 +18,9 @@ package jobs_api
 
 import (
 	"errors"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"time"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/aws/aws-lambda-go/events"
 
@@ -109,7 +110,9 @@ func LoadJob(rctx *rmngctx.RmngContext, requestID, expectedJobType string) (*nod
 // List implements GET .../jobs. expectedJobType is applied at the DB layer
 // (register includes legacy rows with missing/empty job_type).
 func List(rctx *rmngctx.RmngContext, request events.APIGatewayProxyRequest, expectedJobType string) (ListResponse, error) {
-	rctx.SetAllow(utils.NodeAdminRegisterStatus, "*")
+	if err := rctx.SetAllow(utils.NodeAdminRegisterStatus, "*"); err != nil {
+		return ListResponse{}, rmerror.NewRMError(err, "failed to grant permissions")
+	}
 
 	limit := rmngrequest.ParsePageSize(request.QueryStringParameters)
 	startKey := request.QueryStringParameters["start_key"]
@@ -136,7 +139,9 @@ func List(rctx *rmngctx.RmngContext, request events.APIGatewayProxyRequest, expe
 // Status implements GET .../jobs/{requestId}. Returns ErrJobNotFound
 // on a missing row or a cross-flow mismatch; caller translates to 404.
 func Status(rctx *rmngctx.RmngContext, request events.APIGatewayProxyRequest, expectedJobType string) (StatusResponse, error) {
-	rctx.SetAllow(utils.NodeAdminRegisterStatus, "*")
+	if err := rctx.SetAllow(utils.NodeAdminRegisterStatus, "*"); err != nil {
+		return StatusResponse{}, rmerror.NewRMError(err, "failed to grant permissions")
+	}
 
 	requestID := request.PathParameters["requestId"]
 	if requestID == "" {
@@ -170,7 +175,9 @@ func Status(rctx *rmngctx.RmngContext, request events.APIGatewayProxyRequest, ex
 
 // ListFailedNodes implements GET .../jobs/{requestId}/failed-nodes.
 func ListFailedNodes(rctx *rmngctx.RmngContext, request events.APIGatewayProxyRequest, expectedJobType string) (ListFailedNodesResponse, error) {
-	rctx.SetAllow(utils.NodeAdminRegisterStatus, "*")
+	if err := rctx.SetAllow(utils.NodeAdminRegisterStatus, "*"); err != nil {
+		return ListFailedNodesResponse{}, rmerror.NewRMError(err, "failed to grant permissions")
+	}
 
 	requestID := request.PathParameters["requestId"]
 	if requestID == "" {

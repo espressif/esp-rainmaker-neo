@@ -31,7 +31,8 @@ type ProfileOperation struct {
 }
 
 type Profile struct {
-	mu sync.Mutex
+	// A pointer, so ProfileGet can hand out copies without copying a lock.
+	mu *sync.Mutex
 	// For every table, the read/write counts and the operations performed on it
 	Accesses map[string]struct {
 		ReadCount  int
@@ -42,6 +43,7 @@ type Profile struct {
 
 func NewProfile() *Profile {
 	return &Profile{
+		mu: &sync.Mutex{},
 		Accesses: make(map[string]struct {
 			ReadCount  int
 			WriteCount int
@@ -261,7 +263,9 @@ func deepCopy(src, dst interface{}) error {
 }
 
 func (m *DynamoDBMock) ProfileGet() Profile {
-	var profile Profile
+	m.profile.mu.Lock()
+	defer m.profile.mu.Unlock()
+	profile := Profile{mu: &sync.Mutex{}}
 	deepCopy(m.profile, &profile)
 	return profile
 }

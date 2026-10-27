@@ -31,14 +31,15 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec // RFC 5280 §4.2.1.2 subject key identifier, not a security use
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/pem"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"math/big"
 	"time"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 )
 
 const (
@@ -146,10 +147,9 @@ type Issuer interface {
 // SigningIssuer signs with any crypto.Signer against a fixed CA certificate.
 // Production wires a KMS-backed signer; tests can supply a local key.
 type SigningIssuer struct {
-	caCert   *x509.Certificate
-	caPEM    string
-	signer   crypto.Signer
-	defaults Profile
+	caCert *x509.Certificate
+	caPEM  string
+	signer crypto.Signer
 }
 
 // NewSigningIssuer builds an issuer from a PEM-encoded CA certificate and the
@@ -354,7 +354,7 @@ func subjectKeyID(pub *ecdsa.PublicKey) ([]byte, error) {
 	if _, err := asn1.Unmarshal(spki, &info); err != nil {
 		return nil, rmerror.NewRMError(err, "failed to parse subject public key info")
 	}
-	sum := sha1.Sum(info.PublicKey.Bytes)
+	sum := sha1.Sum(info.PublicKey.Bytes) //nolint:gosec // RFC 5280 §4.2.1.2 subject key identifier, not a security use
 	return sum[:], nil
 }
 

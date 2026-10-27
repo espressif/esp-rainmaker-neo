@@ -68,6 +68,7 @@ validate_api_docs:
     - asyncapi validate docs/api/MQTT_Bridge.yaml
     - asyncapi validate docs/api/Push_User.yaml
 
+# Blocks on the repo-specific analysers in src/tools/rmng-lint.
 go_lint:
   stage: lint
   rules:
@@ -82,7 +83,23 @@ go_lint:
         - src/esp-cloud-common
   script:
     - make lint
-  allow_failure: true
+
+# Blocks on the golangci-lint checks gated in .golangci.yml.
+golangci_lint:
+  stage: lint
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "**/*.go"
+        - "**/go.mod"
+        - "**/go.sum"
+        - go.work
+        - go.work.sum
+        - Makefile
+        - .golangci.yml
+        - src/esp-cloud-common
+  script:
+    - make go-lint
 
 secrets:
   stage: lint

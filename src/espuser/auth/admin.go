@@ -8,8 +8,9 @@ package auth
 import (
 	"context"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"os"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/cognitoutil"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/cognito"

@@ -8,8 +8,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"testing"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 

@@ -8,13 +8,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"os"
+
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_group_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"net/http"
-	"os"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
@@ -462,7 +463,7 @@ func resolveAssumeRoleGroupAccess(ctx context.Context, rmng_context *rmngctx.Rmn
 		}, nil
 	}
 
-	rawAccess, err := group.ListUserAccessableGroups(rmng_context)
+	rawAccess, err := group.ListUserAccessibleGroups(rmng_context)
 	if err != nil {
 		rlog.Error(rmng_context).Err(err).Msg("Error fetching groups for user")
 		resp := utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Error fetching user groups"))
@@ -479,7 +480,7 @@ func resolveAssumeRoleGroupAccess(ctx context.Context, rmng_context *rmngctx.Rmn
 	return access, nil
 }
 
-// toGroupAccess converts the untyped map returned by group.ListUserAccessableGroups
+// toGroupAccess converts the untyped map returned by group.ListUserAccessibleGroups
 // into the typed groupAccess. Comma-ok guards each field so a malformed map yields
 // empty slices/maps instead of panicking.
 func toGroupAccess(raw map[string]interface{}) groupAccess {

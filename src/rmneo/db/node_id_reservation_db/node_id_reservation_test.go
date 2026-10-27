@@ -12,7 +12,7 @@ import (
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_id_reservation_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )

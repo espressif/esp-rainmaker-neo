@@ -105,6 +105,12 @@ RUN go install github.com/onsi/ginkgo/v2/ginkgo@${GINKGO_VERSION} && \
 ARG GOVULNCHECK_VERSION=latest
 RUN go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
 
+# Keep in step with GOLANGCI_LINT_VERSION in the Makefile. A release binary, as golangci-lint advises against go install builds.
+ARG GOLANGCI_LINT_VERSION=2.14.0
+RUN curl -sSfL "https://github.com/golangci/golangci-lint/releases/download/v${GOLANGCI_LINT_VERSION}/golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64.tar.gz" \
+      | tar -xz -C /usr/local/bin --strip-components=1 "golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64/golangci-lint" && \
+    golangci-lint version
+
 COPY go.work go.work.sum go.mod go.sum ./
 COPY src/esp-cloud-common/go.mod src/esp-cloud-common/go.sum ./src/esp-cloud-common/
 COPY src/mcp/proxy/go.mod src/mcp/proxy/go.sum ./src/mcp/proxy/

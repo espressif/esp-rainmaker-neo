@@ -9,9 +9,10 @@ import (
 	"context"
 	"encoding/csv"
 	"errors"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"os"
 	"testing"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -23,7 +24,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/nodeadmin/bulk_container"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )

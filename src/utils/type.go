@@ -18,6 +18,17 @@ func Ptr[T any](v T) *T {
 	return &v
 }
 
+// ClampInt32 converts v to int32, saturating at the int32 range rather than wrapping: 1<<31 -> math.MaxInt32.
+func ClampInt32(v int64) int32 {
+	if v > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	if v < math.MinInt32 {
+		return math.MinInt32
+	}
+	return int32(v)
+}
+
 // ConvertAnyToAny converts between different types using JSON marshaling/unmarshaling
 // This function supports the following conversions:
 // - Map to struct

@@ -18,9 +18,10 @@ package webhook
 import (
 	"encoding/json"
 	"errors"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"os"
 	"time"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 	webhookdb "github.com/espressif/esp-rainmaker-neo/test/infra/db"

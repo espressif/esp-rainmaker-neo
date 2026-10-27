@@ -20,7 +20,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/config"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/httpclient"
@@ -111,7 +111,9 @@ func stToken(userID string) string {
 // seedNodeConfig stores a NodeCfg as the node's "config" service data.
 func seedNodeConfig(nodeID string, cfg config.NodeCfg) {
 	rmngNodeCtx := rmngctx.NewRmngContext(node.NewNode(nodeID))
-	err := node_details_db.NewNodeDetailsDB(rmngNodeCtx).UpdateServiceData("config", cfg.ToMap())
+	cfgMap, err := cfg.ToMap()
+	Expect(err).To(BeNil())
+	err = node_details_db.NewNodeDetailsDB(rmngNodeCtx).UpdateServiceData("config", cfgMap)
 	Expect(err).To(BeNil())
 }
 
@@ -1063,7 +1065,7 @@ var _ = Describe("SmartThings handlers", func() {
 		})
 
 		It("Send (broadcast) returns an error since notifications are user-specific", func() {
-			Expect(stNotif.Send(nil)).To(HaveOccurred())
+			Expect(stNotif.Send(context.TODO(), nil)).To(HaveOccurred())
 		})
 
 		Describe("Marshal", func() {
@@ -1413,18 +1415,18 @@ var _ = Describe("SmartThings handlers", func() {
 					Headers:     STHeaders{Schema: "st-schema", Version: "1.0", InteractionType: InteractionStateCallback},
 					DeviceState: []STDeviceState{{ExternalDeviceID: GetDeviceID(switchNodeID, "Switch")}},
 				}
-				err := stNotif.SendTo(payload, []string{userID})
+				err := stNotif.SendTo(context.TODO(), payload, []string{userID})
 				Expect(err).To(BeNil())
 				// No HTTP call should have been made for a user with no tokens.
 				Expect(mockHTTP.Requests).To(BeEmpty())
 			})
 
 			It("returns nil (skips) when the payload is nil", func() {
-				Expect(stNotif.SendTo(nil, []string{userID})).To(BeNil())
+				Expect(stNotif.SendTo(context.TODO(), nil, []string{userID})).To(BeNil())
 			})
 
 			It("errors when the payload is not an *STStateCallbackPayload", func() {
-				Expect(stNotif.SendTo("not-a-payload", []string{userID})).To(HaveOccurred())
+				Expect(stNotif.SendTo(context.TODO(), "not-a-payload", []string{userID})).To(HaveOccurred())
 			})
 
 			It("sends the state callback via the injectable HTTP client for a user with valid tokens", func() {
@@ -1447,7 +1449,7 @@ var _ = Describe("SmartThings handlers", func() {
 					}},
 				}
 
-				err := stNotif.SendTo(payload, []string{userID})
+				err := stNotif.SendTo(context.TODO(), payload, []string{userID})
 				Expect(err).To(BeNil())
 				Expect(mockHTTP.Requests).To(HaveLen(1))
 				Expect(mockHTTP.Requests[0].URL.String()).To(Equal(callbackURL))

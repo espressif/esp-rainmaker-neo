@@ -33,9 +33,10 @@ package node_reg_failed_nodes_db
 
 import (
 	"errors"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"strings"
 	"time"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/espdynamodb"
 	dbpkg "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"

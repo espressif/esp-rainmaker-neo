@@ -8,10 +8,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/espressif/esp-cloud-common/go/rbac/rbac"
+	"testing"
+
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/automation_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
-	"testing"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service"
@@ -20,8 +20,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/timeseries"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/trigger"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
-	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -33,18 +32,6 @@ import (
 func TestNodeDataReset(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "NodeDataReset Suite")
-}
-
-// buildPerms creates an EntityPermissions granting NodeAll for each node and GroupAll for the group.
-func buildPerms(nodeIDs []string, groupID string) *rbac.EntityPermissions {
-	perms := make(rbac.EntityPermissions)
-	for _, nid := range nodeIDs {
-		perms.SetAllow(utils.NodeAll.String(), nid)
-	}
-	if groupID != "" {
-		perms.SetAllow(utils.GroupAll.String(), groupID)
-	}
-	return &perms
 }
 
 var _ = Describe("handleRequest", func() {
@@ -259,10 +246,11 @@ var _ = Describe("handleRequest", func() {
 			Expect(event).To(HaveLen(1))
 
 			eventType := event[0].(string)
-			if eventType == "getSchedDetails" {
+			switch eventType {
+			case "getSchedDetails":
 				scheduleNotificationFound = true
 				Expect(publishedData).To(HaveKey("getSchedDetails"))
-			} else if eventType == "getTriggerDetails" {
+			case "getTriggerDetails":
 				triggerNotificationFound = true
 				Expect(publishedData).To(HaveKey("getTriggerDetails"))
 			}
@@ -417,18 +405,20 @@ var _ = Describe("handleRequest", func() {
 			topic := *call.Topic
 
 			if topic == fmt.Sprintf("rainmaker/nodes/%s/from_cloud", nodeID1) {
-				if eventType == "getSchedDetails" {
+				switch eventType {
+				case "getSchedDetails":
 					node1ScheduleNotificationFound = true
 					Expect(publishedData).To(HaveKey("getSchedDetails"))
-				} else if eventType == "getTriggerDetails" {
+				case "getTriggerDetails":
 					node1TriggerNotificationFound = true
 					Expect(publishedData).To(HaveKey("getTriggerDetails"))
 				}
 			} else if topic == fmt.Sprintf("rainmaker/nodes/%s/from_cloud", nodeID2) {
-				if eventType == "getSchedDetails" {
+				switch eventType {
+				case "getSchedDetails":
 					node2ScheduleNotificationFound = true
 					Expect(publishedData).To(HaveKey("getSchedDetails"))
-				} else if eventType == "getTriggerDetails" {
+				case "getTriggerDetails":
 					node2TriggerNotificationFound = true
 					Expect(publishedData).To(HaveKey("getTriggerDetails"))
 				}

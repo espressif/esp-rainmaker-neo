@@ -183,11 +183,11 @@ func exchangeCodeForTokens(ctx context.Context, code, oauthTokenURL string) (*ac
 		},
 	}
 
-	return postAccessTokenRequest(reqBody, oauthTokenURL)
+	return postAccessTokenRequest(ctx, reqBody, oauthTokenURL)
 }
 
 // postAccessTokenRequest marshals and sends an accessTokenRequest, then parses the response.
-func postAccessTokenRequest(reqBody accessTokenRequest, url string) (*accessTokenResponse, error) {
+func postAccessTokenRequest(ctx context.Context, reqBody accessTokenRequest, url string) (*accessTokenResponse, error) {
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to marshal accessTokenRequest")
@@ -199,7 +199,7 @@ func postAccessTokenRequest(reqBody accessTokenRequest, url string) (*accessToke
 
 	// Use the shared (injectable) HTTP client — consistent with the state-callback path and
 	// unit-testable. MakeHTTPPostRequest returns an error for any non-2XX response.
-	body, err := notification.MakeHTTPPostRequest(jsonData, url, func(req *http.Request) error {
+	body, err := notification.MakeHTTPPostRequest(ctx, jsonData, url, func(req *http.Request) error {
 		req.Header.Set("Content-Type", "application/json")
 		return nil
 	})

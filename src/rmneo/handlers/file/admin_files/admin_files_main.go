@@ -7,9 +7,10 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"net/http"
 	"strings"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/file"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification/push"
@@ -103,7 +104,7 @@ func handleGetFileTemplate(_ context.Context, request events.APIGatewayProxyRequ
 func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	var err error
 	var response interface{}
-	var statusCode int = http.StatusOK
+	var statusCode = http.StatusOK
 	rctx := user.NewContextWithAPIRequest(ctx, request)
 	isAuthorized := rctx.GetAccessor().(*user.User).IsAdmin(rctx)
 	if !isAuthorized {

@@ -8,11 +8,12 @@ import (
 	"cmp"
 	"encoding/json"
 	"errors"
+	"os"
+	"strings"
+
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-	"os"
-	"strings"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/iotutil"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_details_db"
@@ -21,7 +22,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/config"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 

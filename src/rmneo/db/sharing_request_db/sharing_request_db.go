@@ -85,9 +85,10 @@ package sharing_request_db
 
 import (
 	"errors"
-	dbcore "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
 	"strconv"
 	"time"
+
+	dbcore "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"

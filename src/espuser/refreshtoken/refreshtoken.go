@@ -19,11 +19,12 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/ssmutil"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/refresh_tokens_db"

@@ -7,12 +7,13 @@ package cognitoutil_test
 import (
 	"context"
 	"errors"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"os"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/cognitoutil"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
-	"github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"

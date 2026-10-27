@@ -143,11 +143,11 @@ func (e *Mexpression) Evaluate(av map[string]types.AttributeValue) (bool, error)
 	}
 	node, err := e.condition()
 	if err != nil {
-		return false, fmt.Errorf("ValidationException: %v in expression %q", err, *e.Expr)
+		return false, fmt.Errorf("ValidationException: %w in expression %q", err, *e.Expr)
 	}
 	ok, err := node.eval(e, av)
 	if err != nil {
-		return false, fmt.Errorf("ValidationException: %v in expression %q", err, *e.Expr)
+		return false, fmt.Errorf("ValidationException: %w in expression %q", err, *e.Expr)
 	}
 	return ok, nil
 }
@@ -180,27 +180,6 @@ func attrContains(container types.AttributeValue, operand types.AttributeValue) 
 		}
 	}
 	return false
-}
-
-func extractCurrentValue(av map[string]types.AttributeValue, e *Mexpression, lhs_var string) (types.AttributeValue, error) {
-	if strings.Contains(lhs_var, "[") {
-		// This is a list index. This is a bit tricky, because the getName list only contains the name, but the lhs_var contains the index as well
-		parts := strings.Split(lhs_var, "[")
-
-		list_name := e.getName(parts[0])
-
-		indexStr := parts[1]
-		index, err := strconv.Atoi(strings.Trim(indexStr, "]"))
-		if err != nil {
-			return nil, err
-		}
-		list, ok := av[list_name].(*types.AttributeValueMemberL)
-		if !ok {
-			return nil, fmt.Errorf("expected list, got %T", av[list_name])
-		}
-		return list.Value[index], nil
-	}
-	return av[e.getName(lhs_var)], nil
 }
 
 // GetNamesList returns the list of names in the expression, if the expression is a NamesList
