@@ -91,6 +91,7 @@ def ensure_bucket_cors(session, bucket_name):
     Allow browsers to fetch the published outputs cross-origin. Public-read grants access
     but the browser still blocks a cross-origin fetch() without CORS response headers, so
     the admin dashboard needs GET allowed from any origin to read rmng-client-outputs.json.
+    Its Branding page also writes and deletes <region>/brand/ with signed PUT and DELETE requests.
     """
     s3 = _s3_bucket_client(session)
     try:
@@ -100,7 +101,7 @@ def ensure_bucket_cors(session, bucket_name):
                 "CORSRules": [
                     {
                         "AllowedOrigins": ["*"],
-                        "AllowedMethods": ["GET", "HEAD"],
+                        "AllowedMethods": ["GET", "HEAD", "PUT", "DELETE"],
                         "AllowedHeaders": ["*"],
                         "MaxAgeSeconds": 3000,
                     }

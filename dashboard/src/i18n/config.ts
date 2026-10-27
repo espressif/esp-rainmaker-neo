@@ -9,6 +9,7 @@ import { initReactI18next } from 'react-i18next'
 import { appConfig } from '@/lib/app-config'
 import type { SupportedLanguage } from '@/lib/constants'
 import accountSettingsEn from './locales/en/account-settings.json'
+import brandingEn from './locales/en/branding.json'
 import commonEn from './locales/en/common.json'
 import forgotPasswordEn from './locales/en/forgot-password.json'
 import generateEn from './locales/en/generate.json'
@@ -26,6 +27,7 @@ import setPasswordEn from './locales/en/set-password.json'
 import staticEn from './locales/en/static.json'
 import voiceAssistantsEn from './locales/en/voice-assistants.json'
 import accountSettingsZh from './locales/zh/account-settings.json'
+import brandingZh from './locales/zh/branding.json'
 import commonZh from './locales/zh/common.json'
 import forgotPasswordZh from './locales/zh/forgot-password.json'
 import generateZh from './locales/zh/generate.json'
@@ -66,6 +68,7 @@ const resources = {
     'voice-assistants': voiceAssistantsEn,
     'push-notifications': pushNotificationsEn,
     'post-deployment': postDeploymentEn,
+    branding: brandingEn,
     'account-settings': accountSettingsEn,
   },
   zh: {
@@ -85,6 +88,7 @@ const resources = {
     'voice-assistants': voiceAssistantsZh,
     'push-notifications': pushNotificationsZh,
     'post-deployment': postDeploymentZh,
+    branding: brandingZh,
     'account-settings': accountSettingsZh,
   },
 } satisfies Record<SupportedLanguage, object>

@@ -42,6 +42,12 @@ export function getSettingsSidebarGroup(t: TFunction): SidebarGroupConfig {
         icon: group.items["post-deployment"],
         path: "/home/settings/post-deployment",
       },
+      {
+        id: "branding",
+        label: t("sidebar.branding", "Branding"),
+        icon: group.items.branding,
+        path: "/home/settings/branding",
+      },
     ],
   };
 }

@@ -1,0 +1,75 @@
+{
+  "heading": "Branding",
+  "beta": "Beta",
+  "secondaryText": "Publish the app brand designed in ESP RainMaker Neo App Studio. Phones download it the next time ESP RainMaker Home opens and show it from the launch after.",
+  "form": {
+    "fileLabel": "App Studio file",
+    "fileTitle": "Drop your .rainmaker file here",
+    "fileDescription": "Save the project in ESP RainMaker Neo App Studio and upload the .rainmaker file it downloads.",
+    "submit": "Publish brand",
+    "errors": {
+      "fileRequired": "Choose a .rainmaker file saved from App Studio.",
+      "notRainmaker": "This is not a .rainmaker file saved from App Studio.",
+      "noBrand": "This file has no app brand. Save the project again in App Studio and upload the new file.",
+      "invalidBrand": "The brand in this file is not valid ({{detail}}).",
+      "invalidImage": "An image in this file cannot be used ({{detail}}).",
+      "tooLarge": "The brand is larger than 16 KB. Remove some customisation and try again.",
+      "publishFailed": "Could not publish the brand. Try again."
+    },
+    "replaceTitle": "Replace the brand",
+    "published": "{{appName}} is published. Phones download it the next time ESP RainMaker Home opens and show it from the launch after."
+  },
+  "empty": "No brand is published, so ESP RainMaker Home shows its default look on this deployment.",
+  "loadError": "Could not load the published brand",
+  "loadErrorDescription": "Reload the page to try again.",
+  "errors": {
+    "unavailable": "This deployment does not allow branding from the dashboard yet. Redeploy it and try again."
+  },
+  "actions": {
+    "replace": "Replace brand",
+    "delete": "Delete brand"
+  },
+  "delete": {
+    "confirmTitle": "Delete the brand?",
+    "confirmDescription": "Phones pick this up the next time ESP RainMaker Home opens and go back to its default look from the launch after.",
+    "success": "Brand deleted. Phones go back to the default look from the launch after they next open the app.",
+    "failed": "Could not delete the brand. Try again."
+  },
+  "summary": {
+    "published": "Published",
+    "appearance": {
+      "light": "Light mode only",
+      "dark": "Dark mode only",
+      "both": "Light and dark mode"
+    }
+  },
+  "logo": {
+    "heading": "Logo",
+    "secondaryText": "The logo on the app's background in each mode it ships.",
+    "alt": "{{appName}} logo in {{mode}}",
+    "wordmark": "Wordmark",
+    "wordmarkHidden": "Hidden",
+    "wordmarkImage": "Custom image",
+    "wordmarkDefault": "Deployment name",
+    "scale": "Logo size",
+    "radius": "Corner radius",
+    "radiusDefault": "App default"
+  },
+  "colors": {
+    "heading": "Colours",
+    "secondaryText": "The palette the app uses in place of its default colours, per mode."
+  },
+  "icons": {
+    "heading": "Icons",
+    "secondaryText": "Device and screen icons that replace the app's own.",
+    "alt": "{{name}} icon"
+  },
+  "wording": {
+    "heading": "Wording",
+    "secondaryText": "Words the app uses in place of its own."
+  },
+  "modes": {
+    "light": "Light mode",
+    "dark": "Dark mode"
+  }
+}

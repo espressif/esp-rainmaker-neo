@@ -349,6 +349,13 @@ export const routesConfig: RouteConfig[] = [
               fallback: "Post-Deployment",
             },
           },
+          {
+            path: "/branding",
+            breadcrumb: {
+              i18nKey: "common:sidebar.branding",
+              fallback: "Branding",
+            },
+          },
         ],
       },
       {

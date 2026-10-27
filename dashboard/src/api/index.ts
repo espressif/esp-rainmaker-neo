@@ -54,3 +54,6 @@ export * from './config'
 
 // Post-deployment domain
 export * from './post-deployment'
+
+// Branding domain
+export * from './branding'

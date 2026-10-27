@@ -106,6 +106,7 @@
     "gva": "GVA",
     "pushNotifications": "Push notifications",
     "postDeployment": "Post-Deployment",
+    "branding": "Branding",
     "smartthings": "SmartThings"
   },
   "deploymentQr": {
