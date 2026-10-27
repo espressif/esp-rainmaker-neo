@@ -828,8 +828,10 @@ reboots — the cloud is authoritative.
 ### 5.8 Bridge Disassociation / Group Move (Cascade Delete)
 
 The cascade is triggered from `DELETE /v1/groups/{groupId}/nodes/{nodeId}`
-when `nodeId` is a bridge (`node_type=bridge`), and from the assoc flow when
-a bridge is being moved to a new group (= disassoc + assoc).
+when `nodeId` is a bridge (`node_type=bridge`), from the assoc flow when
+a bridge is being moved to a new group (= disassoc + assoc), and when a bridge
+reports a factory reset (`node_reset`). A bridge's first association is not a
+move and does not cascade.
 
 ```
 1. Disassoc/assoc handler detects bridge via the node_type=bridge column

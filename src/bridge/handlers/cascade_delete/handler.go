@@ -41,6 +41,10 @@ func handleCascadeDelete(ctx context.Context, event nodelifecycle.NodeLeftGroupE
 	if parent == "" {
 		return nil
 	}
+	// Core fires the hook with no old group on a first placement, which §5.8 does not cascade; doing so would delete children added right after association.
+	if oldGroup == "" {
+		return nil
+	}
 
 	rmngCtx := rmngctx.NewRmngContextWithNode(ctx, node.NewNode(parent), parent)
 	bcDB := bridge_children_db.NewBridgeChildrenDB(rmngCtx)
@@ -61,19 +65,15 @@ func handleCascadeDelete(ctx context.Context, event nodelifecycle.NodeLeftGroupE
 	// getGroupNodeEntry), GroupListSubEntities (via GetGroupNode), and
 	// GroupEditNodes (RemoveNodeAuthorized explicit). Wildcard GroupAll
 	// would escalate a secondary user past their primary's restrictions.
-	// (An empty oldGroup is tolerated by the bulk helper below; only the
-	// bridge-specific teardown runs in that case.)
-	if oldGroup != "" {
-		if err := rmngCtx.SetAllowMultiple(
-			[]string{
-				utils.GroupGet.String(),
-				utils.GroupListSubEntities.String(),
-				utils.GroupEditNodes.String(),
-			},
-			oldGroup,
-		); err != nil {
-			return rmerror.NewRMError(err, "failed to grant permissions")
-		}
+	if err := rmngCtx.SetAllowMultiple(
+		[]string{
+			utils.GroupGet.String(),
+			utils.GroupListSubEntities.String(),
+			utils.GroupEditNodes.String(),
+		},
+		oldGroup,
+	); err != nil {
+		return rmerror.NewRMError(err, "failed to grant permissions")
 	}
 
 	childNames := make([]string, len(children))

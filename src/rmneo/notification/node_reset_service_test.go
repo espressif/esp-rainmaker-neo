@@ -6,12 +6,14 @@ package notification
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node/nodelifecycle"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
@@ -51,6 +53,19 @@ var _ = Describe("Node Reset Service", func() {
 		return count
 	}
 
+	leftGroupHookEvents := func() []nodelifecycle.NodeLeftGroupEvent {
+		lambdaMock := awscommon.GetLambdaClient().(*mock.LambdaMock)
+		events := []nodelifecycle.NodeLeftGroupEvent{}
+		for _, call := range lambdaMock.InvokeCalls {
+			if call.FunctionName != nil && *call.FunctionName == "test-node-left-group-hook" {
+				var event nodelifecycle.NodeLeftGroupEvent
+				Expect(json.Unmarshal(call.Payload, &event)).To(Succeed())
+				events = append(events, event)
+			}
+		}
+		return events
+	}
+
 	BeforeEach(func() {
 		test_utils.TestSetup()
 		os.Setenv("NODE_DATA_RESET_FUNCTION_NAME", "test-node-data-reset")
@@ -72,10 +87,14 @@ var _ = Describe("Node Reset Service", func() {
 		err = node.ShadowNodeAddToGroup(ownerCtx, nodeID, groupID, nil)
 		Expect(err).To(BeNil())
 		test_utils.AssertNodeInGroup(groupID, nodeID)
+
+		// Set after the setup add so its first-placement hook call is not counted.
+		os.Setenv("NODE_LEFT_GROUP_HOOK_FUNCTION_NAME", "test-node-left-group-hook")
 	})
 
 	AfterEach(func() {
 		os.Unsetenv("NODE_DATA_RESET_FUNCTION_NAME")
+		os.Unsetenv("NODE_LEFT_GROUP_HOOK_FUNCTION_NAME")
 	})
 
 	Describe("Service Properties", func() {
@@ -111,6 +130,14 @@ var _ = Describe("Node Reset Service", func() {
 			Expect(resetLambdaCalls()).To(Equal(1))
 		})
 
+		It("should fire the node-left-group hook once with the old group", func() {
+			Expect(service.Send(context.TODO(), buildNotification(nodeID, groupID))).To(Succeed())
+
+			Expect(leftGroupHookEvents()).To(Equal([]nodelifecycle.NodeLeftGroupEvent{
+				{NodeID: nodeID, OldGroupID: groupID},
+			}))
+		})
+
 		It("should run even when the group has no members (no member resolution gate)", func() {
 			// No push devices / members are set up at all — a generic service
 			// must still act. This is the empty-group case that the user-specific
@@ -125,6 +152,7 @@ var _ = Describe("Node Reset Service", func() {
 			Expect(err).ToNot(BeNil())
 			// Original association is untouched on failure.
 			test_utils.AssertNodeInGroup(groupID, nodeID)
+			Expect(leftGroupHookEvents()).To(BeEmpty())
 		})
 
 		It("should ignore a shadow_update (non-direct) notification", func() {
@@ -141,6 +169,7 @@ var _ = Describe("Node Reset Service", func() {
 			// No action taken: node stays in the group, no cleanup fired.
 			test_utils.AssertNodeInGroup(groupID, nodeID)
 			Expect(resetLambdaCalls()).To(Equal(0))
+			Expect(leftGroupHookEvents()).To(BeEmpty())
 		})
 
 		It("should ignore a payload that is not *Notification", func() {
