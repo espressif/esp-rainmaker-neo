@@ -15,6 +15,7 @@ import {
 import { usePublishedBrand } from "@/api/branding";
 import { DeploymentDetailsQr } from "@/components/deployment-details-qr";
 import { useConfigStore } from "@/stores/config.store";
+import { RainmakerBrandError } from "@/utils/rainmaker-brand/rainmaker-brand";
 import BrandActions from "./_components/brand-actions";
 import BrandPreview from "./_components/brand-preview";
 import BrandingFormSheet from "./_components/branding-form-sheet";
@@ -46,7 +47,10 @@ export default function Branding() {
             )}
             truncateSecondaryText={false}
             actions={
-              brand && <BrandActions onReplace={() => setIsReplaceOpen(true)} />
+              // A published brand this dashboard cannot read can still be replaced or deleted.
+              (brand || error instanceof RainmakerBrandError) && (
+                <BrandActions onReplace={() => setIsReplaceOpen(true)} />
+              )
             }
           >
             <BrandingMainContent

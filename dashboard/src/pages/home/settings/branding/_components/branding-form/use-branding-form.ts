@@ -45,8 +45,8 @@ export function useBrandingForm({
           toast.success(
             t(
               "form.published",
-              "{{appName}} is published. Phones download it the next time ESP RainMaker Home opens and show it from the launch after.",
-              { appName: brand.config.appName },
+              "{{brandName}} is published. Phones download it the next time ESP RainMaker Home opens and show it from the launch after.",
+              { brandName: brand.config.brandName },
             ),
           );
           onSuccess?.();

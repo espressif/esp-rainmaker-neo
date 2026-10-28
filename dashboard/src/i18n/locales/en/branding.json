@@ -13,11 +13,11 @@
       "noBrand": "This file has no app brand. Save the project again in App Studio and upload the new file.",
       "invalidBrand": "The brand in this file is not valid ({{detail}}).",
       "invalidImage": "An image in this file cannot be used ({{detail}}).",
-      "tooLarge": "The brand is larger than 16 KB. Remove some customisation and try again.",
+      "tooLarge": "The brand is larger than 32 KB. Remove some customisation and try again.",
       "publishFailed": "Could not publish the brand. Try again."
     },
     "replaceTitle": "Replace the brand",
-    "published": "{{appName}} is published. Phones download it the next time ESP RainMaker Home opens and show it from the launch after."
+    "published": "{{brandName}} is published. Phones download it the next time ESP RainMaker Home opens and show it from the launch after."
   },
   "empty": "No brand is published, so ESP RainMaker Home shows its default look on this deployment.",
   "loadError": "Could not load the published brand",
@@ -46,11 +46,7 @@
   "logo": {
     "heading": "Logo",
     "secondaryText": "The logo on the app's background in each mode it ships.",
-    "alt": "{{appName}} logo in {{mode}}",
-    "wordmark": "Wordmark",
-    "wordmarkHidden": "Hidden",
-    "wordmarkImage": "Custom image",
-    "wordmarkDefault": "Deployment name",
+    "alt": "{{brandName}} logo in {{mode}}",
     "scale": "Logo size",
     "radius": "Corner radius",
     "radiusDefault": "App default"
@@ -61,8 +57,13 @@
   },
   "icons": {
     "heading": "Icons",
-    "secondaryText": "Device and screen icons that replace the app's own.",
-    "alt": "{{name}} icon"
+    "secondaryText": "Device icons, AI agent icons and screen illustrations that replace the app's own.",
+    "alt": "{{name}} icon",
+    "groups": {
+      "devices": "Devices",
+      "agents": "AI agents",
+      "illustrations": "Illustrations"
+    }
   },
   "wording": {
     "heading": "Wording",
