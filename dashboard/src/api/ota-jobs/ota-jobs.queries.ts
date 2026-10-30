@@ -82,6 +82,22 @@ export const otaJobsKeys = {
     [...otaJobsKeys.all, "execution", jobId, thingName] as const,
 };
 
+// Statuses AWS IoT can still move on from. A job or execution in any other status is final.
+const ACTIVE_STATUSES = new Set([
+  "SCHEDULED",
+  "IN_PROGRESS",
+  "DELETION_IN_PROGRESS",
+  "QUEUED",
+]);
+const ACTIVE_POLL_MS = 10_000;
+
+// The global 5-minute staleTime would otherwise hold a finished job at "In progress" until a reload.
+function pollWhileActive(statuses: (string | undefined)[] | undefined) {
+  return statuses?.some((s) => s !== undefined && ACTIVE_STATUSES.has(s))
+    ? ACTIVE_POLL_MS
+    : false;
+}
+
 export const otaJobsQueries = {
   detail: (jobId: string) =>
     queryOptions({
@@ -89,6 +105,7 @@ export const otaJobsQueries = {
       // Normalize a missing job to `null` so consumers can distinguish
       // "loaded but not found" and React Query never sees `undefined`.
       queryFn: async () => (await describeJob(jobId)) ?? null,
+      refetchInterval: (query) => pollWhileActive([query.state.data?.status]),
     }),
   list: (params: OtaJobsListParams) =>
     queryOptions({
@@ -102,6 +119,8 @@ export const otaJobsQueries = {
           thingGroupName: params.thingGroupName,
         }),
       placeholderData: keepPreviousData,
+      refetchInterval: (query) =>
+        pollWhileActive(query.state.data?.jobs.map((j) => j.status)),
     }),
   forThing: (params: ThingOtaJobsListParams) =>
     queryOptions({
@@ -113,6 +132,8 @@ export const otaJobsQueries = {
           nextToken: params.nextToken,
         }),
       placeholderData: keepPreviousData,
+      refetchInterval: (query) =>
+        pollWhileActive(query.state.data?.executions.map((e) => e.status)),
     }),
   forGroup: (params: GroupOtaJobsListParams) =>
     queryOptions({
@@ -124,6 +145,8 @@ export const otaJobsQueries = {
           nextToken: params.nextToken,
         }),
       placeholderData: keepPreviousData,
+      refetchInterval: (query) =>
+        pollWhileActive(query.state.data?.jobs.map((j) => j.status)),
     }),
   executionsForJob: (params: JobExecutionsListParams) =>
     queryOptions({
@@ -135,6 +158,8 @@ export const otaJobsQueries = {
           nextToken: params.nextToken,
         }),
       placeholderData: keepPreviousData,
+      refetchInterval: (query) =>
+        pollWhileActive(query.state.data?.executions.map((e) => e.status)),
     }),
   executionDetail: (jobId: string, thingName: string) =>
     queryOptions({
@@ -143,6 +168,7 @@ export const otaJobsQueries = {
       // "loaded but not found" and React Query never sees `undefined`.
       queryFn: async () =>
         (await describeJobExecution({ jobId, thingName })) ?? null,
+      refetchInterval: (query) => pollWhileActive([query.state.data?.status]),
     }),
 };
 
