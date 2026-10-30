@@ -5,10 +5,11 @@
  */
 
 import type { CSSProperties } from "react";
-import type {
-  BrandMode,
-  PublishedBrand,
-} from "@/utils/rainmaker-brand/rainmaker-brand";
+import type { BrandTheme } from "@/utils/rainmaker-brand/rainmaker-brand";
+
+export const BRAND_IMAGE_TILE_CLASS =
+  "flex items-center justify-center overflow-hidden border border-border";
+export const BRAND_ITEM_CLASS = "rounded-xl border border-border";
 
 export const BRAND_CARD_PROPS = {
   allowCollapse: false,
@@ -20,31 +21,34 @@ export const BRAND_CARD_PROPS = {
 /** Colour role App Studio uses for the app's screen background. */
 export const BRAND_SURFACE_ROLE = "bg";
 
-/** Backdrop for a mode whose palette leaves the screen background unset. */
-export const DEFAULT_BRAND_SURFACE: Record<BrandMode, string> = {
+/** Backdrop for a theme whose palette leaves the screen background unset. */
+export const DEFAULT_BRAND_SURFACE: Record<BrandTheme, string> = {
   light: "#FFFFFF",
   dark: "#121212",
 };
 
-export const BRAND_MODES: BrandMode[] = ["light", "dark"];
+export const BRAND_MODES: BrandTheme[] = ["light", "dark"];
 
 export const DEFAULT_LOGO_SCALE = 1;
 
-export const BRAND_MODES_BY_APPEARANCE: Record<
-  PublishedBrand["appearance"],
-  BrandMode[]
-> = {
-  light: ["light"],
-  dark: ["dark"],
-  both: BRAND_MODES,
-};
-
 export const BRAND_MODE_LABELS: Record<
-  BrandMode,
+  BrandTheme,
   { i18nKey: string; fallback: string }
 > = {
   light: { i18nKey: "branding:modes.light", fallback: "Light mode" },
   dark: { i18nKey: "branding:modes.dark", fallback: "Dark mode" },
+};
+
+/** Headings for the image groups App Studio writes; a group this dashboard does not know shows its own name. */
+export const BRAND_ICON_GROUP_LABELS: Partial<
+  Record<string, { i18nKey: string; fallback: string }>
+> = {
+  devices: { i18nKey: "branding:icons.groups.devices", fallback: "Devices" },
+  agents: { i18nKey: "branding:icons.groups.agents", fallback: "AI agents" },
+  illustrations: {
+    i18nKey: "branding:icons.groups.illustrations",
+    fallback: "Illustrations",
+  },
 };
 
 /** Checkerboard behind a swatch, so the alpha of an rgba() colour shows. */

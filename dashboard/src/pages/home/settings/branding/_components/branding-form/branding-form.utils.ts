@@ -33,7 +33,7 @@ export function getPublishErrorMessage(error: Error, t: TFunction): string {
       ),
       tooLarge: t(
         "form.errors.tooLarge",
-        "The brand is larger than 16 KB. Remove some customisation and try again.",
+        "The brand is larger than 32 KB. Remove some customisation and try again.",
       ),
     };
     return messages[error.reason];

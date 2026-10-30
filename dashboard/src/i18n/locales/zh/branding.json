@@ -13,11 +13,11 @@
       "noBrand": "此文件不包含应用品牌。请在 App Studio 中重新保存项目并上传新文件。",
       "invalidBrand": "此文件中的品牌无效（{{detail}}）。",
       "invalidImage": "此文件中的某张图片无法使用（{{detail}}）。",
-      "tooLarge": "品牌大小超过 16 KB。请减少部分定制后重试。",
+      "tooLarge": "品牌大小超过 32 KB。请减少部分定制后重试。",
       "publishFailed": "无法发布品牌，请重试。"
     },
     "replaceTitle": "替换品牌",
-    "published": "{{appName}} 已发布。ESP RainMaker Home 下次打开时下载，并从再下一次启动起显示。"
+    "published": "{{brandName}} 已发布。ESP RainMaker Home 下次打开时下载，并从再下一次启动起显示。"
   },
   "empty": "尚未发布品牌，此部署上的 ESP RainMaker Home 使用默认外观。",
   "loadError": "无法加载已发布的品牌",
@@ -46,11 +46,7 @@
   "logo": {
     "heading": "标志",
     "secondaryText": "标志在应用各模式背景上的显示效果。",
-    "alt": "{{mode}}下的 {{appName}} 标志",
-    "wordmark": "文字标志",
-    "wordmarkHidden": "隐藏",
-    "wordmarkImage": "自定义图片",
-    "wordmarkDefault": "部署名称",
+    "alt": "{{mode}}下的 {{brandName}} 标志",
     "scale": "标志大小",
     "radius": "圆角半径",
     "radiusDefault": "应用默认"
@@ -61,8 +57,13 @@
   },
   "icons": {
     "heading": "图标",
-    "secondaryText": "替换应用自带图标的设备和界面图标。",
-    "alt": "{{name}} 图标"
+    "secondaryText": "替换应用自带图标的设备图标、AI 智能体图标和界面插图。",
+    "alt": "{{name}} 图标",
+    "groups": {
+      "devices": "设备",
+      "agents": "AI 智能体",
+      "illustrations": "插图"
+    }
   },
   "wording": {
     "heading": "用语",

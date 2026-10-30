@@ -7,7 +7,8 @@
 import JSZip from "jszip";
 
 export const LOGO = "brand/images/logo.png";
-export const FAN = "brand/images/asset-fan.png";
+export const FAN = "brand/images/fan.png";
+export const CHAT_ICON_URL = "https://cdn.example.com/acme/chat.png";
 
 /** Smallest byte layout readRainmakerBrand checks: the PNG signature, then an IHDR chunk carrying width and height. */
 export function png(width = 4, height = 4): Uint8Array {
@@ -20,21 +21,20 @@ export function png(width = 4, height = 4): Uint8Array {
   return bytes;
 }
 
-export function brandJson(config: Record<string, unknown> = {}) {
+/** A schemaVersion 1 brand.json; `config` replaces config keys, `document` replaces top-level keys. */
+export function brandJson(config: Record<string, unknown> = {}, document: Record<string, unknown> = {}) {
   return {
-    schema: 1,
-    generatedBy: "ESP RainMaker Neo App Studio",
-    appearance: "both",
+    schemaVersion: 1,
     config: {
-      whitelabelSchema: 1,
-      mode: "light",
-      appName: "Acme Home",
-      logoUrl: LOGO,
-      wordmark: "hidden",
-      assets: { fan: FAN },
-      colors: { light: { primary: "#0369A1", lightBlue: "rgba(3, 105, 161, 0.3)" } },
+      brandName: "Acme Home",
+      supportedThemes: ["light", "dark"],
+      brandLogo: { light: LOGO },
+      ui: { radius: 12, colors: { light: { primary: "#0369A1", lightBlue: "rgba(3, 105, 161, 0.3)" } } },
+      glossary: { device: "Gadget" },
+      assets: { images: { devices: { fan: FAN }, agents: { chatIcon: CHAT_ICON_URL } } },
       ...config,
     },
+    ...document,
   };
 }
 
@@ -57,5 +57,5 @@ export const VALID = {
   "project.yaml": "never: read",
   "brand/brand.json": brandJson(),
   [LOGO]: png(),
-  [FAN]: png(),
+  [FAN]: png(8, 8),
 };

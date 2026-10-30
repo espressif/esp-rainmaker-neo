@@ -10,10 +10,10 @@ import { getServerUrl } from "@/lib/config";
 import {
   buildPublishedBrand,
   imageDigest,
-  imageRefs,
   parsePublishedBrand,
   readRainmakerBrand,
   serializeBrand,
+  stringFields,
   type PublishedBrand,
 } from "@/utils/rainmaker-brand/rainmaker-brand";
 
@@ -54,10 +54,10 @@ function brandKey(location: PublicAssetsLocation): string {
   return `${location.brandPrefix}/brand.json`;
 }
 
-/** Keys of the images this deployment hosts for a brand; external https:// images are left alone. */
-function hostedImageKeys(location: PublicAssetsLocation, brand: PublishedBrand | null): Set<string> {
+/** Keys of the images this deployment hosts for a brand, in any format it was published in; external https:// images are left alone. */
+function hostedImageKeys(location: PublicAssetsLocation, brand: unknown): Set<string> {
   const imagesUrl = `${location.origin}/${location.brandPrefix}/images/`;
-  const urls = brand ? Object.values(imageRefs(brand.config)) : [];
+  const urls = Object.values(stringFields(brand));
   return new Set(
     urls
       .filter((url) => url.startsWith(imagesUrl) && HOSTED_IMAGE_NAME.test(url.slice(imagesUrl.length)))
@@ -72,9 +72,8 @@ async function deleteImages(client: S3Client, location: PublicAssetsLocation, ke
   );
 }
 
-/** The brand phones download, or null when the deployment has none. */
-export async function readPublishedBrand(): Promise<PublishedBrand | null> {
-  const location = publicAssetsLocation();
+/** The stored brand.json, unchecked, or null when the deployment has none. */
+async function fetchPublishedJson(location: PublicAssetsLocation): Promise<unknown> {
   const response = await fetch(`${location.origin}/${brandKey(location)}`, { cache: "no-store" });
   if (NOT_PUBLISHED_STATUSES.includes(response.status)) {
     return null;
@@ -82,7 +81,13 @@ export async function readPublishedBrand(): Promise<PublishedBrand | null> {
   if (!response.ok) {
     throw new Error(`brand.json returned HTTP ${response.status}`);
   }
-  return parsePublishedBrand(await response.json());
+  return response.json();
+}
+
+/** The brand phones download, or null when the deployment has none. */
+export async function readPublishedBrand(): Promise<PublishedBrand | null> {
+  const published = await fetchPublishedJson(publicAssetsLocation());
+  return published === null ? null : parsePublishedBrand(published);
 }
 
 /** Publishes a .rainmaker brand: images first and `brand.json` last, so a phone never reads a brand whose images are missing, then the previous brand's unused images go. */
@@ -90,7 +95,7 @@ export async function publishBrand(file: File): Promise<PublishedBrand> {
   const { brand, images } = await readRainmakerBrand(file);
   const location = publicAssetsLocation();
   const client = getS3Client(location.region);
-  const previous = await readPublishedBrand().catch(() => null);
+  const previous = await fetchPublishedJson(location).catch(() => null);
 
   const imageUrls = new Map<string, string>();
   await Promise.all(
@@ -128,7 +133,7 @@ export async function publishBrand(file: File): Promise<PublishedBrand> {
 export async function deleteBrand(): Promise<void> {
   const location = publicAssetsLocation();
   const client = getS3Client(location.region);
-  const previous = await readPublishedBrand().catch(() => null);
+  const previous = await fetchPublishedJson(location).catch(() => null);
   await client.send(new DeleteObjectCommand({ Bucket: location.bucket, Key: brandKey(location) }));
   await deleteImages(client, location, [...hostedImageKeys(location, previous)]);
 }

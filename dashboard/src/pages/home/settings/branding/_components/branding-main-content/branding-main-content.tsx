@@ -13,11 +13,15 @@ import {
   Skeleton,
   Typography,
 } from "@espressif/dashboard-ui-components/components";
-import { getBrandingErrorMessage } from "../../branding.utils";
+import {
+  getBrandAppearance,
+  getBrandingErrorMessage,
+} from "../../branding.utils";
 import BrandingForm from "../branding-form";
 import type { BrandingMainContentProps } from "./branding-main-content.props";
 
 const APPEARANCE_ICONS = { light: Sun, dark: Moon, both: SunMoon } as const;
+const MS_PER_SECOND = 1000;
 
 export default function BrandingMainContent({
   brand,
@@ -66,24 +70,25 @@ export default function BrandingMainContent({
   }
 
   const { config } = brand;
-  const AppearanceIcon = APPEARANCE_ICONS[brand.appearance];
+  const appearance = getBrandAppearance(config.supportedThemes);
+  const AppearanceIcon = APPEARANCE_ICONS[appearance];
   const appearanceLabel = {
     light: t("summary.appearance.light", "Light mode only"),
     dark: t("summary.appearance.dark", "Dark mode only"),
     both: t("summary.appearance.both", "Light and dark mode"),
-  }[brand.appearance];
+  }[appearance];
 
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <Typography variant="h3" className="truncate">
-        {config.appName}
+        {config.brandName}
       </Typography>
-      {config.tagline && (
+      {typeof config.brandTagline === "string" && config.brandTagline && (
         <Typography variant="body1" className="text-muted-foreground">
-          {config.tagline}
+          {config.brandTagline}
         </Typography>
       )}
-      {config.company && (
+      {typeof config.company === "string" && config.company && (
         <p className="text-sm text-muted-foreground">{config.company}</p>
       )}
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -94,7 +99,7 @@ export default function BrandingMainContent({
         <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
           {t("summary.published", "Published")}
           <SimplifiedDate
-            ts={Date.parse(brand.publishedAt)}
+            ts={brand.publishedAt * MS_PER_SECOND}
             relative
             className="text-muted-foreground"
           />
