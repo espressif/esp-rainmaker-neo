@@ -172,6 +172,7 @@ export function TargetDetailsSection() {
                   value={field.value || undefined}
                   onSelect={(next) => field.onChange(next ?? "")}
                   onError={handleTargetError}
+                  clearable={false}
                   label={t("createOtaJobPage.nodeGroup.label", "Node group")}
                   placeholder={t(
                     "createOtaJobPage.nodeGroup.placeholder",

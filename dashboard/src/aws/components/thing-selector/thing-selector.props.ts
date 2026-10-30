@@ -16,7 +16,7 @@ export interface ThingSelectorProps {
   emptyText?: string
   required?: boolean
   disabled?: boolean
-  /** Allow clearing the selection. Defaults to true. */
+  /** Clicking the selected node again clears it. Defaults to false. */
   clearable?: boolean
   /** Compact trigger for filter toolbars. Defaults to "default". */
   size?: "sm" | "default"

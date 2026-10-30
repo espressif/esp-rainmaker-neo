@@ -15,8 +15,12 @@ import type { ThingSelectorProps } from "./thing-selector.props";
 import { useThingSearch } from "./use-thing-search";
 import { ThingOptionRow } from "./thing-option-row";
 
+// The trigger shows `label`, so it carries the node ID: display names like "Switch" repeat across nodes. The dropdown row still leads with the display name.
 const renderThingOption = (opt: AsyncMultiSelectOption) => (
-  <ThingOptionRow label={opt.label} secondaryText={opt.description} />
+  <ThingOptionRow
+    label={opt.description ?? opt.label}
+    secondaryText={opt.description ? opt.label : undefined}
+  />
 );
 
 /**
@@ -34,7 +38,7 @@ export function ThingSelector({
   emptyText,
   required,
   disabled,
-  clearable = true,
+  clearable = false,
   size = "default",
 }: ThingSelectorProps) {
   const { t } = useTranslation("ota-jobs");
@@ -48,8 +52,8 @@ export function ThingSelector({
         const { nodeId, displayName } = getNodeDisplay(thing);
         return {
           value: nodeId,
-          label: displayName ?? nodeId,
-          description: displayName ? nodeId : undefined,
+          label: nodeId,
+          description: displayName ?? undefined,
         };
       }),
     [things],
