@@ -28,7 +28,7 @@ page for the deployment's region before designing against a number.
 | Unacked outbound publishes per client      | 100        | H     |                                                                                                                   |
 | In-flight shadow messages per thing        | 10         | H     |                                                                                                                   |
 | Rules per account / actions per rule       | 1000 / 10  | S / H | This deployment defines 5 rules, 1–2 actions each                                                                 |
-| Inline session policy (STS `AssumeRole`)   | 2048 chars | H     | ≈4 groups or 8 shared subgroups per user — see below                                                              |
+| Inline session policy (STS `AssumeRole`)   | 2048 chars | H     | ≈4 groups or 5 shared subgroups per user — see below                                                              |
 
 
 
@@ -42,7 +42,7 @@ page for the deployment's region before designing against a number.
 | Subgroups per node                   | **3**     | `subgrp1`/`subgrp2`/`subgrp3` slots; a fourth add is rejected with `"node is already in 3 subgroups"`                                                                                                                                      |
 | Subgroups per group, nodes per group | unbounded | Only subgroups shared *to* a user cost session-policy budget                                                                                                                                                                               |
 | Full-access groups per MQTT session  | 4         | Consequence of the 2048-char session policy; exceeding it fails credential issuance outright. See [user_auth.md](user_auth.md) §3.3, [group.md](group.md#capacity-limits)                                                                  |
-| Shared subgroups per MQTT session    | ~8        | Same budget, cheaper per entry                                                                                                                                                                                                             |
+| Shared subgroups per MQTT session    | ~5        | Same budget, cheaper per entry                                                                                                                                                                                                             |
 | Sharing request validity             | 24 h      | From creation                                                                                                                                                                                                                              |
 | Association request validity         | 5 min     | DynamoDB TTL *and* a deadline the handlers enforce on read, since TTL deletion is only guaranteed within ~48 h. Refreshed on each status update, so the Matter verify → confirm leg gets a fresh 5 min. See [node_assoc.md](node_assoc.md) |
 | Node IDs per claimant                | 20        | Lifetime cap, operator-configurable; reservations are never deleted, so a removed node does not return its slot. See [assisted-claiming.md](assisted-claiming.md)                                                                          |

@@ -68,14 +68,22 @@ every device in the group:
 arn:aws:iot:<region>:<account>:topic/rainmaker/nodes/*/user/params-<groupID>*/*
 ```
 
+For users with **subgroup-only access**, the unicast pattern is scoped to
+each shared subgroup, so it matches only nodes whose shadow name carries that
+subgroup:
+
+```
+# Unicast — subgroup-only access
+arn:aws:iot:<region>:<account>:topic/rainmaker/nodes/*/user/params-<groupID>*<sgID>*/*
+```
+
 Group control topics use a separate path namespace under
 `nodes/groups/<gid>/...` (terminating in a `control` segment) and require
-their own IAM resource patterns. **Subgroup-only access** is expressed
-exclusively against the group control namespace — see Section 3.2.
+their own IAM resource patterns — see Section 3.2.
 
 Because these resources are emitted **per group**, the policy grows with the
 caller's group count and is bounded by STS's 2048-character session-policy
-limit. Each full-access group costs 4 resources and each shared subgroup 2,
+limit. Each full-access group costs 4 resources and each shared subgroup 3,
 which caps a user at roughly 4 groups per session. Adding a per-group resource
 pattern here therefore lowers that ceiling for every user — see
 [group.md](group.md#capacity-limits).
@@ -217,8 +225,8 @@ subgroup-only access, no wildcard is needed because the exact subgroup ID is
 known.
 
 A user with subgroup-only access does **not** get permission to publish on the
-group-level broadcast topic. This matches the existing semantics for the
-unicast topic patterns.
+group-level broadcast topic. They can still publish unicast to a single node,
+but only through the subgroup-scoped pattern in Section 2.3.
 
 ### 3.3 Device IoT Policy
 

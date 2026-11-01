@@ -256,6 +256,7 @@ var _ = Describe("Assume Role Main", func() {
 						topicPrefix + "topic/rainmaker/nodes/*/user/params-" + group3.GroupID + "*/*",
 						topicPrefix + "topic/rainmaker/nodes/groups/" + group3.GroupID + "/control",
 						topicPrefix + "topic/rainmaker/nodes/groups/" + group3.GroupID + "/subgroups/*/control",
+						topicPrefix + "topic/rainmaker/nodes/*/user/params-" + testGroup.GroupID + "*" + subGroup.SubGroupID + "*/*",
 						topicPrefix + "topic/rainmaker/nodes/groups/" + testGroup.GroupID + "/subgroups/" + subGroup.SubGroupID + "/control",
 						topicPrefix + "*/$aws/things/*/shadow/name/params-" + group3.GroupID + "*/*",
 						topicPrefix + "*/$aws/things/*/shadow/name/params-" + testGroup.GroupID + "*" + subGroup.SubGroupID + "*/*",
@@ -528,6 +529,7 @@ var _ = Describe("Assume Role Main", func() {
 				{
 					Action: "iot:Publish",
 					Resource: []string{
+						topicPrefix + "topic/rainmaker/nodes/*/user/params-" + adminGroup.GroupID + "*" + adminSubgroup.SubGroupID + "*/*",
 						topicPrefix + "topic/rainmaker/nodes/groups/" + adminGroup.GroupID + "/subgroups/" + adminSubgroup.SubGroupID + "/control",
 						topicPrefix + "*/$aws/things/*/shadow/name/params-" + adminGroup.GroupID + "*" + adminSubgroup.SubGroupID + "*/*",
 					},
@@ -600,6 +602,28 @@ var _ = Describe("Assume Role Main", func() {
 			Expect(len(policy)).To(BeNumerically("<=", maxSessionPolicyChars),
 				fmt.Sprintf("policy for %d groups is %d chars; STS rejects anything over %d",
 					supportedGroupsPerSession, len(policy), maxSessionPolicyChars))
+		})
+
+		It("should stay within the STS limit at the supported shared subgroup count", func() {
+			for i := 0; i < supportedSharedSubgroupsPerSession; i++ {
+				subGroup, err := group.CreateSubGroup(rmng_context, testGroup.GroupID, fmt.Sprintf("Budget Sub Group %d", i))
+				Expect(err).To(BeNil())
+				_, err = group.ShareSubGroup(rmng_context, testGroup.GroupID, subGroup.SubGroupID, testUser2.GetID(), auth.UserInfo{})
+				Expect(err).To(BeNil())
+			}
+			sharingRequests, err := group.GetMySharingRequests(rmng_context2)
+			Expect(err).To(BeNil())
+			Expect(sharingRequests).To(HaveLen(supportedSharedSubgroupsPerSession))
+			for _, sharingRequest := range sharingRequests {
+				Expect(group.ApproveSharingRequest(rmng_context2, sharingRequest.SharingRequestID)).To(Succeed())
+			}
+
+			CallAssumeRoleHandler(ctx, testUser2.GetID())
+			policy := *stsMock.GetLastAssumeRoleInput().Policy
+
+			Expect(len(policy)).To(BeNumerically("<=", maxSessionPolicyChars),
+				fmt.Sprintf("policy for %d shared subgroups is %d chars; STS rejects anything over %d",
+					supportedSharedSubgroupsPerSession, len(policy), maxSessionPolicyChars))
 		})
 
 		It("should reject with a diagnosable error instead of letting STS fail opaquely", func() {

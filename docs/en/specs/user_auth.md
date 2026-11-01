@@ -318,8 +318,9 @@ Topic ARNs are appended as follows:
   a subgroup-control wildcard. Because a full-group grant already covers all
   its subgroups, per-subgroup ARNs are skipped for those groups.
 - **Subgroup-only access** contributes, for each shared subgroup of a group the
-  caller does *not* fully own, a shadow-filter and a subgroup-control topic
-  ARN.
+  caller does *not* fully own, a shadow-filter, a unicast params publish
+  resource (`.../rainmaker/nodes/*/user/params-<group>*<subgroup>*/*`) and a
+  subgroup-control topic ARN.
 
 The set of groups/subgroups the caller may access is resolved as follows:
 

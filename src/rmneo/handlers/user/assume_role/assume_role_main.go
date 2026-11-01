@@ -58,6 +58,11 @@ const maxSessionPolicyChars = 2048
 // A caller above this cannot be issued MQTT credentials at all.
 const supportedGroupsPerSession = 4
 
+// supportedSharedSubgroupsPerSession is the same budget for a caller holding
+// only shared subgroups: ~271 chars per subgroup (shadow filter, unicast and
+// subgroup control ARNs).
+const supportedSharedSubgroupsPerSession = 5
+
 // groupAccess is the set of groups (full access) and per-group subgroups the
 // caller may reach, used to scope the MQTT session policy.
 type groupAccess struct {
@@ -336,9 +341,10 @@ func createMQTTPolicyDocument(accountId string, clientIdentity mqttClientIdentit
 		}
 		for _, subgroup := range subgroups {
 			shadowFilterResource := fmt.Sprintf("arn:aws:iot:%s:%s:*/$aws/things/*/shadow/name/params-%s*%s*/*", region, accountId, grp, subgroup)
+			unicastPublishResource := fmt.Sprintf("arn:aws:iot:%s:%s:topic/rainmaker/nodes/*/user/params-%s*%s*/*", region, accountId, grp, subgroup)
 			subgroupControlResource := fmt.Sprintf("arn:aws:iot:%s:%s:topic/rainmaker/nodes/groups/%s/subgroups/%s/control", region, accountId, grp, subgroup)
 
-			topicResources = append(topicResources, subgroupControlResource)
+			topicResources = append(topicResources, unicastPublishResource, subgroupControlResource)
 			topicFilterResources = append(topicFilterResources, shadowFilterResource)
 		}
 	}

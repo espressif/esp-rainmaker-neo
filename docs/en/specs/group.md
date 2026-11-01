@@ -89,8 +89,8 @@ Device control runs over MQTT, and the credentials for it come from `POST /v1/as
 | --- | --- |
 | Groups a user may create | Unbounded |
 | Groups usable in one session | **4** with full access |
-| Shared subgroups usable in one session | **8** |
-| Mixed allowance | `343 × groups + 183 × shared_subgroups ≤ ~1545` characters |
+| Shared subgroups usable in one session | **5** |
+| Mixed allowance | `343 × groups + 271 × shared_subgroups ≤ ~1545` characters |
 | Subgroups per group | No enforced limit |
 | Session policy size (AWS/STS) | 2048 characters |
 | Sharing request validity | 24 hours from creation |
@@ -133,7 +133,7 @@ for a regular user would hand a `subentity` member the whole group's ARNs.
 Two further properties are worth knowing:
 
 - Even under a scoped policy, a member holding many shared subgroups **of the
-  same group** still accumulates one ARN pair per subgroup, so roughly 8 shared
+  same group** still accumulates three ARNs per subgroup, so roughly 5 shared
   subgroups overruns a single-group policy.
 - The over-allowance failure surfaces as HTTP 500, which a client cannot
   distinguish from a transient fault. Clients must treat a repeated
@@ -1808,7 +1808,7 @@ sequenceDiagram
     - No Matter-specific membership backfill is required. Controller Node IDs are derived during NOC issuance.
 
 13. **How many groups can a user have?**
-    - There is no limit on how many a user can *create*, but only about **4** can be used at once, because every accessible group is encoded into the 2048-character STS session policy that `POST /v1/assumed-roles` issues. Shared subgroups are cheaper — roughly 8 fit. See [Capacity Limits](#capacity-limits).
+    - There is no limit on how many a user can *create*, but only about **4** can be used at once, because every accessible group is encoded into the 2048-character STS session policy that `POST /v1/assumed-roles` issues. Shared subgroups are cheaper — roughly 5 fit. See [Capacity Limits](#capacity-limits).
 
 14. **Does a group shared with me count against my own limit?**
     - Yes. The allowance is per user and pooled: a group shared to you costs exactly as much as one you own. This means other users' sharing decisions consume your allowance, and nothing warns either party when that happens.
