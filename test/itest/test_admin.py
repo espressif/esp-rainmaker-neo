@@ -195,7 +195,7 @@ def test_admin_assume_role_nonexistent_subgroup(admin_user, test_user1):
     user1_group_api.delete_group(group_id)
 
 
-@pytest.mark.unsafe
+@pytest.mark.xdist_group("mqtt_shadow_authz")
 def test_admin_assume_role_group_mqtt_access(admin_user, associated_device):
     """
     Test that admin assume_role with a group grants MQTT access to nodes in that group.
@@ -239,7 +239,7 @@ def test_admin_assume_role_group_mqtt_access(admin_user, associated_device):
     admin_user.mqtt_disconnect_and_wait()
 
 
-@pytest.mark.unsafe
+@pytest.mark.xdist_group("mqtt_shadow_authz")
 def test_admin_assume_role_subgroup_mqtt_access(admin_user, device_with_2_subgroups):
     """
     Test that admin assume_role with a subgroup grants MQTT access ONLY to
