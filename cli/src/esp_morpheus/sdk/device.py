@@ -874,8 +874,8 @@ class Device:
                 message = self.from_cloud_queue.get(timeout=1)
                 if "getGroupInfo" in message:
                     self.group_id = message["getGroupInfo"].get("pgrp")
-                    if "subgrps" in message["getGroupInfo"]:
-                        self.subgroup_ids = message["getGroupInfo"].get("subgrps")
+                    # The cloud omits subgrps for a node in no subgroup, so absence must clear what a previous placement left.
+                    self.subgroup_ids = message["getGroupInfo"].get("subgrps")
                     return True
             except Empty:
                 pass
