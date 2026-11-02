@@ -40,6 +40,8 @@ from awscrt import mqtt as awscrt_mqtt
 
 RAW_TS_DATA_TABLE = "rmng-raw-ts-data"
 TS_INGEST_SETTLE_S = 4.0
+# The batch path goes through SQS, and Lambda's pickup from an idle queue measured ~20s end to end.
+TS_BATCH_INGEST_SETTLE_S = 30.0
 
 
 def _bridge_publish(bridge, topic, payload):
@@ -223,9 +225,7 @@ def test_bridge_publishes_child_ts_batch(bridge_in_group, ddb, seed_child):
         (f"{child}.{probe}_a.int", ts_ms),
         (f"{child}.{probe}_b.float", ts_ms + 1),
     ]
-    # Longer than the single-point budget: this path adds a Lambda hop, and
-    # in SQS mode an event-source-mapping batching window on top.
-    deadline = time.time() + TS_INGEST_SETTLE_S * 3
+    deadline = time.time() + TS_BATCH_INGEST_SETTLE_S
     pending = list(expected)
     while pending and time.time() < deadline:
         pending = [(k, t) for k, t in pending if not _ts_row_exists(ddb, k, t)]
