@@ -79,6 +79,9 @@ ENV REPOS_PATH="/root"
 RUN mkdir -p ${GOPATH}/src ${GOPATH}/bin ${GOPATH}/pkg
 WORKDIR ${REPOS_PATH}
 
+# Python 3.12 bundles pip 25.0.1; PIP_RESUME_RETRIES (resume a broken download instead of restarting it) needs 25.1+.
+RUN python3.12 -m pip install --upgrade pip
+
 # Copy requirements files if they exist
 COPY requirements*.txt ./
 
