@@ -71,25 +71,35 @@ def st_region_arn(request):
 # 1. Config API CRUD (admin REST API)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.xdist_group("env_mut")
 def test_smartthings_configuration_is_readable(admin_user):
     """GET returns the deployment's client_id and never the secret.
 
-    Read-only deliberately: a write here overwrites the deployment's real credentials and
-    nothing can put them back, since the secret is never returned. st_cfg's unit specs
-    cover store, update and delete against mocked SSM.
+    Read-only on a configured deployment: a write there overwrites the deployment's real
+    credentials and nothing can put them back, since the secret is never returned. An
+    unconfigured deployment gets a placeholder that is deleted again afterwards. st_cfg's
+    unit specs cover store, update and delete against mocked SSM.
     """
     admin = admin_user
     admin.get_aws_credentials()
 
     response = admin.st_get_configuration()
-    if response.status_code == 404:
-        pytest.skip("SmartThings is not configured on this deployment")
-    assert response.status_code == 200, f"GET failed: {response.text}"
+    stored_placeholder = response.status_code == 404
+    if stored_placeholder:
+        # DELETE leaves the SmartThings callback URLs on the shared va-client row; they are the fixed URLs any real configuration adds.
+        post = admin.st_post_configuration("itest-st-client-id", "itest-st-client-secret")
+        assert post.status_code in (200, 201), f"POST failed: {post.text}"
+        response = admin.st_get_configuration()
+    try:
+        assert response.status_code == 200, f"GET failed: {response.text}"
 
-    body = response.json()
-    assert body.get('client_id'), f"configured deployment must report a client_id: {body}"
-    # The secret must never be readable, which only a live call can prove.
-    assert 'client_secret' not in body, f"client_secret must be omitted from GET: {body}"
+        body = response.json()
+        assert body.get('client_id'), f"configured deployment must report a client_id: {body}"
+        # The secret must never be readable, which only a live call can prove.
+        assert 'client_secret' not in body, f"client_secret must be omitted from GET: {body}"
+    finally:
+        if stored_placeholder:
+            admin.st_delete_configuration()
 
 
 def test_smartthings_config_non_admin_forbidden(test_user1):

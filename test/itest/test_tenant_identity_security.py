@@ -95,6 +95,7 @@ def test_no_client_can_write_identity_attributes(pool_id, pool_label, extra_forb
     )
 
 
+@pytest.mark.cognito
 def test_sub_mapped_pools_forbid_writing_the_mapped_claim():
     """The precondition for mapping sub, checked on every pool a provider row maps rather than only the pools this repo deploys."""
     pools = _sub_mapped_cognito_pools()
