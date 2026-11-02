@@ -21,7 +21,7 @@ TABLE_NAMES = {
 
     'GROUPS': 'rmng-groups',
     'GROUP_DEVICE_MAPPING': 'rmng-group-node-assoc',
-    'SHARING_REQUESTS': 'rmng-sharing-reqs',
+    'SHARING_REQUESTS': 'rmng-sharing-requests',
     'AUTOMATIONS': 'rmng-automations',
 
     'NODE_DETAILS': 'rmng-nodes',

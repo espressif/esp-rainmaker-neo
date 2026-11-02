@@ -2038,6 +2038,81 @@ var _ = Describe("Group Sharing", func() {
 
 })
 
+var _ = Describe("Sharing request storage", func() {
+	var (
+		owner   *rmngctx.RmngContext
+		groupID string
+	)
+
+	BeforeEach(func() {
+		test_utils.TestSetup()
+		owner = rmngctx.NewRmngContext(user.NewUser("st-owner"))
+		g, err := group.CreateGroupForUser(owner, "House")
+		Expect(err).To(BeNil())
+		groupID = g.GroupID
+	})
+
+	storedRow := func(storedUserID, requestID string) map[string]types.AttributeValue {
+		row := test_utils.QuickGetItem(sharing_request_db.SharingRequestsTable, map[string]types.AttributeValue{
+			"user_id":            &types.AttributeValueMemberS{Value: storedUserID},
+			"sharing_request_id": &types.AttributeValueMemberS{Value: requestID},
+		})
+		Expect(row).ToNot(BeNil())
+		return row
+	}
+
+	It("should store NONE and the typed username for a whole-group invite, and show the invitee no subgroup", func() {
+		reqID, err := group.ShareGroupWithTarget(owner, groupID, group.ShareTarget{UserID: "st-invitee", Username: "st-invitee@example.com"}, utils.GroupSecondaryAccess, auth.UserInfo{})
+		Expect(err).To(BeNil())
+
+		row := storedRow("st-invitee", reqID)
+		Expect(row["sub_entity_id"]).To(Equal(&types.AttributeValueMemberS{Value: sharing_request_db.WholeGroupSubEntityID}))
+		Expect(row["target_username"]).To(Equal(&types.AttributeValueMemberS{Value: "st-invitee@example.com"}))
+
+		received, err := group.GetMySharingRequests(rmngctx.NewRmngContext(user.NewUser("st-invitee")))
+		Expect(err).To(BeNil())
+		Expect(received).To(HaveLen(1))
+		Expect(received[0].SubgroupID()).To(BeEmpty())
+	})
+
+	It("should still grant whole-group access for an invite stored with an empty sub_entity_id", func() {
+		_, err := awscommon.GetDynamoDBClient().PutItem(context.Background(), &dynamodb.PutItemInput{
+			TableName: aws.String(sharing_request_db.SharingRequestsTable),
+			Item: map[string]types.AttributeValue{
+				"user_id":            &types.AttributeValueMemberS{Value: "st-invitee"},
+				"sharing_request_id": &types.AttributeValueMemberS{Value: "legacy-request"},
+				"expiration_time":    &types.AttributeValueMemberN{Value: strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10)},
+				"group_id":           &types.AttributeValueMemberS{Value: groupID},
+				"sub_entity_id":      &types.AttributeValueMemberS{Value: ""},
+				"access_type":        &types.AttributeValueMemberS{Value: string(utils.GroupSecondaryAccess)},
+				"primary_user_id":    &types.AttributeValueMemberS{Value: "st-owner"},
+			},
+		})
+		Expect(err).To(BeNil())
+
+		Expect(group.ApproveSharingRequest(rmngctx.NewRmngContext(user.NewUser("st-invitee")), "legacy-request")).To(Succeed())
+		test_utils.AssertRowInDB(user_group_db.UserGroupMappingTable, map[string]types.AttributeValue{
+			"user_id":        &types.AttributeValueMemberS{Value: "st-invitee"},
+			"group_id":       &types.AttributeValueMemberS{Value: groupID},
+			"sub_entity_ids": &types.AttributeValueMemberL{Value: []types.AttributeValue{}},
+			"access_type":    &types.AttributeValueMemberS{Value: string(utils.GroupSecondaryAccess)},
+		})
+	})
+
+	It("should store an unresolved username as a decoy that nobody can claim", func() {
+		decoyID, err := group.ShareGroupWithTarget(owner, groupID, group.ShareTarget{Username: "nobody@example.com"}, utils.GroupSecondaryAccess, auth.UserInfo{})
+		Expect(err).To(BeNil())
+
+		row := storedRow("decoy-"+decoyID, decoyID)
+		Expect(row["target_username"]).To(Equal(&types.AttributeValueMemberS{Value: "nobody@example.com"}))
+
+		for _, claimer := range []string{"st-owner", "st-invitee", "st-outsider"} {
+			err := group.ApproveSharingRequest(rmngctx.NewRmngContext(user.NewUser(claimer)), decoyID)
+			Expect(errors.Is(err, sharing_request_db.ErrSharingRequestNotFound)).To(BeTrue(), "claimer %s got %v", claimer, err)
+		}
+	})
+})
+
 var _ = Describe("ListUsersForGroupOrSubGroup", func() {
 	var (
 		rmng_context1 *rmngctx.RmngContext

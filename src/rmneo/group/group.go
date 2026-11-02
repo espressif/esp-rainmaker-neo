@@ -606,23 +606,34 @@ func DeleteSubGroup(ctx *rmngctx.RmngContext, groupID string, subGroupID string)
 	return nil
 }
 
+// ShareTarget names a sharing request's invitee. UserID is the resolved account, empty when Username resolved to none; Username is what the sharer typed, empty for a QR-code request.
+type ShareTarget struct {
+	UserID   string
+	Username string
+}
+
 // ShareGroup shares a group with a user. Pass an empty targetUserID for the
 // QR-code flow: this creates an unclaimed request that anyone holding the
 // returned request ID can claim via ApproveSharingRequest/RejectSharingRequest
 // (see sharing_request_db.SharingRequestDB.CreateSharingRequest).
 func ShareGroup(ctx *rmngctx.RmngContext, groupID string, targetUserID string, accessType utils.GroupAccessType, primaryUserInfo auth.UserInfo) (string, error) {
+	return ShareGroupWithTarget(ctx, groupID, ShareTarget{UserID: targetUserID}, accessType, primaryUserInfo)
+}
+
+// ShareGroupWithTarget is ShareGroup that also records the username the sharer typed. A Username with no UserID stores a decoy request (see sharing_request_db).
+func ShareGroupWithTarget(ctx *rmngctx.RmngContext, groupID string, target ShareTarget, accessType utils.GroupAccessType, primaryUserInfo auth.UserInfo) (string, error) {
 	// check if we have permission to access the group
 	_, err := GetUserGroupAccess(ctx, groupID)
 	if err != nil {
 		return "", rmerror.NewRMError(err, "parent group does not exist")
 	}
 
-	if targetUserID == ctx.Accessor.GetID() {
+	if target.UserID == ctx.Accessor.GetID() {
 		return "", rmerror.NewRMError(nil, "Cannot share with self")
 	}
 
 	sharingRequestDB := sharing_request_db.NewSharingRequestDB(ctx)
-	requestID, err := sharingRequestDB.CreateSharingRequest(targetUserID, groupID, "", string(accessType), primaryUserInfo.Email, primaryUserInfo.PhoneNumber)
+	requestID, err := sharingRequestDB.CreateSharingRequest(target.UserID, target.Username, groupID, sharing_request_db.WholeGroupSubEntityID, string(accessType), primaryUserInfo.Email, primaryUserInfo.PhoneNumber)
 	if err != nil {
 		return "", rmerror.NewRMError(err, "failed to create sharing request")
 	}
@@ -677,18 +688,23 @@ func UnshareGroup(ctx *rmngctx.RmngContext, groupID string, targetUserID string)
 // They can never share this sub-group further
 // Pass an empty targetUserID for the QR-code flow — see ShareGroup.
 func ShareSubGroup(ctx *rmngctx.RmngContext, parentGroupID string, subGroupID string, targetUserID string, primaryUserInfo auth.UserInfo) (string, error) {
+	return ShareSubGroupWithTarget(ctx, parentGroupID, subGroupID, ShareTarget{UserID: targetUserID}, primaryUserInfo)
+}
+
+// ShareSubGroupWithTarget is ShareSubGroup that also records the username the sharer typed — see ShareGroupWithTarget.
+func ShareSubGroupWithTarget(ctx *rmngctx.RmngContext, parentGroupID string, subGroupID string, target ShareTarget, primaryUserInfo auth.UserInfo) (string, error) {
 	// check if we have permission to access the group
 	_, err := GetUserGroupAccess(ctx, parentGroupID)
 	if err != nil {
 		return "", rmerror.NewRMError(err, "parent group does not exist")
 	}
 
-	if targetUserID == ctx.Accessor.GetID() {
+	if target.UserID == ctx.Accessor.GetID() {
 		return "", rmerror.NewRMError(nil, "Cannot share with self")
 	}
 
 	sharingRequestDB := sharing_request_db.NewSharingRequestDB(ctx)
-	requestID, err := sharingRequestDB.CreateSharingRequest(targetUserID, parentGroupID, subGroupID, string(utils.GroupSubEntityAccess), primaryUserInfo.Email, primaryUserInfo.PhoneNumber)
+	requestID, err := sharingRequestDB.CreateSharingRequest(target.UserID, target.Username, parentGroupID, subGroupID, string(utils.GroupSubEntityAccess), primaryUserInfo.Email, primaryUserInfo.PhoneNumber)
 	if err != nil {
 		return "", rmerror.NewRMError(err, "failed to create sharing request")
 	}

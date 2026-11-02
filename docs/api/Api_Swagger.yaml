@@ -1782,9 +1782,10 @@ paths:
         "201":
           description: |
             Request accepted. The response is identical whether or not the
-            username belongs to a registered user: same message, and a
-            request_id that is real for a registered invitee and a decoy UUID
-            otherwise, so the outcome does not reveal whether an account exists.
+            username belongs to a registered user: an unregistered username
+            gets a stored decoy request that nobody can accept, so neither this
+            response nor a listing of the group's requests reveals whether an
+            account exists.
           content:
             application/json:
               schema:
