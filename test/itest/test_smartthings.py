@@ -18,9 +18,6 @@ Mirrors test_alexa.py / test_gva.py for parity. Two layers are covered:
 Run all: pytest test/itest/test_smartthings.py -v -s
 """
 import base64
-import os
-import subprocess
-import sys
 import time
 import uuid
 
@@ -768,59 +765,15 @@ def _assert_st_reported(base_url, api_key, callback_token, device_id, expected_s
 
 
 
-@pytest.fixture
-def st_action_test_mode(webhook_mock):
-    """Point the regional Schema App Lambda at the in-cloud mock for one test.
-
-    grantCallbackAccess runs in rmng-st-action, not in rmng-notifications, so the
-    webhook_mock fixture's env patch does not reach it. Without this the handler
-    reads /rmng/smartthings/{client_id,client_secret} from SSM and fails outright on
-    an account where SmartThings was never configured. drx.py takes its region from
-    AWS_REGION, hence the per-region env for the subprocess.
-    """
-    base_url, api_key = webhook_mock
-    if not ST_REGION_ARNS:
-        pytest.skip("No rmng-st-core regions in rmng-outputs.json")
-    region, arn = ST_REGION_ARNS[0]
-    fn = arn.rsplit(":", 1)[-1]
-
-    def _set(url_value, key_value):
-        # Both vars matter: the base URL is what makes the handler skip the SSM
-        # credential read, and the key is what MakeHTTPPostRequest attaches as
-        # x-api-key -- every /v1 method on the test-infra API is api_key_required,
-        # so the token POST is answered with 403 without it.
-        env = {**os.environ, "AWS_REGION": region}
-        subprocess.run(
-            [sys.executable, "tools/drx.py", "update-env", fn,
-             f"webhook_mock_base_url={url_value}",
-             f"webhook_mock_api_key={key_value}"],
-            check=True, env=env)
-        # drx returns as soon as UpdateFunctionConfiguration is accepted, but the new
-        # env is not live until the update finishes. Invoking in that window runs the
-        # old configuration: the handler then posts the token exchange without
-        # x-api-key and grantCallbackAccess fails, leaving the previous callback token
-        # in place with nothing to say it happened.
-        boto3.client("lambda", region_name=region).get_waiter(
-            "function_updated_v2").wait(FunctionName=fn)
-
-    _set(base_url, api_key)
-    try:
-        yield base_url
-    finally:
-        _set("", "")
-
-
-@pytest.mark.xdist_group("env_mut")
-def test_smartthings_state_callback(user_with_1_dev_each_in_2_groups, webhook_mock, st_action_test_mode):
+def test_smartthings_state_callback(user_with_1_dev_each_in_2_groups, webhook_mock):
     """A device param change is reported to SmartThings as a proactive stateCallback.
 
-    The webhook_mock fixture points rmng-notifications at the in-cloud mock, which
-    is where the adapter's test mode routes state callbacks. The env_mut group
-    serialises this against the other tests that toggle the same Lambda config.
+    The test links against the in-cloud mock's token and stateCallback URLs, so the
+    callback is delivered there with no switch on any Lambda; only requests addressed
+    to the mock carry its API key.
 
     Only the first ST region is exercised: the dispatch path under test lives in
-    the notifications Lambda, which is regional-independent, and the fixture
-    mutates shared Lambda env.
+    the notifications Lambda, which is regional-independent.
     """
     webhook_mock_base_url, webhook_mock_api_key = webhook_mock
     if not ST_REGION_ARNS:
@@ -904,9 +857,8 @@ def _expire_st_callback_token(user_sub, state_callback_url):
     )
 
 
-@pytest.mark.xdist_group("env_mut")
 def test_smartthings_state_callback_refreshes_expired_token(
-        user_with_1_dev_each_in_2_groups, webhook_mock, st_action_test_mode):
+        user_with_1_dev_each_in_2_groups, webhook_mock):
     """An expired callback token is refreshed and the stateCallback still lands.
 
     The refresh is its own interaction (refreshAccessTokens), and a refresh_token grant
@@ -1014,8 +966,7 @@ def _link_st_callbacks(test_user1, webhook_mock_base_url, arn, region):
     return callback_token
 
 
-@pytest.mark.xdist_group("env_mut")
-def test_smartthings_device_added_callback(user_with_1_dev_each_in_2_groups, webhook_mock, st_action_test_mode):
+def test_smartthings_device_added_callback(user_with_1_dev_each_in_2_groups, webhook_mock):
     """A node added to a group is pushed to SmartThings as a discoveryCallback.
 
     Removing the node first makes the add a real membership transition: adding a
@@ -1046,8 +997,7 @@ def test_smartthings_device_added_callback(user_with_1_dev_each_in_2_groups, web
                           callback_token, added, "discoveryCallback")
 
 
-@pytest.mark.xdist_group("env_mut")
-def test_smartthings_device_removed_callback(user_with_1_dev_each_in_2_groups, webhook_mock, st_action_test_mode):
+def test_smartthings_device_removed_callback(user_with_1_dev_each_in_2_groups, webhook_mock):
     """A node removed from a group is pushed as DEVICE-DELETED on every device.
 
     Answering DEVICE-DELETED to a later stateRefresh is not enough — SmartThings
@@ -1117,9 +1067,8 @@ def _assert_st_discovery_reported(base_url, api_key, callback_token, device_id, 
     raise last_error
 
 
-@pytest.mark.xdist_group("env_mut")
 def test_smartthings_rename_emits_discovery_callback(
-        user_with_1_dev_each_in_2_groups, webhook_mock, st_action_test_mode):
+        user_with_1_dev_each_in_2_groups, webhook_mock):
     """Renaming a device reaches SmartThings as a discoveryCallback.
 
     Without it the rename would emit a stateCallback carrying only healthCheck and

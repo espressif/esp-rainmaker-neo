@@ -137,6 +137,8 @@ SSM_PARAMETER_PREFIXES = {
     'GVA_CONFIG': '/rmng/gva/',
     'ALEXA_CONFIG': '/rmng/alexa/',
     'ST_CONFIG': '/rmng/smartthings/',
+    # Published by the itest test-infra stack (test/infra); absent in every production account.
+    'TEST_MOCK': '/rmng/test/webhook-mock',
 }
 
 # S3 Bucket Name Pattern

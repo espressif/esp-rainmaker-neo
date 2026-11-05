@@ -11,12 +11,14 @@ import (
 	"io"
 	"time"
 
+	"github.com/espressif/esp-rainmaker-neo/src/awsutils/ssmutil"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_details_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_integration_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification/testmock"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/config"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
@@ -890,14 +892,19 @@ var _ = Describe("SmartThings handlers", func() {
 			Expect(sent.CallbackAuthentication.RefreshToken).To(Equal("old-refresh-token"))
 		})
 
-		Context("with webhook_mock_base_url set", func() {
+		Context("with the itest webhook mock deployed", func() {
 			const mockBase = "https://mock.example.com/prod"
 
 			BeforeEach(func() {
-				GinkgoT().Setenv("webhook_mock_base_url", mockBase)
+				Expect(ssmutil.StoreParameter(ctx, testmock.PARAM_NAME, `{"base_url":"`+mockBase+`","api_key":"mock-key"}`)).To(Succeed())
+				testmock.Reset()
 			})
 
-			It("sends a mock token request without client credentials", func() {
+			AfterEach(func() {
+				testmock.Reset()
+			})
+
+			It("sends a mock token request without client credentials, carrying the mock's API key", func() {
 				mockHTTP := mock.NewMockHTTPClient()
 				httpclient.Set(mockHTTP)
 				tokenResp := `{"callbackAuthentication":{"accessToken":"mock-access-token","refreshToken":"mock-refresh-token","expiresIn":86400}}`
@@ -909,27 +916,23 @@ var _ = Describe("SmartThings handlers", func() {
 				sent := sentTokenRequest(mockHTTP)
 				Expect(sent.CallbackAuthentication.ClientID).To(BeEmpty())
 				Expect(sent.CallbackAuthentication.ClientSecret).To(BeEmpty())
+				Expect(mockHTTP.Requests[0].Header.Get("x-api-key")).To(Equal("mock-key"))
 			})
 
-			const realTokenURL = "https://c2c-ap.smartthings.com/oauth/token"
+			It("still sends real SmartThings its client credentials and never the mock's API key", func() {
+				mockHTTP := mock.NewMockHTTPClient()
+				httpclient.Set(mockHTTP)
+				tokenResp := `{"callbackAuthentication":{"accessToken":"a","refreshToken":"r","expiresIn":86400}}`
+				Expect(mockHTTP.RegisterResponse("https://st/token", "POST", 200, tokenResp)).To(BeNil())
 
-			DescribeTable("refuses a token request to real SmartThings without sending it",
-				func(send func() error) {
-					mockHTTP := mock.NewMockHTTPClient()
-					httpclient.Set(mockHTTP)
+				_, err := exchangeCodeForTokens(ctx, "auth-code", "https://st/token")
+				Expect(err).NotTo(HaveOccurred())
 
-					Expect(send()).To(MatchError(ContainSubstring("not the webhook mock")))
-					Expect(mockHTTP.Requests).To(BeEmpty())
-				},
-				Entry("grant", func() error {
-					_, err := exchangeCodeForTokens(ctx, "auth-code", realTokenURL)
-					return err
-				}),
-				Entry("refresh", func() error {
-					_, err := refreshCallbackToken(ctx, realTokenURL)("old-refresh-token")
-					return err
-				}),
-			)
+				sent := sentTokenRequest(mockHTTP)
+				Expect(sent.CallbackAuthentication.ClientID).To(Equal("test-client-id"))
+				Expect(sent.CallbackAuthentication.ClientSecret).To(Equal("test-client-secret"))
+				Expect(mockHTTP.Requests[0].Header.Get("x-api-key")).To(BeEmpty())
+			})
 		})
 
 		It("errors when callbackAuthentication is missing", func() {
@@ -1049,7 +1052,7 @@ var _ = Describe("SmartThings handlers", func() {
 		var stNotif *STNotification
 
 		BeforeEach(func() {
-			stNotif = NewSTNotification(ctx, "")
+			stNotif = NewSTNotification()
 		})
 
 		It("reports the correct name and type", func() {

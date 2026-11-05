@@ -14,8 +14,6 @@ import csv
 import datetime
 import json
 import os
-import subprocess
-import sys
 import threading
 import time
 import uuid
@@ -25,6 +23,7 @@ from types import SimpleNamespace
 import boto3
 import pytest
 import requests
+from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -2129,12 +2128,12 @@ def provision_end_user():
         except Exception:  # noqa: BLE001
             pass
 # ============================================================================
-# Webhook mock toggle (test-infra deployed by `make itest-setup`)
+# Webhook mock (test-infra deployed by `make itest-setup`)
 # ============================================================================
 
 # Path to the test-infra outputs written by `make itest-setup`.
 _TEST_INFRA_OUTPUTS = "build/cdk/cdk-outputs-test.json"
-_NOTIFICATIONS_LAMBDA = "rmng-notifications"
+_USER_ENDPOINTS_TABLE = "rmng-user-endpoints"
 
 
 def _load_mock_infra():
@@ -2154,42 +2153,60 @@ def _load_mock_infra():
     return base_url, api_key
 
 
-def _set_notifications_env(**pairs):
-    """Patch rmng-notifications env vars via drx.py (VAR=VALUE ...)."""
-    args = [f"{k}={v}" for k, v in pairs.items()]
-    subprocess.run(
-        [sys.executable, "tools/drx.py", "update-env", _NOTIFICATIONS_LAMBDA, *args],
-        check=True,
-    )
-
-
 @pytest.fixture(scope="session")
 def webhook_mock():
-    """Enable the DynamoDB webhook mock on the notifications Lambda for the run.
+    """Yield (base_url, api_key) for the webhook mock `make itest-setup` deploys.
 
-    Yields (base_url, api_key): the test-infra API Gateway URL (deployed by
-    `make itest-setup`) and the API key gating every /v1 method. Points
-    rmng-notifications at the mock with the key, and disables it on teardown —
-    even if a test fails — by blanking webhook_mock_base_url, the sole toggle the
-    Lambda reads. Skips the requesting test(s) when the infra isn't deployed. The
-    test sends the api_key on its own validate GETs; the notifications Lambda gets
-    it via the webhook_mock_api_key env var.
+    Nothing on a Lambda changes: the backend delivers only endpoints a test marked
+    with mark_itest_endpoints to the mock, and every other endpoint in the account,
+    QA's and real users' included, keeps going to the real service. Skips the
+    requesting test(s) when the infra isn't deployed. Tests send the api_key on their
+    own validate GETs.
     """
     infra = _load_mock_infra()
     if infra is None:
         pytest.skip(
             "test webhook mock not deployed; run `make itest-setup` first"
         )
-    base_url, api_key = infra
+    return infra
 
-    _set_notifications_env(
-        webhook_mock_base_url=base_url,
-        webhook_mock_api_key=api_key,
-    )
-    try:
-        yield base_url, api_key
-    finally:
-        _set_notifications_env(webhook_mock_base_url="")
+
+def _endpoint_rows(user, integration_id):
+    """Return the endpoints table and the user's rows on integration_id."""
+    table = boto3.resource("dynamodb", region_name=REGION).Table(_USER_ENDPOINTS_TABLE)
+    rows = table.query(
+        KeyConditionExpression=Key("user_id").eq(user.sub)
+        & Key("integration_endpoint").begins_with(f"{integration_id}#"),
+    )["Items"]
+    return table, rows
+
+
+def _row_key(row):
+    return {"user_id": row["user_id"], "integration_endpoint": row["integration_endpoint"]}
+
+
+def mark_itest_endpoints(user, integration_id):
+    """Route every endpoint the user has on integration_id to the webhook mock.
+
+    Call it after the test creates the endpoint and after anything that re-links it
+    (a Google SYNC, a SmartThings grant): those rewrite the row and drop the mark,
+    which is also what keeps a real re-link of the same login off the mock.
+    """
+    table, rows = _endpoint_rows(user, integration_id)
+    assert rows, f"no {integration_id} endpoint to mark for user {user.sub}"
+    for row in rows:
+        table.update_item(
+            Key=_row_key(row),
+            UpdateExpression="SET test_mock = :on",
+            ExpressionAttributeValues={":on": True},
+        )
+
+
+def delete_endpoints(user, integration_id):
+    """Drop every endpoint the user has on integration_id. Pooled users keep rows, marks included, from earlier tests."""
+    table, rows = _endpoint_rows(user, integration_id)
+    for row in rows:
+        table.delete_item(Key=_row_key(row))
 
 
 # ---------------------------------------------------------------------------

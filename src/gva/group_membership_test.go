@@ -10,9 +10,8 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification"
 )
 
-// newGVA builds a mock-mode GVA adapter (no SSM / Google calls).
 func newGVATestNotification() *GVANotification {
-	return &GVANotification{isTestMode: true, reportURI: "https://example.test/gva/data"}
+	return NewGVANotification()
 }
 
 func groupMembershipNotif(t *testing.T, action string) *notification.Notification {

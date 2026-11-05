@@ -11,11 +11,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification/integrationauth"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification/testmock"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/httpclient"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/jwtutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
@@ -72,10 +72,8 @@ func MakeHTTPPostRequest(ctx context.Context, body []byte, uri string, addHeader
 		return nil, rmerror.NewRMError(err, "Failed to add headers to request")
 	}
 
-	// In mock mode the test-infra API Gateway requires an API key. webhook_mock_api_key is set only during integration tests (by the notification itest fixture), so this is a no-op in production, where these requests hit the real Alexa/Google endpoints.
-	if apiKey := os.Getenv("webhook_mock_api_key"); apiKey != "" {
-		req.Header.Set("x-api-key", apiKey)
-	}
+	// The itest mock's API Gateway requires an API key; only a request addressed to the mock gets it.
+	testmock.SetAPIKey(ctx, req)
 
 	client := httpclient.Get()
 	resp, err := client.Do(req)

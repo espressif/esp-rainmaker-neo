@@ -5,10 +5,13 @@
 package notification
 
 import (
-	"fmt"
+	"context"
+
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification/testmock"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 )
 
-/* A mock webhook service is hosted at the configured mock base URL, which exposes the following APIs
+/* The itest webhook mock, located through testmock, exposes:
 * - POST /v1/token which accepts a json body with field refresh_token, and returns a refresh_token and access_token
 * - POST /v1/data which accepts the POST data of the webhook and returns a 200 status code. A field "uuid" is mandatory
     in the body of the request
@@ -17,21 +20,30 @@ import (
 * that was received in /v1/data.
 */
 
-// WebhookMockService implements the NotificationService interface for mock webhook notifications
+// WebhookMockService delivers the webhook_mock integration, which only itests register, to the itest webhook mock.
 type WebhookMockService struct {
 	*WebhookService
 }
 
-// NewWebhookMockService creates a new WebhookMockService pointed at baseURL.
-func NewWebhookMockService(baseURL string) *WebhookMockService {
+func NewWebhookMockService() *WebhookMockService {
 	return &WebhookMockService{
-		WebhookService: NewWebhookService("webhook_mock", fmt.Sprintf("%s/v1/data", baseURL), fmt.Sprintf("%s/v1/token", baseURL), InjectUserCode),
+		WebhookService: NewWebhookService("webhook_mock", "", "", InjectUserCode),
 	}
 }
 
 // GetName returns the name of the notification service
 func (s *WebhookMockService) GetName() string {
 	return "webhook_mock"
+}
+
+// SendTo resolves the mock per send, so an account that deploys it after a cold start still delivers.
+func (s *WebhookMockService) SendTo(ctx context.Context, notif interface{}, userIDs []string) error {
+	cfg, ok := testmock.Get(ctx)
+	if !ok {
+		rlog.Warn(ctx).Msg("dropping a webhook_mock notification: no itest webhook mock is deployed in this account")
+		return nil
+	}
+	return NewWebhookService("webhook_mock", cfg.URL("/v1/data"), cfg.URL("/v1/token"), InjectUserCode).SendTo(ctx, notif, userIDs)
 }
 
 // Marshal marshals the notification

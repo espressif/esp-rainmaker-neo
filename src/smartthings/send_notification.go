@@ -26,22 +26,10 @@ const (
 	stNotificationName = "smartthings"
 )
 
-// STNotification implements the NotificationService interface for SmartThings state callbacks.
-type STNotification struct {
-	isTestMode bool
-	mockURL    string
-}
+// STNotification implements the NotificationService interface for SmartThings state callbacks. Each endpoint carries its own callback URL, so an itest endpoint linked against the webhook mock is delivered there with no mode switch.
+type STNotification struct{}
 
-// NewSTNotification creates a new SmartThings notification service instance.
-// A non-empty baseURL switches the adapter into mock mode, routing state
-// callbacks to the test webhook instead of the per-user callback URL.
-func NewSTNotification(ctx context.Context, baseURL string) *STNotification {
-	if baseURL != "" {
-		return &STNotification{
-			isTestMode: true,
-			mockURL:    baseURL + "/v1/smartthings/data",
-		}
-	}
+func NewSTNotification() *STNotification {
 	return &STNotification{}
 }
 
@@ -104,9 +92,6 @@ func (s *STNotification) SendTo(ctx context.Context, notif interface{}, userIDs 
 
 			// The state-callback URL is the endpoint's natural identifier.
 			callbackURL := user_integration_db.DecodeEndpointID(endpoint.EndpointID)
-			if s.isTestMode {
-				callbackURL = s.mockURL
-			}
 
 			for _, callbackPayload := range callbackPayloads {
 				if err := sendCallback(ctx, callbackPayload, tokenData.AccessToken, callbackURL); err != nil {

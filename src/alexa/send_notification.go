@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_integration_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification/integrationauth"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification/testmock"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/config"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/collections"
@@ -40,31 +42,41 @@ func alexaEventGatewayForRegion(region string) (string, bool) {
 	return gw, ok
 }
 
-type AlexaNotification struct {
-	alexa_uri         string
-	alexa_refresh_uri string
+type AlexaNotification struct{}
+
+func NewAlexaNotification() *AlexaNotification {
+	return &AlexaNotification{}
 }
 
-var isTestMode = false
+// alexaRoute is where one endpoint's change reports and token refreshes go.
+type alexaRoute struct {
+	gateway    string
+	refreshURI string
+	mock       bool
+}
 
-func NewAlexaNotification(ctx context.Context, baseURL string) *AlexaNotification {
-
-	if baseURL != "" {
-		// Mock mode: route to the test webhook. Data carries the userID in the
-		// "x-alexa-uuid" header.
-		isTestMode = true
-		return &AlexaNotification{
-			alexa_uri:         baseURL + "/v1/alexa/data",
-			alexa_refresh_uri: baseURL + "/v1/alexa/token",
+// routeFor sends an itest endpoint to the webhook mock and every other endpoint to the Alexa event gateway of its link region. An itest endpoint never falls back to Amazon.
+func routeFor(ctx context.Context, endpoint user_integration_db.UserIntegrationEntry) (alexaRoute, error) {
+	if endpoint.TestMock {
+		cfg, ok := testmock.Get(ctx)
+		if !ok {
+			return alexaRoute{}, rmerror.NewRMError(nil, "itest endpoint but no itest webhook mock is deployed in this account")
 		}
+		return alexaRoute{gateway: cfg.URL("/v1/alexa/data"), refreshURI: cfg.URL("/v1/alexa/token"), mock: true}, nil
 	}
-	// alexa_uri is unused in production -- the gateway is chosen per-user by region.
-	return &AlexaNotification{
-		alexa_refresh_uri: AlexaRefreshURI,
+
+	region := ""
+	if endpoint.IntegrationToken != nil {
+		region = endpoint.IntegrationToken.Region
 	}
+	gateway, ok := alexaEventGatewayForRegion(region)
+	if !ok {
+		return alexaRoute{}, rmerror.NewRMError(nil, fmt.Sprintf("no Alexa event gateway for region %q", region))
+	}
+	return alexaRoute{gateway: gateway, refreshURI: AlexaRefreshURI}, nil
 }
 
-func (a *AlexaNotification) RefreshToken(ctx context.Context, refreshToken string) (*integrationauth.TokenResponse, error) {
+func (a *AlexaNotification) RefreshToken(ctx context.Context, refreshToken string, refreshURI string) (*integrationauth.TokenResponse, error) {
 
 	clientId, clientSecret, err := GetAlexaClientDetails(ctx)
 	if err != nil {
@@ -72,7 +84,7 @@ func (a *AlexaNotification) RefreshToken(ctx context.Context, refreshToken strin
 	}
 
 	body := []byte(fmt.Sprintf(`grant_type=refresh_token&refresh_token=%s&client_id=%s&client_secret=%s`, refreshToken, clientId, clientSecret))
-	respBody, err := notification.MakeHTTPPostRequest(ctx, body, a.alexa_refresh_uri, func(req *http.Request) error {
+	respBody, err := notification.MakeHTTPPostRequest(ctx, body, refreshURI, func(req *http.Request) error {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
 		return nil
 	})
@@ -117,26 +129,18 @@ func (a *AlexaNotification) SendTo(ctx context.Context, notif interface{}, userI
 		}
 
 		for _, endpoint := range endpoints {
+			route, err := routeFor(ctx, endpoint)
+			if err != nil {
+				rlog.Warn(ctx).Err(err).Msgf("Skipping Alexa endpoint %s of user %s", endpoint.EndpointID, userID)
+				continue
+			}
+
 			tokenData, err := integrationauth.UpdateAndGetLatestToken(userID, AlexaPlatform, endpoint.EndpointID, func(refreshToken string) (*integrationauth.TokenResponse, error) {
-				return a.RefreshToken(ctx, refreshToken)
+				return a.RefreshToken(ctx, refreshToken, route.refreshURI)
 			})
 			if err != nil {
 				rlog.Error(ctx).Err(err).Msgf("Failed to get token data for user %s endpoint %s", userID, endpoint.EndpointID)
 				continue
-			}
-
-			gateway := a.alexa_uri // mock endpoint in test mode
-			if !isTestMode {
-				region := ""
-				if endpoint.IntegrationToken != nil {
-					region = endpoint.IntegrationToken.Region
-				}
-				gw, ok := alexaEventGatewayForRegion(region)
-				if !ok {
-					rlog.Error(ctx).Msgf("No Alexa event gateway for user %s endpoint %s region %q, skipping", userID, endpoint.EndpointID, region)
-					continue
-				}
-				gateway = gw
 			}
 
 			for _, changeReport := range changeReports {
@@ -148,12 +152,12 @@ func (a *AlexaNotification) SendTo(ctx context.Context, notif interface{}, userI
 					continue
 				}
 
-				_, err = notification.MakeHTTPPostRequest(ctx, jsonData, gateway, func(req *http.Request) error {
+				_, err = notification.MakeHTTPPostRequest(ctx, jsonData, route.gateway, func(req *http.Request) error {
 					req.Header.Set("Content-Type", "application/json")
 					rlog.Info(ctx).Msgf("Sending Alexa notification to user %s endpoint %s", userID, endpoint.EndpointID)
 					rlog.Info(ctx).Msgf("the data is %s", string(jsonData))
 					req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", tokenData.AccessToken))
-					if isTestMode {
+					if route.mock {
 						req.Header.Set("x-alexa-uuid", userID)
 					}
 					return nil

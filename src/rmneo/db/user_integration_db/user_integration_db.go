@@ -19,6 +19,7 @@ Schema:
 - access_token, refresh_token, expires_at, token_type (optional): OAuth bundle for alexa / gva / webhook integrations.
 - token_callback_url (String, optional): per-endpoint token-exchange/refresh URL, for integrations whose token endpoint arrives at link time rather than being a fixed constant (smartthings).
 - locale (String, optional): the locale supplied at registration time; consumed by the send-path localized-message lookup.
+- test_mock (Bool, optional): set by itests on endpoints they create, so delivery goes to the itest webhook mock instead of the real service.
 
 */
 
@@ -74,6 +75,8 @@ type UserIntegrationEntry struct {
 	IntegrationToken    *IntegrationToken `dynamodbav:"integration_token,omitempty"`
 	TokenCallbackURL    string            `dynamodbav:"token_callback_url,omitempty"`
 	Locale              string            `dynamodbav:"locale,omitempty"`
+	// TestMock marks an endpoint an itest created: its traffic goes to the itest webhook mock and never to the real service. Itests set it straight on the row with their AWS credentials; no API writes it, and a real re-link replaces the row and drops it.
+	TestMock bool `dynamodbav:"test_mock,omitempty"`
 }
 
 // integrationEndpointKey composes the SK from its two logical parts. Keep this single function as the only producer of the composite so the separator never leaks into call sites.

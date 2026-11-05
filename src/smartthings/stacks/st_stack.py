@@ -179,6 +179,7 @@ class STStack(Stack):
         # Add permissions for SSM Parameter Store (SmartThings config + JWKS for token validation)
         ssm_resources = [
             get_ssm_parameter_prefix_arn('ST_CONFIG', rmng_region),
+            get_ssm_parameter_prefix_arn('TEST_MOCK', rmng_region),
         ]
         if esp_user_jwks:
             ssm_resources.append(f"arn:aws:ssm:{rmng_region}:{Aws.ACCOUNT_ID}:parameter{esp_user_jwks}")

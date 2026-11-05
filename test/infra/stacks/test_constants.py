@@ -9,4 +9,6 @@ TABLE_NAMES = {
 SSM_PARAMETERS = {
     'API_GATEWAY_ID': '/rmng/test/base/api-gateway-id',
     'API_GATEWAY_ROOT_RESOURCE_ID': '/rmng/test/base/api-gateway-root-resource-id',
+    # Read by testmock.PARAM_NAME (src/rmneo/notification/testmock): where an itest-marked endpoint is delivered.
+    'WEBHOOK_MOCK': '/rmng/test/webhook-mock',
 }

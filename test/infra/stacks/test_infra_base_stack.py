@@ -70,8 +70,8 @@ class TestInfraBaseStack(Stack):
 
         # The execute-api URL is public, so an API key gates every /v1 method
         # (defense-in-depth with the mock's in-Lambda JWT check). The value is
-        # generated at deploy; the notification itest resolves it from the secret ARN
-        # output and sets it on rmng-notifications so its requests carry x-api-key.
+        # generated at deploy; itests resolve it from the secret ARN output for their own
+        # validate calls, and the backend reads it from the WebhookMockParameter below.
         mock_api_key_secret = secretsmanager.Secret(
             self,
             "MockApiKeySecret",
@@ -115,6 +115,18 @@ class TestInfraBaseStack(Stack):
             "MockApiKeySecretArn",
             value=mock_api_key_secret.secret_arn,
             description="ARN of the mock API key secret, not the key itself [visibility:public]",
+        )
+
+        # Where the backend delivers an itest-marked endpoint, read through testmock. A plain String: the key only gates this mock and is already in the template via the CfnApiKey above.
+        create_ssm_string_parameter(
+            self,
+            "WebhookMockParameter",
+            parameter_name=SSM_PARAMETERS["WEBHOOK_MOCK"],
+            string_value=self.to_json_string({
+                "base_url": f"https://{self.api_gateway_cfn.rest_api_id}.execute-api.{self.region}.amazonaws.com/prod",
+                "api_key": mock_api_key_secret.secret_value.unsafe_unwrap(),
+            }),
+            description="Itest webhook mock base URL and API key",
         )
 
         self.gsi_readiness = GsiReadinessGate(
