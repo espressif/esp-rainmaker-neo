@@ -14,10 +14,10 @@ import (
 
 var gvaLinkEndpointID = user_integration_db.EncodeEndpointID(GVAPlatform)
 
-// Best-effort: fulfillment must not fail on link bookkeeping. The read keeps repeat SYNCs to one cheap read once the row exists.
+// Best-effort: fulfillment must not fail on link bookkeeping. The read keeps repeat SYNCs to one cheap read once the row exists. An itest-marked row is rewritten, so a real link on a reused itest login reaches HomeGraph instead of the itest mock.
 func ensureAccountLinkRecorded(ctx *rmngctx.RmngContext, accessToken string) {
 	userDB := user_integration_db.NewUserDB(ctx)
-	if _, err := userDB.GetUserEntryByEndpoint(GVAPlatform, gvaLinkEndpointID); err == nil {
+	if entry, err := userDB.GetUserEntryByEndpoint(GVAPlatform, gvaLinkEndpointID); err == nil && !entry.TestMock {
 		return
 	}
 	err := userDB.RegisterClient(user_integration_db.UserIntegrationEntry{

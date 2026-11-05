@@ -21,6 +21,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 
 	alexa_skill "github.com/espressif/esp-rainmaker-neo/src/alexa"
+	"github.com/espressif/esp-rainmaker-neo/src/awsutils/ssmutil"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/gva"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_details_db"
@@ -28,6 +29,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification/push"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification/testmock"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
@@ -246,35 +248,6 @@ var _ = Describe("hasConnectivityDispatchTarget", func() {
 
 	It("is false for an empty notify map", func() {
 		Expect(hasConnectivityDispatchTarget(registry, map[string]interface{}{})).To(BeFalse())
-	})
-})
-
-var _ = Describe("resolveMockBaseURL", func() {
-	// webhook_mock_base_url is read from the real process environment, so each
-	// spec snapshots and restores it to avoid leaking state into unrelated specs.
-	var originalBase string
-	var baseWasSet bool
-
-	BeforeEach(func() {
-		originalBase, baseWasSet = os.LookupEnv("webhook_mock_base_url")
-	})
-
-	AfterEach(func() {
-		if baseWasSet {
-			os.Setenv("webhook_mock_base_url", originalBase)
-		} else {
-			os.Unsetenv("webhook_mock_base_url")
-		}
-	})
-
-	It("resolves to the base URL when webhook_mock_base_url is set", func() {
-		os.Setenv("webhook_mock_base_url", "https://webhook-mock.test")
-		Expect(resolveMockBaseURL()).To(Equal("https://webhook-mock.test"))
-	})
-
-	It("resolves to empty (production) when webhook_mock_base_url is unset", func() {
-		os.Unsetenv("webhook_mock_base_url")
-		Expect(resolveMockBaseURL()).To(Equal(""))
 	})
 })
 
@@ -1302,7 +1275,7 @@ var _ = Describe("Notifications Handler", func() {
 			Expect(err).To(BeNil())
 
 			// Register Alexa notification service and reset HTTP requests
-			alexaNotification := alexa_skill.NewAlexaNotification(ctx, "")
+			alexaNotification := alexa_skill.NewAlexaNotification()
 			notification.Registry().Register(alexaNotification)
 			mockHTTPClient.Requests = []*http.Request{}
 
@@ -1879,7 +1852,7 @@ var _ = Describe("Notifications Handler", func() {
 			err = userDB.RegisterClient(user_integration_db.UserIntegrationEntry{IntegrationID: alexa_skill.AlexaPlatform, EndpointID: "amazon-user-B", IntegrationToken: &user_integration_db.IntegrationToken{AccessToken: "token-B", RefreshToken: "refresh-B", ExpiresAt: expiresAt, TokenType: "Bearer", Region: "eu-west-1"}})
 			Expect(err).To(BeNil())
 
-			alexaNotification := alexa_skill.NewAlexaNotification(ctx, "")
+			alexaNotification := alexa_skill.NewAlexaNotification()
 			notification.Registry().Register(alexaNotification)
 			mockHTTPClient.Requests = []*http.Request{}
 
@@ -1922,11 +1895,13 @@ var _ = Describe("Notifications Handler", func() {
 			// Register GVA token for user
 			userDB := user_integration_db.NewUserDB(rmngctx.NewRmngContext(user.NewUser(userID)))
 			expiresAt := time.Now().Add(24 * time.Hour).Unix()
-			err := userDB.RegisterClient(user_integration_db.UserIntegrationEntry{IntegrationID: gva.GVAPlatform, EndpointID: gva.GVAPlatform, IntegrationToken: &user_integration_db.IntegrationToken{AccessToken: "gva-test-token", RefreshToken: "gva-test-refresh", ExpiresAt: expiresAt, TokenType: "Bearer"}})
+			err := userDB.RegisterClient(user_integration_db.UserIntegrationEntry{IntegrationID: gva.GVAPlatform, EndpointID: gva.GVAPlatform, IntegrationToken: &user_integration_db.IntegrationToken{AccessToken: "gva-test-token", RefreshToken: "gva-test-refresh", ExpiresAt: expiresAt, TokenType: "Bearer"}, TestMock: true})
 			Expect(err).To(BeNil())
 
-			// Register GVA notification service in mock mode and reset HTTP requests
-			gvaNotification := gva.NewGVANotification(ctx, "https://webhook-mock.test")
+			// An itest-marked link routes to the published mock; reset HTTP requests
+			Expect(ssmutil.StoreParameter(ctx, testmock.PARAM_NAME, `{"base_url":"https://webhook-mock.test","api_key":"k"}`)).To(Succeed())
+			testmock.Reset()
+			gvaNotification := gva.NewGVANotification()
 			notification.Registry().Register(gvaNotification)
 
 			// Register mock response for GVA mock endpoint
@@ -2046,7 +2021,7 @@ var _ = Describe("Notifications Handler", func() {
 			)
 			Expect(err).To(BeNil())
 
-			gvaService := gva.NewGVANotification(ctx, "https://webhook-mock.test")
+			gvaService := gva.NewGVANotification()
 			result, err := gvaService.Marshal(notif)
 			Expect(err).To(BeNil())
 
@@ -2106,7 +2081,7 @@ var _ = Describe("Notifications Handler", func() {
 		It("sends report state only to users with a recorded GVA link", func() {
 			setupGVATest()
 
-			gvaService := gva.NewGVANotification(ctx, "https://webhook-mock.test")
+			gvaService := gva.NewGVANotification()
 			batch := gva.GVANotificationBatch{Reports: []gva.GVAReportStateRequest{{
 				RequestID: "filter-test",
 			}}}
@@ -2120,7 +2095,7 @@ var _ = Describe("Notifications Handler", func() {
 		It("sends request sync only to users with a recorded GVA link", func() {
 			setupGVATest()
 
-			gvaService := gva.NewGVANotification(ctx, "https://webhook-mock.test")
+			gvaService := gva.NewGVANotification()
 
 			mockHTTPClient.Requests = nil
 			err := gvaService.SendTo(context.TODO(), []gva.GVARequestSyncRequest{{Async: false}}, []string{"user-without-gva-link", userID})
@@ -2131,7 +2106,7 @@ var _ = Describe("Notifications Handler", func() {
 		It("makes no HomeGraph calls when no recipient has a GVA link", func() {
 			setupGVATest()
 
-			gvaService := gva.NewGVANotification(ctx, "https://webhook-mock.test")
+			gvaService := gva.NewGVANotification()
 			batch := gva.GVANotificationBatch{Reports: []gva.GVAReportStateRequest{{
 				RequestID: "filter-test",
 			}}}
@@ -2160,7 +2135,7 @@ var _ = Describe("Notifications Handler", func() {
 			)
 			Expect(err).To(BeNil())
 
-			gvaService := gva.NewGVANotification(ctx, "https://webhook-mock.test")
+			gvaService := gva.NewGVANotification()
 			result, err := gvaService.Marshal(notif)
 			Expect(err).To(BeNil())
 
@@ -2183,7 +2158,7 @@ var _ = Describe("Notifications Handler", func() {
 			)
 			Expect(err).To(BeNil())
 
-			gvaService := gva.NewGVANotification(ctx, "https://webhook-mock.test")
+			gvaService := gva.NewGVANotification()
 			result, err := gvaService.Marshal(notif)
 			Expect(err).To(BeNil())
 
@@ -2236,7 +2211,7 @@ var _ = Describe("Notifications Handler", func() {
 			)
 			Expect(err).To(BeNil())
 
-			gvaService := gva.NewGVANotification(ctx, "https://webhook-mock.test")
+			gvaService := gva.NewGVANotification()
 			result, err := gvaService.Marshal(notif)
 			Expect(err).To(BeNil())
 

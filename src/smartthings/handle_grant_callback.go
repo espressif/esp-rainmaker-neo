@@ -8,13 +8,12 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/ssmutil"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_integration_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification/testmock"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
@@ -148,16 +147,12 @@ func getSTClientCredentials(ctx context.Context) (clientID string, clientSecret 
 	return clientID, clientSecret, nil
 }
 
-// tokenRequestCredentials returns the SSM client credentials, or blank ones for the webhook mock, which never reads them; any other URL in test mode is refused.
+// tokenRequestCredentials returns blank credentials for the itest webhook mock, which never reads them, and the SSM client credentials for every other token URL.
 func tokenRequestCredentials(ctx context.Context, oauthTokenURL string) (clientID, clientSecret string, err error) {
-	mockBase := os.Getenv("webhook_mock_base_url")
-	if mockBase == "" {
-		return getSTClientCredentials(ctx)
+	if cfg, ok := testmock.Get(ctx); ok && cfg.Owns(oauthTokenURL) {
+		return "", "", nil
 	}
-	if !strings.HasPrefix(oauthTokenURL, mockBase) {
-		return "", "", rmerror.NewRMError(nil, "webhook_mock_base_url is set but the token URL is not the webhook mock, refusing to send a token request without client credentials to "+oauthTokenURL)
-	}
-	return "", "", nil
+	return getSTClientCredentials(ctx)
 }
 
 // exchangeCodeForTokens sends an accessTokenRequest to SmartThings to exchange

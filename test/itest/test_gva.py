@@ -7,6 +7,8 @@ import time
 import pytest
 import requests
 
+from test.itest.conftest import mark_itest_endpoints
+
 # presence_event_handler waits PRESENCE_OFFLINE_DELAY (10s) after a disconnect
 # before writing reported.online=false, then re-checks. A connectivity assertion
 # has to outwait that write plus the notification round trip to the mock.
@@ -276,17 +278,14 @@ def test_gva_query_and_control(user_with_1_dev_each_in_2_groups):
     device1.update_named_shadow(shadow_name, {"Light1": {"Power": False, "Brightness": 25}})
     validate_gva_query("Light1", {"on": False, "brightness": 25})
 
-@pytest.mark.xdist_group("env_mut")
 def test_gva_report_state(user_with_1_dev_each_in_2_groups, webhook_mock):
     """Test GVA report state (QUERY) after shadow updates.
 
     Similar to Alexa validate_report_state_directive.
 
     The proactive connectivity Report State at the end is dispatched by the
-    notifications lambda; the webhook_mock fixture points that lambda at the
-    in-cloud test mock (with its API key) so the report is captured there. The
-    env_mut group serializes this against test_webhook_notification, which
-    toggles the same lambda config.
+    notifications lambda; marking the test's Google link delivers it to the
+    in-cloud test mock, where the report is captured.
     """
     webhook_mock_base_url, webhook_mock_api_key = webhook_mock
     device1, device2, group1_id, group2_id, test_user1 = user_with_1_dev_each_in_2_groups
@@ -398,6 +397,8 @@ def test_gva_report_state(user_with_1_dev_each_in_2_groups, webhook_mock):
     # SYNC records the account link. Report State is only sent to linked users, so
     # without it the dispatch stops at "no GVA-linked users among the recipients".
     test_user1.gva_discover_devices()
+    # SYNC rewrites the link row, so mark it afterwards to deliver it to the mock.
+    mark_itest_endpoints(test_user1, "gva")
 
     # Seed the notify map firmware maintains once an assistant is enabled. It has
     # to be in the shadow before the connectivity change, because the rule reads
@@ -723,7 +724,6 @@ def _read_gva_raw_notification(base_url, api_key, user_sub):
     return notification_data
 
 
-@pytest.mark.xdist_group("env_mut")
 def test_gva_rename_requests_sync(user_with_1_dev_each_in_2_groups, webhook_mock):
     """Renaming a device dispatches a RequestSync to Google.
 
@@ -743,9 +743,9 @@ def test_gva_rename_requests_sync(user_with_1_dev_each_in_2_groups, webhook_mock
     })
 
     # SYNC records the account link. Nothing is dispatched to an unlinked user --
-    # filterLinkedUsers drops them and the send stops at "no GVA-linked users
-    # among the recipients".
+    # the send stops at "no GVA-linked users among the recipients".
     test_user1.gva_discover_devices()
+    mark_itest_endpoints(test_user1, "gva")
 
     device1.update_named_shadow(shadow_name, {
         "Light1": {"Name": "Reading Lamp"},

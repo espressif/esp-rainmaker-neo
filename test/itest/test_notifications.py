@@ -13,13 +13,26 @@ import boto3
 import pytest
 import requests
 
-from test.itest.conftest import FILES_BUCKET_NAME, REGION, accept_sharing_request_for
+from test.infra.stacks.test_constants import TABLE_NAMES
+from test.itest.conftest import (
+    FILES_BUCKET_NAME,
+    REGION,
+    accept_sharing_request_for,
+    delete_endpoints,
+    mark_itest_endpoints,
+)
 
 
-@pytest.mark.xdist_group("env_mut")
-def test_webhook_notification(test_user2, test_user3, test_user4, associated_device, webhook_mock):
+def _clear_mock_captures(user):
+    """Drop the mock's Alexa and GVA captures for user: pooled users carry them for 24h from earlier runs."""
+    table = boto3.resource("dynamodb", region_name=REGION).Table(TABLE_NAMES["TEST_WEBHOOK_TABLE"])
+    for channel in ("alexa", "gva"):
+        table.delete_item(Key={"PK": f"{channel}#{user.sub}", "SK": "BLOB"})
+
+
+def test_webhook_notification(request, test_user2, test_user3, test_user4, test_user5, associated_device, webhook_mock):
     # base_url is used in the validate URLs; api_key gates every /v1 method, so the
-    # test sends it on its own validate GETs (the notifications Lambda gets it via env).
+    # test sends it on its own validate GETs.
     webhook_mock_base_url, webhook_mock_api_key = webhook_mock
 
     # Set dummy Alexa client details in SSM if they don't exist
@@ -67,9 +80,24 @@ def test_webhook_notification(test_user2, test_user3, test_user4, associated_dev
         # For now, share creds between webhook and alexa platforms
         user.register_client("alexa", json.dumps(webhook_creds))
         user.register_client("gva", json.dumps(webhook_creds))
+        # Fake links: deliver them to the mock, never to Amazon or Google.
+        mark_itest_endpoints(user, "alexa")
+        mark_itest_endpoints(user, "gva")
+
+    # A bystander in the same group whose Alexa and Google links are not marked, like
+    # a QA or real user sharing the account during an itest run. Its reports must go
+    # to the real services, never to the mock.
+    bystander = test_user5
+    # A finalizer, not the cleanup below, so the fake links go even if setup fails: left behind
+    # on this pooled user, they would reach the real services in later tests.
+    request.addfinalizer(lambda: [delete_endpoints(bystander, i) for i in ("alexa", "gva")])
+    for integration_id in ("alexa", "gva"):
+        delete_endpoints(bystander, integration_id)
+        bystander.register_client(integration_id, json.dumps(webhook_creds))
+    _clear_mock_captures(bystander)
 
     # Share the group with all users
-    for user in test_users[1:]:  # Skip test_user1 as they already own the group
+    for user in test_users[1:] + [bystander]:  # Skip test_user1 as they already own the group
         user1_group_api.share_group(group_id, user.username, "secondary")
         accept_sharing_request_for(user, group_id, "")
 
@@ -269,6 +297,14 @@ def test_webhook_notification(test_user2, test_user3, test_user4, associated_dev
                         f"expected {value}, "
                         f"got {dev_state.get(key)}")
 
+    def assert_not_captured(user):
+        for channel in ("alexa", "gva"):
+            response = requests.get(
+                f"{webhook_mock_base_url}/v1/{channel}/validate",
+                params={"uuid": user.sub}, headers={"x-api-key": webhook_mock_api_key})
+            assert response.status_code == 410, \
+                f"{channel} report for unmarked user {user.sub} reached the mock: {response.status_code} {response.text}"
+
     def validate_webhook_notifications(expected_state, expected_version=None):
         # Try validation with retry logic
         try:
@@ -346,6 +382,8 @@ def test_webhook_notification(test_user2, test_user3, test_user4, associated_dev
                 "online": True,
             }
         })
+        # The marked users' reports have arrived, so the bystander's would have too.
+        assert_not_captured(bystander)
 
 
         # NOTIFICATION TRIGGER 2: Change brightness with version 2
@@ -418,7 +456,7 @@ def test_webhook_notification(test_user2, test_user3, test_user4, associated_dev
         print("Webhook notification test completed, proceeding with cleanup...")
 
     # Clean up - unshare the group from all users
-    for user in test_users[1:]:
+    for user in test_users[1:] + [bystander]:
         user1_group_api.unshare_group(group_id, user.user_id)
 
     device.disconnect()

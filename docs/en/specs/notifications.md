@@ -115,7 +115,7 @@ Each channel registered in the registry is one of two kinds:
 | `gva`          | user-specific | Google HomeGraph Report State. See [gva.md](gva.md).                                     |
 | `push`         | user-specific | Mobile push via SNS. See [notifications-push.md](notifications-push.md).                 |
 | `node_reset`   | generic       | Server-side action, not a delivery channel: a node reporting a self factory-reset is disassociated, its data cleaned up and the node-left-group hook fired. Valid only as a direct notification. |
-| `webhook_mock` | generic       | Registered **only** when `webhook_mock_base_url` is set, which the integration-test fixture does to route Alexa/GVA traffic at an in-cloud mock. Absent in production. |
+| `webhook_mock` | user-specific | Delivers the `webhook_mock` integration, which only itests register, to the itest mock published at `/rmng/test/webhook-mock`; dropped where that parameter is absent (every production account). Itests mark their own Alexa and GVA endpoints with `test_mock` to send those to the mock too, so no Lambda setting is ever switched and other users' traffic is untouched. |
 
 Each service supplies its own marshal step that converts the channel-agnostic event into a channel-specific payload (a push message, a ChangeReport, a HomeGraph request, …). See the per-channel specs for those shapes.
 

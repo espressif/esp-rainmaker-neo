@@ -8,7 +8,11 @@ import (
 	"context"
 	"testing"
 
+	"github.com/espressif/esp-rainmaker-neo/src/awsutils/ssmutil"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_integration_db"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification/testmock"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/config"
+	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 
 	// Qualified import: this package already declares a Context type (the
 	// Alexa wire-format Context), which collides with ginkgo's dot-importable
@@ -22,16 +26,41 @@ func TestAlexaSkillSuite(t *testing.T) {
 	ginkgo.RunSpecs(t, "Alexa Skill Suite")
 }
 
-var _ = ginkgo.Describe("NewAlexaNotification base URL", func() {
-	ginkgo.It("derives /v1 mock URIs when a base URL is given", func() {
-		n := NewAlexaNotification(context.Background(), "https://mock.example.com")
-		Expect(n.alexa_uri).To(Equal("https://mock.example.com/v1/alexa/data"))
-		Expect(n.alexa_refresh_uri).To(Equal("https://mock.example.com/v1/alexa/token"))
+var _ = ginkgo.Describe("routeFor", func() {
+	const mockBase = "https://mock.example.com/prod"
+	var ctx context.Context
+
+	ginkgo.BeforeEach(func() {
+		test_utils.TestSetup()
+		testmock.Reset()
+		ctx = context.Background()
 	})
 
-	ginkgo.It("uses the production refresh URI when base URL is empty", func() {
-		n := NewAlexaNotification(context.Background(), "")
-		Expect(n.alexa_refresh_uri).To(Equal(AlexaRefreshURI))
+	publishMock := func() {
+		Expect(ssmutil.StoreParameter(ctx, testmock.PARAM_NAME, `{"base_url":"`+mockBase+`","api_key":"k"}`)).To(Succeed())
+		testmock.Reset()
+	}
+
+	realEndpoint := user_integration_db.UserIntegrationEntry{IntegrationToken: &user_integration_db.IntegrationToken{Region: "eu-west-1"}}
+	itestEndpoint := user_integration_db.UserIntegrationEntry{IntegrationToken: &user_integration_db.IntegrationToken{Region: "eu-west-1"}, TestMock: true}
+
+	ginkgo.It("sends a real endpoint to Amazon even where a mock is deployed", func() {
+		publishMock()
+		route, err := routeFor(ctx, realEndpoint)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(route).To(Equal(alexaRoute{gateway: "https://api.eu.amazonalexa.com/v3/events", refreshURI: AlexaRefreshURI}))
+	})
+
+	ginkgo.It("sends an itest endpoint to the mock", func() {
+		publishMock()
+		route, err := routeFor(ctx, itestEndpoint)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(route).To(Equal(alexaRoute{gateway: mockBase + "/v1/alexa/data", refreshURI: mockBase + "/v1/alexa/token", mock: true}))
+	})
+
+	ginkgo.It("never sends an itest endpoint to Amazon when no mock is deployed", func() {
+		_, err := routeFor(ctx, itestEndpoint)
+		Expect(err).To(HaveOccurred())
 	})
 })
 

@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"maps"
-	"os"
 	"slices"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils/collections"
@@ -46,37 +45,26 @@ type NotificationEvent struct {
 	Action      string   `json:"action,omitempty"` // "added" or "removed"
 }
 
-// resolveMockBaseURL returns the mock base URL to register services against, or
-// "" for production. The presence of webhook_mock_base_url is the switch: the
-// integration-test fixture sets it to route notifications at the in-cloud mock;
-// unset (the production default) sends them to the real Alexa/GVA endpoints.
-func resolveMockBaseURL() string {
-	return os.Getenv("webhook_mock_base_url")
-}
-
 func initialize() {
 	notification.Initialize()
 	// Register the automation service
 	notification.Registry().Register(notification.NewAutomationService())
 
-	mockBaseURL := resolveMockBaseURL()
-	if mockBaseURL != "" {
-		rlog.Info(context.TODO()).Msgf("Registering webhook mock service at %s", mockBaseURL)
-		notification.Registry().Register(notification.NewWebhookMockService(mockBaseURL))
-	}
+	// Only itests register webhook_mock endpoints, and the service drops them where no itest mock is deployed.
+	notification.Registry().Register(notification.NewWebhookMockService())
 
 	// Register Alexa notification service
-	alexaAdapter := alexa_skill.NewAlexaNotification(context.Background(), mockBaseURL)
+	alexaAdapter := alexa_skill.NewAlexaNotification()
 	notification.Registry().Register(alexaAdapter)
 	rlog.Info(context.TODO()).Msg("Registered Alexa notification service")
 
 	// Register GVA notification service
-	gvaAdapter := gva.NewGVANotification(context.Background(), mockBaseURL)
+	gvaAdapter := gva.NewGVANotification()
 	notification.Registry().Register(gvaAdapter)
 	rlog.Info(context.TODO()).Msg("Registered GVA notification service")
 
 	// Register SmartThings notification service
-	stAdapter := smartthings.NewSTNotification(context.Background(), mockBaseURL)
+	stAdapter := smartthings.NewSTNotification()
 	notification.Registry().Register(stAdapter)
 	rlog.Info(context.TODO()).Msg("Registered SmartThings notification service")
 

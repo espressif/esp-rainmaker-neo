@@ -7,6 +7,8 @@ import json
 import boto3
 import pytest
 
+from test.itest.conftest import mark_itest_endpoints
+
 
 def test_alexa_configuration_is_readable(admin_user, alexa_region_arn):
     """GET returns the configuration without the secret, and the skill Lambda's trigger
@@ -247,7 +249,6 @@ def test_alexa_control(user_with_1_dev_each_in_2_groups, alexa_region_arn):
 # Alexa app goes stale. This test documents that gap; it is expected to fail
 # until the rename path is wired up the way SmartThings' discoveryCallback is.
 # ---------------------------------------------------------------------------
-@pytest.mark.xdist_group("env_mut")
 @pytest.mark.xfail(reason="Alexa has no rename path: no AddOrUpdateReport is emitted for esp.param.name",
                    strict=False)
 def test_alexa_rename_emits_add_or_update_report(user_with_1_dev_each_in_2_groups, webhook_mock):
@@ -258,6 +259,14 @@ def test_alexa_rename_emits_add_or_update_report(user_with_1_dev_each_in_2_group
 
     webhook_mock_base_url, webhook_mock_api_key = webhook_mock
     device1, _device2, group1_id, _group2_id, test_user1 = user_with_1_dev_each_in_2_groups
+
+    # A fake Alexa link of the test's own, delivered to the mock.
+    test_user1.register_client("alexa", json.dumps({
+        "access_token": "test_access_token",
+        "refresh_token": "test_refresh_token",
+        "expires_at": int(time.time()) + 3600,
+    }))
+    mark_itest_endpoints(test_user1, "alexa")
 
     test_user1.get_aws_credentials()
     assert device1.connect(), "Failed to connect to MQTT"
