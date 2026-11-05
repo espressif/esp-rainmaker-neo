@@ -164,6 +164,17 @@ def _test_shadow_access_after_sharing(sharing_details):
         shadow_data = test_user2.read_shadow_queue()
         assert shadow_data is not None, "User2 should be able to read shadow after sharing"
         assert shadow_data['state']['reported']['online'] is True, "Should receive correct online status"
+
+        # User2 can also control the node on its own params topic, the one the app's setParams uses
+        params_topic = f"rainmaker/nodes/{device.node_thing_name}/user/{shadow_name}/params"
+        params = {"Light": {"Power": True}}
+        assert device.subscribe(topic=params_topic), f"Device failed to subscribe to {params_topic}"
+        # A denied publish makes the broker hang up, and with reconnect on the persistent session resends it forever
+        test_user2.disable_reconnect = True
+        assert test_user2.mqtt_publish_to_topic(device.node_thing_name, f"{shadow_name}/params", params), "User2 should be able to publish params to the node after sharing"
+        message = device.wait_for_params_message(timeout=5)
+        assert message == params, f"Device should receive the params User2 published, got {message}"
+        device.unsubscribe(params_topic)
         test_user2.mqtt_disconnect_and_wait()
     elif sharing_details['state'] == "unshared":
         # Verify that user2 cannot access the shadow

@@ -987,8 +987,18 @@ authenticated by the bridge's certificate.
 `assume_role` generates session policies based on group/subgroup
 membership. Children appear in `group_device_mapping` like any other node,
 so the existing `topic/rainmaker/nodes/*/user/params-<groupID>*/*` pattern
-already covers user→child unicast publishes. The app does not interact
-with the bridge namespace directly.
+(and `params-<groupID>*<sgID>*/*` for subgroup-only access) already covers
+user→child unicast publishes. The app does not interact with the bridge
+namespace directly.
+
+These patterns restrict the shadow segment of the topic, not the target
+node: `nodes/*` matches any node and the publisher chooses the shadow
+segment. A direct device is still safe because it subscribes only to its
+exact shadow name. A child is not: Rule B republishes any
+`rainmaker/nodes/<bridge>--<child>/user/+/params` with the shadow segment
+unchanged, so a subgroup-only user can address a child in another subgroup
+by putting their own subgroup's shadow name in the topic. The bridge must
+drop such messages itself — see §6.7.
 
 ### 6.6 Abuse Vector: Bridge Spamming `add_child`
 
@@ -1008,6 +1018,16 @@ As with normal devices (see [group-control-feature.md](group-control-feature.md#
 this is enforced at the bridge firmware layer rather than at the IoT
 policy layer. The bridge sees commands for all subgroups in its group and
 is trusted to deliver them only to the correct children.
+
+For unicast params (§6.5), this means the bridge must drop a message on
+`rainmaker/bridges/<parent>/children/<child>/user/<shadow_name>/params`
+whose `<shadow_name>` does not match the child's current shadow name — the
+same check a direct device gets from its exact subscription.
+
+> **Not yet enforced.** The bridge firmware's `__cb_params`
+> (`components/esp_rmaker_neo/src/bridge/bridge_subscriber.c`) ignores
+> `shadow_name` and applies the payload to the child, so a subgroup-only
+> user can currently control a child outside their subgroup.
 
 ---
 
