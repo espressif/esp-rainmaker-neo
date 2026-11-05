@@ -8,11 +8,17 @@ import (
 	"context"
 	"fmt"
 	"sync/atomic"
+	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
+
+func TestParallel(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Parallel Suite")
+}
 
 var _ = Describe("ProcessParallel", func() {
 	Context("Basic Processing", func() {

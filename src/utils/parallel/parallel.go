@@ -41,7 +41,7 @@ type ParallelOptions struct {
 // The function handles panics in individual goroutines gracefully, ensuring that a panic in one routine doesn't affect others.
 // It also tracks the last successfully processed item even when not collecting results.
 //
-// If you plan to change the function, run all benchmark tests: TestGoroutineCount, BenchmarkMemoryUsage, BenchmarkParallelProcessing against the original function to ensure the performance is not degraded
+// If you change this function, run BenchmarkParallelProcessing to check that performance has not degraded.
 func ProcessParallel[T, R any](ctx context.Context, items []T, processFunc func(T) R, opts ...ParallelOptions) (results []R, lastProcessed T, err error) {
 	zerolog.Ctx(ctx).Info().Msg("Starting parallel processing")
 
