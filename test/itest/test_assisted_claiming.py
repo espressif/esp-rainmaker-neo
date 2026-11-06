@@ -37,6 +37,8 @@ from test.itest.conftest import (
     DEVICE_VIDEO_ROLE_ALIAS,
     IOT_ENDPOINT,
     REGION,
+    _destroy_user,
+    _init_user,
     connect_device_with_retry,
     rmng_outputs,
 )
@@ -330,15 +332,20 @@ def test_reclaim_with_bridge_upgrades_a_plain_node(_bridge_stack_deployed, test_
     assert _node_type(node_id) == "bridge", "presence cascade filters on node_type"
 
 
-def test_claim_with_bridge_without_the_bridge_stack_is_rejected(test_user1):
-    if "rmng-bridge-core" in rmng_outputs:
-        pytest.skip("bridge stacks deployed; this checks a deployment without them")
+def test_claim_with_bridge_is_granted_only_where_the_bridge_stack_is_deployed(test_user1, claimed_nodes):
     mac = _random_mac()
     init = _initiate(test_user1, mac)
     assert init.status_code in (200, 201), init.text
 
     csr_pem, _key_pem = _make_csr()
     resp = _verify(test_user1, mac, csr_pem, capabilities=["bridge"])
+    if "rmng-bridge-core" in rmng_outputs:
+        assert resp.status_code == 201, resp.text
+        node_id = init.json()["node_id"]
+        claimed_nodes.append(node_id)
+        assert BRIDGE_POLICY_NAME in _attached_cert_policies(node_id)
+        return
+
     assert resp.status_code == 400, resp.text
     body = resp.json()
     assert body["message"] == 'capability "bridge" is not available on this deployment'
@@ -630,15 +637,15 @@ def test_registered_at_survives_a_reclaim(test_user1, claimed_nodes):
     assert _registered_at() == original, "re-claim must not overwrite the registration time"
 
 
-@pytest.mark.skipif(
-    os.environ.get("RUN_CLAIM_QUOTA_TEST") != "1",
-    reason=(
-        "permanently consumes the pooled test user's lifetime claim quota — "
-        "reservations are never deleted, so this cannot be undone. "
-        "Set RUN_CLAIM_QUOTA_TEST=1 to run against a throwaway user."
-    ),
-)
-def test_quota_is_enforced_and_is_a_lifetime_cap(test_user1, claimed_nodes):
+@pytest.fixture
+def unpooled_user():
+    # Reservations are never deleted, so the quota this user spends is gone for good; a pooled user would carry it into later tests.
+    user = _init_user()
+    yield user
+    _destroy_user(user)
+
+
+def test_quota_is_enforced_and_is_a_lifetime_cap(unpooled_user, claimed_nodes):
     """Minting is bounded per caller, and repeat claims stay exempt."""
     limit = int(os.environ.get("CLAIM_QUOTA_LIMIT", "20"))
 
@@ -646,7 +653,7 @@ def test_quota_is_enforced_and_is_a_lifetime_cap(test_user1, claimed_nodes):
     rejected_at = None
     for i in range(limit + 5):
         mac = _random_mac()
-        resp = _initiate(test_user1, mac)
+        resp = _initiate(unpooled_user, mac)
         if resp.status_code == 403:
             rejected_at = i
             assert "quota" in resp.json().get("message", "").lower()
@@ -660,7 +667,7 @@ def test_quota_is_enforced_and_is_a_lifetime_cap(test_user1, claimed_nodes):
 
     # An already-reserved device still resolves at the limit, so a device that
     # is factory-erased after the quota fills can still be re-provisioned.
-    repeat = _initiate(test_user1, first_mac)
+    repeat = _initiate(unpooled_user, first_mac)
     assert repeat.status_code == 200, repeat.text
 
 

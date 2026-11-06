@@ -375,7 +375,7 @@ def test_multi_subgroup_remove_in_grp_dynamodb_validation(test_user2, associated
     user1_group_api.unshare_group(group_id, test_user2.user_id)
 
 # You could skip this test since running it multiple times will cause AWS to block your device for some time
-@pytest.mark.unsafe
+@pytest.mark.xdist_group("mqtt_shadow_authz")
 def test_multi_group_subgroup_shadow_access(test_user1, test_user2, bare_device):
     # User2 requires some group for assume_role to work
     user1_group_api = Group(test_user1)

@@ -291,7 +291,6 @@ def test_user_no_mapping_denied(associated_device, session_valid_device_rsa):
     )
 
 
-@pytest.mark.unsafe
 def test_user_multiple_devices(test_user1):
     """User with access to multiple devices can access files from each."""
     user = test_user1
