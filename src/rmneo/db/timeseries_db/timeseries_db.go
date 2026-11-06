@@ -62,6 +62,7 @@ package timeseries_db
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -70,15 +71,14 @@ import (
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
-	dbcore "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
+	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/processed_ts_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )
@@ -87,19 +87,38 @@ const (
 	RawTSDataTable = "rmng-raw-ts-data"
 )
 
-// The two timeseries tables share a partition key but NOT a sort key, and a batch delete has to
-// name the sort key exactly: an attribute the item does not carry aborts the whole delete.
-var timeseriesKeyAttributes = map[string][]string{
-	RawTSDataTable:                       {"node_key_dt", "ts"},
-	processed_ts_db.ProcessedTSDataTable: {"node_key_dt", "interval_key"},
+// partitionPurger is the one operation DeleteTimeseriesForParam needs from either timeseries table.
+type partitionPurger interface {
+	QueryDelete(ctx context.Context, keyCond expression.KeyConditionBuilder, opts ...ddbu.QueryDeleteOpts) error
 }
 
 type TimeseriesDB struct {
-	dbcore.DB
+	Ctx         *rmngctx.RmngContext
+	rawTS       *ddbu.Table[TimeseriesEntry]
+	purgeTables map[string]partitionPurger
 }
 
 func NewTimeseriesDB(ctx *rmngctx.RmngContext) *TimeseriesDB {
-	return &TimeseriesDB{DB: *dbcore.NewDB(ctx)}
+	client := awscommon.GetDynamoDBClient()
+	rawTS := ddbu.NewTable[TimeseriesEntry](client, ddbu.Schema{
+		Name:     RawTSDataTable,
+		HashKey:  "node_key_dt",
+		RangeKey: "ts",
+	})
+	// The two tables share a partition key but not a sort key, so each purge needs its own schema.
+	processedTS := ddbu.NewTable[processed_ts_db.ProcessedTsEntry](client, ddbu.Schema{
+		Name:     processed_ts_db.ProcessedTSDataTable,
+		HashKey:  "node_key_dt",
+		RangeKey: "interval_key",
+	})
+	return &TimeseriesDB{
+		Ctx:   ctx,
+		rawTS: rawTS,
+		purgeTables: map[string]partitionPurger{
+			RawTSDataTable:                       rawTS,
+			processed_ts_db.ProcessedTSDataTable: processedTS,
+		},
+	}
 }
 
 type TimeseriesEntry struct {
@@ -191,7 +210,7 @@ type TimeseriesQueryResult struct {
 // This is the main function that handles all timeseries queries
 func (db *TimeseriesDB) GetTimeseriesDataWithPagination(nodeID string, dataKey string, dataType string, startTime int64, endTime int64, limit int32, nextToken string) (*TimeseriesQueryResult, error) {
 	// Access permission check
-	if err := db.IsAuthorized(utils.NodeGet, nodeID); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodeGet, nodeID); err != nil {
 		return nil, rmerror.NewRMError(err, "unauthorized access to node timeseries data")
 	}
 
@@ -202,7 +221,7 @@ func (db *TimeseriesDB) GetTimeseriesDataWithPagination(nodeID string, dataKey s
 	var paginationTimestamp int64 = 0
 	if nextToken != "" {
 		// Decode the next token (it's base64 encoded JSON)
-		decodedToken, err := dbcore.DecodePaginationToken(nextToken)
+		decodedToken, err := ddbu.DecodeToken(nextToken)
 		if err != nil {
 			return nil, rmerror.NewRMError(err, "invalid pagination token")
 		}
@@ -245,57 +264,28 @@ func (db *TimeseriesDB) GetTimeseriesDataWithPagination(nodeID string, dataKey s
 		keyCondition = keyCondition.And(expression.Key("ts").LessThanEqual(expression.Value(effectiveEndTime)))
 	}
 
-	// Build expression
-	expr, err := expression.NewBuilder().WithKeyCondition(keyCondition).Build()
-	if err != nil {
-		return nil, rmerror.NewRMError(err, "failed to build query expression")
+	opts := ddbu.QueryOpts{
+		Descending: true, // Return latest data first
 	}
-
-	// Build the query input
-	queryInput := &dynamodb.QueryInput{
-		TableName:                 aws.String(RawTSDataTable),
-		KeyConditionExpression:    expr.KeyCondition(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
-		ScanIndexForward:          aws.Bool(false), // Return latest data first
-	}
-
-	// Add limit if specified
 	if limit > 0 {
-		queryInput.Limit = aws.Int32(limit)
+		opts.Limit = int(limit)
 	}
 
-	// Note: We're using timestamp-based pagination instead of ExclusiveStartKey
-	// to avoid potential issues with DynamoDB pagination in the real AWS environment
-
-	// Execute the query
-	result, err := db.Query(db.Ctx.Context, queryInput)
+	// Paging resumes through the ts bound decoded above, never through StartToken, to avoid potential issues with DynamoDB pagination in the real AWS environment.
+	page, err := db.rawTS.Query(db.Ctx.Context, keyCondition, opts)
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to query timeseries data")
 	}
 
-	// Convert results to TimeseriesEntry structs
-	var entries []*TimeseriesEntry
-	err = attributevalue.UnmarshalListOfMaps(result.Items, &entries)
-	if err != nil {
-		return nil, rmerror.NewRMError(err, "failed to unmarshal timeseries entries")
+	entries := make([]*TimeseriesEntry, len(page.Items))
+	for i := range page.Items {
+		entries[i] = &page.Items[i]
 	}
 
-	// Prepare pagination result
-	queryResult := &TimeseriesQueryResult{
-		Entries: entries,
-	}
-
-	// Generate next token if there are more results
-	if result.LastEvaluatedKey != nil {
-		nextToken, err := dbcore.EncodePaginationToken(result.LastEvaluatedKey)
-		if err != nil {
-			return nil, rmerror.NewRMError(err, "failed to encode pagination token")
-		}
-		queryResult.NextToken = nextToken
-	}
-
-	return queryResult, nil
+	return &TimeseriesQueryResult{
+		Entries:   entries,
+		NextToken: page.NextToken,
+	}, nil
 }
 
 // GetTimeseriesData retrieves timeseries data for a specific parameter within a time range
@@ -330,7 +320,7 @@ func (db *TimeseriesDB) GetTimeseriesDataByTimeRange(nodeID string, dataKey stri
 // GetParameterList retrieves all parameters for a given node that have timeseries data
 func (db *TimeseriesDB) GetParameterList(nodeID string) ([]string, error) {
 	// Access permission check
-	if err := db.IsAuthorized(utils.NodeGet, nodeID); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodeGet, nodeID); err != nil {
 		return nil, rmerror.NewRMError(err, "unauthorized access to node timeseries data")
 	}
 
@@ -343,25 +333,14 @@ func (db *TimeseriesDB) GetParameterList(nodeID string) ([]string, error) {
 // Note: This is typically done via IoT rules, but provided for completeness
 func (db *TimeseriesDB) PutTimeseriesData(entry *TimeseriesEntry) error {
 	// Access permission check
-	if err := db.IsAuthorized(utils.NodePutConfig, entry.NodeID); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodePutConfig, entry.NodeID); err != nil {
 		return rmerror.NewRMError(err, "unauthorized access to node timeseries data")
 	}
 
 	// Build the partition key
 	entry.NodeKeyDt = fmt.Sprintf("%s.%s.%s", entry.NodeID, entry.DataKey, entry.DataType)
 
-	// Marshal the entry to DynamoDB format
-	av, err := attributevalue.MarshalMap(entry)
-	if err != nil {
-		return rmerror.NewRMError(err, "failed to marshal timeseries entry")
-	}
-
-	// Put the item in DynamoDB
-	_, err = db.PutItem(db.Ctx.Context, &dynamodb.PutItemInput{
-		TableName: aws.String(RawTSDataTable),
-		Item:      av,
-	})
-	if err != nil {
+	if err := db.rawTS.Put(db.Ctx.Context, *entry); err != nil {
 		return rmerror.NewRMError(err, "failed to put timeseries data")
 	}
 
@@ -376,27 +355,24 @@ func (db *TimeseriesDB) PutTimeseriesDataBatch(entries []*TimeseriesEntry) error
 	}
 
 	authorizedNodes := make(map[string]struct{})
-	items := make([]map[string]types.AttributeValue, len(entries))
+	items := make([]TimeseriesEntry, len(entries))
 	for i, entry := range entries {
 		if entry == nil {
 			return rmerror.NewRMError(nil, fmt.Sprintf("nil timeseries entry at index %d", i))
 		}
 		if _, ok := authorizedNodes[entry.NodeID]; !ok {
-			if err := db.IsAuthorized(utils.NodePutConfig, entry.NodeID); err != nil {
+			if err := db.Ctx.IsAuthorized(utils.NodePutConfig, entry.NodeID); err != nil {
 				return rmerror.NewRMError(err, "unauthorized access to node timeseries data")
 			}
 			authorizedNodes[entry.NodeID] = struct{}{}
 		}
 
 		entry.NodeKeyDt = fmt.Sprintf("%s.%s.%s", entry.NodeID, entry.DataKey, entry.DataType)
-		av, err := attributevalue.MarshalMap(entry)
-		if err != nil {
-			return rmerror.NewRMError(err, fmt.Sprintf("failed to marshal timeseries entry at index %d", i))
-		}
-		items[i] = av
+		items[i] = *entry
 	}
 
-	if err := db.BatchPutItems(db.Ctx.Context, items, RawTSDataTable); err != nil {
+	// Sequential stops at the first failed chunk, so a failed write keeps the points before it and none after, never gaps scattered through the series.
+	if err := db.rawTS.BatchPut(db.Ctx.Context, items, ddbu.BatchWriteOpts{Sequential: true}); err != nil {
 		return rmerror.NewRMError(err, "failed to batch put timeseries data")
 	}
 	return nil
@@ -457,26 +433,20 @@ func (db *TimeseriesDB) UnMarshalToTimeseriesEntry(image map[string]events.Dynam
 // tableName should be "raw_ts_data" or "processed_ts_data".
 func (db *TimeseriesDB) DeleteTimeseriesForParam(tableName, nodeID, dataKey, dataType string) error {
 	// Access permission check
-	if err := db.IsAuthorized(utils.NodeDeleteConfig, nodeID); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodeDeleteConfig, nodeID); err != nil {
 		return rmerror.NewRMError(err, "unauthorized access to node timeseries data")
 	}
 
 	nodeKeyDt := fmt.Sprintf("%s.%s.%s", nodeID, dataKey, dataType)
 
-	queryInput := &dynamodb.QueryInput{
-		TableName:              aws.String(tableName),
-		KeyConditionExpression: aws.String("node_key_dt = :npd"),
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":npd": &types.AttributeValueMemberS{Value: nodeKeyDt},
-		},
-	}
-
-	keyAttributes, ok := timeseriesKeyAttributes[tableName]
+	table, ok := db.purgeTables[tableName]
 	if !ok {
 		return rmerror.NewRMError(nil, fmt.Sprintf("cannot delete timeseries data: unknown table %q has no key attributes registered", tableName))
 	}
 
-	return db.QueryAndBatchDelete(db.Ctx.Context, queryInput, tableName, keyAttributes)
+	// Returned unwrapped: an RMError would hide the "unprocessed" detail of a throttled batch behind its own message.
+	err := table.QueryDelete(db.Ctx.Context, expression.Key("node_key_dt").Equal(expression.Value(nodeKeyDt)))
+	return err
 }
 
 // DeleteAllTimeseriesForNode deletes all timeseries data (raw and processed) for a node

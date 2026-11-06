@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/lambdautil"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
@@ -19,12 +20,9 @@ import (
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/user_details_db"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
-
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 // Handlers map ErrGroupNotEmpty/ErrSubGroupNotEmpty to 409. Child nodes
@@ -142,7 +140,7 @@ func CreateGroupForUserWithOptions(ctx *rmngctx.RmngContext, groupName string, o
 			group.CapabilityData = capabilityData
 			break
 		}
-		if !db.IsConditionalCheckFailedException(err) {
+		if !ddbu.IsConditionFailed(err) {
 			return nil, rmerror.NewRMError(err, "failed to create group in DynamoDB")
 		}
 		// If we reach here, it means we had a duplicate groupID. We'll retry in the next iteration.
@@ -268,7 +266,7 @@ func CreateSubGroup(ctx *rmngctx.RmngContext, parentGroupID, subGroupName string
 			}
 			break
 		}
-		if !db.IsConditionalCheckFailedException(err) {
+		if !ddbu.IsConditionFailed(err) {
 			return nil, rmerror.NewRMError(err, "failed to create subgroup in DynamoDB")
 		}
 		// If we reach here, it means we had a duplicate subGroupID. We'll retry in the next iteration.
@@ -442,7 +440,7 @@ func AddCapabilitiesToGroup(ctx *rmngctx.RmngContext, groupID string, capabiliti
 	for _, capName := range capabilities {
 		// AddCapability rejects an already-enabled capability via a conditional write.
 		if err := groupDB.AddCapability(groupID, capName, capabilityData[capName]); err != nil {
-			if db.IsConditionalCheckFailedException(err) {
+			if ddbu.IsConditionFailed(err) {
 				return nil, rmerror.NewRMError(ErrCapabilityAlreadyExists, "group already has capability: "+capName)
 			}
 			return nil, rmerror.NewRMError(err, "failed to enable capability "+capName+" on group")
@@ -643,17 +641,12 @@ func UnshareGroup(ctx *rmngctx.RmngContext, groupID string, targetUserID string)
 
 	// Get target user's access type BEFORE removal (needed for capability callbacks)
 	var accessType string
-	targetUserGroupItem, err := userGroupDB.GetUserGroupItemByUserID(targetUserID, groupID)
+	targetEntry, err := userGroupDB.GetUserGroupItemByUserID(targetUserID, groupID)
 	if err != nil {
 		// Log but continue - the user may not be in the group
 		rlog.Error(ctx).Err(err).Msg("Failed to get target user's group access")
-	} else if targetUserGroupItem.Item != nil {
-		// Extract access_type from the item
-		if attrVal, ok := targetUserGroupItem.Item["access_type"]; ok {
-			if s, ok := attrVal.(*types.AttributeValueMemberS); ok {
-				accessType = s.Value
-			}
-		}
+	} else if targetEntry != nil {
+		accessType = string(targetEntry.AccessType)
 	}
 
 	// Remove the user FIRST. The capability hooks below have side effects that outlive the request — the Matter hook rotates a fabric CAT ID, invalidating every NOC already issued under it — so they must not run until the removal has passed its own authorization check (GroupShare) and the last-primary guard, and committed. Ordering them before the removal let a call that was ultimately rejected keep its side effects.

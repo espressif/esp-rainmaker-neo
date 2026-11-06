@@ -65,18 +65,14 @@ Lifecycle:
 package assoc_request_db
 
 import (
-	"strconv"
 	"time"
 
-	dbcore "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
+
+	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 // AssocRequestStatus represents the status of an association request
@@ -89,12 +85,17 @@ const (
 )
 
 type AssocRequestDB struct {
-	dbcore.DB
+	Ctx      *rmngctx.RmngContext
+	requests *ddbu.Table[AssocRequestEntry]
 }
 
 func NewAssocRequestDB(ctx *rmngctx.RmngContext) *AssocRequestDB {
 	return &AssocRequestDB{
-		DB: *dbcore.NewDB(ctx),
+		Ctx: ctx,
+		requests: ddbu.NewTable[AssocRequestEntry](awscommon.GetDynamoDBClient(), ddbu.Schema{
+			Name:    AssocRequestsTable,
+			HashKey: "request_id",
+		}),
 	}
 }
 
@@ -115,104 +116,44 @@ type AssocRequestEntry struct {
 }
 
 func (db *AssocRequestDB) StoreAssocRequest(entry *AssocRequestEntry) error {
-	item := map[string]types.AttributeValue{
-		"request_id":      &types.AttributeValueMemberS{Value: entry.RequestID},
-		"challenge":       &types.AttributeValueMemberS{Value: entry.Challenge},
-		"user_id":         &types.AttributeValueMemberS{Value: entry.UserID},
-		"group_id":        &types.AttributeValueMemberS{Value: entry.GroupID},
-		"is_matter_group": &types.AttributeValueMemberBOOL{Value: entry.IsMatterGroup},
-		"status":          &types.AttributeValueMemberS{Value: entry.Status},
-		"expiration_time": &types.AttributeValueMemberN{Value: strconv.FormatInt(time.Now().Add(AssocRequestTTL).Unix(), 10)},
-	}
+	// A copy, so the caller's entry keeps its own expiration_time.
+	item := *entry
+	item.ExpirationTime = time.Now().Add(AssocRequestTTL).Unix()
 
-	// Add node info if set (after verify for Matter groups)
-	if entry.NodeID != "" {
-		item["node_id"] = &types.AttributeValueMemberS{Value: entry.NodeID}
-	}
-	if entry.MatterNodeID != "" {
-		item["matter_node_id"] = &types.AttributeValueMemberS{Value: entry.MatterNodeID}
-	}
-
-	input := &dynamodb.PutItemInput{
-		TableName: aws.String(AssocRequestsTable),
-		Item:      item,
-	}
-
-	_, err := db.PutItem(db.Ctx.Context, input)
-	if err != nil {
+	if err := db.requests.Put(db.Ctx.Context, item); err != nil {
 		return rmerror.NewRMError(err, "failed to store item in DynamoDB")
 	}
 	return nil
 }
 
 func (db *AssocRequestDB) GetAssocRequestByID(requestID string) (*AssocRequestEntry, error) {
-	input := &dynamodb.GetItemInput{
-		TableName: aws.String(AssocRequestsTable),
-		Key: map[string]types.AttributeValue{
-			"request_id": &types.AttributeValueMemberS{Value: requestID},
-		},
-	}
-
-	result, err := db.GetItem(db.Ctx.Context, input)
+	entry, found, err := db.requests.Get(db.Ctx.Context, db.requests.Key(requestID))
 	if err != nil {
 		return nil, err
 	}
-
-	if result.Item == nil {
+	if !found {
 		return nil, nil
 	}
 
-	entry := &AssocRequestEntry{}
-	err = attributevalue.UnmarshalMap(result.Item, entry)
-	if err != nil {
-		return nil, err
-	}
-
-	return entry, nil
+	return &entry, nil
 }
 
 func (db *AssocRequestDB) UpdateAssocRequestStatus(requestID, status, nodeID, matterNodeID string) error {
-	updateExpr := "SET #status = :status, expiration_time = :exp"
-	exprAttrNames := map[string]string{"#status": "status"}
-	exprAttrValues := map[string]types.AttributeValue{
-		":status": &types.AttributeValueMemberS{Value: status},
-		":exp":    &types.AttributeValueMemberN{Value: strconv.FormatInt(time.Now().Add(AssocRequestTTL).Unix(), 10)},
-	}
-
+	update := expression.Set(expression.Name("status"), expression.Value(status)).
+		Set(expression.Name("expiration_time"), expression.Value(time.Now().Add(AssocRequestTTL).Unix()))
 	if nodeID != "" {
-		updateExpr += ", node_id = :nid"
-		exprAttrValues[":nid"] = &types.AttributeValueMemberS{Value: nodeID}
+		update = update.Set(expression.Name("node_id"), expression.Value(nodeID))
 	}
 	if matterNodeID != "" {
-		updateExpr += ", matter_node_id = :mnid"
-		exprAttrValues[":mnid"] = &types.AttributeValueMemberS{Value: matterNodeID}
+		update = update.Set(expression.Name("matter_node_id"), expression.Value(matterNodeID))
 	}
 
-	input := &dynamodb.UpdateItemInput{
-		TableName: aws.String(AssocRequestsTable),
-		Key: map[string]types.AttributeValue{
-			"request_id": &types.AttributeValueMemberS{Value: requestID},
-		},
-		UpdateExpression:          aws.String(updateExpr),
-		ExpressionAttributeNames:  exprAttrNames,
-		ExpressionAttributeValues: exprAttrValues,
-	}
-
-	_, err := db.UpdateItem(db.Ctx.Context, input)
-	if err != nil {
+	if _, err := db.requests.Upsert(db.Ctx.Context, db.requests.Key(requestID), update); err != nil {
 		return rmerror.NewRMError(err, "failed to update item in DynamoDB")
 	}
 	return nil
 }
 
 func (db *AssocRequestDB) DeleteAssocRequest(requestID string) error {
-	input := &dynamodb.DeleteItemInput{
-		TableName: aws.String(AssocRequestsTable),
-		Key: map[string]types.AttributeValue{
-			"request_id": &types.AttributeValueMemberS{Value: requestID},
-		},
-	}
-
-	_, err := db.DeleteItem(db.Ctx.Context, input)
-	return err
+	return db.requests.DeleteAllowMissing(db.Ctx.Context, db.requests.Key(requestID))
 }

@@ -7,6 +7,8 @@ package timeseries_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -233,6 +235,23 @@ var _ = Describe("TimeseriesService", func() {
 			Expect(operations[0].Details).To(Equal(testNodeID + ".energy.float:1000"))
 			Expect(operations[1].Details).To(Equal(testNodeID + ".energy.float:2000"))
 			Expect(operations[2].Details).To(Equal(testNodeID + ".energy.float:3000"))
+		})
+
+		// Pins chunk-after-chunk submission in timestamp order. The mock applies writes sequentially; real DynamoDB does not order puts within a chunk.
+		It("submits batch-write chunks in ascending timestamp order", func() {
+			testUser.Permissions.SetAllow(utils.NodePutConfig.String(), testNodeID)
+			const points = 80
+			data := make([]timeseries_db.NodeTimeseriesPayload, 0, points)
+			for i := points; i > 0; i-- {
+				data = append(data, timeseries_db.NodeTimeseriesPayload{Key: "energy", DataType: "float", Timestamp: int64(i * 1000), Value: json.RawMessage(strconv.Itoa(i))})
+			}
+			Expect(timeseriesService.Put(rmngCtx, testNodeID, timeseries.TimeseriesBatchPayload{Data: data})).To(Succeed())
+
+			operations := mockDB.ProfileGet().Accesses[timeseries_db.RawTSDataTable].Operations
+			Expect(operations).To(HaveLen(points))
+			for i, op := range operations {
+				Expect(op.Details).To(Equal(fmt.Sprintf("%s.energy.float:%d", testNodeID, (i+1)*1000)), "write %d out of timestamp order", i)
+			}
 		})
 	})
 
@@ -992,6 +1011,27 @@ var _ = Describe("Timeseries Service Integration", func() {
 			// the call should succeed rather than surface an error.
 			_, err := timeseriesService.Get(rmngCtx, testNodeID)
 			Expect(err).To(BeNil())
+		})
+
+		// Without the cap, an oversize page_size reads the whole series in one request.
+		It("caps page_size at 1000 and returns a next_key for the rest", func() {
+			testUser.Permissions.SetAllow(utils.NodePutConfig.String(), testNodeID)
+			entries := make([]*timeseries_db.TimeseriesEntry, 0, 1001)
+			for i := 1; i <= 1001; i++ {
+				entries = append(entries, &timeseries_db.TimeseriesEntry{NodeID: testNodeID, DataKey: "temperature", DataType: "float", Timestamp: int64(i), Value: float64(i)})
+			}
+			Expect(timeseries_db.NewTimeseriesDB(rmngCtx).PutTimeseriesDataBatch(entries)).To(Succeed())
+
+			rmngCtx.Context = timeseries.WithQueryParams(rmngCtx.Context, map[string]string{
+				"key":       "temperature",
+				"data_type": "float",
+				"page_size": "5000",
+			})
+			result, err := timeseriesService.Get(rmngCtx, testNodeID)
+			Expect(err).ToNot(HaveOccurred())
+			response := result.(map[string]interface{})
+			Expect(response["page_total"]).To(Equal(1000))
+			Expect(response).To(HaveKey("next_key"))
 		})
 
 		It("should enforce authorization", func() {

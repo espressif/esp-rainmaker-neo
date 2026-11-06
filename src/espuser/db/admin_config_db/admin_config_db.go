@@ -6,15 +6,12 @@
 package admin_config_db
 
 import (
-	"github.com/espressif/esp-rainmaker-neo/src/awsutils/espdynamodb"
+	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 const (
@@ -27,11 +24,19 @@ const (
 )
 
 type AdminConfigDB struct {
-	espdynamodb.EspDB
+	Ctx     *rmngctx.RmngContext
+	configs *ddbu.Table[ConfigEntry]
 }
 
 func NewAdminConfigDB(ctx *rmngctx.RmngContext) *AdminConfigDB {
-	return &AdminConfigDB{EspDB: espdynamodb.NewEspDB(ctx)}
+	return &AdminConfigDB{
+		Ctx: ctx,
+		configs: ddbu.NewTable[ConfigEntry](awscommon.GetDynamoDBClient(), ddbu.Schema{
+			Name:     adminConfigTableName,
+			HashKey:  adminConfigHashKey,
+			RangeKey: adminConfigRangeKey,
+		}),
+	}
 }
 
 type ConfigEntry struct {
@@ -41,49 +46,20 @@ type ConfigEntry struct {
 	UpdatedAt  int64  `dynamodbav:"updated_at,omitempty"`
 }
 
-// key-only struct so a Get never leaks non-key fields into the DynamoDB Key.
-
-func getLastEvaluatedKey(e ConfigEntry, _ ...string) map[string]types.AttributeValue {
-	return map[string]types.AttributeValue{
-		adminConfigHashKey:  &types.AttributeValueMemberS{Value: e.ConfigName},
-		adminConfigRangeKey: &types.AttributeValueMemberS{Value: e.Subtype},
-	}
-}
-
 // Put is an unconditional upsert of one (configName, subtype) row.
 func (db *AdminConfigDB) Put(configName, subtype, value string, updatedAt int64) error {
-	av, err := attributevalue.MarshalMap(&ConfigEntry{
-		ConfigName: configName, Subtype: subtype, Value: value, UpdatedAt: updatedAt,
-	})
-	if err != nil {
-		return rmerror.NewRMError(err, "failed to marshal admin config")
-	}
-	if _, err := db.DB.PutItem(db.Ctx.Context, &dynamodb.PutItemInput{
-		TableName: aws.String(adminConfigTableName),
-		Item:      av,
-	}); err != nil {
+	entry := ConfigEntry{ConfigName: configName, Subtype: subtype, Value: value, UpdatedAt: updatedAt}
+	if err := db.configs.Put(db.Ctx.Context, entry); err != nil {
 		return rmerror.NewRMError(err, "failed to put admin config")
 	}
 	return nil
 }
 
-// Get returns the value, or empty string if absent.
-
 // GetAll returns every row under configName.
 func (db *AdminConfigDB) GetAll(configName string) ([]ConfigEntry, error) {
-	keyCond := expression.Key(adminConfigHashKey).Equal(expression.Value(configName))
-	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()
-	if err != nil {
-		return nil, rmerror.NewRMError(err, "failed to build admin config query")
-	}
-	rows, _, err := espdynamodb.DbQueryWithLoop(espdynamodb.QueryWithLoopInput[ConfigEntry]{
-		DBHandle:  &db.EspDB,
-		TableName: adminConfigTableName,
-		Expr:      expr,
-		GetKey:    getLastEvaluatedKey,
-	})
+	page, err := db.configs.Query(db.Ctx.Context, expression.Key(adminConfigHashKey).Equal(expression.Value(configName)))
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to query admin config")
 	}
-	return rows, nil
+	return page.Items, nil
 }

@@ -9,15 +9,12 @@ package oauth_clients_db
 import (
 	"errors"
 
+	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-
-	"github.com/espressif/esp-rainmaker-neo/src/awsutils/espdynamodb"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
@@ -32,11 +29,18 @@ const (
 var ErrOAuthClientNotFound = errors.New("oauth client not found")
 
 type OAuthClientsDB struct {
-	espdynamodb.EspDB
+	Ctx     *rmngctx.RmngContext
+	clients *ddbu.Table[OAuthClientEntry]
 }
 
 func NewOAuthClientsDB(ctx *rmngctx.RmngContext) *OAuthClientsDB {
-	return &OAuthClientsDB{EspDB: espdynamodb.NewEspDB(ctx)}
+	return &OAuthClientsDB{
+		Ctx: ctx,
+		clients: ddbu.NewTable[OAuthClientEntry](awscommon.GetDynamoDBClient(), ddbu.Schema{
+			Name:    oauthClientsTableName,
+			HashKey: oauthClientsHashKey,
+		}),
+	}
 }
 
 // OAuthClientEntry is one registered client. Secret is stored plaintext so List can return it (get_secret).
@@ -80,24 +84,9 @@ type OAuthClientEntry struct {
 	UpdatedAt   int64 `dynamodbav:"updated_at,omitempty"`
 }
 
-func (c *OAuthClientEntry) GetHKey() string { return oauthClientsHashKey }
-func (c *OAuthClientEntry) GetRKey() string { return "" }
-
-// Key-only struct for key/query sites (matches the otp_db convention).
-type oauthClientKey struct {
-	ClientID string `dynamodbav:"client_id"`
-}
-
-func (oauthClientKey) GetHKey() string { return oauthClientsHashKey }
-func (oauthClientKey) GetRKey() string { return "" }
-
-func newOAuthClientKey(clientID string) *oauthClientKey {
-	return &oauthClientKey{ClientID: clientID}
-}
-
 // CreateClient puts a new client, failing (not clobbering) if the client_id already exists.
 func (db *OAuthClientsDB) CreateClient(entry *OAuthClientEntry) error {
-	if err := db.DbCreateItem(oauthClientsTableName, entry); err != nil {
+	if err := db.clients.Create(db.Ctx.Context, *entry); err != nil {
 		return rmerror.NewRMError(err, "failed to create oauth client")
 	}
 	return nil
@@ -105,77 +94,48 @@ func (db *OAuthClientsDB) CreateClient(entry *OAuthClientEntry) error {
 
 // GetClient returns the client, or ErrOAuthClientNotFound if the id is unknown.
 func (db *OAuthClientsDB) GetClient(clientID string) (*OAuthClientEntry, error) {
-	var result OAuthClientEntry
-	if err := db.DbGetItem(oauthClientsTableName, newOAuthClientKey(clientID), &result); err != nil {
+	entry, found, err := db.clients.Get(db.Ctx.Context, db.clients.Key(clientID))
+	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to get oauth client")
 	}
-	if result.ClientID == "" {
+	if !found {
 		return nil, ErrOAuthClientNotFound
 	}
-	return &result, nil
+	return &entry, nil
 }
 
 // ListClients scans the whole (small, admin-only) table and returns every client.
 func (db *OAuthClientsDB) ListClients() ([]OAuthClientEntry, error) {
-	var clients []OAuthClientEntry
-	var startKey map[string]types.AttributeValue
-	for {
-		out, err := db.DB.Scan(db.Ctx.Context, &dynamodb.ScanInput{
-			TableName:         aws.String(oauthClientsTableName),
-			ExclusiveStartKey: startKey,
-		})
-		if err != nil {
-			return nil, rmerror.NewRMError(err, "failed to list oauth clients")
-		}
-		var page []OAuthClientEntry
-		if err := attributevalue.UnmarshalListOfMaps(out.Items, &page); err != nil {
-			return nil, rmerror.NewRMError(err, "failed to unmarshal oauth clients")
-		}
-		clients = append(clients, page...)
-		if len(out.LastEvaluatedKey) == 0 {
-			break
-		}
-		startKey = out.LastEvaluatedKey
+	page, err := db.clients.Scan(db.Ctx.Context)
+	if err != nil {
+		return nil, rmerror.NewRMError(err, "failed to list oauth clients")
 	}
-	return clients, nil
+	return page.Items, nil
 }
 
 // UpdateClient sets all non-key fields of entry via UpdateItem; fails if the client does not exist.
 func (db *OAuthClientsDB) UpdateClient(entry *OAuthClientEntry) error {
-	if _, err := db.DbUpdateItemStructSet(espdynamodb.DbUpdateItemStructSetInput{
-		TableName: oauthClientsTableName,
-		Item:      entry,
-	}); err != nil {
+	if _, err := db.clients.UpdateFrom(db.Ctx.Context, *entry); err != nil {
 		return rmerror.NewRMError(err, "failed to update oauth client")
 	}
 	return nil
 }
 
-// AddRedirectURIs unions uris into the client's redirect_uris string-set with a single
-// conditional UpdateItem (ADD = set-union, dedup by DynamoDB; condition item-exists is
-// applied by DbUpdateItem). No prior read. Returns the full merged set from UpdatedNew.
+// AddRedirectURIs unions uris into the client's redirect_uris string set in one conditional UpdateItem (ADD is a set-union, so DynamoDB dedups) and returns the merged set.
 func (db *OAuthClientsDB) AddRedirectURIs(clientID string, uris []string, updatedAt int64) ([]string, error) {
 	update := expression.
 		Add(expression.Name("redirect_uris"), expression.Value(&types.AttributeValueMemberSS{Value: uris})).
 		Set(expression.Name("updated_at"), expression.Value(updatedAt))
-	out, err := db.DbUpdateItem(espdynamodb.DbUpdateItemInput{
-		TableName: oauthClientsTableName,
-		Update:    update,
-		Query:     newOAuthClientKey(clientID),
-	})
+	updated, err := db.clients.Update(db.Ctx.Context, db.clients.Key(clientID), update)
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to add redirect uris")
 	}
-	merged := OAuthClientEntry{}
-	if err := attributevalue.UnmarshalMap(out.Attributes, &merged); err != nil {
-		return nil, rmerror.NewRMError(err, "failed to unmarshal redirect uris")
-	}
-	return merged.RedirectURIs, nil
+	return updated.RedirectURIs, nil
 }
 
 // DeleteClient permanently removes the client row.
 func (db *OAuthClientsDB) DeleteClient(clientID string) error {
-	if err := db.DbDeleteItem(oauthClientsTableName, newOAuthClientKey(clientID)); err != nil {
+	if err := db.clients.Delete(db.Ctx.Context, db.clients.Key(clientID)); err != nil {
 		return rmerror.NewRMError(err, "failed to delete oauth client")
 	}
 	return nil

@@ -5,20 +5,18 @@
 package node_details_db
 
 import (
-	"strconv"
+	"fmt"
 	"time"
 
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-
-	"github.com/espressif/esp-rainmaker-neo/src/awsutils/espdynamodb"
-	"github.com/espressif/esp-rainmaker-neo/src/utils"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+
+	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )
 
 const (
@@ -39,85 +37,80 @@ type NodeDetailsEntry struct {
 	NodeType string `dynamodbav:"node_type,omitempty"`
 }
 
-func (n *NodeDetailsEntry) GetHKey() string {
-	return nodeDetailsHashKey
+// nodeDetailsRow keeps a row as raw attributes because service columns are named at runtime.
+type nodeDetailsRow struct {
+	attrs map[string]types.AttributeValue
 }
 
-func (n *NodeDetailsEntry) GetRKey() string {
-	return ""
+func (r *nodeDetailsRow) UnmarshalDynamoDBAttributeValue(av types.AttributeValue) error {
+	m, ok := av.(*types.AttributeValueMemberM)
+	if !ok {
+		return rmerror.NewRMError(nil, fmt.Sprintf("node details row: want a map attribute, got %T", av))
+	}
+	r.attrs = m.Value
+	return nil
 }
 
 type NodeDetailsDB struct {
-	espdynamodb.EspDB
+	Ctx     *rmngctx.RmngContext
+	entries *ddbu.Table[NodeDetailsEntry]
+	rows    *ddbu.Table[nodeDetailsRow]
 }
 
 func NewNodeDetailsDB(ctx *rmngctx.RmngContext) *NodeDetailsDB {
+	client := awscommon.GetDynamoDBClient()
+	schema := ddbu.Schema{Name: NodeDetailsTable, HashKey: nodeDetailsHashKey}
 	return &NodeDetailsDB{
-		EspDB: espdynamodb.NewEspDB(ctx),
+		Ctx:     ctx,
+		entries: ddbu.NewTable[NodeDetailsEntry](client, schema),
+		rows:    ddbu.NewTable[nodeDetailsRow](client, schema),
 	}
 }
 
 // GetNodeDetails retrieves the complete row from node_details table
 func (db *NodeDetailsDB) GetNodeDetails(nodeID string) (*NodeDetails, error) {
-	if err := db.DB.IsAuthorized(utils.NodeGet, nodeID); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodeGet, nodeID); err != nil {
 		return nil, err
 	}
 
-	result, err := db.DB.GetItem(db.Ctx.Context, &dynamodb.GetItemInput{
-		TableName: aws.String(NodeDetailsTable),
-		Key: map[string]types.AttributeValue{
-			nodeDetailsHashKey: &types.AttributeValueMemberS{Value: nodeID},
-		},
-	})
+	row, found, err := db.rows.Get(db.Ctx.Context, db.rows.Key(nodeID))
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to get node details")
 	}
-	if result.Item == nil {
-		return nil, nil // Node details not found
+	if !found {
+		return nil, nil
 	}
-
-	return &NodeDetails{Data: result.Item}, nil
+	return &NodeDetails{Data: row.attrs}, nil
 }
 
 // GetNodeType returns the node_type value stored at registration time.
 // Returns an empty string if the row is absent or the field is unset.
-// Uses a projection so only the node_type column is fetched.
 func (db *NodeDetailsDB) GetNodeType(nodeID string) (string, error) {
-	if err := db.DB.IsAuthorized(utils.NodeGet, nodeID); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodeGet, nodeID); err != nil {
 		return "", err
 	}
-	result, err := db.DB.GetItem(db.Ctx.Context, &dynamodb.GetItemInput{
-		TableName: aws.String(NodeDetailsTable),
-		Key: map[string]types.AttributeValue{
-			nodeDetailsHashKey: &types.AttributeValueMemberS{Value: nodeID},
-		},
-		ProjectionExpression: aws.String(nodeDetailsColNodeType),
-	})
+	entry, _, err := db.entries.Get(db.Ctx.Context, db.entries.Key(nodeID), ddbu.ReadOpts{Project: []string{nodeDetailsColNodeType}})
 	if err != nil {
 		return "", rmerror.NewRMError(err, "failed to get node type")
 	}
-	return (&NodeDetails{Data: result.Item}).NodeType(), nil
+	return entry.NodeType, nil
 }
 
 func (db *NodeDetailsDB) AddNode(nodeobj NodeDetailsEntry) error {
-	if err := db.DB.IsAuthorized(utils.NodeAdminAdd, nodeobj.NodeID); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodeAdminAdd, nodeobj.NodeID); err != nil {
 		return err
 	}
 
-	return db.DbCreateItem(NodeDetailsTable, &nodeobj)
+	return db.entries.Create(db.Ctx.Context, nodeobj)
 }
 
 // SetNodeType overwrites node_type on an existing row; it never creates one.
 func (db *NodeDetailsDB) SetNodeType(nodeID string, nodeType string) error {
-	if err := db.DB.IsAuthorized(utils.NodeAdminAdd, nodeID); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodeAdminAdd, nodeID); err != nil {
 		return err
 	}
-	_, err := db.DbUpdateItem(espdynamodb.DbUpdateItemInput{
-		TableName: NodeDetailsTable,
-		Query:     &NodeDetailsEntry{NodeID: nodeID},
-		Update:    expression.Set(expression.Name(nodeDetailsColNodeType), expression.Value(nodeType)),
-	})
-	if err != nil {
+	update := expression.Set(expression.Name(nodeDetailsColNodeType), expression.Value(nodeType))
+	if _, err := db.rows.Update(db.Ctx.Context, db.rows.Key(nodeID), update); err != nil {
 		return rmerror.NewRMError(err, "failed to set node type")
 	}
 	return nil
@@ -125,7 +118,7 @@ func (db *NodeDetailsDB) SetNodeType(nodeID string, nodeType string) error {
 
 // GetServiceData retrieves data for a specific service
 func (db *NodeDetailsDB) GetServiceData(nodeID string, serviceName string) (interface{}, error) {
-	if err := db.DB.IsAuthorized(utils.NodeGet, nodeID); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodeGet, nodeID); err != nil {
 		return nil, err
 	}
 
@@ -170,7 +163,7 @@ func (db *NodeDetailsDB) extractAndMarshalServiceData(data interface{}, serviceN
 // UpdateServiceData writes a service field on the accessor's own node row (db.Ctx.GetID()).
 func (db *NodeDetailsDB) UpdateServiceData(serviceName string, data interface{}) error {
 	nodeID := db.Ctx.GetID()
-	if err := db.DB.IsAuthorized(utils.NodePutConfig, nodeID); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodePutConfig, nodeID); err != nil {
 		return err
 	}
 	return db.setServiceData(nodeID, serviceName, data)
@@ -179,7 +172,7 @@ func (db *NodeDetailsDB) UpdateServiceData(serviceName string, data interface{})
 // SetServiceDataForNode writes a service field on an explicit node's row, letting an app
 // write config for a pure Matter node. RBAC-gated on NodePutConfig for that node.
 func (db *NodeDetailsDB) SetServiceDataForNode(nodeID string, serviceName string, data interface{}) error {
-	if err := db.DB.IsAuthorized(utils.NodePutConfig, nodeID); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodePutConfig, nodeID); err != nil {
 		return err
 	}
 	return db.setServiceData(nodeID, serviceName, data)
@@ -191,64 +184,31 @@ func (db *NodeDetailsDB) setServiceData(nodeID string, serviceName string, data 
 		return err
 	}
 
-	updateExpr := expression.Set(
-		expression.Name(serviceName),
-		expression.Value(dataAttr),
-	)
-
-	expr, err := expression.NewBuilder().WithUpdate(updateExpr).Build()
-	if err != nil {
-		return rmerror.NewRMError(err, "failed to build update expression")
-	}
-
-	input := &dynamodb.UpdateItemInput{
-		TableName:                 aws.String(NodeDetailsTable),
-		Key:                       map[string]types.AttributeValue{nodeDetailsHashKey: &types.AttributeValueMemberS{Value: nodeID}},
-		UpdateExpression:          expr.Update(),
-		ExpressionAttributeValues: expr.Values(),
-		ExpressionAttributeNames:  expr.Names(),
-	}
-	// No condition expression: an absent row is created, which is required for pure Matter nodes.
+	// Upsert: an absent row is created, which is required for pure Matter nodes.
 	//TODO: a node with no prior row is implicitly created here when capability/service data is written (e.g. by an optional module) rather than at user-node association. Fix by calling AddNode() at assoc time.
-
-	_, err = db.DB.UpdateItem(db.Ctx.Context, input)
-	if err != nil {
+	update := expression.Set(expression.Name(serviceName), expression.Value(dataAttr))
+	if _, err := db.rows.Upsert(db.Ctx.Context, db.rows.Key(nodeID), update); err != nil {
 		return rmerror.NewRMError(err, "failed to update service data")
 	}
-
 	return nil
 }
 
 // DeleteServiceData removes a specific service field from the node configuration
 func (db *NodeDetailsDB) DeleteServiceData(nodeID string, serviceName string) error {
-	if err := db.DB.IsAuthorized(utils.NodeDeleteConfig, nodeID); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodeDeleteConfig, nodeID); err != nil {
 		return err
 	}
 
-	// Set up the update item input to remove the service field
-	input := &dynamodb.UpdateItemInput{
-		TableName: aws.String(NodeDetailsTable),
-		Key: map[string]types.AttributeValue{
-			nodeDetailsHashKey: &types.AttributeValueMemberS{Value: nodeID},
-		},
-		UpdateExpression: aws.String("REMOVE #column"),
-		ExpressionAttributeNames: map[string]string{
-			"#column": serviceName,
-		},
-	}
-
-	// Execute the update
-	_, err := db.DB.UpdateItem(db.Ctx.Context, input)
-	if err != nil {
+	update := expression.Remove(expression.Name(serviceName))
+	if _, err := db.rows.Upsert(db.Ctx.Context, db.rows.Key(nodeID), update); err != nil {
 		return rmerror.NewRMError(err, "failed to delete service data")
 	}
-
 	return nil
 }
 
 // GetServiceVersion gets the version for a service
 func (db *NodeDetailsDB) GetServiceVersion(nodeID string, serviceName string) (*int64, error) {
-	if err := db.DB.IsAuthorized(utils.NodeGet, nodeID); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodeGet, nodeID); err != nil {
 		return nil, err
 	}
 
@@ -267,11 +227,10 @@ func (db *NodeDetailsDB) GetServiceVersion(nodeID string, serviceName string) (*
 // UpdateServiceDataWithVersion updates a specific service field in the node configuration and updates the schedule version
 // This is an optimized version that combines both operations into a single database write
 func (db *NodeDetailsDB) UpdateServiceDataWithVersion(nodeID string, serviceName string, data interface{}) error {
-	if err := db.DB.IsAuthorized(utils.NodePutConfig, nodeID); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodePutConfig, nodeID); err != nil {
 		return err
 	}
 
-	// Get current timestamp in seconds for schedule version
 	currentTime := time.Now().Unix()
 
 	dataAttr, err := db.extractAndMarshalServiceData(data, serviceName)
@@ -279,74 +238,26 @@ func (db *NodeDetailsDB) UpdateServiceDataWithVersion(nodeID string, serviceName
 		return err
 	}
 
-	// Version column name follows the convention <serviceName>Ver
-	versionColumnName := serviceName + "Ver"
-
-	// Build update expression using the expression builder
-	updateExpr := expression.Set(
-		expression.Name(serviceName),
-		expression.Value(dataAttr),
-	).Set(
-		expression.Name(versionColumnName),
-		expression.Value(currentTime),
-	)
-
-	expr, err := expression.NewBuilder().WithUpdate(updateExpr).Build()
-	if err != nil {
-		return rmerror.NewRMError(err, "failed to build update expression")
-	}
-
-	input := &dynamodb.UpdateItemInput{
-		TableName:                 aws.String(NodeDetailsTable),
-		Key:                       map[string]types.AttributeValue{nodeDetailsHashKey: &types.AttributeValueMemberS{Value: nodeID}},
-		UpdateExpression:          expr.Update(),
-		ExpressionAttributeValues: expr.Values(),
-		ExpressionAttributeNames:  expr.Names(),
-	}
-
-	_, err = db.DB.UpdateItem(db.Ctx.Context, input)
-	if err != nil {
+	update := expression.Set(expression.Name(serviceName), expression.Value(dataAttr)).
+		Set(expression.Name(serviceName+"Ver"), expression.Value(currentTime))
+	if _, err := db.rows.Upsert(db.Ctx.Context, db.rows.Key(nodeID), update); err != nil {
 		return rmerror.NewRMError(err, "failed to update service data")
 	}
-
 	return nil
 }
 
 // DeleteServiceDataWithVersion removes a specific service field from the node configuration and updates the schedule version
 // This is an optimized version that combines both operations into a single database write
 func (db *NodeDetailsDB) DeleteServiceDataWithVersion(nodeID string, serviceName string) error {
-	if err := db.DB.IsAuthorized(utils.NodeDeleteConfig, nodeID); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodeDeleteConfig, nodeID); err != nil {
 		return err
 	}
 
-	// Get current timestamp in seconds for schedule version
-	currentTime := time.Now().Unix()
-
-	// Version column name follows the convention <serviceName>Ver
-	versionColumnName := serviceName + "Ver"
-
-	// Set up the update item input
-	input := &dynamodb.UpdateItemInput{
-		TableName: aws.String(NodeDetailsTable),
-		Key: map[string]types.AttributeValue{
-			nodeDetailsHashKey: &types.AttributeValueMemberS{Value: nodeID},
-		},
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":version": &types.AttributeValueMemberN{Value: strconv.FormatInt(currentTime, 10)},
-		},
-		UpdateExpression: aws.String("REMOVE #column SET #version = :version"),
-		ExpressionAttributeNames: map[string]string{
-			"#column":  serviceName,
-			"#version": versionColumnName,
-		},
-	}
-
-	// Execute the update
-	_, err := db.DB.UpdateItem(db.Ctx.Context, input)
-	if err != nil {
+	update := expression.Remove(expression.Name(serviceName)).
+		Set(expression.Name(serviceName+"Ver"), expression.Value(time.Now().Unix()))
+	if _, err := db.rows.Upsert(db.Ctx.Context, db.rows.Key(nodeID), update); err != nil {
 		return rmerror.NewRMError(err, "failed to delete service data")
 	}
-
 	return nil
 }
 

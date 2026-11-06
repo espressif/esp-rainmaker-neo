@@ -19,13 +19,13 @@ import (
 	"time"
 
 	"github.com/espressif/esp-cloud-common/go/rbac/rbac"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/nodes_online_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/certutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
+	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/iotdputil"
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/iotutil"
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/s3util"
@@ -1573,7 +1573,7 @@ func RegisterNodeInRmng(rmngCtx *rmngctx.RmngContext, cert string, caCert string
 	// treat its absence like any other missing row.
 	if err := detailsDB.AddNode(node_details_db.NodeDetailsEntry{
 		NodeID: nodeId, RegTs: time.Now().Unix(), AdminId: adminId, NodeType: nodeType}); err != nil {
-		if db.IsConditionalCheckFailedException(err) {
+		if ddbu.IsConditionFailed(err) {
 			return nodeId, ErrNodeAlreadyRegistered
 		}
 		rlog.Warn(rmngCtx).Err(err).Msg("failed to record node details row")

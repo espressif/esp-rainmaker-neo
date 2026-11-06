@@ -10,13 +10,12 @@ package refresh_tokens_db
 import (
 	"errors"
 
+	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-
-	"github.com/espressif/esp-rainmaker-neo/src/awsutils/espdynamodb"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 const (
@@ -37,11 +36,19 @@ var (
 )
 
 type RefreshTokensDB struct {
-	espdynamodb.EspDB
+	Ctx      *rmngctx.RmngContext
+	families *ddbu.Table[FamilyEntry]
 }
 
 func NewRefreshTokensDB(ctx *rmngctx.RmngContext) *RefreshTokensDB {
-	return &RefreshTokensDB{EspDB: espdynamodb.NewEspDB(ctx)}
+	return &RefreshTokensDB{
+		Ctx: ctx,
+		families: ddbu.NewTable[FamilyEntry](awscommon.GetDynamoDBClient(), ddbu.Schema{
+			Name:     refreshTokensTableName,
+			HashKey:  refreshTokensHashKey,
+			RangeKey: refreshTokensRangeKey,
+		}),
+	}
 }
 
 // FamilyEntry is one login's rotation family: a single row holding the current counter.
@@ -71,9 +78,6 @@ type FamilyEntry struct {
 	CreatedAt int64 `dynamodbav:"created_at,omitempty"`
 }
 
-func (e *FamilyEntry) GetHKey() string { return refreshTokensHashKey }
-func (e *FamilyEntry) GetRKey() string { return refreshTokensRangeKey }
-
 // SetKey composes the SK from client_id + family_id.
 func (e *FamilyEntry) SetKey(clientID, familyID string) *FamilyEntry {
 	e.ClientID = clientID
@@ -86,24 +90,15 @@ func composeSK(clientID, familyID string) string {
 	return clientID + refreshTokensSKSep + familyID
 }
 
-// Key-only struct: FamilyEntry's non-omitempty fields would leak into the DynamoDB Key and fail with ValidationException, so always pass this at key sites.
-type familyKey struct {
-	UserID       string `dynamodbav:"user_id"`
-	ClientFamily string `dynamodbav:"client_family"`
-}
-
-func (familyKey) GetHKey() string { return refreshTokensHashKey }
-func (familyKey) GetRKey() string { return refreshTokensRangeKey }
-
-func newFamilyKey(userID, clientID, familyID string) *familyKey {
-	return &familyKey{UserID: userID, ClientFamily: composeSK(clientID, familyID)}
+func (db *RefreshTokensDB) familyKey(userID, clientID, familyID string) ddbu.Key {
+	return db.families.Key(userID, composeSK(clientID, familyID))
 }
 
 // CreateFamily writes a login's first family row at counter 0. Conditional on the row not
 // existing so a family-id collision can never silently overwrite an active login.
 func (db *RefreshTokensDB) CreateFamily(entry *FamilyEntry) error {
 	entry.SetKey(entry.ClientID, entry.FamilyID)
-	if err := db.DbCreateItem(refreshTokensTableName, entry); err != nil {
+	if err := db.families.Create(db.Ctx.Context, *entry); err != nil {
 		return rmerror.NewRMError(err, "failed to create refresh token family")
 	}
 	return nil
@@ -111,11 +106,11 @@ func (db *RefreshTokensDB) CreateFamily(entry *FamilyEntry) error {
 
 // GetFamily reads a family row; a missing row is ErrRefreshNotFound.
 func (db *RefreshTokensDB) GetFamily(userID, clientID, familyID string) (*FamilyEntry, error) {
-	var result FamilyEntry
-	if err := db.DbGetItem(refreshTokensTableName, newFamilyKey(userID, clientID, familyID), &result); err != nil {
+	result, found, err := db.families.Get(db.Ctx.Context, db.familyKey(userID, clientID, familyID))
+	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to get refresh token family")
 	}
-	if result.UserID == "" {
+	if !found {
 		return nil, ErrRefreshNotFound
 	}
 	return &result, nil
@@ -130,13 +125,7 @@ func (db *RefreshTokensDB) AdvanceCounter(userID, clientID, familyID string, exp
 		Set(expression.Name("expires_on"), expression.Value(expiresOn)).
 		Set(expression.Name("rotated_at"), expression.Value(rotatedAt))
 	condition := expression.Name(refreshTokensColCounter).Equal(expression.Value(expected))
-	_, err := db.DbUpdateItem(espdynamodb.DbUpdateItemInput{
-		TableName: refreshTokensTableName,
-		Update:    update,
-		Query:     newFamilyKey(userID, clientID, familyID),
-		Condition: condition,
-	})
-	if err != nil {
+	if _, err := db.families.Update(db.Ctx.Context, db.familyKey(userID, clientID, familyID), update, ddbu.WriteOpts{If: condition}); err != nil {
 		return rmerror.NewRMError(err, "failed to advance refresh token counter")
 	}
 	return nil
@@ -144,7 +133,7 @@ func (db *RefreshTokensDB) AdvanceCounter(userID, clientID, familyID string, exp
 
 // DeleteFamily removes one login's family row — RFC 7009 revoke, sign-out, and theft response.
 func (db *RefreshTokensDB) DeleteFamily(userID, clientID, familyID string) error {
-	if err := db.DbDeleteItem(refreshTokensTableName, newFamilyKey(userID, clientID, familyID)); err != nil {
+	if err := db.families.Delete(db.Ctx.Context, db.familyKey(userID, clientID, familyID)); err != nil {
 		return rmerror.NewRMError(err, "failed to delete refresh token family")
 	}
 	return nil
@@ -158,18 +147,11 @@ func (db *RefreshTokensDB) DeleteAllForUser(userID string) error {
 		return err
 	}
 	for i := range rows {
-		if err := db.DbDeleteItem(refreshTokensTableName, newFamilyKey(rows[i].UserID, rows[i].ClientID, rows[i].FamilyID)); err != nil {
+		if err := db.families.Delete(db.Ctx.Context, db.familyKey(rows[i].UserID, rows[i].ClientID, rows[i].FamilyID)); err != nil {
 			return rmerror.NewRMError(err, "failed to delete refresh token family")
 		}
 	}
 	return nil
-}
-
-func getLastEvaluatedKey(r FamilyEntry, _ ...string) map[string]types.AttributeValue {
-	return map[string]types.AttributeValue{
-		refreshTokensHashKey:  &types.AttributeValueMemberS{Value: r.UserID},
-		refreshTokensRangeKey: &types.AttributeValueMemberS{Value: r.ClientFamily},
-	}
 }
 
 // ListByUser returns every refresh family a user holds -- one per application per login.
@@ -177,21 +159,11 @@ func getLastEvaluatedKey(r FamilyEntry, _ ...string) map[string]types.AttributeV
 // index: "what am I signed in to" was always answerable, it is reaching the SESSION rows
 // that needed one.
 func (db *RefreshTokensDB) ListByUser(userID string) ([]FamilyEntry, error) {
-	keyCond := expression.Key(refreshTokensHashKey).Equal(expression.Value(userID))
-	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()
-	if err != nil {
-		return nil, rmerror.NewRMError(err, "failed to build expression")
-	}
-	rows, _, err := espdynamodb.DbQueryWithLoop(espdynamodb.QueryWithLoopInput[FamilyEntry]{
-		DBHandle:  &db.EspDB,
-		TableName: refreshTokensTableName,
-		Expr:      expr,
-		GetKey:    getLastEvaluatedKey,
-	})
+	page, err := db.families.Query(db.Ctx.Context, expression.Key(refreshTokensHashKey).Equal(expression.Value(userID)))
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to query user refresh token families")
 	}
-	return rows, nil
+	return page.Items, nil
 }
 
 // DeleteBySID deletes every family created through one browser session, and reports how
@@ -213,7 +185,7 @@ func (db *RefreshTokensDB) DeleteBySID(userID, sid string) (int, error) {
 		if rows[i].SID != sid {
 			continue
 		}
-		if err := db.DbDeleteItem(refreshTokensTableName, newFamilyKey(rows[i].UserID, rows[i].ClientID, rows[i].FamilyID)); err != nil {
+		if err := db.families.Delete(db.Ctx.Context, db.familyKey(rows[i].UserID, rows[i].ClientID, rows[i].FamilyID)); err != nil {
 			return deleted, rmerror.NewRMError(err, "failed to delete refresh token family")
 		}
 		deleted++

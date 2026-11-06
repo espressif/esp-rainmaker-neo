@@ -17,8 +17,10 @@ import (
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_reg_failed_nodes_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
+	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )
 
@@ -148,7 +150,9 @@ var _ = Describe("NodeRegFailedNodesDB", func() {
 			Expect(out.NextKey).To(BeEmpty())
 		})
 
-		It("paginates via NextKey", func() {
+		It("paginates via NextKey, filling each page across service calls", func() {
+			// A Query returns at most 1 MB regardless of Limit; MaxPageItems stands in for that cap.
+			awscommon.GetDynamoDBClient().(*mock.DynamoDBMock).MaxPageItems = 1
 			failures := make([]node_reg_failed_nodes_db.NodeRegFailedNodeEntry, 0, 5)
 			for i := 0; i < 5; i++ {
 				failures = append(failures, node_reg_failed_nodes_db.NodeRegFailedNodeEntry{
@@ -183,34 +187,11 @@ var _ = Describe("NodeRegFailedNodesDB", func() {
 
 		It("rejects an invalid start_key", func() {
 			_, err := db.ListFailures(testRequestID, 100, "not-a-valid-base64-token!!!")
-			Expect(err).To(HaveOccurred())
+			Expect(err).To(MatchError("invalid start_key"))
 		})
 	})
 
 	Describe("IterateFailures", func() {
-		It("calls fn once per row, draining across multiple pages", func() {
-			// Enough rows to span multiple internal DDB Query pages; passing
-			// limit 0 makes DbQueryWithLoop walk them all, and the iterator
-			// must call fn for every row.
-			const n = 60
-			failures := make([]node_reg_failed_nodes_db.NodeRegFailedNodeEntry, 0, n)
-			for i := 0; i < n; i++ {
-				failures = append(failures, node_reg_failed_nodes_db.NodeRegFailedNodeEntry{
-					NodeID: fmt.Sprintf("node-%03d", i),
-					Reason: fmt.Sprintf("err-%d", i),
-				})
-			}
-			Expect(db.RecordFailures(testRequestID, failures)).To(Succeed())
-
-			seen := map[string]bool{}
-			err := db.IterateFailures(testRequestID, func(e node_reg_failed_nodes_db.NodeRegFailedNodeEntry) error {
-				seen[e.NodeID] = true
-				return nil
-			})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(seen).To(HaveLen(n))
-		})
-
 		It("does not call fn for an unknown request_id", func() {
 			called := 0
 			err := db.IterateFailures("nonexistent", func(node_reg_failed_nodes_db.NodeRegFailedNodeEntry) error {
@@ -239,6 +220,58 @@ var _ = Describe("NodeRegFailedNodesDB", func() {
 			})
 			Expect(err).To(Equal(boom))
 			Expect(called).To(Equal(2))
+		})
+
+		Context("when the failures span several DynamoDB pages", func() {
+			const n = 7
+			var mockDB *mock.DynamoDBMock
+
+			BeforeEach(func() {
+				failures := make([]node_reg_failed_nodes_db.NodeRegFailedNodeEntry, 0, n)
+				for i := 0; i < n; i++ {
+					failures = append(failures, node_reg_failed_nodes_db.NodeRegFailedNodeEntry{
+						NodeID: fmt.Sprintf("node-%d", i),
+						Reason: "x",
+					})
+				}
+				Expect(db.RecordFailures(testRequestID, failures)).To(Succeed())
+
+				mockDB = awscommon.GetDynamoDBClient().(*mock.DynamoDBMock)
+				mockDB.MaxPageItems = 2
+				mockDB.ProfileReset()
+			})
+
+			queryCount := func() int {
+				return mockDB.ProfileGet().Accesses[node_reg_failed_nodes_db.NodeRegFailedNodesTable].ReadCount
+			}
+
+			It("calls fn for every failure in node_id order", func() {
+				var seen []string
+				Expect(db.IterateFailures(testRequestID, func(e node_reg_failed_nodes_db.NodeRegFailedNodeEntry) error {
+					seen = append(seen, e.NodeID)
+					return nil
+				})).To(Succeed())
+
+				Expect(seen).To(Equal([]string{"node-0", "node-1", "node-2", "node-3", "node-4", "node-5", "node-6"}))
+				Expect(queryCount()).To(Equal(4))
+			})
+
+			It("reads no further pages once fn returns an error", func() {
+				boom := errors.New("stop")
+				var seen []string
+				err := db.IterateFailures(testRequestID, func(e node_reg_failed_nodes_db.NodeRegFailedNodeEntry) error {
+					seen = append(seen, e.NodeID)
+					if len(seen) == 3 {
+						return boom
+					}
+					return nil
+				})
+
+				Expect(err).To(BeIdenticalTo(boom))
+				Expect(seen).To(Equal([]string{"node-0", "node-1", "node-2"}))
+				// node-2 opens the second page, so pages three and four must never be read.
+				Expect(queryCount()).To(Equal(2))
+			})
 		})
 
 		It("rejects callers without NodeAdminRegisterStatus permission", func() {

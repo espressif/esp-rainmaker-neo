@@ -9,10 +9,10 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
-
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/sharing_request_db"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_group_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
@@ -631,7 +631,7 @@ func handleDeleteSubgroup(context context.Context, request events.APIGatewayProx
 		if errors.Is(err, group.ErrSubGroupNotEmpty) {
 			return utils.APIGwRespJSON(http.StatusConflict, utils.NewAPIStatus("subgroup not empty")), nil
 		}
-		if errors.Is(err, db.ErrSubGroupNotFound) {
+		if errors.Is(err, group_db.ErrSubGroupNotFound) {
 			return utils.APIGwRespJSON(http.StatusNotFound, utils.NewAPIStatus("Subgroup not found")), nil
 		}
 		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Failed to delete subgroup")), nil
@@ -676,7 +676,7 @@ func handleDeleteGroupUser(context context.Context, request events.APIGatewayPro
 	err := group.UnshareGroup(ctx, groupID, userID)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Send()
-		if errors.Is(err, db.ErrLastPrimaryUser) {
+		if errors.Is(err, user_group_db.ErrLastPrimaryUser) {
 			return utils.APIGwRespJSON(http.StatusConflict, utils.NewAPIStatus("Cannot remove the last primary user from the group")), nil
 		}
 		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Failed to remove member")), nil

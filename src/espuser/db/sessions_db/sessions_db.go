@@ -14,13 +14,12 @@ import (
 	"sort"
 	"time"
 
-	"github.com/espressif/esp-rainmaker-neo/src/awsutils/espdynamodb"
+	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
-	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 const (
@@ -53,11 +52,21 @@ const (
 var ErrSessionNotFound = errors.New("session not found")
 
 type SessionsDB struct {
-	espdynamodb.EspDB
+	Ctx      *rmngctx.RmngContext
+	sessions *ddbu.Table[SessionEntry]
 }
 
 func NewSessionsDB(ctx *rmngctx.RmngContext) *SessionsDB {
-	return &SessionsDB{EspDB: espdynamodb.NewEspDB(ctx)}
+	return &SessionsDB{
+		Ctx: ctx,
+		sessions: ddbu.NewTable[SessionEntry](awscommon.GetDynamoDBClient(), ddbu.Schema{
+			Name:    sessionsTableName,
+			HashKey: sessionsHashKey,
+			Indexes: map[string]ddbu.IndexKeys{
+				SessionsByUserIndex: {HashKey: sessionsUserKey, RangeKey: sessionsSIDKey},
+			},
+		}),
+	}
 }
 
 type SessionEntry struct {
@@ -103,21 +112,8 @@ type SessionEntry struct {
 	UserAgentName string `dynamodbav:"user_agent_name,omitempty"`
 }
 
-func (s *SessionEntry) GetHKey() string { return sessionsHashKey }
-func (s *SessionEntry) GetRKey() string { return "" }
-
-// Key-only struct: passing the full SessionEntry at key sites would leak attributes into the DynamoDB Key.
-type sessionKey struct {
-	SessionHash string `dynamodbav:"session_hash"`
-}
-
-func (sessionKey) GetHKey() string { return sessionsHashKey }
-func (sessionKey) GetRKey() string { return "" }
-
-func newSessionKey(hash string) *sessionKey { return &sessionKey{SessionHash: hash} }
-
 func (db *SessionsDB) CreateSession(entry *SessionEntry) error {
-	if err := db.DbCreateItem(sessionsTableName, entry); err != nil {
+	if err := db.sessions.Create(db.Ctx.Context, *entry); err != nil {
 		return rmerror.NewRMError(err, "failed to put session")
 	}
 	return nil
@@ -127,14 +123,11 @@ func (db *SessionsDB) CreateSession(entry *SessionEntry) error {
 // rather than left to the DynamoDB TTL sweep, which lags by up to ~48h; a swept-late row is
 // unusable from the instant expires_at passes, whatever remains on disk.
 func (db *SessionsDB) GetSession(hash string) (*SessionEntry, error) {
-	var result SessionEntry
-	if err := db.DbGetItem(sessionsTableName, newSessionKey(hash), &result); err != nil {
+	result, found, err := db.sessions.Get(db.Ctx.Context, db.sessions.Key(hash))
+	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to get session")
 	}
-	if result.SessionHash == "" {
-		return nil, ErrSessionNotFound
-	}
-	if isExpired(result, time.Now().Unix()) {
+	if !found || isExpired(result, time.Now().Unix()) {
 		return nil, ErrSessionNotFound
 	}
 	return &result, nil
@@ -170,31 +163,16 @@ func (db *SessionsDB) touchLive(hash string, now, expiresAt int64, checkCap bool
 			expression.Name(colMaxExpiresAt).GreaterThanEqual(expression.Value(expiresAt)),
 		))
 	}
-	out, err := db.DbUpdateItem(espdynamodb.DbUpdateItemInput{
-		TableName:                           sessionsTableName,
-		Update:                              update,
-		Query:                               newSessionKey(hash),
-		Condition:                           cond,
-		ReturnValues:                        types.ReturnValueAllNew,
-		ReturnValuesOnConditionCheckFailure: types.ReturnValuesOnConditionCheckFailureAllOld,
-	})
+	row, err := db.sessions.Update(db.Ctx.Context, db.sessions.Key(hash), update, ddbu.WriteOpts{If: cond, ReturnOld: true})
 	if err != nil {
-		var ccf *types.ConditionalCheckFailedException
-		if !errors.As(err, &ccf) {
+		if !ddbu.IsConditionFailed(err) {
 			return nil, nil, rmerror.NewRMError(err, "failed to touch session")
 		}
-		if len(ccf.Item) == 0 {
+		old, ok := ddbu.OldItem[SessionEntry](err)
+		if !ok {
 			return nil, nil, ErrSessionNotFound
 		}
-		var old SessionEntry
-		if err := attributevalue.UnmarshalMap(ccf.Item, &old); err != nil {
-			return nil, nil, rmerror.NewRMError(err, "failed to decode session")
-		}
 		return nil, &old, ErrSessionNotFound
-	}
-	var row SessionEntry
-	if err := attributevalue.UnmarshalMap(out.Attributes, &row); err != nil {
-		return nil, nil, rmerror.NewRMError(err, "failed to decode session")
 	}
 	return &row, nil, nil
 }
@@ -238,11 +216,11 @@ func (db *SessionsDB) TouchExpiryBySID(userID, sid string, now, sessionTTLSecond
 
 // touchExpiry rolls one row's expires_at forward. A row past expires_at is ErrSessionNotFound (the TTL sweep lags, so an ended session can still be on disk); a missing row is 0 with no error, since it may only not be readable yet.
 func (db *SessionsDB) touchExpiry(hash string, now, sessionTTLSeconds int64) (int64, error) {
-	var row SessionEntry
-	if err := db.DbGetItem(sessionsTableName, newSessionKey(hash), &row); err != nil {
+	row, found, err := db.sessions.Get(db.Ctx.Context, db.sessions.Key(hash))
+	if err != nil {
 		return 0, rmerror.NewRMError(err, "failed to read session for retention bump")
 	}
-	if row.SessionHash == "" {
+	if !found {
 		return 0, nil
 	}
 	if isExpired(row, now) {
@@ -257,19 +235,13 @@ func (db *SessionsDB) touchExpiry(hash string, now, sessionTTLSeconds int64) (in
 	update := expression.
 		Set(expression.Name(colExpiresAt), expression.Value(expiresAt)).
 		Set(expression.Name(colLastSeenAt), expression.Value(now))
-	live := expression.Name(sessionsHashKey).AttributeExists().And(expression.Or(
+	live := expression.Or(
 		expression.Name(colExpiresAt).Equal(expression.Value(0)),
 		expression.Name(colExpiresAt).GreaterThan(expression.Value(now)),
-	))
-	if _, err := db.DbUpdateItem(espdynamodb.DbUpdateItemInput{
-		TableName: sessionsTableName,
-		Update:    update,
-		Query:     newSessionKey(hash),
-		Condition: live,
-	}); err != nil {
+	)
+	if _, err := db.sessions.Update(db.Ctx.Context, db.sessions.Key(hash), update, ddbu.WriteOpts{If: live}); err != nil {
 		// The row changed between the read and the write, so whether the session ended is unknown.
-		var ccf *types.ConditionalCheckFailedException
-		if errors.As(err, &ccf) {
+		if ddbu.IsConditionFailed(err) {
 			return 0, nil
 		}
 		return 0, rmerror.NewRMError(err, "failed to bump session retention")
@@ -278,7 +250,7 @@ func (db *SessionsDB) touchExpiry(hash string, now, sessionTTLSeconds int64) (in
 }
 
 func (db *SessionsDB) DeleteSession(hash string) error {
-	if err := db.DbDeleteItem(sessionsTableName, newSessionKey(hash)); err != nil {
+	if err := db.sessions.Delete(db.Ctx.Context, db.sessions.Key(hash)); err != nil {
 		return rmerror.NewRMError(err, "failed to delete session")
 	}
 	return nil
@@ -301,11 +273,11 @@ func (db *SessionsDB) ListByUser(userID string) ([]SessionEntry, error) {
 	now := time.Now().Unix()
 	sessions := make([]SessionEntry, 0, len(hashes))
 	for _, hash := range hashes {
-		var row SessionEntry
-		if err := db.DbGetItem(sessionsTableName, newSessionKey(hash), &row); err != nil {
+		row, found, err := db.sessions.Get(db.Ctx.Context, db.sessions.Key(hash))
+		if err != nil {
 			return nil, rmerror.NewRMError(err, "failed to read session")
 		}
-		if row.SessionHash == "" || isExpired(row, now) {
+		if !found || isExpired(row, now) {
 			continue
 		}
 		sessions = append(sessions, row)
@@ -358,35 +330,15 @@ func (db *SessionsDB) sessionHashesForUser(userID, sid string) ([]string, error)
 	if sid != "" {
 		keyCond = keyCond.And(expression.Key(sessionsSIDKey).Equal(expression.Value(sid)))
 	}
-	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()
-	if err != nil {
-		return nil, rmerror.NewRMError(err, "failed to build session index expression")
-	}
-	rows, _, err := espdynamodb.DbQueryWithLoop(espdynamodb.QueryWithLoopInput[SessionEntry]{
-		DBHandle:  &db.EspDB,
-		TableName: sessionsTableName,
-		IndexName: SessionsByUserIndex,
-		Expr:      expr,
-		GetKey:    indexLastEvaluatedKey,
-	})
+	page, err := db.sessions.Query(db.Ctx.Context, keyCond, ddbu.QueryOpts{Index: SessionsByUserIndex})
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to query sessions by user")
 	}
-	hashes := make([]string, 0, len(rows))
-	for i := range rows {
-		hashes = append(hashes, rows[i].SessionHash)
+	hashes := make([]string, 0, len(page.Items))
+	for i := range page.Items {
+		hashes = append(hashes, page.Items[i].SessionHash)
 	}
 	return hashes, nil
-}
-
-// indexLastEvaluatedKey names both the index key and the base-table key, which is what
-// DynamoDB requires to page a GSI query.
-func indexLastEvaluatedKey(r SessionEntry, _ ...string) map[string]types.AttributeValue {
-	return map[string]types.AttributeValue{
-		sessionsHashKey: &types.AttributeValueMemberS{Value: r.SessionHash},
-		sessionsUserKey: &types.AttributeValueMemberS{Value: r.UserID},
-		sessionsSIDKey:  &types.AttributeValueMemberS{Value: r.SID},
-	}
 }
 
 // isExpired enforces expires_at only. There is no idle or absolute clock any more: a user agent

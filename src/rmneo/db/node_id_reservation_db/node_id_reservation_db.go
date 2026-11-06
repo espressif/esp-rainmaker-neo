@@ -58,13 +58,13 @@ package node_id_reservation_db
 import (
 	"time"
 
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-
-	"github.com/espressif/esp-rainmaker-neo/src/awsutils/espdynamodb"
-	"github.com/espressif/esp-rainmaker-neo/src/utils"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
-
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
+
+	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )
 
 const (
@@ -79,11 +79,19 @@ const (
 )
 
 type NodeIDReservationsDB struct {
-	espdynamodb.EspDB
+	Ctx          *rmngctx.RmngContext
+	reservations *ddbu.Table[ReservationEntry]
 }
 
 func NewNodeIDReservationsDB(ctx *rmngctx.RmngContext) *NodeIDReservationsDB {
-	return &NodeIDReservationsDB{EspDB: espdynamodb.NewEspDB(ctx)}
+	return &NodeIDReservationsDB{
+		Ctx: ctx,
+		reservations: ddbu.NewTable[ReservationEntry](awscommon.GetDynamoDBClient(), ddbu.Schema{
+			Name:     NodeIDReservationsTable,
+			HashKey:  reservationsHashKey,
+			RangeKey: reservationsRangeKey,
+		}),
+	}
 }
 
 type ReservationEntry struct {
@@ -98,25 +106,17 @@ type ReservationEntry struct {
 	CreatedAt int64  `dynamodbav:"created_at,omitempty"`
 }
 
-func (r *ReservationEntry) GetHKey() string {
-	return reservationsHashKey
-}
-
-func (r *ReservationEntry) GetRKey() string {
-	return reservationsRangeKey
-}
-
 // CreateReservation stores a new {mac_addr, claimant_id} -> node_id reservation.
 // The underlying create is conditional on the item not existing, so concurrent
 // calls for the same pair cannot overwrite an earlier reservation.
 func (db *NodeIDReservationsDB) CreateReservation(entry ReservationEntry) error {
-	if err := db.DB.IsAuthorized(utils.NodeAdminReserveID, entry.MacAddr); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodeAdminReserveID, entry.MacAddr); err != nil {
 		return err
 	}
 
 	entry.CreatedAt = time.Now().Unix()
 
-	if err := db.DbCreateItem(NodeIDReservationsTable, &entry); err != nil {
+	if err := db.reservations.Create(db.Ctx.Context, entry); err != nil {
 		return rmerror.NewRMError(err, "failed to create node ID reservation")
 	}
 	return nil
@@ -125,19 +125,18 @@ func (db *NodeIDReservationsDB) CreateReservation(entry ReservationEntry) error 
 // GetReservation returns the reservation for a {mac_addr, claimant_id} pair, or
 // nil when no reservation exists.
 func (db *NodeIDReservationsDB) GetReservation(macAddr string, claimantID string) (*ReservationEntry, error) {
-	if err := db.DB.IsAuthorized(utils.NodeAdminGetReservation, macAddr); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodeAdminGetReservation, macAddr); err != nil {
 		return nil, err
 	}
 
-	entry := &ReservationEntry{}
-	err := db.DbGetItem(NodeIDReservationsTable, &ReservationEntry{MacAddr: macAddr, ClaimantID: claimantID}, entry)
+	entry, found, err := db.reservations.Get(db.Ctx.Context, db.reservations.Key(claimantID, macAddr))
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to get node ID reservation")
 	}
-	if entry.NodeID == "" {
+	if !found || entry.NodeID == "" {
 		return nil, nil
 	}
-	return entry, nil
+	return &entry, nil
 }
 
 // SetCAID records which CA signed the node's current certificate.
@@ -147,19 +146,15 @@ func (db *NodeIDReservationsDB) GetReservation(macAddr string, claimantID string
 // reservation existing, so it cannot resurrect a reservation that was removed
 // between initiate and verify.
 func (db *NodeIDReservationsDB) SetCAID(macAddr string, claimantID string, caID string) error {
-	if err := db.DB.IsAuthorized(utils.NodeAdminReserveID, macAddr); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodeAdminReserveID, macAddr); err != nil {
 		return err
 	}
 	if caID == "" {
 		return rmerror.NewRMError(nil, "ca_id is empty")
 	}
 
-	_, err := db.DbUpdateItem(espdynamodb.DbUpdateItemInput{
-		TableName: NodeIDReservationsTable,
-		Query:     &ReservationEntry{MacAddr: macAddr, ClaimantID: claimantID},
-		Update:    expression.Set(expression.Name("ca_id"), expression.Value(caID)),
-	})
-	if err != nil {
+	update := expression.Set(expression.Name("ca_id"), expression.Value(caID))
+	if _, err := db.reservations.Update(db.Ctx.Context, db.reservations.Key(claimantID, macAddr), update); err != nil {
 		return rmerror.NewRMError(err, "failed to record issuing CA on reservation")
 	}
 	return nil
@@ -178,23 +173,13 @@ func (db *NodeIDReservationsDB) CountReservationsForClaimant(claimantID string) 
 	// no single MAC to authorize against as Create/Get/SetCAID do. A distinct
 	// action lets claim-initiate grant it scoped to the one claimant rather than
 	// widening the per-device grant to "*".
-	if err := db.DB.IsAuthorized(utils.NodeAdminCountReservations, claimantID); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodeAdminCountReservations, claimantID); err != nil {
 		return 0, err
 	}
 
-	keyCondition := expression.Key(reservationsHashKey).Equal(expression.Value(claimantID))
-	expr, err := expression.NewBuilder().WithKeyCondition(keyCondition).Build()
-	if err != nil {
-		return 0, rmerror.NewRMError(err, "failed to build reservation count expression")
-	}
-
-	count, err := db.DbQueryCountLoop(espdynamodb.DbQueryCountInput{
-		TableName:      NodeIDReservationsTable,
-		ConsistentRead: true,
-		Expr:           expr,
-	})
+	count, err := db.reservations.QueryCount(db.Ctx.Context, expression.Key(reservationsHashKey).Equal(expression.Value(claimantID)), ddbu.QueryCountOpts{Consistent: true})
 	if err != nil {
 		return 0, rmerror.NewRMError(err, "failed to count claimant reservations")
 	}
-	return int(count), nil
+	return count, nil
 }

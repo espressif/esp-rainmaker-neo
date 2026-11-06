@@ -71,21 +71,18 @@ user-group records.
 package user_group_db
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 
-	dbcore "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
+	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/sharing_request_db"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 const (
@@ -101,13 +98,28 @@ const (
 	// No sort key for this GSI
 )
 
+// ErrLastPrimaryUser is returned when removing a user would leave the group with no primary user; handlers map it to HTTP 409.
+var ErrLastPrimaryUser = errors.New("cannot remove the last primary user from the group")
+
+var userGroupSchema = ddbu.Schema{
+	Name:     UserGroupMappingTable,
+	HashKey:  userGroupMappingHashKey,
+	RangeKey: userGroupMappingSortKey,
+	Indexes: map[string]ddbu.IndexKeys{
+		UserGroupMappingByGroupIDIndex: {HashKey: userGroupMappingHashKeyGSI},
+	},
+}
+
 type UserGroupDB struct {
-	dbcore.DB
+	Ctx      *rmngctx.RmngContext
+	mappings *ddbu.Table[UserGroupEntry]
 }
 
 func NewUserGroupDB(ctx *rmngctx.RmngContext) *UserGroupDB {
+	client := awscommon.GetDynamoDBClient()
 	return &UserGroupDB{
-		DB: *dbcore.NewDB(ctx),
+		Ctx:      ctx,
+		mappings: ddbu.NewTable[UserGroupEntry](client, userGroupSchema),
 	}
 }
 
@@ -133,52 +145,28 @@ func (db *UserGroupDB) createUserGroupEntry(groupID string, userId string, subEn
 	}
 
 	// First check if entry already exists
-	existingEntry, err := db.GetUserGroupItemByUserID(userId, groupID)
+	existing, exists, err := db.getUserGroupEntry(userId, groupID)
 	if err != nil {
 		return err
 	}
 
-	var subEntityValue []types.AttributeValue
-	if subEntityID != "" {
-		subEntityValue = []types.AttributeValue{
-			&types.AttributeValueMemberS{Value: subEntityID},
-		}
-	} else {
-		subEntityValue = []types.AttributeValue{}
-	}
-
-	var existing UserGroupEntry
-	if existingEntry.Item != nil {
-		if err := attributevalue.UnmarshalMap(existingEntry.Item, &existing); err != nil {
-			return rmerror.NewRMError(err, "failed to unmarshal existing user group mapping")
-		}
-	}
-
-	if existingEntry.Item != nil &&
+	if exists &&
 		existing.AccessType != utils.GroupSubEntityAccess &&
 		accessType == utils.GroupSubEntityAccess {
 		// A group level access is already provided, so we can't add sub-group access to it
 		return rmerror.NewRMError(nil, "cannot add sub-group access to a group level access")
 	}
 
-	var input *dynamodb.UpdateItemInput
-	if existingEntry.Item == nil || existing.AccessType != accessType {
+	var update expression.UpdateBuilder
+	if !exists || existing.AccessType != accessType {
 		// Create/Overwrite with a new entry if the entry doesn't exist or the access type is different (switching between primary/secondary).
 		// When a user with subentity access receives a group share (primary/secondary), this branch wipes sub_entity_ids to [] and promotes the user to full group access — group access supersedes any subgroup access.
-		input = &dynamodb.UpdateItemInput{
-			TableName: aws.String(UserGroupMappingTable),
-			Key: map[string]types.AttributeValue{
-				userGroupMappingHashKey: &types.AttributeValueMemberS{Value: userId},
-				userGroupMappingSortKey: &types.AttributeValueMemberS{Value: groupID},
-			},
-			UpdateExpression: aws.String("SET sub_entity_ids = :sids, access_type = :at"),
-			ExpressionAttributeValues: map[string]types.AttributeValue{
-				":sids": &types.AttributeValueMemberL{
-					Value: subEntityValue,
-				},
-				":at": &types.AttributeValueMemberS{Value: string(accessType)},
-			},
+		subEntityIDs := []string{}
+		if subEntityID != "" {
+			subEntityIDs = append(subEntityIDs, subEntityID)
 		}
+		update = expression.Set(expression.Name("sub_entity_ids"), expression.Value(subEntityIDs)).
+			Set(expression.Name("access_type"), expression.Value(string(accessType)))
 	} else if len(existing.SubEntityIDs) > 0 {
 		// Entry exists with sub_entity_ids. Reject if the subgroup is already present to avoid duplicates.
 		for _, existingID := range existing.SubEntityIDs {
@@ -188,35 +176,19 @@ func (db *UserGroupDB) createUserGroupEntry(groupID string, userId string, subEn
 		}
 
 		// Append the new subgroup using list_append
-		updateExpr := expression.Set(
+		update = expression.Set(
 			expression.Name("sub_entity_ids"),
 			expression.ListAppend(
 				expression.Name("sub_entity_ids"),
 				expression.Value([]string{subEntityID}),
 			),
 		)
-		expr, err := expression.NewBuilder().WithUpdate(updateExpr).Build()
-		if err != nil {
-			return rmerror.NewRMError(err, "failed to build update expression")
-		}
-
-		input = &dynamodb.UpdateItemInput{
-			TableName: aws.String(UserGroupMappingTable),
-			Key: map[string]types.AttributeValue{
-				userGroupMappingHashKey: &types.AttributeValueMemberS{Value: userId},
-				userGroupMappingSortKey: &types.AttributeValueMemberS{Value: groupID},
-			},
-			UpdateExpression:          expr.Update(),
-			ExpressionAttributeNames:  expr.Names(),
-			ExpressionAttributeValues: expr.Values(),
-		}
 	} else {
 		// Nothing to do
 		return rmerror.NewRMError(nil, "no change to user group mapping")
 	}
 
-	_, err = db.UpdateItem(db.Ctx.Context, input)
-	if err != nil {
+	if _, err := db.mappings.Upsert(db.Ctx.Context, db.mappings.Key(userId, groupID), update); err != nil {
 		return rmerror.NewRMError(err, "failed to associate user with group in DynamoDB")
 	}
 
@@ -237,23 +209,23 @@ func (db *UserGroupDB) CreateUserGroup(groupID string) error {
 	return nil
 }
 
-// GetUserGroupItemByUserID gets the user-group mapping for the given user ID and group ID.
-// This should sparingly be used, you almost always want to use GetUserGroup or GetUserGroupItem instead
-func (db *UserGroupDB) GetUserGroupItemByUserID(userID string, groupID string) (*dynamodb.GetItemOutput, error) {
-	input := &dynamodb.GetItemInput{
-		TableName: aws.String(UserGroupMappingTable),
-		Key: map[string]types.AttributeValue{
-			userGroupMappingHashKey: &types.AttributeValueMemberS{Value: userID},
-			userGroupMappingSortKey: &types.AttributeValueMemberS{Value: groupID},
-		},
-	}
-
-	result, err := db.GetItem(db.Ctx.Context, input)
+// getUserGroupEntry reads one mapping row without an authorization check; exists is false when there is no row.
+func (db *UserGroupDB) getUserGroupEntry(userID string, groupID string) (UserGroupEntry, bool, error) {
+	entry, exists, err := db.mappings.Get(db.Ctx.Context, db.mappings.Key(userID, groupID))
 	if err != nil {
-		return nil, rmerror.NewRMError(err, "failed to get user group from DynamoDB")
+		return UserGroupEntry{}, false, rmerror.NewRMError(err, "failed to get user group from DynamoDB")
 	}
+	return entry, exists, nil
+}
 
-	return result, nil
+// GetUserGroupItemByUserID returns the user-group mapping for the given user ID and group ID, or nil when there is none.
+// This should sparingly be used, you almost always want to use GetUserGroup or GetUserGroupItem instead
+func (db *UserGroupDB) GetUserGroupItemByUserID(userID string, groupID string) (*UserGroupEntry, error) {
+	entry, exists, err := db.getUserGroupEntry(userID, groupID)
+	if err != nil || !exists {
+		return nil, err
+	}
+	return &entry, nil
 }
 
 // GetUserGroup retrieves the user-group mapping for the given group ID.
@@ -261,17 +233,12 @@ func (db *UserGroupDB) GetUserGroupItemByUserID(userID string, groupID string) (
 func (db *UserGroupDB) GetUserGroup(groupID string) (*UserGroupEntry, error) {
 	//No authorisation check, as this is the bootstrap read
 
-	result, err := db.GetUserGroupItemByUserID(db.Ctx.Accessor.GetID(), groupID)
+	entry, exists, err := db.getUserGroupEntry(db.Ctx.Accessor.GetID(), groupID)
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to get user group from DynamoDB")
 	}
-	if result.Item == nil {
+	if !exists {
 		return nil, rmerror.NewRMError(nil, "user group not found")
-	}
-
-	entry := &UserGroupEntry{}
-	if err = attributevalue.UnmarshalMap(result.Item, entry); err != nil {
-		return nil, rmerror.NewRMError(err, "failed to unmarshal user group")
 	}
 
 	// If sub_entity_ids is present, the user has access to sub groups but not the main group
@@ -279,11 +246,10 @@ func (db *UserGroupDB) GetUserGroup(groupID string) (*UserGroupEntry, error) {
 		return nil, rmerror.NewRMError(nil, "user group not found")
 	}
 
-	accessType := entry.AccessType
-	if err := db.Ctx.SetAllowMultiple(utils.GetGroupPermissions(accessType), groupID); err != nil {
+	if err := db.Ctx.SetAllowMultiple(utils.GetGroupPermissions(entry.AccessType), groupID); err != nil {
 		return nil, rmerror.NewRMError(err, "failed to grant permissions")
 	}
-	return entry, nil
+	return &entry, nil
 }
 
 // GetUserSubGroup retrieves the caller's user-group mapping for a specific
@@ -291,17 +257,12 @@ func (db *UserGroupDB) GetUserGroup(groupID string) (*UserGroupEntry, error) {
 // Caller's permissions for the parent group are populated.
 func (db *UserGroupDB) GetUserSubGroup(parentGroupID, subGroupID string) (*UserGroupEntry, error) {
 	// Fetch + populate permissions first (this is the bootstrap read).
-	result, err := db.GetUserGroupItemByUserID(db.Ctx.Accessor.GetID(), parentGroupID)
+	entry, exists, err := db.getUserGroupEntry(db.Ctx.Accessor.GetID(), parentGroupID)
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to get user group from DynamoDB")
 	}
-	if result.Item == nil {
+	if !exists {
 		return nil, rmerror.NewRMError(nil, "user group not found")
-	}
-
-	entry := &UserGroupEntry{}
-	if err := attributevalue.UnmarshalMap(result.Item, entry); err != nil {
-		return nil, rmerror.NewRMError(err, "failed to unmarshal user group")
 	}
 
 	// Group-level access (empty sub_entity_ids) covers any subgroup and returns
@@ -324,7 +285,7 @@ func (db *UserGroupDB) GetUserSubGroup(parentGroupID, subGroupID string) (*UserG
 			return nil, rmerror.NewRMError(err, "failed to grant permissions")
 		}
 	}
-	return entry, nil
+	return &entry, nil
 }
 
 // ListGroupsForUser retrieves all group IDs associated with the given user.
@@ -332,36 +293,15 @@ func (db *UserGroupDB) GetUserSubGroup(parentGroupID, subGroupID string) (*UserG
 func (db *UserGroupDB) ListGroupsForUser(groupId string) ([]UserGroupEntry, error) {
 	// Callers context is used, so no need of authorization check
 
-	var keyConditionExpression string
-	expressionAttributeValues := map[string]types.AttributeValue{
-		":uid": &types.AttributeValueMemberS{Value: db.Ctx.Accessor.GetID()},
-	}
-
-	// Build key condition expression based on whether groupId is provided
+	keyCond := expression.Key(userGroupMappingHashKey).Equal(expression.Value(db.Ctx.Accessor.GetID()))
 	if groupId != "" {
-		keyConditionExpression = "user_id = :uid AND group_id = :gid"
-		expressionAttributeValues[":gid"] = &types.AttributeValueMemberS{Value: groupId}
-	} else {
-		keyConditionExpression = "user_id = :uid"
-	}
-
-	queryInput := &dynamodb.QueryInput{
-		TableName:                 aws.String(UserGroupMappingTable),
-		KeyConditionExpression:    aws.String(keyConditionExpression),
-		ExpressionAttributeValues: expressionAttributeValues,
-		ProjectionExpression:      aws.String("group_id, sub_entity_ids, access_type"),
+		keyCond = keyCond.And(expression.Key(userGroupMappingSortKey).Equal(expression.Value(groupId)))
 	}
 
 	var groups []UserGroupEntry
 	// Paginated: each row also grants this request's permissions on its group, so a truncated
 	// page would hide the group and deny access to it.
-	err := db.QueryPaginated(db.Ctx.Context, queryInput, func(item map[string]types.AttributeValue) error {
-		var entry UserGroupEntry
-		if err := attributevalue.UnmarshalMap(item, &entry); err != nil || entry.GroupID == "" {
-			// Skip an item missing the mandatory sort key (or otherwise malformed) rather than panic on the auth path.
-			return nil
-		}
-
+	err := db.mappings.QueryEach(db.Ctx.Context, keyCond, func(entry UserGroupEntry) error {
 		if err := db.Ctx.SetAllowMultiple(utils.GetGroupPermissions(entry.AccessType), entry.GroupID); err != nil {
 			return rmerror.NewRMError(err, "failed to grant permissions")
 		}
@@ -378,7 +318,7 @@ func (db *UserGroupDB) ListGroupsForUser(groupId string) ([]UserGroupEntry, erro
 			AccessType:   entry.AccessType,
 		})
 		return nil
-	})
+	}, ddbu.QueryEachOpts{Project: []string{"group_id", "sub_entity_ids", "access_type"}})
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to query user_group_mapping in DynamoDB")
 	}
@@ -397,8 +337,8 @@ func (db *UserGroupDB) ListGroupsForUser(groupId string) ([]UserGroupEntry, erro
 func (db *UserGroupDB) ListUsersForGroupOrSubGroup(groupID string, subGroupIDs []string) (map[string]utils.GroupAccessType, error) {
 	// Prefer the full listing; fall back to primary-only for lower-privilege members.
 	primaryOnly := false
-	if err := db.IsAuthorized(utils.GroupListUsers, groupID); err != nil {
-		if err := db.IsAuthorized(utils.GroupListPrimaryUsers, groupID); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.GroupListUsers, groupID); err != nil {
+		if err := db.Ctx.IsAuthorized(utils.GroupListPrimaryUsers, groupID); err != nil {
 			return nil, err
 		}
 		primaryOnly = true
@@ -435,8 +375,8 @@ func (db *UserGroupDB) ListUsersForGroupOrSubGroup(groupID string, subGroupIDs [
 // ListAllUsersForGroup returns all user-group entries for a given group.
 func (db *UserGroupDB) ListAllUsersForGroup(groupID string) ([]UserGroupGSIEntry, error) {
 	primaryOnly := false
-	if err := db.IsAuthorized(utils.GroupListUsers, groupID); err != nil {
-		if err := db.IsAuthorized(utils.GroupListPrimaryUsers, groupID); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.GroupListUsers, groupID); err != nil {
+		if err := db.Ctx.IsAuthorized(utils.GroupListPrimaryUsers, groupID); err != nil {
 			return nil, err
 		}
 		primaryOnly = true
@@ -464,33 +404,11 @@ func (db *UserGroupDB) ListAllUsersForGroup(groupID string) ([]UserGroupGSIEntry
 // callers MUST enforce authorization themselves before invoking it (e.g. a
 // per-access-type check).
 func (db *UserGroupDB) listAllUsersForGroupAuthorized(groupID string) ([]UserGroupGSIEntry, error) {
-	// Use expression builder for DynamoDB query
-	expr, err := expression.NewBuilder().
-		WithKeyCondition(
-			expression.Key("group_id").Equal(expression.Value(groupID)),
-		).
-		Build()
-	if err != nil {
-		return nil, rmerror.NewRMError(err, "failed to build DynamoDB expression")
-	}
-
-	queryInput := &dynamodb.QueryInput{
-		TableName:                 aws.String(UserGroupMappingTable),
-		IndexName:                 aws.String(UserGroupMappingByGroupIDIndex),
-		KeyConditionExpression:    expr.KeyCondition(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
-	}
-
 	var entries []UserGroupGSIEntry
-	err = db.QueryPaginated(db.Ctx.Context, queryInput, func(item map[string]types.AttributeValue) error {
-		var entry UserGroupGSIEntry
-		if err := attributevalue.UnmarshalMap(item, &entry); err != nil {
-			return rmerror.NewRMError(err, "failed to unmarshal user group entries")
-		}
-		entries = append(entries, entry)
+	err := db.mappings.QueryEach(db.Ctx.Context, expression.Key(userGroupMappingHashKeyGSI).Equal(expression.Value(groupID)), func(entry UserGroupEntry) error {
+		entries = append(entries, UserGroupGSIEntry(entry))
 		return nil
-	})
+	}, ddbu.QueryEachOpts{Index: UserGroupMappingByGroupIDIndex})
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to query user_group_mapping in DynamoDB")
 	}
@@ -500,20 +418,12 @@ func (db *UserGroupDB) listAllUsersForGroupAuthorized(groupID string) ([]UserGro
 
 // DeleteUserGroupByGroupID deletes all user-group mappings for a given group ID
 func (db *UserGroupDB) DeleteUserGroupByGroupID(groupID string) error {
-	if err := db.IsAuthorized(utils.GroupDelete, groupID); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.GroupDelete, groupID); err != nil {
 		return err
 	}
 
-	queryInput := &dynamodb.QueryInput{
-		TableName:              aws.String(UserGroupMappingTable),
-		IndexName:              aws.String(UserGroupMappingByGroupIDIndex),
-		KeyConditionExpression: aws.String("group_id = :gid"),
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":gid": &types.AttributeValueMemberS{Value: groupID},
-		},
-	}
-
-	return db.QueryAndBatchDelete(db.Ctx.Context, queryInput, UserGroupMappingTable, []string{userGroupMappingHashKey, userGroupMappingSortKey})
+	err := db.mappings.QueryDelete(db.Ctx.Context, expression.Key(userGroupMappingHashKeyGSI).Equal(expression.Value(groupID)), ddbu.QueryDeleteOpts{Index: UserGroupMappingByGroupIDIndex})
+	return err
 }
 
 // DeleteUserSubgroupBySubgroupID removes a subgroup from all users' sub_entity_ids.
@@ -521,7 +431,7 @@ func (db *UserGroupDB) DeleteUserGroupByGroupID(groupID string) error {
 // It only affects users with "subentity" access who have the target subgroup in their list.
 // Users with primary/secondary access (empty sub_entity_ids) are not affected.
 func (db *UserGroupDB) DeleteUserSubgroupBySubgroupID(groupID string, subGroupID string) error {
-	if err := db.IsAuthorized(utils.GroupDeleteSubGroup, groupID); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.GroupDeleteSubGroup, groupID); err != nil {
 		return err
 	}
 
@@ -564,7 +474,7 @@ func (db *UserGroupDB) RemoveUserFromGroup(groupID string, userID string) error 
 
 	//For self unshare or leave from group, bypass the authorization check
 	if userID != db.Ctx.Accessor.GetID() {
-		if err := db.IsAuthorized(utils.GroupShare, groupID); err != nil {
+		if err := db.Ctx.IsAuthorized(utils.GroupShare, groupID); err != nil {
 			return err
 		}
 	}
@@ -574,42 +484,29 @@ func (db *UserGroupDB) RemoveUserFromGroup(groupID string, userID string) error 
 
 // removeUserFromGroupAuthorized deletes a user's mapping row without any authorization check. Per the "Authorized" suffix convention the caller must have enforced its own check first — used by the subgroup-cleanup path, which is gated on GroupDeleteSubGroup rather than GroupShare.
 func (db *UserGroupDB) removeUserFromGroupAuthorized(groupID string, userID string) error {
-	queryInput := &dynamodb.QueryInput{
-		TableName:              aws.String(UserGroupMappingTable),
-		IndexName:              aws.String(UserGroupMappingByGroupIDIndex),
-		KeyConditionExpression: aws.String("group_id = :gid"),
-		FilterExpression:       aws.String("user_id = :uid"),
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":gid": &types.AttributeValueMemberS{Value: groupID},
-			":uid": &types.AttributeValueMemberS{Value: userID},
-		},
+	if err := db.mappings.DeleteAllowMissing(db.Ctx.Context, db.mappings.Key(userID, groupID)); err != nil {
+		return rmerror.NewRMError(err, "failed to remove user from group")
 	}
-
-	return db.QueryAndBatchDelete(db.Ctx.Context, queryInput, UserGroupMappingTable, []string{userGroupMappingHashKey, userGroupMappingSortKey})
+	return nil
 }
 
 // RemoveUserFromSubGroup removes a user from a subgroup by removing the subgroup ID from the list
 func (db *UserGroupDB) RemoveUserFromSubGroup(groupID string, subGroupID string, userID string) error {
 	//For self unshare or leave from subgroup, bypass the authorization check
 	if userID != db.Ctx.Accessor.GetID() {
-		if err := db.IsAuthorized(utils.GroupShare, groupID); err != nil {
+		if err := db.Ctx.IsAuthorized(utils.GroupShare, groupID); err != nil {
 			return err
 		}
 	}
 
 	// Get current entry to find the subgroup to remove
-	item, err := db.GetUserGroupItemByUserID(userID, groupID)
+	entry, exists, err := db.getUserGroupEntry(userID, groupID)
 	if err != nil {
 		return err
 	}
 
-	if item.Item == nil {
+	if !exists {
 		return rmerror.NewRMError(nil, "user has no subgroup access to remove")
-	}
-
-	var entry UserGroupEntry
-	if err := attributevalue.UnmarshalMap(item.Item, &entry); err != nil {
-		return rmerror.NewRMError(err, "invalid data format for user group mapping")
 	}
 
 	// Reject if the user is not part of the specified subgroup. This also covers
@@ -625,7 +522,7 @@ func (db *UserGroupDB) RemoveUserFromSubGroup(groupID string, subGroupID string,
 		return rmerror.NewRMError(nil, "user is not part of the specified subgroup")
 	}
 
-	// Delegate to shared helper — handles filtering, empty-list deletion, and the dbcore.DB write
+	// Delegate to shared helper — handles filtering, empty-list deletion, and the write
 	if err := db.removeSubGroupFromUser(userID, groupID, subGroupID, entry.SubEntityIDs); err != nil {
 		return rmerror.NewRMError(err, "failed to remove user from subgroup")
 	}
@@ -657,24 +554,8 @@ func (db *UserGroupDB) removeSubGroupFromUser(userID, groupID, subGroupID string
 		return db.removeUserFromGroupAuthorized(groupID, userID)
 	}
 
-	expr, err := expression.NewBuilder().
-		WithUpdate(expression.Set(expression.Name("sub_entity_ids"), expression.Value(newSubEntities))).
-		Build()
-	if err != nil {
-		return rmerror.NewRMError(err, "failed to build update expression for user group mapping")
-	}
-
-	updateInput := &dynamodb.UpdateItemInput{
-		TableName: aws.String(UserGroupMappingTable),
-		Key: map[string]types.AttributeValue{
-			userGroupMappingHashKey: &types.AttributeValueMemberS{Value: userID},
-			userGroupMappingSortKey: &types.AttributeValueMemberS{Value: groupID},
-		},
-		UpdateExpression:          expr.Update(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
-	}
-	if _, err := db.UpdateItem(db.Ctx.Context, updateInput); err != nil {
+	update := expression.Set(expression.Name("sub_entity_ids"), expression.Value(newSubEntities))
+	if _, err := db.mappings.Upsert(db.Ctx.Context, db.mappings.Key(userID, groupID), update); err != nil {
 		return rmerror.NewRMError(err, "failed to update user group mapping in DynamoDB")
 	}
 
@@ -703,7 +584,7 @@ func (db *UserGroupDB) UnshareUserGroup(groupID string, targetUserID string) err
 			}
 		}
 		if targetIsPrimary && primaryCount <= 1 {
-			return rmerror.NewRMError(dbcore.ErrLastPrimaryUser, "cannot remove the last primary user from the group")
+			return rmerror.NewRMError(ErrLastPrimaryUser, "cannot remove the last primary user from the group")
 		}
 	}
 

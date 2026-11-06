@@ -721,18 +721,15 @@ var _ = Describe("Group", func() {
 			// The shared user keeps subGroup2 access; subGroup1 is gone from their mapping.
 			// Assert the full mapping entry.
 			userGroupDB := user_group_db.NewUserGroupDB(rmngContext2)
-			item, err := userGroupDB.GetUserGroupItemByUserID(rmngContext2.Accessor.GetID(), parentGroup.GroupID)
+			entry, err := userGroupDB.GetUserGroupItemByUserID(rmngContext2.Accessor.GetID(), parentGroup.GroupID)
 			Expect(err).To(BeNil())
-			Expect(item.Item).ToNot(BeNil())
-
-			var entry user_group_db.UserGroupEntry
-			Expect(attributevalue.UnmarshalMap(item.Item, &entry)).To(Succeed())
+			Expect(entry).ToNot(BeNil())
 			test_utils.AssertNormalizedEqual(user_group_db.UserGroupEntry{
 				UserID:       rmngContext2.Accessor.GetID(),
 				GroupID:      parentGroup.GroupID,
 				SubEntityIDs: []string{subGroup2.SubGroupID},
 				AccessType:   utils.GroupSubEntityAccess,
-			}, entry)
+			}, *entry)
 		})
 
 		It("should delete the mapping row when the deleted subgroup was the user's only access", func() {
@@ -751,9 +748,9 @@ var _ = Describe("Group", func() {
 
 			// With no remaining subgroup access, the shared user's mapping row is removed
 			userGroupDB := user_group_db.NewUserGroupDB(rmngContext2)
-			item, err := userGroupDB.GetUserGroupItemByUserID(rmngContext2.Accessor.GetID(), parentGroup.GroupID)
+			entry, err := userGroupDB.GetUserGroupItemByUserID(rmngContext2.Accessor.GetID(), parentGroup.GroupID)
 			Expect(err).To(BeNil())
-			Expect(item.Item).To(BeNil())
+			Expect(entry).To(BeNil())
 		})
 
 		It("should not affect the primary owner's mapping", func() {
@@ -766,18 +763,15 @@ var _ = Describe("Group", func() {
 			// Owner has empty sub_entity_ids; their mapping row must survive intact.
 			// Assert the full mapping entry.
 			userGroupDB := user_group_db.NewUserGroupDB(rmng_context)
-			item, err := userGroupDB.GetUserGroupItemByUserID(rmng_context.Accessor.GetID(), testGroup.GroupID)
+			entry, err := userGroupDB.GetUserGroupItemByUserID(rmng_context.Accessor.GetID(), testGroup.GroupID)
 			Expect(err).To(BeNil())
-			Expect(item.Item).ToNot(BeNil())
-
-			var entry user_group_db.UserGroupEntry
-			Expect(attributevalue.UnmarshalMap(item.Item, &entry)).To(Succeed())
+			Expect(entry).ToNot(BeNil())
 			test_utils.AssertNormalizedEqual(user_group_db.UserGroupEntry{
 				UserID:       rmng_context.Accessor.GetID(),
 				GroupID:      testGroup.GroupID,
 				SubEntityIDs: []string{},
 				AccessType:   utils.GroupPrimaryAccess,
-			}, entry)
+			}, *entry)
 		})
 
 		It("should remove only the targeted subgroup and preserve siblings", func() {

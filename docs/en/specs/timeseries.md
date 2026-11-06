@@ -400,7 +400,7 @@ and the DB layer re-checks it on every query.
 | `date` | aggregates | Single historical window: `YYYY-MM-DD`, or `YYYY-MM-DDTHH` for hourly. |
 | `start_date` / `end_date` | aggregates | Historical range (same formats). |
 | `start_time` / `end_time` | raw | Unix **milliseconds** bounding the raw query; a seconds-scale value is tolerated and auto-scaled (see §2.4). |
-| `page_size` | raw, aggregates range | Page size. |
+| `page_size` | raw, aggregates range | Page size, capped at 1000; a larger value returns 1000 items and a `next_key`. |
 | `start_key` | raw, aggregates range | Opaque pagination token from a prior response's `next_key`. |
 
 If `key` or `data_type` is missing, the request is rejected. If no query

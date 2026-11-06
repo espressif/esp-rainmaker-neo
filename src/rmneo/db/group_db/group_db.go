@@ -84,16 +84,17 @@ package group_db
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
 
-	dbcore "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-
+	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
@@ -103,16 +104,92 @@ const (
 	// Key column names
 	groupsHashKey = "group_id"
 	groupsSortKey = "sub_group_id"
+
+	capColumnPrefix = "cap_"
 )
 
+// ErrSubGroupNotFound is returned when a subgroup operation targets a subgroup that does not exist; handlers map it to HTTP 404.
+var ErrSubGroupNotFound = errors.New("subgroup not found")
+
 type GroupDB struct {
-	dbcore.DB
+	Ctx    *rmngctx.RmngContext
+	groups *ddbu.Table[groupRow]
 }
 
 func NewGroupDB(ctx *rmngctx.RmngContext) *GroupDB {
 	return &GroupDB{
-		DB: *dbcore.NewDB(ctx),
+		Ctx: ctx,
+		groups: ddbu.NewTable[groupRow](awscommon.GetDynamoDBClient(), ddbu.Schema{
+			Name:     GroupsTable,
+			HashKey:  groupsHashKey,
+			RangeKey: groupsSortKey,
+		}),
 	}
+}
+
+// groupRow is one rmng-groups item. Its cap_<name> columns are dynamic, so it (un)marshals itself; decoding is lenient so one malformed column does not fail a group read.
+type groupRow struct {
+	GroupID      string
+	SubGroupID   string
+	GroupName    string
+	Capabilities []string
+	// CapColumns holds each cap_<name> attribute as stored, keyed by the full column name.
+	CapColumns map[string]types.AttributeValue
+}
+
+func (r groupRow) MarshalDynamoDBAttributeValue() (types.AttributeValue, error) {
+	item := map[string]types.AttributeValue{
+		groupsHashKey: &types.AttributeValueMemberS{Value: r.GroupID},
+		groupsSortKey: &types.AttributeValueMemberS{Value: r.SubGroupID},
+		"group_name":  &types.AttributeValueMemberS{Value: r.GroupName},
+	}
+	if len(r.Capabilities) > 0 {
+		capList := make([]types.AttributeValue, len(r.Capabilities))
+		for i, capability := range r.Capabilities {
+			capList[i] = &types.AttributeValueMemberS{Value: capability}
+		}
+		item["capabilities"] = &types.AttributeValueMemberL{Value: capList}
+	}
+	for column, value := range r.CapColumns {
+		item[column] = value
+	}
+	return &types.AttributeValueMemberM{Value: item}, nil
+}
+
+func (r *groupRow) UnmarshalDynamoDBAttributeValue(av types.AttributeValue) error {
+	m, ok := av.(*types.AttributeValueMemberM)
+	if !ok {
+		return rmerror.NewRMError(nil, fmt.Sprintf("%s item is %T, not a map", GroupsTable, av))
+	}
+	*r = groupRow{
+		GroupID:    stringAttr(m.Value, groupsHashKey),
+		SubGroupID: stringAttr(m.Value, groupsSortKey),
+		GroupName:  stringAttr(m.Value, "group_name"),
+	}
+	if list, ok := m.Value["capabilities"].(*types.AttributeValueMemberL); ok {
+		for _, listItem := range list.Value {
+			if s, ok := listItem.(*types.AttributeValueMemberS); ok {
+				r.Capabilities = append(r.Capabilities, s.Value)
+			}
+		}
+	}
+	for column, value := range m.Value {
+		if len(column) > len(capColumnPrefix) && strings.HasPrefix(column, capColumnPrefix) {
+			if r.CapColumns == nil {
+				r.CapColumns = make(map[string]types.AttributeValue)
+			}
+			r.CapColumns[column] = value
+		}
+	}
+	return nil
+}
+
+// stringAttr returns an S attribute's value, or "" when it is absent or not a string.
+func stringAttr(item map[string]types.AttributeValue, name string) string {
+	if s, ok := item[name].(*types.AttributeValueMemberS); ok {
+		return s.Value
+	}
+	return ""
 }
 
 // CreateGroup creates a new group in DynamoDB
@@ -123,23 +200,16 @@ func (gdb *GroupDB) CreateGroup(groupID, groupName string) error {
 // CreateGroupWithCapabilities creates a new group with optional capabilities in DynamoDB.
 // Each capability's data is stored as a JSON string in a column named cap_<capability_name>.
 func (gdb *GroupDB) CreateGroupWithCapabilities(groupID, groupName string, capabilities []string, capabilityData map[string]map[string]interface{}) error {
-	if err := gdb.IsAuthorized(utils.GroupCreate, groupID); err != nil {
+	if err := gdb.Ctx.IsAuthorized(utils.GroupCreate, groupID); err != nil {
 		return err
 	}
 
-	item := map[string]types.AttributeValue{
-		"group_id":     &types.AttributeValueMemberS{Value: groupID},
-		"sub_group_id": &types.AttributeValueMemberS{Value: "NONE"},
-		"group_name":   &types.AttributeValueMemberS{Value: groupName},
-	}
-
-	// Add capabilities list if provided
-	if len(capabilities) > 0 {
-		capList := make([]types.AttributeValue, len(capabilities))
-		for i, cap := range capabilities {
-			capList[i] = &types.AttributeValueMemberS{Value: cap}
-		}
-		item["capabilities"] = &types.AttributeValueMemberL{Value: capList}
+	row := groupRow{
+		GroupID:      groupID,
+		SubGroupID:   "NONE",
+		GroupName:    groupName,
+		Capabilities: capabilities,
+		CapColumns:   make(map[string]types.AttributeValue, len(capabilityData)),
 	}
 
 	// Add capability-specific data as JSON in cap_<name> columns
@@ -148,61 +218,41 @@ func (gdb *GroupDB) CreateGroupWithCapabilities(groupID, groupName string, capab
 		if err != nil {
 			return rmerror.NewRMError(err, "failed to serialize capability data for "+capName)
 		}
-		item["cap_"+capName] = &types.AttributeValueMemberS{Value: string(jsonBytes)}
+		row.CapColumns[capColumnPrefix+capName] = &types.AttributeValueMemberS{Value: string(jsonBytes)}
 	}
 
-	input := &dynamodb.PutItemInput{
-		TableName:           aws.String(GroupsTable),
-		Item:                item,
-		ConditionExpression: aws.String("attribute_not_exists(group_id)"),
-	}
-	_, err := gdb.PutItem(gdb.Ctx.Context, input)
-
-	return err
+	return gdb.groups.Create(gdb.Ctx.Context, row)
 }
 
 // CreateSubGroup creates a new subgroup in DynamoDB
 func (gdb *GroupDB) CreateSubGroup(parentGroupID, subGroupName, subGroupID string) error {
-	if err := gdb.IsAuthorized(utils.GroupCreateSubGroup, parentGroupID); err != nil {
+	if err := gdb.Ctx.IsAuthorized(utils.GroupCreateSubGroup, parentGroupID); err != nil {
 		return err
 	}
-	input := &dynamodb.PutItemInput{
-		TableName: aws.String(GroupsTable),
-		Item: map[string]types.AttributeValue{
-			"group_id":     &types.AttributeValueMemberS{Value: parentGroupID},
-			"sub_group_id": &types.AttributeValueMemberS{Value: subGroupID},
-			"group_name":   &types.AttributeValueMemberS{Value: subGroupName},
-		},
-		ConditionExpression: aws.String("attribute_not_exists(group_id)"),
-	}
-	_, err := gdb.PutItem(gdb.Ctx.Context, input)
-	return err
+	return gdb.groups.Create(gdb.Ctx.Context, groupRow{
+		GroupID:    parentGroupID,
+		SubGroupID: subGroupID,
+		GroupName:  subGroupName,
+	})
 }
 
 // ListRowsWithGroupID retrieves all rows for a given group ID, including capability data for the main group
 func (gdb *GroupDB) ListRowsWithGroupID(parentGroupID string) ([]GroupInDB, error) {
-	if err := gdb.IsAuthorized(utils.GroupListSubEntities, parentGroupID); err != nil {
+	if err := gdb.Ctx.IsAuthorized(utils.GroupListSubEntities, parentGroupID); err != nil {
 		return nil, err
-	}
-	queryInput := &dynamodb.QueryInput{
-		TableName:              aws.String(GroupsTable),
-		KeyConditionExpression: aws.String("group_id = :gid"),
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":gid": &types.AttributeValueMemberS{Value: parentGroupID},
-		},
 	}
 
 	// Paginated: the parent row sorts under "NONE", so a truncated page can drop the group
 	// itself as easily as its subgroups.
 
 	// A caller that can list sub-entities but cannot GroupGet the parent is subgroup-scoped. It still receives the parent row, so the cap_* secrets have to be withheld from it explicitly.
-	limitedAccess := gdb.IsAuthorized(utils.GroupGet, parentGroupID) != nil
+	limitedAccess := gdb.Ctx.IsAuthorized(utils.GroupGet, parentGroupID) != nil
 
 	var groups []GroupInDB
-	err := gdb.QueryPaginated(gdb.Ctx.Context, queryInput, func(item map[string]types.AttributeValue) error {
+	err := gdb.groups.QueryEach(gdb.Ctx.Context, expression.Key(groupsHashKey).Equal(expression.Value(parentGroupID)), func(row groupRow) error {
 		var addToGroups bool
-		subGroupID, ok := dbcore.GetStringAttr(item, "sub_group_id")
-		if !ok {
+		subGroupID := row.SubGroupID
+		if subGroupID == "" {
 			// Sort key is mandatory; skip a malformed item rather than panic.
 			return nil
 		}
@@ -218,15 +268,14 @@ func (gdb *GroupDB) ListRowsWithGroupID(parentGroupID string) ([]GroupInDB, erro
 			addToGroups = match
 		}
 		if addToGroups {
-			groupName, _ := dbcore.GetStringAttr(item, "group_name")
 			groupEntry := GroupInDB{
 				GroupID:    parentGroupID,
-				GroupName:  groupName,
+				GroupName:  row.GroupName,
 				SubGroupID: subGroupID,
 			}
 			// Only parse capability data for the main group entry (not subgroups)
 			if subGroupID == "NONE" {
-				caps, capData := parseCapabilitiesFromItem(item)
+				caps, capData := row.parseCapabilities()
 				groupEntry.Capabilities = caps
 				// The cap_* columns hold a capability's secrets — for Matter that is the fabric identity-protection key, the root CA and both CAT ids. A subgroup-scoped caller may know the group is Matter-enabled, but must not receive the fabric material: get-groups feeds this straight into the response via the capability's GetResponseData.
 				if !limitedAccess {
@@ -247,58 +296,37 @@ func (gdb *GroupDB) ListRowsWithGroupID(parentGroupID string) ([]GroupInDB, erro
 // GetGroupByID retrieves a group by its ID, including capability data
 func (gdb *GroupDB) GetGroupByID(groupID string) (*GroupInDB, error) {
 	// Allow anybody to get a group by its ID
-	input := &dynamodb.GetItemInput{
-		TableName: aws.String(GroupsTable),
-		Key: map[string]types.AttributeValue{
-			"group_id":     &types.AttributeValueMemberS{Value: groupID},
-			"sub_group_id": &types.AttributeValueMemberS{Value: "NONE"},
-		},
-	}
-
-	result, err := gdb.GetItem(gdb.Ctx.Context, input)
+	row, found, err := gdb.groups.Get(gdb.Ctx.Context, gdb.groups.Key(groupID, "NONE"))
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to get group from DynamoDB")
 	}
 
-	if result.Item == nil {
+	if !found {
 		return nil, rmerror.NewRMError(nil, "group not found")
 	}
 
-	groupName, _ := dbcore.GetStringAttr(result.Item, "group_name")
 	group := &GroupInDB{
 		GroupID:   groupID,
-		GroupName: groupName,
+		GroupName: row.GroupName,
 	}
 
 	// Parse capabilities list and capability data
-	group.Capabilities, group.CapabilityData = parseCapabilitiesFromItem(result.Item)
+	group.Capabilities, group.CapabilityData = row.parseCapabilities()
 
 	return group, nil
 }
 
 // IsSubGroup checks if a subgroup exists for a given group
 func (gdb *GroupDB) IsSubGroup(groupID, subGroupID string) (bool, error) {
-	if err := gdb.IsAuthorized(utils.GroupListSubEntities, groupID); err != nil {
+	if err := gdb.Ctx.IsAuthorized(utils.GroupListSubEntities, groupID); err != nil {
 		return false, err
 	}
-	queryInput := &dynamodb.QueryInput{
-		TableName:              aws.String(GroupsTable),
-		KeyConditionExpression: aws.String("group_id = :gid AND sub_group_id = :sgid"),
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":gid":  &types.AttributeValueMemberS{Value: groupID},
-			":sgid": &types.AttributeValueMemberS{Value: subGroupID},
-		},
-	}
 
-	queryOutput, err := gdb.Query(gdb.Ctx.Context, queryInput)
+	_, found, err := gdb.groups.Get(gdb.Ctx.Context, gdb.groups.Key(groupID, subGroupID))
 	if err != nil {
 		return false, rmerror.NewRMError(err, "failed to query groups in DynamoDB")
 	}
-
-	if len(queryOutput.Items) > 0 {
-		return true, nil
-	}
-	return false, nil
+	return found, nil
 }
 
 // UpdateSubGroup updates the information of a subgroup (or the group if sub_group_id=="NONE")
@@ -309,41 +337,18 @@ func (gdb *GroupDB) UpdateSubGroup(groupID, subGroupID, groupOrSubgroupName stri
 		action = utils.GroupUpdate
 	}
 
-	if err := gdb.IsAuthorized(action, groupID); err != nil {
+	if err := gdb.Ctx.IsAuthorized(action, groupID); err != nil {
 		return err
 	}
 
 	update := expression.Set(expression.Name("group_name"), expression.Value(groupOrSubgroupName))
 
-	cond := expression.AttributeExists(expression.Name("group_id"))
-
+	var opts ddbu.WriteOpts
 	if subGroupID != "NONE" {
-		cond = expression.And(cond,
-			expression.NotEqual(expression.Name("sub_group_id"), expression.Value("NONE")))
+		opts.If = expression.NotEqual(expression.Name("sub_group_id"), expression.Value("NONE"))
 	}
 
-	expr, err := expression.NewBuilder().
-		WithUpdate(update).
-		WithCondition(cond).
-		Build()
-
-	if err != nil {
-		return rmerror.NewRMError(err, "failed to build update expression")
-	}
-
-	input := &dynamodb.UpdateItemInput{
-		TableName: aws.String(GroupsTable),
-		Key: map[string]types.AttributeValue{
-			"group_id":     &types.AttributeValueMemberS{Value: groupID},
-			"sub_group_id": &types.AttributeValueMemberS{Value: subGroupID},
-		},
-		UpdateExpression:          expr.Update(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
-		ConditionExpression:       expr.Condition(),
-	}
-
-	if _, err = gdb.UpdateItem(gdb.Ctx.Context, input); err != nil {
+	if _, err := gdb.groups.Update(gdb.Ctx.Context, gdb.groups.Key(groupID, subGroupID), update, opts); err != nil {
 		return rmerror.NewRMError(err, "failed to update group/subgroup name in DynamoDB")
 	}
 
@@ -355,21 +360,14 @@ func (gdb *GroupDB) UpdateGroup(groupID, groupName string) error {
 	return gdb.UpdateSubGroup(groupID, "NONE", groupName)
 }
 
-// DeleteGroup deletes a group and all its subgroups from DynamoDB using QueryAndBatchDelete
+// DeleteGroup deletes a group and all its subgroups from DynamoDB
 func (gdb *GroupDB) DeleteGroup(groupID string) error {
-	if err := gdb.IsAuthorized(utils.GroupDelete, groupID); err != nil {
+	if err := gdb.Ctx.IsAuthorized(utils.GroupDelete, groupID); err != nil {
 		return err
 	}
 
-	queryInput := &dynamodb.QueryInput{
-		TableName:              aws.String(GroupsTable),
-		KeyConditionExpression: aws.String("group_id = :gid"),
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":gid": &types.AttributeValueMemberS{Value: groupID},
-		},
-	}
-
-	return gdb.QueryAndBatchDelete(gdb.Ctx.Context, queryInput, GroupsTable, []string{"group_id", "sub_group_id"})
+	err := gdb.groups.QueryDelete(gdb.Ctx.Context, expression.Key(groupsHashKey).Equal(expression.Value(groupID)))
+	return err
 }
 
 // DeleteSubGroup deletes a specific subgroup from DynamoDB.
@@ -381,34 +379,14 @@ func (gdb *GroupDB) DeleteSubGroup(groupID, subGroupID string) error {
 		return rmerror.NewRMError(nil, "cannot delete main group via DeleteSubGroup; use DeleteGroup instead")
 	}
 
-	if err := gdb.IsAuthorized(utils.GroupDeleteSubGroup, groupID); err != nil {
+	if err := gdb.Ctx.IsAuthorized(utils.GroupDeleteSubGroup, groupID); err != nil {
 		return err
 	}
 
-	// Verify it exists before deleting to return 404 if needed
-	cond := expression.And(
-		expression.AttributeExists(expression.Name(groupsHashKey)),
-		expression.AttributeExists(expression.Name(groupsSortKey)),
-	)
-	expr, err := expression.NewBuilder().WithCondition(cond).Build()
-	if err != nil {
-		return rmerror.NewRMError(err, "failed to build condition expression")
-	}
-
-	input := &dynamodb.DeleteItemInput{
-		TableName: aws.String(GroupsTable),
-		Key: map[string]types.AttributeValue{
-			groupsHashKey: &types.AttributeValueMemberS{Value: groupID},
-			groupsSortKey: &types.AttributeValueMemberS{Value: subGroupID},
-		},
-		ConditionExpression:      expr.Condition(),
-		ExpressionAttributeNames: expr.Names(),
-	}
-
-	_, err = gdb.DeleteItem(gdb.Ctx.Context, input)
-	if err != nil {
-		if dbcore.IsConditionalCheckFailedException(err) {
-			return rmerror.NewRMError(dbcore.ErrSubGroupNotFound, "subgroup not found")
+	// Delete's must-exist condition is what turns a missing subgroup into a 404.
+	if err := gdb.groups.Delete(gdb.Ctx.Context, gdb.groups.Key(groupID, subGroupID)); err != nil {
+		if ddbu.IsConditionFailed(err) {
+			return rmerror.NewRMError(ErrSubGroupNotFound, "subgroup not found")
 		}
 		return rmerror.NewRMError(err, "failed to delete subgroup from DynamoDB")
 	}
@@ -424,67 +402,45 @@ type GroupInDB struct {
 	CapabilityData map[string]map[string]interface{} // cap_name -> parsed JSON data
 }
 
-// parseCapabilitiesFromItem extracts capabilities list and capability data from a DynamoDB item.
-// It looks for the "capabilities" list attribute and "cap_*" JSON string attributes.
-// Returns nil for capabilityData if no capability data is found.
-func parseCapabilitiesFromItem(item map[string]types.AttributeValue) ([]string, map[string]map[string]interface{}) {
-	var capabilities []string
+// parseCapabilities returns the capabilities list and the JSON in each cap_* column that holds a string. capabilityData is nil when no column parses.
+func (r groupRow) parseCapabilities() ([]string, map[string]map[string]interface{}) {
 	var capabilityData map[string]map[string]interface{}
 
-	// Parse capabilities list
-	if val, ok := item["capabilities"]; ok {
-		if list, ok := val.(*types.AttributeValueMemberL); ok {
-			for _, listItem := range list.Value {
-				if s, ok := listItem.(*types.AttributeValueMemberS); ok {
-					capabilities = append(capabilities, s.Value)
-				}
-			}
+	for column, val := range r.CapColumns {
+		s, ok := val.(*types.AttributeValueMemberS)
+		if !ok {
+			continue
 		}
+		var data map[string]interface{}
+		if err := json.Unmarshal([]byte(s.Value), &data); err != nil {
+			continue
+		}
+		if capabilityData == nil {
+			capabilityData = make(map[string]map[string]interface{})
+		}
+		capabilityData[strings.TrimPrefix(column, capColumnPrefix)] = data
 	}
 
-	// Parse capability data from cap_* columns
-	for key, val := range item {
-		if len(key) > 4 && key[:4] == "cap_" {
-			capName := key[4:]
-			if s, ok := val.(*types.AttributeValueMemberS); ok {
-				var data map[string]interface{}
-				if err := json.Unmarshal([]byte(s.Value), &data); err == nil {
-					if capabilityData == nil {
-						capabilityData = make(map[string]map[string]interface{})
-					}
-					capabilityData[capName] = data
-				}
-			}
-		}
-	}
-
-	return capabilities, capabilityData
+	return r.Capabilities, capabilityData
 }
 
 // GetCapabilityData retrieves capability-specific data for a group from the cap_<name> column.
 // The data is stored as JSON and returned as a map.
 func (gdb *GroupDB) GetCapabilityData(groupID string, capabilityName string) (map[string]interface{}, error) {
 	// Allow anybody to get a group by its ID
-	columnName := "cap_" + capabilityName
-	input := &dynamodb.GetItemInput{
-		TableName: aws.String(GroupsTable),
-		Key: map[string]types.AttributeValue{
-			"group_id":     &types.AttributeValueMemberS{Value: groupID},
-			"sub_group_id": &types.AttributeValueMemberS{Value: "NONE"},
-		},
-		ProjectionExpression: aws.String(columnName),
-	}
+	columnName := capColumnPrefix + capabilityName
 
-	result, err := gdb.GetItem(gdb.Ctx.Context, input)
+	// Whole row, no projection: a group without this column would project to an empty item and read as not found.
+	row, found, err := gdb.groups.Get(gdb.Ctx.Context, gdb.groups.Key(groupID, "NONE"))
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to get capability data from DynamoDB")
 	}
 
-	if result.Item == nil {
+	if !found {
 		return nil, rmerror.NewRMError(nil, "group not found")
 	}
 
-	val, ok := result.Item[columnName]
+	val, ok := row.CapColumns[columnName]
 	if !ok {
 		return nil, nil // No capability data
 	}
@@ -502,20 +458,17 @@ func (gdb *GroupDB) GetCapabilityData(groupID string, capabilityName string) (ma
 	return data, nil
 }
 
-// setCapabilityData writes a group's capability data into the cap_<name> column using the
-// expression builder. When enable is true it also appends capabilityName to the
-// "capabilities" list and requires the capability to be absent (enable-once); when false
-// it overwrites the data of an already-enabled capability. The caller handles authorization.
+// setCapabilityDataAuthorized writes a group's capability data into the cap_<name> column. When createCapability is true it also appends capabilityName to the "capabilities" list and requires the capability to be absent (enable-once); when false it overwrites the data of an already-enabled capability. The caller handles authorization.
 func (gdb *GroupDB) setCapabilityDataAuthorized(groupID, capabilityName string, data map[string]interface{}, createCapability bool) error {
 	jsonBytes, err := json.Marshal(data)
 	if err != nil {
 		return rmerror.NewRMError(err, "failed to serialize capability data")
 	}
 
-	columnName := "cap_" + capabilityName
+	columnName := capColumnPrefix + capabilityName
 
 	update := expression.Set(expression.Name(columnName), expression.Value(string(jsonBytes)))
-	condition := expression.AttributeExists(expression.Name("group_id"))
+	var opts ddbu.WriteOpts
 
 	if createCapability {
 		// The cap_<name> column exists iff the capability is enabled, so its absence is the duplicate guard.
@@ -526,31 +479,16 @@ func (gdb *GroupDB) setCapabilityDataAuthorized(groupID, capabilityName string, 
 				expression.Value([]string{capabilityName}),
 			),
 		)
-		condition = condition.And(expression.AttributeNotExists(expression.Name(columnName)))
+		opts.If = expression.AttributeNotExists(expression.Name(columnName))
 	}
 
-	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(condition).Build()
-	if err != nil {
-		return rmerror.NewRMError(err, "failed to build capability update expression")
-	}
-
-	_, err = gdb.UpdateItem(gdb.Ctx.Context, &dynamodb.UpdateItemInput{
-		TableName: aws.String(GroupsTable),
-		Key: map[string]types.AttributeValue{
-			"group_id":     &types.AttributeValueMemberS{Value: groupID},
-			"sub_group_id": &types.AttributeValueMemberS{Value: "NONE"},
-		},
-		UpdateExpression:          expr.Update(),
-		ConditionExpression:       expr.Condition(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
-	})
+	_, err = gdb.groups.Update(gdb.Ctx.Context, gdb.groups.Key(groupID, "NONE"), update, opts)
 	return err
 }
 
 // UpdateCapabilityData overwrites the cap_<name> data of an already-enabled capability.
 func (gdb *GroupDB) UpdateCapabilityData(groupID string, capabilityName string, data map[string]interface{}) error {
-	if err := gdb.IsAuthorized(utils.GroupUpdate, groupID); err != nil {
+	if err := gdb.Ctx.IsAuthorized(utils.GroupUpdate, groupID); err != nil {
 		return err
 	}
 	if err := gdb.setCapabilityDataAuthorized(groupID, capabilityName, data, false); err != nil {
@@ -562,7 +500,7 @@ func (gdb *GroupDB) UpdateCapabilityData(groupID string, capabilityName string, 
 // AddCapability enables a capability on a group: it appends the name to the "capabilities"
 // list and writes its data, rejecting the write if the capability is already present.
 func (gdb *GroupDB) AddCapability(groupID string, capabilityName string, data map[string]interface{}) error {
-	if err := gdb.IsAuthorized(utils.GroupUpdateCapabilities, groupID); err != nil {
+	if err := gdb.Ctx.IsAuthorized(utils.GroupUpdateCapabilities, groupID); err != nil {
 		return err
 	}
 	if err := gdb.setCapabilityDataAuthorized(groupID, capabilityName, data, true); err != nil {

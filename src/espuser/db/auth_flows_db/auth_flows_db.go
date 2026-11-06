@@ -9,14 +9,12 @@ import (
 	"errors"
 	"time"
 
+	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-
-	"github.com/espressif/esp-rainmaker-neo/src/awsutils/espdynamodb"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
-	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 const (
@@ -40,11 +38,21 @@ var (
 )
 
 type AuthFlowsDB struct {
-	espdynamodb.EspDB
+	Ctx   *rmngctx.RmngContext
+	flows *ddbu.Table[AuthFlow]
 }
 
 func NewAuthFlowsDB(ctx *rmngctx.RmngContext) *AuthFlowsDB {
-	return &AuthFlowsDB{EspDB: espdynamodb.NewEspDB(ctx)}
+	return &AuthFlowsDB{
+		Ctx: ctx,
+		flows: ddbu.NewTable[AuthFlow](awscommon.GetDynamoDBClient(), ddbu.Schema{
+			Name:    authFlowsTableName,
+			HashKey: authFlowsHashKey,
+			Indexes: map[string]ddbu.IndexKeys{
+				authFlowsByCode: {HashKey: colCode},
+			},
+		}),
+	}
 }
 
 type AuthFlow struct {
@@ -84,32 +92,19 @@ type AuthFlow struct {
 	PendingClaims map[string]string `dynamodbav:"pending_claims,omitempty"`
 }
 
-func (a *AuthFlow) GetHKey() string { return authFlowsHashKey }
-func (a *AuthFlow) GetRKey() string { return "" }
-
-// Key-only struct: passing the full AuthFlow at key sites would leak attributes into the DynamoDB Key.
-type authFlowKey struct {
-	FlowID string `dynamodbav:"flow_id"`
-}
-
-func (authFlowKey) GetHKey() string { return authFlowsHashKey }
-func (authFlowKey) GetRKey() string { return "" }
-
-func newAuthFlowKey(flowID string) *authFlowKey { return &authFlowKey{FlowID: flowID} }
-
 func (db *AuthFlowsDB) CreateFlow(flow *AuthFlow) error {
-	if err := db.DbCreateItem(authFlowsTableName, flow); err != nil {
+	if err := db.flows.Create(db.Ctx.Context, *flow); err != nil {
 		return rmerror.NewRMError(err, "failed to put auth flow")
 	}
 	return nil
 }
 
 func (db *AuthFlowsDB) GetFlow(flowID string) (*AuthFlow, error) {
-	var result AuthFlow
-	if err := db.DbGetItem(authFlowsTableName, newAuthFlowKey(flowID), &result); err != nil {
+	result, found, err := db.flows.Get(db.Ctx.Context, db.flows.Key(flowID))
+	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to get auth flow")
 	}
-	if result.FlowID == "" {
+	if !found {
 		return nil, ErrFlowNotFound
 	}
 	if result.ExpiresOn != 0 && time.Now().Unix() >= result.ExpiresOn {
@@ -136,23 +131,12 @@ func (db *AuthFlowsDB) IssueCode(flowID, subject string, grantedScope []string, 
 		expression.Name(colExpiresOn).AttributeNotExists(),
 		expression.Name(colExpiresOn).GreaterThan(expression.Value(time.Now().Unix())),
 	)
-	out, err := db.DbUpdateItem(espdynamodb.DbUpdateItemInput{
-		TableName:    authFlowsTableName,
-		Update:       update,
-		Query:        newAuthFlowKey(flowID),
-		Condition:    unbound.And(unexpired),
-		ReturnValues: types.ReturnValueAllNew,
-	})
+	flow, err := db.flows.Update(db.Ctx.Context, db.flows.Key(flowID), update, ddbu.WriteOpts{If: unbound.And(unexpired)})
 	if err != nil {
-		var ccf *types.ConditionalCheckFailedException
-		if errors.As(err, &ccf) {
+		if ddbu.IsConditionFailed(err) {
 			return nil, ErrFlowNotFound
 		}
 		return nil, rmerror.NewRMError(err, "failed to issue authorization code")
-	}
-	var flow AuthFlow
-	if err := attributevalue.UnmarshalMap(out.Attributes, &flow); err != nil {
-		return nil, rmerror.NewRMError(err, "failed to decode issued auth flow")
 	}
 	return &flow, nil
 }
@@ -168,13 +152,7 @@ func (db *AuthFlowsDB) SetUpstreamLeg(flowID, provider, upstreamState, upstreamN
 		expression.Name(colSubject).AttributeNotExists(),
 		expression.Name(colSubject).Equal(expression.Value("")),
 	)
-	_, err := db.DbUpdateItem(espdynamodb.DbUpdateItemInput{
-		TableName: authFlowsTableName,
-		Update:    update,
-		Query:     newAuthFlowKey(flowID),
-		Condition: unbound,
-	})
-	if err != nil {
+	if _, err := db.flows.Update(db.Ctx.Context, db.flows.Key(flowID), update, ddbu.WriteOpts{If: unbound}); err != nil {
 		return rmerror.NewRMError(err, "failed to set upstream federation leg")
 	}
 	return nil
@@ -182,46 +160,29 @@ func (db *AuthFlowsDB) SetUpstreamLeg(flowID, provider, upstreamState, upstreamN
 
 // GetFlowByCode resolves a CODE record via the by-code GSI at token exchange.
 func (db *AuthFlowsDB) GetFlowByCode(code string) (*AuthFlow, error) {
-	builder := expression.NewBuilder().WithKeyCondition(expression.Key(colCode).Equal(expression.Value(code)))
-	expr, err := builder.Build()
-	if err != nil {
-		return nil, rmerror.NewRMError(err, "failed to build by-code expression")
-	}
-	result, _, err := espdynamodb.DbQueryWithLoop(espdynamodb.QueryWithLoopInput[AuthFlow]{
-		DBHandle:  &db.EspDB,
-		TableName: authFlowsTableName,
-		IndexName: authFlowsByCode,
-		Expr:      expr,
-		Limit:     1,
-		GetKey:    getLastEvaluatedKey,
+	page, err := db.flows.Query(db.Ctx.Context, expression.Key(colCode).Equal(expression.Value(code)), ddbu.QueryOpts{
+		Index: authFlowsByCode,
+		Limit: 1,
 	})
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to query auth flow by code")
 	}
-	if len(result) == 0 {
+	if len(page.Items) == 0 {
 		return nil, ErrFlowNotFound
 	}
-	flow := result[0]
+	flow := page.Items[0]
 	if flow.ExpiresOn != 0 && time.Now().Unix() >= flow.ExpiresOn {
 		return nil, ErrFlowExpired
 	}
 	return &flow, nil
 }
 
-// ConsumeCode deletes the flow record so the code is single-use. DbDeleteItem carries an
+// ConsumeCode deletes the flow record so the code is single-use. Delete carries an
 // item-exists condition, so a concurrent/replayed second exchange fails atomically (only one
 // caller wins) and is denied. (Token revocation on reuse is a separate open item.)
 func (db *AuthFlowsDB) ConsumeCode(flowID string) error {
-	if err := db.DbDeleteItem(authFlowsTableName, newAuthFlowKey(flowID)); err != nil {
+	if err := db.flows.Delete(db.Ctx.Context, db.flows.Key(flowID)); err != nil {
 		return rmerror.NewRMError(err, "failed to consume authorization code")
 	}
 	return nil
-}
-
-// getLastEvaluatedKey returns the by-code GSI paging key (code index key + flow_id base key).
-func getLastEvaluatedKey(item AuthFlow, _ ...string) map[string]types.AttributeValue {
-	return map[string]types.AttributeValue{
-		colCode:          &types.AttributeValueMemberS{Value: item.Code},
-		authFlowsHashKey: &types.AttributeValueMemberS{Value: item.FlowID},
-	}
 }

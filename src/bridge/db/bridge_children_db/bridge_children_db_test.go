@@ -5,6 +5,7 @@
 package bridge_children_db_test
 
 import (
+	"fmt"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -15,8 +16,10 @@ import (
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
+	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )
 
@@ -101,6 +104,21 @@ var _ = Describe("BridgeChildrenDB", func() {
 			entries, err := db.GetChildrenByParent("unknown-bridge")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(entries).To(BeEmpty())
+		})
+
+		It("returns every child of a parent with more than 1000, read across several pages", func() {
+			awscommon.GetDynamoDBClient().(*mock.DynamoDBMock).MaxPageItems = 100
+			const total = 1001
+			for i := 0; i < total; i++ {
+				child := fmt.Sprintf("%s--child_%04d", parentA, i)
+				Expect(db.AddChild(parentA, child, fmt.Sprintf("0x%016X", i))).To(Succeed())
+			}
+			Expect(db.AddChild(parentB, childB1, localB1)).To(Succeed())
+
+			entries, err := db.GetChildrenByParent(parentA)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(entries).To(HaveLen(total))
+			Expect(entries[total-1].ChildNodeID).To(Equal(fmt.Sprintf("%s--child_%04d", parentA, total-1)))
 		})
 	})
 

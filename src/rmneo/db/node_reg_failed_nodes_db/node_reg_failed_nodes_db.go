@@ -36,16 +36,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-
-	"github.com/espressif/esp-rainmaker-neo/src/awsutils/espdynamodb"
-	dbpkg "github.com/espressif/esp-rainmaker-neo/src/rmneo/db"
-	"github.com/espressif/esp-rainmaker-neo/src/utils"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
-
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/smithy-go"
+
+	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )
 
 const (
@@ -56,11 +54,19 @@ const (
 )
 
 type NodeRegFailedNodesDB struct {
-	espdynamodb.EspDB
+	Ctx      *rmngctx.RmngContext
+	failures *ddbu.Table[NodeRegFailedNodeEntry]
 }
 
 func NewNodeRegFailedNodesDB(ctx *rmngctx.RmngContext) *NodeRegFailedNodesDB {
-	return &NodeRegFailedNodesDB{EspDB: espdynamodb.NewEspDB(ctx)}
+	return &NodeRegFailedNodesDB{
+		Ctx: ctx,
+		failures: ddbu.NewTable[NodeRegFailedNodeEntry](awscommon.GetDynamoDBClient(), ddbu.Schema{
+			Name:     NodeRegFailedNodesTable,
+			HashKey:  nodeRegFailedNodesHashKey,
+			RangeKey: nodeRegFailedNodesRangeKey,
+		}),
+	}
 }
 
 type NodeRegFailedNodeEntry struct {
@@ -70,9 +76,6 @@ type NodeRegFailedNodeEntry struct {
 	Reason     string `dynamodbav:"reason,omitempty"      json:"reason,omitempty"`
 	RecordedAt int64  `dynamodbav:"recorded_at,omitempty" json:"recorded_at,omitempty"`
 }
-
-func (n *NodeRegFailedNodeEntry) GetHKey() string { return nodeRegFailedNodesHashKey }
-func (n *NodeRegFailedNodeEntry) GetRKey() string { return nodeRegFailedNodesRangeKey }
 
 // FailureCode is a coarse classification of a per-row failure recorded by a
 // bulk node registration / update job. Stored in the entry's Code field
@@ -144,7 +147,7 @@ type ListFailedNodesOutput struct {
 // repeat it on each entry. Failure rows are retained indefinitely (no TTL) —
 // batch failures are rare and operators may need them later to debug issues.
 func (db *NodeRegFailedNodesDB) RecordFailures(requestID string, failures []NodeRegFailedNodeEntry) error {
-	if err := db.DB.IsAuthorized(utils.NodeAdminAdd, "*"); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodeAdminAdd, "*"); err != nil {
 		return err
 	}
 
@@ -160,7 +163,7 @@ func (db *NodeRegFailedNodesDB) RecordFailures(requestID string, failures []Node
 		}
 	}
 
-	if err := espdynamodb.DbBatchPutItem(&db.EspDB, NodeRegFailedNodesTable, failures); err != nil {
+	if err := db.failures.BatchPut(db.Ctx.Context, failures); err != nil {
 		return rmerror.NewRMError(err, "failed to record failed nodes")
 	}
 	return nil
@@ -174,52 +177,21 @@ func (db *NodeRegFailedNodesDB) RecordFailures(requestID string, failures []Node
 // handler — same pattern as ListNodeRegRequests — which never yields a value
 // mirrors the sibling list function for direct (non-handler) callers and tests.
 func (db *NodeRegFailedNodesDB) ListFailures(requestID string, limit int64, startKey string) (*ListFailedNodesOutput, error) {
-	if err := db.DB.IsAuthorized(utils.NodeAdminRegisterStatus, "*"); err != nil {
+	if err := db.Ctx.IsAuthorized(utils.NodeAdminRegisterStatus, "*"); err != nil {
 		return nil, err
 	}
 
-	expr, err := expression.NewBuilder().
-		WithKeyCondition(expression.Key(nodeRegFailedNodesHashKey).Equal(expression.Value(requestID))).
-		Build()
-	if err != nil {
-		return nil, rmerror.NewRMError(err, "failed to build list expression")
-	}
-
-	var exclusiveStartKey map[string]types.AttributeValue
-	if startKey != "" {
-		exclusiveStartKey, err = dbpkg.DecodePaginationToken(startKey)
-		if err != nil {
-			return nil, rmerror.NewRMError(err, "invalid start_key")
-		}
-	}
-
-	getKey := func(entry NodeRegFailedNodeEntry, indexNames ...string) map[string]types.AttributeValue {
-		return map[string]types.AttributeValue{
-			nodeRegFailedNodesHashKey:  &types.AttributeValueMemberS{Value: entry.RequestID},
-			nodeRegFailedNodesRangeKey: &types.AttributeValueMemberS{Value: entry.NodeID},
-		}
-	}
-
-	entries, lastKey, err := espdynamodb.DbQueryWithLoop(espdynamodb.QueryWithLoopInput[NodeRegFailedNodeEntry]{
-		DBHandle:  &db.EspDB,
-		TableName: NodeRegFailedNodesTable,
-		Limit:     limit,
-		StartKey:  exclusiveStartKey,
-		Expr:      expr,
-		GetKey:    getKey,
+	page, err := db.failures.Query(db.Ctx.Context, failuresOf(requestID), ddbu.QueryOpts{
+		Limit:      int(limit),
+		StartToken: startKey,
 	})
+	if errors.Is(err, ddbu.ErrInvalidToken) {
+		return nil, rmerror.NewRMError(err, "invalid start_key")
+	}
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to list failed nodes")
 	}
-
-	out := &ListFailedNodesOutput{Entries: entries}
-	if len(lastKey) > 0 {
-		out.NextKey, err = dbpkg.EncodePaginationToken(lastKey)
-		if err != nil {
-			return nil, rmerror.NewRMError(err, "failed to encode next key")
-		}
-	}
-	return out, nil
+	return &ListFailedNodesOutput{Entries: page.Items, NextKey: page.NextToken}, nil
 }
 
 // IterateFailures drains every failure row for the given request_id, calling
@@ -228,8 +200,8 @@ func (db *NodeRegFailedNodesDB) ListFailures(requestID string, limit int64, star
 // directly to a CSV buffer (audit-CSV export), etc.
 //
 // fn returning a non-nil error aborts the iteration and the error is returned
-// to the caller. The iterator drives pagination internally via the per-page
-// ListFailures helper; callers never see startKey/NextKey state.
+// to the caller. The iterator drives pagination internally; callers never see
+// startKey/NextKey state.
 //
 // Memory: bounded by what fn does with each row. Unlike a slice-returning API,
 // this never materializes all failures at once — so retry-csv collectors that
@@ -237,20 +209,25 @@ func (db *NodeRegFailedNodesDB) ListFailures(requestID string, limit int64, star
 // export still buffers its output and is bound by the Lambda response cap;
 // that's tracked as the S3-backed export future-work item.
 func (db *NodeRegFailedNodesDB) IterateFailures(requestID string, fn func(NodeRegFailedNodeEntry) error) error {
-	startKey := ""
-	for {
-		out, err := db.ListFailures(requestID, 0, startKey)
-		if err != nil {
-			return err
-		}
-		for _, e := range out.Entries {
-			if err := fn(e); err != nil {
-				return err
-			}
-		}
-		if out.NextKey == "" {
-			return nil
-		}
-		startKey = out.NextKey
+	if err := db.Ctx.IsAuthorized(utils.NodeAdminRegisterStatus, "*"); err != nil {
+		return err
 	}
+
+	// QueryEach returns fn's error as-is, so remember it to tell it apart from a read failure that needs wrapping.
+	var fnErr error
+	err := db.failures.QueryEach(db.Ctx.Context, failuresOf(requestID), func(entry NodeRegFailedNodeEntry) error {
+		fnErr = fn(entry)
+		return fnErr
+	})
+	if fnErr != nil {
+		return fnErr
+	}
+	if err != nil {
+		return rmerror.NewRMError(err, "failed to list failed nodes")
+	}
+	return nil
+}
+
+func failuresOf(requestID string) expression.KeyConditionBuilder {
+	return expression.Key(nodeRegFailedNodesHashKey).Equal(expression.Value(requestID))
 }
