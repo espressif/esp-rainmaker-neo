@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+#
+# SPDX-License-Identifier: Apache-2.0
+
+
+name: Publish esp-morpheus to PyPI
+
+# A release is a version bump: this runs only when the file carrying __version__ changes on main,
+# and skip-existing below turns a non-bump edit to that file into a no-op.
+on:
+  push:
+    branches: [main]
+    paths: [cli/src/esp_morpheus/__init__.py]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python -m pip install build twine "./cli[test]"
+          pytest cli/tests -q
+          python -m build --outdir dist ./cli
+          twine check --strict dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  # Kept separate from build so the job holding the OIDC token runs no project code
+  # (https://docs.pypi.org/trusted-publishers/security-model/).
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true

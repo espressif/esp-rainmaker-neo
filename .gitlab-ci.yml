@@ -337,32 +337,10 @@ cli_test:
     - pip3 install -e "./cli[test]"
   script:
     - pytest cli/tests -q
-
-# -------------------------
-# Publish esp-morpheus to the project PyPI registry on a tag. The version is
-# esp_morpheus.__version__ and nothing else carries one, so a release is that bump plus the tag.
-# CI_JOB_TOKEN authenticates to the registry, so no credentials are configured here.
-# -------------------------
-publish_cli:
-  stage: deploy
-  image: $CI_REGISTRY_IMAGE/rmng:go1.26.10_node24
-  # A cancelled twine upload half-publishes the release, and the retry fails with
-  # "File name has already been taken" — the version has to be bumped to recover.
-  interruptible: false
-  rules:
-    - if: '$CI_COMMIT_TAG'
-  script:
+    # Build + metadata check on every MR, so a packaging break surfaces here and not in the
+    # version-change-triggered PyPI publish (.github/workflows/publish-morpheus-to-pypi.yml, on the GitHub mirror).
     - python -m build --outdir dist ./cli
-    - >-
-      TWINE_USERNAME=gitlab-ci-token
-      TWINE_PASSWORD=$CI_JOB_TOKEN
-      twine upload
-      --repository-url ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi
-      dist/*
-  artifacts:
-    paths:
-      - dist/
-    expire_in: 1 month
+    - twine check --strict dist/*
 
 # -------------------------
 # Template for AWS deploy

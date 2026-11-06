@@ -31,6 +31,13 @@ built with the region from the outputs, so a differing ambient region is reporte
 pip install esp-morpheus
 ```
 
+`user <id> node camera-stream` needs the WebRTC stack (aiortc, OpenCV), which is heavy and ships as
+an extra:
+
+```bash
+pip install 'esp-morpheus[camera]'
+```
+
 From a checkout, install it in place:
 
 ```bash

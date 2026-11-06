@@ -1615,3 +1615,12 @@ def test_a_failed_cv2_import_leaves_sys_path_unchanged(tmp_path, monkeypatch):
     with pytest.raises(ImportError):
         kvs_viewer._import_cv2()
     assert sys.path == before
+
+
+def test_changelog_has_an_entry_for_the_current_version():
+    """A version bump without release notes fails here, not on PyPI."""
+    import pathlib
+
+    import esp_morpheus
+    changelog = (pathlib.Path(__file__).parent.parent / 'CHANGELOG.md').read_text()
+    assert f'## {esp_morpheus.__version__}' in changelog
