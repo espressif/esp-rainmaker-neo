@@ -251,7 +251,7 @@ unchanged between them.
 
 - **Direct** (default): the `node_to_cloud_rule` IoT rule invokes the handler
   Lambda directly — one invoke per message. IoT Core is granted
-  `lambda:InvokeFunction`.
+  `lambda:InvokeFunction`, scoped to that rule's ARN.
 - **Scalable**: an alternate deployment mode that consumes events via a queue.
   The rule writes to a Standard SQS queue (with a DLQ); the Lambda consumes
   batches through an event-source mapping. Each record is validated (non-empty

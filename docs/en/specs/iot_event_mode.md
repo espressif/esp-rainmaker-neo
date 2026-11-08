@@ -107,8 +107,9 @@ Concretely:
 - All queues (`node-conn-queue`, `node-to-cloud-queue`, and
   `timeseries-ingest-queue`) and
   their DLQs always exist.
-- Each lambda has `iot.amazonaws.com lambda:InvokeFunction` so the direct
-  action can fire.
+- Each lambda has `iot.amazonaws.com lambda:InvokeFunction`, scoped by
+  `SourceArn` to its own rule, so the direct action can fire and no other
+  rule or account can invoke it.
 - Each lambda has `sqs:ReceiveMessage` on its queue and a live event-source
   mapping (`batch_size=10`, `max_batching_window=1s`,
   `report_batch_item_failures=true`) so the SQS path can fire.

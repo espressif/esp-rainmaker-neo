@@ -514,7 +514,7 @@ start through the processor and the range query) is listed under Future work.
     batch size 10, a one-second batching window, and partial-batch failures;
   - `sqs:SendMessage` on the IoT rule role and a separate least-privilege
     CloudWatch Logs error-action role;
-  - Lambda-direct invoke permission retained for runtime direct mode.
+  - Lambda-direct invoke permission, scoped to the `node_ts_batch_rule` ARN, retained for runtime direct mode.
 
 ### 5.2 Stream-processor stack
 
