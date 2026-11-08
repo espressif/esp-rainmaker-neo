@@ -93,11 +93,16 @@ def show_build_env_details() {
     println('=== End Build Environment Details ===')
 }
 
-def setup_aws_credentials() {
-    sh '''
-    echo "${AWS_ENV_CREDS}" > ./aws_creds
-    . ./aws_creds
+// Jenkins runs sh steps with -x, which would trace the sourced export lines (AWS keys) into the build log.
+def with_aws_creds(String script) {
+    return 'set +x\n. ./aws_creds\nset -x\n' + script
+}
 
+def setup_aws_credentials() {
+    // writeFile, not echo: the expanded echo command would be traced into the build log.
+    writeFile file: 'aws_creds', text: params.AWS_ENV_CREDS ?: ''
+
+    sh '''
     mkdir -p /root/.aws
 
     echo "[default]" > /root/.aws/config
@@ -105,7 +110,7 @@ def setup_aws_credentials() {
     echo "output = json" >> /root/.aws/config
     '''
 
-    def accountId = sh(script: '. ./aws_creds && aws sts get-caller-identity --query Account --output text', returnStdout: true).trim()
+    def accountId = sh(script: with_aws_creds('aws sts get-caller-identity --query Account --output text'), returnStdout: true).trim()
 
     // Set environment variables for account ID
     env.ACCOUNT_ID = accountId
@@ -114,8 +119,7 @@ def setup_aws_credentials() {
 }
 
 def setup_git() {
-    sh '''
-    . ./aws_creds
+    sh with_aws_creds('''
     aws s3 ls
     cd /root
     # Explicit clone directory: the rest of the pipeline hardcodes /root/esp-rainmaker-neo, so it must not depend on the basename of the credential-supplied repo URL.
@@ -128,17 +132,16 @@ def setup_git() {
         "https://${GIT_APPFW_USR}:${GIT_APPFW_PSW}@${JENKINS_RMNG_CLOUD_COMPONENTS_REPO_URL}"
 
     git submodule update --recursive
-    '''
+    ''')
     println('Git set up done')
 }
 
 
 def generate_cdk_outputs() {
-    sh '''
-    . ./aws_creds
+    sh with_aws_creds('''
     cd /root/esp-rainmaker-neo
     AWS_REGION="${AWS_REGION}" python3 ./scripts/generate_stack_outputs.py
-    '''
+    ''')
     println('CDK outputs generated from CloudFormation')
 }
 
@@ -163,29 +166,26 @@ def build_and_deploy() {
         }
 
         if (env.DEPLOY_MODE == 'New deployment') {
-            sh '''
-            . ./aws_creds
+            sh with_aws_creds('''
             cd /root/esp-rainmaker-neo
             make setup
             make deploy
-            '''
+            ''')
         } else if (env.DEPLOY_MODE == 'Upgrade deployment') {
-            sh '''
-            . ./aws_creds
+            sh with_aws_creds('''
             cd /root/esp-rainmaker-neo
             make deploy
-            '''
+            ''')
         } else {
             println("Skipping deployment as per DEPLOY_MODE: ${env.DEPLOY_MODE}")
         }
 
         if (env.DEPLOY_MODE != "Don't deploy" && params.DEPLOY_CLAIM) {
             println('Deploying the claim group (DEPLOY_CLAIM checked)')
-            sh '''
-            . ./aws_creds
+            sh with_aws_creds('''
             cd /root/esp-rainmaker-neo
             make deploy-claim
-            '''
+            ''')
         } else {
             println('Skipping the claim group')
         }
@@ -199,18 +199,16 @@ def build_and_deploy() {
 
 def deploy_test_infra() {
     println('Deploying itest webhook mock and seeding test data')
-    sh '''
-    . ./aws_creds
+    sh with_aws_creds('''
     cd /root/esp-rainmaker-neo
     make itest-setup
-    '''
+    ''')
     println('Test infra setup done')
 }
 
 def deploy_test() {
     println('Run deployment test')
-    sh '''
-    . ./aws_creds
+    sh with_aws_creds('''
     cd /root/esp-rainmaker-neo
 
     if [ "$RUN_TEST" = "true" ]; then
@@ -219,7 +217,7 @@ def deploy_test() {
     else
         echo "Skipping deployment test"
     fi
-    '''
+    ''')
     println('Deployment test done')
 }
 
