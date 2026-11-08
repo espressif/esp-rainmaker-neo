@@ -82,6 +82,15 @@ func handleRegisterSingleNode(rctx *rmngctx.RmngContext, request events.APIGatew
 		return RegisterSingleNodeResponse{}, rmerror.NewRMError(err, "failed to extract request")
 	}
 
+	// Checked before the admin groups are created so a rejected cert leaves no thing groups behind.
+	nodeId, err := node.ValidateCAAndGetNodeId(req.Cert, req.CACert)
+	if err != nil {
+		return RegisterSingleNodeResponse{}, rmerror.NewRMError(err, "failed to register node")
+	}
+	if err := node.ValidateNodeID(nodeId); err != nil {
+		return RegisterSingleNodeResponse{}, rmerror.NewRMError(err, fmt.Sprintf("%s: %v", nodeId, err))
+	}
+
 	if len(req.AdminGroupNames) > 0 {
 		err := node.CreateAdminGroupIfNotExists(rctx, req.AdminGroupNames, req.AdminParentGroupName)
 		if err != nil {
@@ -89,7 +98,7 @@ func handleRegisterSingleNode(rctx *rmngctx.RmngContext, request events.APIGatew
 		}
 	}
 
-	nodeId, err := node.RegisterNodeInRmng(rctx, req.Cert, req.CACert, req.AdminGroupNames, req.Tags, rctx.GetID(), req.Capabilities)
+	nodeId, err = node.RegisterNodeInRmng(rctx, req.Cert, req.CACert, req.AdminGroupNames, req.Tags, rctx.GetID(), req.Capabilities)
 	if err != nil {
 		if errors.Is(err, node.ErrNodeAlreadyRegistered) {
 			return RegisterSingleNodeResponse{}, rmerror.NewRMError(err, fmt.Sprintf("node %s is already registered", nodeId))
@@ -227,6 +236,10 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 			if errors.Is(err, node.ErrNodeAlreadyRegistered) {
 				rlog.Warn(rctx).Err(err).Send()
 				return utils.APIGwRespJSON(http.StatusConflict, utils.NewAPIStatus(err.Error())), nil
+			}
+			if errors.Is(err, node.ErrInvalidNodeID) {
+				rlog.Warn(rctx).Err(err).Send()
+				return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(err.Error())), nil
 			}
 			var unavailable *nodelifecycle.CapabilityUnavailableError
 			if errors.As(err, &unavailable) {

@@ -158,8 +158,11 @@ func recordRowOutcome(reportedID string, err error) {
 	// Mapped here, not in ClassifyFailure, to keep the db package free of a
 	// node-package import.
 	code := node_reg_failed_nodes_db.ClassifyFailure(err)
-	if errors.Is(err, node.ErrNodeAlreadyRegistered) {
+	switch {
+	case errors.Is(err, node.ErrNodeAlreadyRegistered):
 		code = node_reg_failed_nodes_db.FailureCodeDuplicateNodeID
+	case errors.Is(err, node.ErrInvalidNodeID):
+		code = node_reg_failed_nodes_db.FailureCodeInvalidCert
 	}
 	failedNodes = append(failedNodes, node_reg_failed_nodes_db.NodeRegFailedNodeEntry{
 		NodeID: reportedID,

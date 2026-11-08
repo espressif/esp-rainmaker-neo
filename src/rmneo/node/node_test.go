@@ -687,6 +687,17 @@ var _ = Describe("Node", func() {
 					"a duplicate must not re-provision the node in IoT Core")
 			})
 
+			It("rejects a CN containing \"--\" or ending in \"-\" before touching IoT Core", func() {
+				for _, nodeID := range []string{"bridge--device", "bridge-"} {
+					cert := test_utils.SelfSignedCertPEM(nodeID)
+					nodeIDRegistered, err := node.RegisterNodeInRmng(testUserContext, cert, "", []string{}, []string{}, "test-user-id", nil)
+					Expect(err).To(MatchError(node.ErrInvalidNodeID), nodeID)
+					Expect(nodeIDRegistered).To(Equal(nodeID))
+					Expect(iotClient.VerifyThingExists(nodeID)).To(BeFalse(), nodeID)
+					Expect(iotClient.VerifyCertificateExists(cert)).To(BeFalse(), nodeID)
+				}
+			})
+
 			It("should handle invalid certificate format", func() {
 				invalidCert := "invalid-certificate-format"
 				nodeIDRegistered, err := node.RegisterNodeInRmng(testUserContext, invalidCert, "", []string{}, []string{}, "test-user-id", nil)

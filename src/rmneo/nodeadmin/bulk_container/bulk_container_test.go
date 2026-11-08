@@ -221,6 +221,31 @@ var _ = Describe("Bulk Container", func() {
 			}
 		})
 
+		It("reports a row whose CN contains the reserved \"--\" separator as INVALID_CERT", func() {
+			var buf bytes.Buffer
+			w := csv.NewWriter(&buf)
+			w.Write([]string{"node_id", "certs", "admin_groups"})
+			w.Write([]string{"bulknode1", testCert1, ""})
+			w.Write([]string{"bridge--device", test_utils.SelfSignedCertPEM("bridge--device"), ""})
+			w.Flush()
+			mockS3Client.Buckets[fileBucket]["system/test-key.csv"] = buf.String()
+
+			Expect(bulk_container.HandleContainer(testConfig)).To(Succeed())
+			entry, err := dbClient.GetNodeRegRequest(testTaskID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(*entry.SuccessCount).To(Equal(1))
+			Expect(*entry.FailedCount).To(Equal(1))
+
+			readerCtx := rmngctx.NewRmngContext(user.NewUser("reader"))
+			readerCtx.SetAllow(utils.NodeAdminRegisterStatus, "*")
+			out, err := node_reg_failed_nodes_db.NewNodeRegFailedNodesDB(readerCtx).ListFailures(testTaskID, 100, "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(out.Entries).To(HaveLen(1))
+			Expect(out.Entries[0].NodeID).To(Equal("bridge--device"))
+			Expect(out.Entries[0].Code).To(Equal(string(node_reg_failed_nodes_db.FailureCodeInvalidCert)))
+			Expect(awscommon.GetIoTClient().(*mock.IoTClientMock).VerifyThingExists("bridge--device")).To(BeFalse())
+		})
+
 		It("should fail when S3 file read fails", func() {
 			// Don't store the file in the mock bucket
 			err := bulk_container.HandleContainer(testConfig)
