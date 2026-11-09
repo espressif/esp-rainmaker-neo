@@ -7,6 +7,7 @@ package nodelifecycle
 import (
 	"fmt"
 
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 )
 
@@ -30,9 +31,9 @@ func (e *CapabilityUnavailableError) Unwrap() error {
 // core never interprets the value.
 type NodeRegisterHook func(ctx *rmngctx.RmngContext, nodeID string, capabilities []string, certArn string) (string, error)
 
-var nodeRegisterHook NodeRegisterHook
+var nodeRegisterHooks []NodeRegisterHook
 
-// RegisterNodeRegisterHook installs the node-register hook. Call it from a
+// RegisterNodeRegisterHook adds a node-register hook; hooks accumulate, and nil clears them (tests only). Call it from a
 // module's init: the write then happens during package initialisation, before
 // main starts and before anything can register a node, so no synchronisation is
 // needed.
@@ -46,21 +47,42 @@ var nodeRegisterHook NodeRegisterHook
 // *link* — importing the module compiles it into the binary whether or not its
 // stack group is deployed.
 func RegisterNodeRegisterHook(hook NodeRegisterHook) {
-	nodeRegisterHook = hook
+	if hook == nil {
+		nodeRegisterHooks = nil
+		return
+	}
+	nodeRegisterHooks = append(nodeRegisterHooks, hook)
 }
 
-// OnNodeRegister runs the registered hook and returns the node_type it assigned.
+// OnNodeRegister runs every hook in registration order and returns the first non-empty node_type.
 // Empty when no capabilities are requested (plain-node registration, including
-// the bulk path, does no hook work), when no hook is registered, or when the
-// hook assigns no type.
+// the bulk path, does no hook work), when no hook is registered, or when no
+// hook assigns a type.
 //
 // Called during registration after the base IoT policy is attached. A non-nil
 // error must fail registration: a hook that cannot complete — a required
 // capability policy that could not be attached, say — would leave the node
 // unusable.
 func OnNodeRegister(ctx *rmngctx.RmngContext, nodeID string, capabilities []string, certArn string) (string, error) {
-	if len(capabilities) == 0 || nodeRegisterHook == nil {
+	if len(capabilities) == 0 || len(nodeRegisterHooks) == 0 {
 		return "", nil
 	}
-	return nodeRegisterHook(ctx, nodeID, capabilities, certArn)
+	nodeType := ""
+	for _, hook := range nodeRegisterHooks {
+		assigned, err := hook(ctx, nodeID, capabilities, certArn)
+		if err != nil {
+			return "", err
+		}
+		if assigned == "" {
+			continue
+		}
+		if nodeType == "" {
+			nodeType = assigned
+			continue
+		}
+		// node_details holds one node_type; a second classification is a misconfiguration to log, not a reason to fail a registration whose policies all attached.
+		rlog.Warn(ctx).Str("nid", nodeID).Str("kept", nodeType).Str("ignored", assigned).
+			Msg("two node-register hooks classified the same node")
+	}
+	return nodeType, nil
 }

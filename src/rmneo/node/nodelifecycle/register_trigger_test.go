@@ -85,4 +85,63 @@ var _ = Describe("OnNodeRegister", func() {
 		_, err := nodelifecycle.OnNodeRegister(ctx, "node-1", []string{"bridge"}, "cert-arn")
 		Expect(err).To(MatchError("policy attach failed"))
 	})
+
+	It("runs every registered hook, because capabilities are independent", func() {
+		// The reason the registry is a slice: a node registered with two capabilities needs both
+		// modules to attach their own policy. A single slot would drop one silently.
+		var ran []string
+		nodelifecycle.RegisterNodeRegisterHook(func(*rmngctx.RmngContext, string, []string, string) (string, error) {
+			ran = append(ran, "first")
+			return "", nil
+		})
+		nodelifecycle.RegisterNodeRegisterHook(func(*rmngctx.RmngContext, string, []string, string) (string, error) {
+			ran = append(ran, "second")
+			return "", nil
+		})
+
+		_, err := nodelifecycle.OnNodeRegister(ctx, "node-1", []string{"bridge", "controller"}, "cert-arn")
+		Expect(err).To(BeNil())
+		Expect(ran).To(Equal([]string{"first", "second"}))
+	})
+
+	It("keeps the first node_type when two hooks both classify", func() {
+		nodelifecycle.RegisterNodeRegisterHook(func(*rmngctx.RmngContext, string, []string, string) (string, error) {
+			return "bridge", nil
+		})
+		nodelifecycle.RegisterNodeRegisterHook(func(*rmngctx.RmngContext, string, []string, string) (string, error) {
+			return "controller", nil
+		})
+
+		nodeType, err := nodelifecycle.OnNodeRegister(ctx, "node-1", []string{"bridge", "controller"}, "cert-arn")
+		Expect(err).To(BeNil())
+		Expect(nodeType).To(Equal("bridge"))
+	})
+
+	It("takes a later hook's node_type when the earlier one classifies nothing", func() {
+		nodelifecycle.RegisterNodeRegisterHook(func(*rmngctx.RmngContext, string, []string, string) (string, error) {
+			return "", nil
+		})
+		nodelifecycle.RegisterNodeRegisterHook(func(*rmngctx.RmngContext, string, []string, string) (string, error) {
+			return "controller", nil
+		})
+
+		nodeType, err := nodelifecycle.OnNodeRegister(ctx, "node-1", []string{"controller"}, "cert-arn")
+		Expect(err).To(BeNil())
+		Expect(nodeType).To(Equal("controller"))
+	})
+
+	It("stops at the first failing hook and does not run the rest", func() {
+		secondRan := false
+		nodelifecycle.RegisterNodeRegisterHook(func(*rmngctx.RmngContext, string, []string, string) (string, error) {
+			return "", errors.New("policy attach failed")
+		})
+		nodelifecycle.RegisterNodeRegisterHook(func(*rmngctx.RmngContext, string, []string, string) (string, error) {
+			secondRan = true
+			return "controller", nil
+		})
+
+		_, err := nodelifecycle.OnNodeRegister(ctx, "node-1", []string{"bridge", "controller"}, "cert-arn")
+		Expect(err).To(MatchError("policy attach failed"))
+		Expect(secondRan).To(BeFalse())
+	})
 })
