@@ -71,6 +71,7 @@ specs/device_management
 specs/timeseries
 specs/s3-device-file-storage
 specs/kvs-camera-streaming
+specs/controller
 ```
 
 ```{toctree}
@@ -233,6 +234,8 @@ behind that overview:
   storage in S3.
 - [Camera Streaming](specs/kvs-camera-streaming.md) — Kinesis Video Streams
   camera streaming.
+- [Controller](specs/controller.md) — a node that reads and controls the other
+  nodes in its group, with no user credentials on the device.
 
 ## User messaging
 

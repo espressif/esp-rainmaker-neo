@@ -31,6 +31,36 @@ describe('RainMaker rows (legacy parity)', () => {
       { key: 'random', op: 'hex2bin', val: 'abcd1234' },
     ])
   })
+
+  // api_base_url is appended only for controller nodes, so a plain node's partition stays
+  // byte-identical to what it was before the field existed.
+  it('omits api_base_url when no API base URL is provisioned', () => {
+    const rows = buildRmakerNvsRows({
+      nodeId: 'node123',
+      privateKey: 'KEY',
+      certificate: 'CERT',
+      mqttHost: 'host',
+      random: 'abcd1234',
+    })
+    expect(toWireRows(rows).map((r) => r.key)).not.toContain('api_base_url')
+  })
+
+  it('appends api_base_url last when provisioned', () => {
+    const rows = buildRmakerNvsRows({
+      nodeId: 'node123',
+      privateKey: 'KEY',
+      certificate: 'CERT',
+      mqttHost: 'host',
+      random: 'abcd1234',
+      apiBaseUrl: 'https://api.example.com',
+    })
+    const wire = toWireRows(rows)
+    expect(wire[wire.length - 1]).toEqual({
+      key: 'api_base_url',
+      op: 'utf8bin',
+      val: 'https://api.example.com',
+    })
+  })
 })
 
 describe('Matter rows through the shared packer', () => {
@@ -63,5 +93,20 @@ describe('Matter rows through the shared packer', () => {
     // merged RainMaker namespace present after chip-factory
     expect(byKey.get('rmaker_creds')?.op).toBe('ns')
     expect(byKey.get('client_id')).toEqual({ key: 'client_id', op: 'utf8bin', val: device.thingName })
+  })
+
+  it('omits api_base_url when no API base URL is provisioned', () => {
+    const device = generateMatterDevice({ mqttHost: 'host' })
+    expect(toWireRows(device.nvsRows).map((r) => r.key)).not.toContain('api_base_url')
+  })
+
+  it('appends api_base_url last in rmaker_creds when provisioned', () => {
+    const device = generateMatterDevice({ mqttHost: 'host', apiBaseUrl: 'https://api.example.com' })
+    const wire = toWireRows(device.nvsRows)
+    expect(wire[wire.length - 1]).toEqual({
+      key: 'api_base_url',
+      op: 'utf8bin',
+      val: 'https://api.example.com',
+    })
   })
 })

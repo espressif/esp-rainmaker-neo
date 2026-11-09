@@ -19,6 +19,7 @@ import { useGenerateOrchestration } from "./use-generate-orchestration";
 const DEFAULT_VALUES: GenerateNodesFormValues = {
   count: "5",
   matter: false,
+  includeApiUrl: false,
 };
 
 export function useGenerateNodesForm() {
@@ -48,6 +49,7 @@ export function useGenerateNodesForm() {
       void orchestration.startFlow({
         count: Number.parseInt(values.count, 10),
         matter: values.matter,
+        includeApiUrl: values.includeApiUrl,
       });
     },
     [orchestration],
@@ -70,6 +72,7 @@ export function useGenerateNodesForm() {
     void orchestration.startFlow({
       count: Number.parseInt(values.count, 10),
       matter: values.matter,
+      includeApiUrl: values.includeApiUrl,
     });
   }, [orchestration, form]);
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/principal"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
@@ -25,7 +26,7 @@ type NodeGroupsResponse struct {
 }
 
 func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	rctx := user.NewContextWithAPIRequest(ctx, request)
+	rctx := principal.FromAPIRequest(ctx, request)
 	if rctx == nil || rctx.GetAccessor() == nil || rctx.GetAccessor().GetID() == "" {
 		rlog.Error(ctx).Msg("Failed to resolve user context for admin node-groups endpoint")
 		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Unauthorized")), nil

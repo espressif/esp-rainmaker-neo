@@ -38,6 +38,7 @@ export async function generateMatterBulkMfgZip({
   mqttHost,
   mqttCredHost = '',
   filesBucket = '',
+  apiBaseUrl = '',
   onProgress,
 }: BulkMfgZipParams): Promise<BulkMfgZipResult> {
   const PREFIX = generatePrefix()
@@ -72,7 +73,7 @@ export async function generateMatterBulkMfgZip({
       message: `Generating device ${i}/${count}...`,
     })
 
-    const device = generateMatterDevice({ mqttHost, mqttCredHost, filesBucket })
+    const device = generateMatterDevice({ mqttHost, mqttCredHost, filesBucket, apiBaseUrl })
     paiCertPem = device.pai.certPem
     const dirName = `node-${padIndex(i)}-${device.thingName}`
 

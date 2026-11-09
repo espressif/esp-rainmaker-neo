@@ -47,6 +47,8 @@ export interface RuntimeConfig {
   ALEXA_SKILL_ARNS?: Record<string, string>
   /** Whether the optional `rmng-bridge-core` stack is deployed. */
   BRIDGE_ENABLED?: boolean
+  /** Whether the optional `rmng-controller-base` stack, which owns the controller IoT policy, is deployed. */
+  CONTROLLER_ENABLED?: boolean
   /** URL of the published client-outputs document this config was fetched from. */
   SERVER_URL?: string
 }
@@ -112,6 +114,11 @@ export function isSmartThingsEnabled(): boolean {
 /** Whether the optional bridge stack (`rmng-bridge-core`) is deployed, i.e. the bridge capability is available. */
 export function isBridgeEnabled(): boolean {
   return useConfigStore.getState().config?.BRIDGE_ENABLED === true
+}
+
+/** Whether the optional controller stack (`rmng-controller-base`) is deployed, i.e. the controller capability is available. */
+export function isControllerEnabled(): boolean {
+  return useConfigStore.getState().config?.CONTROLLER_ENABLED === true
 }
 
 /** Get ESP User API base URL. */

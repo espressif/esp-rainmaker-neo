@@ -5,10 +5,9 @@
 package main
 
 import (
-	// Registration fires the node-register lifecycle hook. Linking bridge here
-	// installs it in-process (see src/bridge/hooks), so a bridge node gets its
-	// IoT policy without the Invoke round-trip this path used to pay.
+	// Blank imports register each capability module's node-register hook from init().
 	_ "github.com/espressif/esp-rainmaker-neo/src/bridge/hooks"
+	_ "github.com/espressif/esp-rainmaker-neo/src/controller/hooks"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/nodeadmin/bulk_container"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 )

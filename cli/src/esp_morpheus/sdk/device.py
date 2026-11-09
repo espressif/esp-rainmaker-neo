@@ -17,6 +17,9 @@ import boto3
 import requests
 from awscrt import io, mqtt
 from awsiot import iotshadow, mqtt_connection_builder
+from botocore.auth import SigV4Auth
+from botocore.awsrequest import AWSRequest
+from botocore.credentials import Credentials
 from botocore.exceptions import ClientError
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -1411,40 +1414,73 @@ class Device:
             except iot_client.exceptions.ResourceAlreadyExistsException:
                 pass  # Already attached
 
-        # Write cert and key to temp files for the mTLS request
+        creds = self.get_iot_provider_credentials(credential_provider_endpoint, role_alias)
+        return boto3.client(
+            "s3",
+            region_name=region,
+            aws_access_key_id=creds["accessKeyId"],
+            aws_secret_access_key=creds["secretAccessKey"],
+            aws_session_token=creds["sessionToken"],
+        )
+
+    # ----- RainMaker Neo Controller helpers --------------------------------------------
+    # These reproduce from Python what controller firmware does: exchange the device cert for
+    # SigV4 credentials at the IoT Credential Provider, call the read-only data APIs with them,
+    # and drive nodes over MQTT.
+
+    def get_iot_provider_credentials(self, credential_provider_endpoint, role_alias):
+        """mTLS to the IoT Credential Provider with this device's certificate.
+
+        Returns the temporary credentials dict (accessKeyId, secretAccessKey, sessionToken).
+        """
         with tempfile.NamedTemporaryFile(mode='w', suffix='.pem', delete=False) as cert_file:
             cert_file.write(self.node_cert)
             cert_path = cert_file.name
-
         with tempfile.NamedTemporaryFile(mode='w', suffix='.pem', delete=False) as key_file:
             key_file.write(self.node_key)
             key_path = key_file.name
-
         try:
             url = f"https://{credential_provider_endpoint}/role-aliases/{role_alias}/credentials"
             headers = {"x-amzn-iot-thingname": self.node_thing_name}
-
-            response = requests.get(
-                url,
-                headers=headers,
-                cert=(cert_path, key_path),
-                verify=True,
-            )
+            response = requests.get(url, headers=headers, cert=(cert_path, key_path), verify=True)
             if response.status_code != 200:
-                device_log(f"[S3 Cred Provider] Status: {response.status_code}, Body: {response.text}")
+                device_log(f"[Cred Provider] Status: {response.status_code}, Body: {response.text}")
             response.raise_for_status()
-            creds = response.json()["credentials"]
-
-            return boto3.client(
-                "s3",
-                region_name=region,
-                aws_access_key_id=creds["accessKeyId"],
-                aws_secret_access_key=creds["secretAccessKey"],
-                aws_session_token=creds["sessionToken"],
-            )
+            return response.json()["credentials"]
         finally:
             os.unlink(cert_path)
             os.unlink(key_path)
+
+    def controller_connect_api(self, credential_provider_endpoint, role_alias, region, api_gateway_url):
+        """Exchange the device cert for SigV4 credentials at the credential provider and cache them for controller_api_request."""
+        creds = self.get_iot_provider_credentials(credential_provider_endpoint, role_alias)
+        self._controller_creds = Credentials(
+            creds["accessKeyId"], creds["secretAccessKey"], creds["sessionToken"])
+        self._controller_region = region
+        self._controller_api_gateway_url = api_gateway_url.rstrip("/")
+
+    def controller_api_request(self, method, path, body=None):
+        """SigV4-sign a data API call with the cached controller credentials, exactly as controller firmware does. Requires controller_connect_api first."""
+        url = f"{self._controller_api_gateway_url}/{path.lstrip('/')}"
+        data = json.dumps(body) if body is not None else ""
+        request = AWSRequest(method=method, url=url, data=data)
+        SigV4Auth(self._controller_creds, "execute-api", self._controller_region).add_auth(request)
+        return requests.request(method, url, headers=dict(request.prepare().headers), data=data)
+
+    def publish_node_params(self, target_thing_name, group_id, params):
+        """Publish a unicast param set at one node, as a controller does. Returns False when the
+        broker rejects the publish, which is how an out-of-scope topic shows up."""
+        topic = f"rainmaker/nodes/{target_thing_name}/user/params-{group_id}/params"
+        return self._publish_to_topic(topic, params, "controller unicast params")
+
+    def publish_group_control(self, group_id, params, subgroup_id=None):
+        """Publish a group or subgroup control message, as a controller does."""
+        if subgroup_id is None:
+            topic = f"rainmaker/nodes/groups/{group_id}/control"
+        else:
+            topic = f"rainmaker/nodes/groups/{group_id}/subgroups/{subgroup_id}/control"
+        return self._publish_to_topic(topic, params, "controller group control")
+
 
 def _generate_key_and_cert(thing_name, key_type='ec', node_key=None, node_validity_days=365):
     """Internal implementation that supports passing an existing node_key and custom validity."""

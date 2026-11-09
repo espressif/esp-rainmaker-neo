@@ -290,3 +290,36 @@ var _ = Describe("ListAttachedPolicies and AttachPolicies", func() {
 		Expect(iotutil.AttachPolicies(ctx, dstArn, []string{"rmng-base-node-policy"})).NotTo(Succeed())
 	})
 })
+
+var _ = Describe("GetThingForCertificate", func() {
+	const certID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	certArn := "arn:aws:iot:us-east-1:123456789012:cert/" + certID
+
+	var (
+		ctx     context.Context
+		iotMock *mock.IoTClientMock
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		iotMock = mock.NewIoTClientMock()
+		awscommon.SetIoTClient(iotMock)
+	})
+
+	It("returns the thing the certificate is attached to", func() {
+		iotMock.AttachTestCertificate("node-1", certID)
+		Expect(iotutil.GetThingForCertificate(ctx, certArn)).To(Equal("node-1"))
+	})
+
+	It("fails for a certificate attached to no thing", func() {
+		_, err := iotutil.GetThingForCertificate(ctx, certArn)
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("fails for a certificate attached to more than one thing", func() {
+		iotMock.AttachTestCertificate("node-1", certID)
+		iotMock.AttachTestCertificate("node-2", certID)
+		_, err := iotutil.GetThingForCertificate(ctx, certArn)
+		Expect(err).To(HaveOccurred())
+	})
+})

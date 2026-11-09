@@ -11,9 +11,9 @@ import (
 	"net/http"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/principal"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/automation"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 
@@ -32,8 +32,10 @@ func initialize() {
 
 // HandleRequest processes API Gateway requests for service operations
 func HandleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	// Create the user context directly using the request
-	userCtx := user.NewContextWithAPIRequest(ctx, request)
+	userCtx := principal.FromAPIRequest(ctx, request)
+	if userCtx == nil {
+		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Unauthorized")), nil
+	}
 
 	// Get path parameters and other request details
 	method := request.HTTPMethod

@@ -13,25 +13,16 @@ package hooks
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"os"
 
-	"github.com/espressif/esp-rainmaker-neo/src/awsutils/iotutil"
 	"github.com/espressif/esp-rainmaker-neo/src/bridge/db/bridge_children_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_details_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node/nodelifecycle"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/parallel"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/iot"
-	"github.com/aws/smithy-go"
 )
 
 func init() {
@@ -42,38 +33,21 @@ func init() {
 // per bridge disconnect.
 const presenceFanoutConcurrency uint = 10
 
+var bridgePolicy = nodelifecycle.CapabilityPolicy{
+	Capability:        "bridge",
+	PolicyEnvVar:      "BRIDGE_POLICY_NAME",
+	DefaultPolicyName: "rmng-bridge-policy",
+}
+
 // OnNodeRegister attaches the bridge IoT policy to a node registering with the
 // "bridge" capability and classifies it as node_type=bridge; any other node is a
 // no-op. Returning an error fails registration, which is what guarantees the
 // policy is on the cert before the bridge device connects.
 func OnNodeRegister(rmngCtx *rmngctx.RmngContext, nodeID string, capabilities []string, certArn string) (string, error) {
-	if !iotutil.HasCapability(capabilities, "bridge") {
-		return "", nil
+	attached, err := bridgePolicy.Attach(rmngCtx, capabilities, certArn)
+	if err != nil || !attached {
+		return "", err
 	}
-	ctx := rmngCtx.Context
-
-	policyName := os.Getenv("BRIDGE_POLICY_NAME")
-	if policyName == "" {
-		policyName = "rmng-bridge-policy"
-	}
-
-	// AttachPolicy is idempotent — re-attaching the same policy to the same
-	// target succeeds — so no already-attached special-casing is needed.
-	_, err := awscommon.GetIoTClient().AttachPolicy(ctx, &iot.AttachPolicyInput{
-		PolicyName: aws.String(policyName),
-		Target:     aws.String(certArn),
-	})
-	if err != nil {
-		// No bridge policy means the optional bridge stack is not deployed here.
-		var apiErr smithy.APIError
-		if errors.As(err, &apiErr) && apiErr.ErrorCode() == "ResourceNotFoundException" {
-			return "", &nodelifecycle.CapabilityUnavailableError{Capability: "bridge", Err: err}
-		}
-		return "", fmt.Errorf("failed to attach bridge policy %q to %q: %w", policyName, certArn, err)
-	}
-
-	rlog.Info(rmngCtx).Str("policy", policyName).Str("certArn", certArn).
-		Msg("register_hook: bridge policy attached")
 	// node_type=bridge on the node_details row is what the presence cascade
 	// filters on. Core stores the value without interpreting it.
 	return "bridge", nil

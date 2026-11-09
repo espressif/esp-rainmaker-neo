@@ -26,15 +26,19 @@ const (
 	nodeDetailsHashKey = "node_id"
 
 	// Columns
-	nodeDetailsColRegTs    = "reg_ts"
-	nodeDetailsColNodeType = "node_type"
+	nodeDetailsColRegTs           = "reg_ts"
+	nodeDetailsColNodeType        = "node_type"
+	nodeDetailsColRegCapabilities = "reg_capabilities"
 )
 
 type NodeDetailsEntry struct {
-	NodeID   string `dynamodbav:"node_id"`
-	AdminId  string `dynamodbav:"admin_id,omitempty"`
-	RegTs    int64  `dynamodbav:"reg_ts,omitempty"` //seconds
+	NodeID  string `dynamodbav:"node_id"`
+	AdminId string `dynamodbav:"admin_id,omitempty"`
+	RegTs   int64  `dynamodbav:"reg_ts,omitempty"` //seconds
+	// NodeType is whatever the node-register hook classified the node as. Core stores it and never reads it — see rmneo/node/nodelifecycle.
 	NodeType string `dynamodbav:"node_type,omitempty"`
+	// RegCapabilities are the capabilities the node was registered with, the ones core itself owns and attached policies for. Named apart from a group's capabilities and from NodeCapabilityInfo, which are different notions entirely.
+	RegCapabilities []string `dynamodbav:"reg_capabilities,omitempty"`
 }
 
 // nodeDetailsRow keeps a row as raw attributes because service columns are named at runtime.
@@ -94,6 +98,34 @@ func (db *NodeDetailsDB) GetNodeType(nodeID string) (string, error) {
 		return "", rmerror.NewRMError(err, "failed to get node type")
 	}
 	return entry.NodeType, nil
+}
+
+// GetRegCapabilities returns the capabilities the node was registered with. An absent row or unset field yields an empty slice, which reads as "no capabilities" — so a node registered before this field existed is simply uncapable, never accidentally privileged.
+func (db *NodeDetailsDB) GetRegCapabilities(nodeID string) ([]string, error) {
+	if err := db.Ctx.IsAuthorized(utils.NodeGet, nodeID); err != nil {
+		return nil, err
+	}
+	entry, _, err := db.entries.Get(db.Ctx.Context, db.entries.Key(nodeID), ddbu.ReadOpts{Project: []string{nodeDetailsColRegCapabilities}})
+	if err != nil {
+		return nil, rmerror.NewRMError(err, "failed to get node capabilities")
+	}
+	return entry.RegCapabilities, nil
+}
+
+// SetRegCapabilities overwrites the registered capabilities of an existing node, and clears them for an empty list. Used by a re-claim, so the row stays in step with the policies attached to the replacement certificate.
+func (db *NodeDetailsDB) SetRegCapabilities(nodeID string, capabilities []string) error {
+	if err := db.Ctx.IsAuthorized(utils.NodeAdminAdd, nodeID); err != nil {
+		return err
+	}
+	update := expression.Set(expression.Name(nodeDetailsColRegCapabilities), expression.Value(capabilities))
+	if len(capabilities) == 0 {
+		// An absent field already reads as "no capabilities", and removing it avoids storing an empty or NULL list.
+		update = expression.Remove(expression.Name(nodeDetailsColRegCapabilities))
+	}
+	if _, err := db.rows.Update(db.Ctx.Context, db.rows.Key(nodeID), update); err != nil {
+		return rmerror.NewRMError(err, "failed to update node capabilities")
+	}
+	return nil
 }
 
 func (db *NodeDetailsDB) AddNode(nodeobj NodeDetailsEntry) error {

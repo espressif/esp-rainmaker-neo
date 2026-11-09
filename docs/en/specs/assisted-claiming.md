@@ -187,7 +187,7 @@ is attached and every previously attached one detached and deactivated.
 Re-claim is the ordinary path after a factory erase, not a rare operator
 correction, so the replacement carries the claim's capabilities and fires the
 same registration hook a first registration fires. Without that, a device with
-`s3`/`kvs`/`bridge` would silently lose those policies and fail later at the
+`s3`/`kvs`/`controller`/`bridge` would silently lose those policies and fail later at the
 credential provider with AccessDenied rather than visibly at the point of change.
 
 The replacement gets only the policies the claim's capabilities imply; it does

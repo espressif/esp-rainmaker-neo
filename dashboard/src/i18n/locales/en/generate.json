@@ -14,7 +14,10 @@
     "matterHint": "Produce Matter attestation certificates and commissioning data alongside RainMaker credentials.",
     "matterAriaLabel": "Matter node data",
     "vendorId": "DAC Vendor ID (VID)",
-    "productId": "DAC Product ID (PID)"
+    "productId": "DAC Product ID (PID)",
+    "includeApiUrl": "Provision cloud API URL in NVS",
+    "includeApiUrlHint": "Writes the REST API base URL into device NVS so controller firmware can reach the session endpoint. Enable only for controller nodes.",
+    "includeApiUrlAriaLabel": "Controller API URL provisioning"
   },
   "info": {
     "title": "Each node will get:",

@@ -10,20 +10,19 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/aws/aws-lambda-go/events"
 	"github.com/espressif/esp-cloud-common/go/rbac/rbac"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_integration_db"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/user_details_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngrequest"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/validation"
-
-	"github.com/aws/aws-lambda-go/events"
 )
 
 // TODO: Clean up this file/package. Giving cyclic dependency.

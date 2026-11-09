@@ -62,6 +62,10 @@
       "bridge": {
         "label": "网桥",
         "description": "为网关节点启用网桥行为。"
+      },
+      "controller": {
+        "label": "控制器",
+        "description": "允许该节点读取并控制其所在群组内的其他节点。"
       }
     },
     "tags": {

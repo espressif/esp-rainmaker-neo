@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_db"
@@ -128,6 +129,13 @@ var _ = Describe("GroupService", func() {
 		userGroupDB := user_group_db.NewUserGroupDB(rmngctx.NewRmngContext(testUser))
 		err = userGroupDB.CreateUserGroup(testGroupID)
 		Expect(err).To(BeNil())
+	})
+
+	It("answers 401 to an unidentifiable device instead of panicking", func() {
+		request.RequestContext.Identity = test_utils.CredentialProviderIdentity(strings.Repeat("ef", 32))
+		response, err := HandleRequest(testCtx, request)
+		Expect(err).To(BeNil())
+		Expect(response.StatusCode).To(Equal(http.StatusUnauthorized))
 	})
 
 	It("should successfully get automation service data", func() {

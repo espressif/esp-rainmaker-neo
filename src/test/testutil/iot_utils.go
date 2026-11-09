@@ -5,9 +5,12 @@
 package test_utils
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 
+	"github.com/aws/aws-lambda-go/events"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 
@@ -97,4 +100,22 @@ func ConvertAllFloatToInt(data interface{}) interface{} {
 	default:
 		return v
 	}
+}
+
+// DeviceCertificateID is the ID of nodeID's test certificate: deterministic, so a node keeps one certificate however often a spec asks.
+func DeviceCertificateID(nodeID string) string {
+	sum := sha256.Sum256([]byte(nodeID))
+	return hex.EncodeToString(sum[:])
+}
+
+// DeviceIdentity attaches a certificate to nodeID's thing in the IoT mock and returns the identity API Gateway attaches when that device signs with credential-provider credentials.
+func DeviceIdentity(nodeID string) events.APIGatewayRequestIdentity {
+	certID := DeviceCertificateID(nodeID)
+	awscommon.GetIoTClient().(*mock.IoTClientMock).AttachTestCertificate(nodeID, certID)
+	return CredentialProviderIdentity(certID)
+}
+
+// CredentialProviderIdentity is the identity of a credential-provider session for certID, attached to a thing or not.
+func CredentialProviderIdentity(certID string) events.APIGatewayRequestIdentity {
+	return events.APIGatewayRequestIdentity{UserArn: "arn:aws:sts::123456789012:assumed-role/rmng-controller-role-us-east-1/" + certID}
 }

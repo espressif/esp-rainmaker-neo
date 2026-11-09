@@ -13,6 +13,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification/push"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/principal"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
@@ -546,7 +547,7 @@ func handleDeleteIntegration(ctx context.Context, request events.APIGatewayProxy
 }
 
 func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	rctx := user.NewContextWithAPIRequest(ctx, request)
+	rctx := principal.FromAPIRequest(ctx, request)
 	if rctx == nil {
 		rlog.Error(ctx).Msg("Failed to create request context")
 		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Unauthorized")), nil

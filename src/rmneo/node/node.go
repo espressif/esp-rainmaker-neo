@@ -1571,8 +1571,10 @@ func RegisterNodeInRmng(rmngCtx *rmngctx.RmngContext, cert string, caCert string
 	// AddNode's conditional put is what detects a re-registration. Other write
 	// failures stay non-fatal: the row is opportunistic and downstream lookups
 	// treat its absence like any other missing row.
+	// reg_capabilities is core's own record of what it attached policies for; node_type stays whatever the register hook returned, which core does not interpret.
 	if err := detailsDB.AddNode(node_details_db.NodeDetailsEntry{
-		NodeID: nodeId, RegTs: time.Now().Unix(), AdminId: adminId, NodeType: nodeType}); err != nil {
+		NodeID: nodeId, RegTs: time.Now().Unix(), AdminId: adminId, NodeType: nodeType,
+		RegCapabilities: capabilities}); err != nil {
 		if ddbu.IsConditionFailed(err) {
 			return nodeId, ErrNodeAlreadyRegistered
 		}
@@ -1696,6 +1698,10 @@ func ReplaceNodeInRmng(rmngCtx *rmngctx.RmngContext, nodeID string, newCertPEM s
 			if oldType != "" {
 				nodelifecycle.OnNodeTypeChanged(rmngCtx, nodeID)
 			}
+		}
+		// A claim's capabilities decide alone, as for node_type above, so the row follows the replacement cert's policies even when the claim restates none.
+		if err := detailsDB.SetRegCapabilities(nodeID, capabilities); err != nil {
+			return rmerror.NewRMError(err, "failed to update node capabilities")
 		}
 	}
 

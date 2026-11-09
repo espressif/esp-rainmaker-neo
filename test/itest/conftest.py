@@ -54,6 +54,8 @@ esp_user_base_outputs = rmng_outputs.get('espuser-base', {})
 esp_user_core_outputs = rmng_outputs.get('espuser-core', {})
 rmng_base_outputs = rmng_outputs.get('rmng-base', {})
 rmng_core_outputs = rmng_outputs.get('rmng-core', {})
+# The controller is its own optional stack group, so a deployment may legitimately not have it.
+rmng_controller_base_outputs = rmng_outputs.get('rmng-controller-base', {})
 
 # Read RMNG stack outputs
 IDENTITY_POOL_ID = rmng_base_outputs['IdentityPoolId']
@@ -68,6 +70,8 @@ CREDENTIAL_PROVIDER_ENDPOINT = rmng_base_outputs['CredentialProviderEndpoint']
 # credential-provider tests authenticate with the current alias, i.e. the last.
 DEVICE_FILE_ROLE_ALIAS = rmng_base_outputs['NodeFileRoleAliases'].split(',')[-1]
 DEVICE_VIDEO_ROLE_ALIAS = rmng_base_outputs['NodeVideoRoleAliases'].split(',')[-1]
+# Absent unless the optional controller stack group is deployed; the controller suite skips itself.
+CONTROLLER_ROLE_ALIAS = (rmng_controller_base_outputs.get('ControllerRoleAliases') or '').split(',')[-1]
 FILES_BUCKET_NAME = rmng_base_outputs['FilesBucketName']
 
 
@@ -2439,6 +2443,106 @@ def bridge_in_group(_bridge_stack_deployed):
         }
     finally:
         bridge_in_group_pool.release(resource)
+
+
+@pytest.fixture
+def _controller_stack_deployed():
+    """Skip when the optional `controller` stack group is not deployed: without its role alias output there is no controller to test."""
+    if not CONTROLLER_ROLE_ALIAS:
+        pytest.skip("controller stacks not deployed (optional stack group 'controller')")
+
+
+def associate_and_reconnect(device, user, group_id):
+    """Associate a device with a group, then reconnect it: IoT policy variables resolve at connection time, so the group_id thing attribute only takes effect on the next connection."""
+    assert connect_device_with_retry(device, max_retries=3, base_delay=2), \
+        f"Failed to connect device {device.node_thing_name}"
+    assert user.do_user_node_assoc(device, group_id) is None, \
+        f"Association failed for {device.node_thing_name}"
+    assert device.wait_for_group_info(), \
+        f"Device {device.node_thing_name} never received group info"
+    device.disconnect()
+    device.clear_queues()
+    assert connect_device_with_retry(device), \
+        f"Failed to reconnect device {device.node_thing_name} after association"
+
+
+def _controller_group_ready(devices, user, group_api):
+    group_id = group_api.create_group("Controller Test Group")
+    for device in devices:
+        associate_and_reconnect(device, user, group_id)
+    return group_id
+
+
+def _new_test_device(prefix, capabilities=None):
+    thing_name = f"{prefix}-{uuid.uuid4()}"
+    private_key_pem, cert_pem = generate_key_and_cert(thing_name, 'rsa')
+    device = Device(thing_name, private_key_pem, cert_pem, CA_CERT, IOT_ENDPOINT, REGION, DEBUG)
+    device.register_test_node(capabilities=capabilities, caller_identity=node_registrar_identity())
+    return device
+
+
+def _init_controller_group():
+    user = user_pool.acquire()
+    group_api = Group(user)
+    devices = [
+        _new_test_device("test-controller", capabilities=["controller"]),
+        _new_test_device("test-controller-node-a"),
+        _new_test_device("test-controller-node-b"),
+    ]
+    group_id = _controller_group_ready(devices, user, group_api)
+    return [devices, group_id, user, group_api]
+
+
+def _reset_controller_group(resource):
+    devices, group_id, user, group_api = resource
+    for device in devices:
+        try:
+            device.disconnect()
+        except Exception:
+            pass
+    group_api.delete_group(group_id, warn_error=True)
+    resource[1] = _controller_group_ready(devices, user, group_api)
+
+
+def _destroy_controller_group(resource):
+    devices, group_id, user, group_api = resource
+    for device in devices:
+        try:
+            device.disconnect()
+            device.destroy_test_node()
+        except Exception:
+            pass
+    try:
+        group_api.delete_group(group_id, warn_error=True)
+        _reset_user(user)
+    except Exception:
+        pass
+
+
+controller_group_pool = ResourcePool(_init_controller_group, _reset_controller_group, _destroy_controller_group)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _drain_controller_pool_at_session_end():
+    yield
+    try:
+        controller_group_pool.drain_free()
+    except Exception:
+        pass
+
+
+@pytest.fixture
+def controller_group(_controller_stack_deployed):
+    """A group holding a controller plus two plain nodes, all associated and connected: (controller, node_a, node_b, group_id, user).
+
+    Backed by controller_group_pool, like bridge_in_group: the three things are registered once per worker and only the group is recreated between tests.
+    """
+    resource = controller_group_pool.acquire()
+    (controller, node_a, node_b), group_id, user, _group_api = resource
+    try:
+        yield controller, node_a, node_b, group_id, user
+    finally:
+        controller_group_pool.release(resource)
 
 
 def publish_add_child(bridge, suffix, local_id):

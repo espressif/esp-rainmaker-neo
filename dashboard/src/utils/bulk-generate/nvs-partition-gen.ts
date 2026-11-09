@@ -24,6 +24,9 @@ export interface MfgNvsParams {
   mqttCredHost?: string
   filesBucket?: string
   random: string
+  // REST API base URL, written only for controller nodes: it is the one bootstrap value a
+  // controller cannot derive from the IoT endpoint it already has.
+  apiBaseUrl?: string
 }
 
 /**
@@ -41,6 +44,16 @@ export function buildRmakerNvsRows(params: MfgNvsParams): NvsRow[] {
     { key: 'client_cert', type: 'data', encoding: 'binary', value: params.certificate },
     { key: 'client_key', type: 'data', encoding: 'binary', value: params.privateKey },
     { key: 'random', type: 'data', encoding: 'hex2bin', value: params.random },
+    ...(params.apiBaseUrl
+      ? [
+          {
+            key: 'api_base_url',
+            type: 'data',
+            encoding: 'binary',
+            value: params.apiBaseUrl,
+          } as NvsRow,
+        ]
+      : []),
   ]
 }
 

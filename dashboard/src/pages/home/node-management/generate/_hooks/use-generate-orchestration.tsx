@@ -9,6 +9,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
 import { useSetState } from "react-use";
 import {
+  getApiGatewayUrl,
   getCredentialProviderEndpoint,
   getFilesBucket,
   getIotEndpoint,
@@ -27,6 +28,7 @@ export type GenerateStatus = "idle" | "generating" | "done" | "error";
 interface StartFlowParams {
   count: number;
   matter: boolean;
+  includeApiUrl: boolean;
 }
 
 interface OrchestrationState {
@@ -70,7 +72,7 @@ export function useGenerateOrchestration() {
   const [state, setState] = useSetState<OrchestrationState>(initialState);
 
   const startFlow = useCallback(
-    async ({ count, matter }: StartFlowParams) => {
+    async ({ count, matter, includeApiUrl }: StartFlowParams) => {
       setState({
         status: "generating",
         dialogOpen: true,
@@ -96,6 +98,7 @@ export function useGenerateOrchestration() {
             mqttHost,
             mqttCredHost: getCredentialProviderEndpoint(),
             filesBucket: getFilesBucket(),
+            apiBaseUrl: includeApiUrl ? getApiGatewayUrl() : "",
             onProgress: ignoreProgress,
           }),
           delay(MIN_GENERATING_MS),

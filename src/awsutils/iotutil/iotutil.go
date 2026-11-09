@@ -355,6 +355,21 @@ func GetThingCertificates(ctx context.Context, thingName string) ([]*types.Certi
 	return certificates, nil
 }
 
+// GetThingForCertificate returns the thing a certificate is attached to. A node's certificate is attached to its own thing only, so anything other than exactly one is an error.
+func GetThingForCertificate(ctx context.Context, certArn string) (string, error) {
+	out, err := awscommon.GetIoTClient().ListPrincipalThings(ctx, &iot.ListPrincipalThingsInput{
+		Principal:  aws.String(certArn),
+		MaxResults: aws.Int32(2),
+	})
+	if err != nil {
+		return "", rmerror.NewRMError(err, "failed to list things for certificate")
+	}
+	if len(out.Things) != 1 {
+		return "", rmerror.NewRMError(fmt.Errorf("certificate %s is attached to %d things, want 1", certArn, len(out.Things)), "")
+	}
+	return out.Things[0], nil
+}
+
 func ExtractCertIDFromARN(arn string) (string, error) {
 	parts := strings.Split(arn, "/")
 	if len(parts) < 2 {

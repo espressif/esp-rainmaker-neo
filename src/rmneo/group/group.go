@@ -312,15 +312,16 @@ func ListUserAccessibleGroups(ctx *rmngctx.RmngContext) (map[string]interface{},
 	return group_access, nil
 }
 
-// ListGroupsForUser retrieves all groups associated with the given user including their subgroups.
+// ListGroupsForUser retrieves all groups the caller can see, including their subgroups.
 // It returns a slice of Group objects and any error that occurred.
 func ListGroupsForUser(ctx *rmngctx.RmngContext, loadNodes bool) ([]Group, error) {
-	return _listGroupsForUser(ctx, "", loadNodes)
+	return listGroupsForPrincipal(ctx, "", loadNodes)
 }
 
-// ListGroupForUser retrieves the group with the given groupId along with its subgroups and nodes
+// ListGroupForUser retrieves the group with the given groupId along with its subgroups and nodes,
+// if the caller can see it. An empty result means no access or no such group.
 func ListGroupForUser(ctx *rmngctx.RmngContext, groupId string, loadNodes bool) ([]Group, error) {
-	return _listGroupsForUser(ctx, groupId, loadNodes)
+	return listGroupsForPrincipal(ctx, groupId, loadNodes)
 }
 
 // ListUsersForGroupOrSubGroup lists all users that have access to the specified group or sub-group.
@@ -330,33 +331,77 @@ func ListUsersForGroupOrSubGroup(ctx *rmngctx.RmngContext, groupId string, subGr
 	return userGroupDB.ListUsersForGroupOrSubGroup(groupId, subGroupIDs)
 }
 
-// _listGroupsForUser retrieves all groups associated with the given user including their subgroups.
-// It returns a slice of Group objects and any error that occurred.
-// If groupId is provided, it will only return that specific group, if accessible to the user
-func _listGroupsForUser(ctx *rmngctx.RmngContext, groupId string, loadNodes bool) ([]Group, error) {
-	userGroupDB := user_group_db.NewUserGroupDB(ctx)
+// groupGrant is one group a caller may see and the access they hold on it. Where grants come from
+// is the only thing that differs between principals; turning them into loaded groups is shared.
+type groupGrant struct {
+	GroupID    string
+	AccessType utils.GroupAccessType
+}
 
-	userGroupEntry, err := userGroupDB.ListGroupsForUser(groupId)
+// listGroupsForPrincipal returns the groups the caller can see, or only groupId when given; grantsForPrincipal is the one place users and devices differ.
+func listGroupsForPrincipal(ctx *rmngctx.RmngContext, groupId string, loadNodes bool) ([]Group, error) {
+	grants, err := grantsForPrincipal(ctx, groupId)
 	if err != nil {
 		return nil, err
 	}
+	return loadGrantedGroups(ctx, grants, loadNodes)
+}
 
+func grantsForPrincipal(ctx *rmngctx.RmngContext, groupId string) ([]groupGrant, error) {
+	if dev, ok := ctx.Accessor.(rmngctx.NodeScopedAccessor); ok {
+		return deviceGrants(ctx, dev, groupId), nil
+	}
+	return userGrants(ctx, groupId)
+}
+
+// userGrants reads a user's grants from their user-group-assoc rows.
+func userGrants(ctx *rmngctx.RmngContext, groupId string) ([]groupGrant, error) {
+	entries, err := user_group_db.NewUserGroupDB(ctx).ListGroupsForUser(groupId)
+	if err != nil {
+		return nil, err
+	}
+	grants := make([]groupGrant, 0, len(entries))
+	for _, entry := range entries {
+		grants = append(grants, groupGrant{GroupID: entry.GroupID, AccessType: entry.AccessType})
+	}
+	return grants, nil
+}
+
+// deviceGrants yields the single group a device principal is bound to, or nothing.
+//
+// The group was read from the node's live membership when the context was built (see
+// rmneo/principal), so a node moved between groups follows the move on its next request, matching
+// how the MQTT plane revokes via the group_id attribute. The grant is re-checked here rather than
+// trusted, so the DB-layer gate stays the authority. Out of scope yields no grant rather than an
+// error, so callers keep their existing "did I find the group" check.
+func deviceGrants(ctx *rmngctx.RmngContext, dev rmngctx.NodeScopedAccessor, groupId string) []groupGrant {
+	scoped := dev.ScopedGroupID()
+	if scoped == "" || (groupId != "" && groupId != scoped) {
+		return nil
+	}
+	if err := ctx.IsAuthorized(utils.GroupListSubEntities, scoped); err != nil {
+		return nil
+	}
+	return []groupGrant{{GroupID: scoped, AccessType: utils.GroupDeviceAccess}}
+}
+
+// loadGrantedGroups turns grants into groups with their subgroups and, if asked, their nodes.
+// Loading nodes is also what grants the caller per-node access on the group's members.
+func loadGrantedGroups(ctx *rmngctx.RmngContext, grants []groupGrant, loadNodes bool) ([]Group, error) {
 	var groups []Group
-	for _, entry := range userGroupEntry {
-		group, err := LoadGroup(ctx, entry.GroupID)
+	for _, grant := range grants {
+		group, err := LoadGroup(ctx, grant.GroupID)
 		if err != nil {
 			return nil, err
 		}
-		group.AccessType = entry.AccessType
+		group.AccessType = grant.AccessType
 		if loadNodes {
-			err := group.LoadNodes(ctx)
-			if err != nil {
+			if err := group.LoadNodes(ctx); err != nil {
 				return nil, err
 			}
 		}
 		groups = append(groups, *group)
 	}
-
 	return groups, nil
 }
 

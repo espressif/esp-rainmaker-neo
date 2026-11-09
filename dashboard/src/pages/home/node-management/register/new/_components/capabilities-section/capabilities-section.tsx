@@ -15,8 +15,8 @@ import {
   SelectableCardList,
   type SelectableCardListItem,
 } from "@espressif/dashboard-ui-components/components";
-import { HardDrive, Network, Video } from "lucide-react";
-import { isBridgeEnabled } from "@/lib/config";
+import { HardDrive, Network, Video, Router } from "lucide-react";
+import { isBridgeEnabled, isControllerEnabled } from "@/lib/config";
 import type { RegisterNodesFormValues } from "../../_schema/register-nodes-form.schema";
 
 export function CapabilitiesSection() {
@@ -49,6 +49,22 @@ export function CapabilitiesSection() {
           "Enable Kinesis Video Streams for camera nodes.",
         ),
       },
+      ...(isControllerEnabled()
+        ? [
+            {
+              id: "controller",
+              icon: <Router className="h-5 w-5" />,
+              primaryText: t(
+                "new.capabilities.controller.label",
+                "Controller",
+              ),
+              secondaryText: t(
+                "new.capabilities.controller.description",
+                "Let the node read and control the other nodes in its group.",
+              ),
+            },
+          ]
+        : []),
       ...(isBridgeEnabled()
         ? [
             {

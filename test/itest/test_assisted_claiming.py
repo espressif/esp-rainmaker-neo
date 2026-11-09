@@ -373,6 +373,37 @@ def test_reclaim_without_bridge_clears_the_bridge_node_type_and_deletes_its_chil
             group_api.delete_group(group_id, warn_error=True)
 
 
+CONTROLLER_POLICY_NAME = "rmng-controller-policy"
+
+
+def test_reclaim_with_controller_upgrades_a_plain_node(_controller_stack_deployed, test_user1, claimed_nodes):
+    mac = _random_mac()
+    node_id, _cert, _ca, _key = _claim(test_user1, mac)
+    claimed_nodes.append(node_id)
+    assert CONTROLLER_POLICY_NAME not in _attached_cert_policies(node_id)
+
+    csr_pem, _key_pem = _make_csr()
+    resp = _verify(test_user1, mac, csr_pem, capabilities=["controller"])
+    assert resp.status_code == 201, resp.text
+
+    assert CONTROLLER_POLICY_NAME in _attached_cert_policies(node_id)
+
+
+def test_reclaim_without_controller_removes_its_policy(_controller_stack_deployed, test_user1, claimed_nodes):
+    """A claim's capabilities decide alone, so a controller re-claimed as a plain node gets a certificate without the controller policy and can no longer assume the controller role."""
+    mac = _random_mac()
+    c = test_user1.claim(mac, capabilities=["controller"])
+    node_id = c["node_id"]
+    claimed_nodes.append(node_id)
+    assert CONTROLLER_POLICY_NAME in _attached_cert_policies(node_id)
+
+    csr_pem, _key_pem = _make_csr()
+    resp = _verify(test_user1, mac, csr_pem)
+    assert resp.status_code == 201, resp.text
+
+    assert CONTROLLER_POLICY_NAME not in _attached_cert_policies(node_id)
+
+
 def test_claim_with_bridge_is_granted_only_where_the_bridge_stack_is_deployed(test_user1, claimed_nodes):
     mac = _random_mac()
     init = _initiate(test_user1, mac)

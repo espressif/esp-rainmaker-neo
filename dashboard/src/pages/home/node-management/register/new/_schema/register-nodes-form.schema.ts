@@ -7,7 +7,7 @@
 import type { TFunction } from "i18next";
 import { z } from "zod";
 
-export const REGISTER_NODES_CAPABILITY_IDS = ["s3", "kvs", "bridge"] as const;
+export const REGISTER_NODES_CAPABILITY_IDS = ["s3", "kvs", "bridge", "controller"] as const;
 
 export type RegisterNodesCapability =
   (typeof REGISTER_NODES_CAPABILITY_IDS)[number];

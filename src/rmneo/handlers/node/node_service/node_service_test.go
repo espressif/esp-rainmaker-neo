@@ -146,6 +146,49 @@ var _ = Describe("NodeService", func() {
 		Expect(responseData["message"]).To(Equal("You don't have access to this group"))
 	})
 
+	Context("as a controller signing with its credential-provider credentials", func() {
+		const controllerID = "node-service-controller"
+		var deviceRequest events.APIGatewayProxyRequest
+
+		BeforeEach(func() {
+			test_utils.ManuallyAddNodeToGroup(testCtx, groupID, controllerID)
+			Expect(node_details_db.NewNodeDetailsDB(rmngctx.NewRmngContext(testUser)).UpdateServiceDataWithVersion(testNodeID, "schedule", map[string]interface{}{"schedule": map[string]interface{}{}})).To(Succeed())
+
+			deviceRequest = request
+			deviceRequest.RequestContext.Identity = test_utils.DeviceIdentity(controllerID)
+		})
+
+		It("reads a node of the group it belongs to", func() {
+			response, err := HandleRequest(testCtx, deviceRequest)
+			Expect(err).To(BeNil())
+			Expect(response.StatusCode).To(Equal(http.StatusOK))
+		})
+
+		It("is refused once moved to another group, with the same credentials", func() {
+			mover := rmngctx.NewRmngContext(user.NewUser("mover"))
+			mover.SetAllow(utils.NodeEditGroups, controllerID)
+			mover.SetAllow(utils.GroupEditNodes, "another-group-id")
+			mover.SetAllow(utils.NodeGet, controllerID)
+			_, err := group.AddNode(mover, "another-group-id", controllerID, nil)
+			Expect(err).To(BeNil())
+
+			response, err := HandleRequest(testCtx, deviceRequest)
+			Expect(err).To(BeNil())
+			Expect(response.StatusCode).To(Equal(http.StatusForbidden))
+		})
+
+		It("keeps access when the group's users change, as on an ownership transfer", func() {
+			owner := rmngctx.NewRmngContext(testUser)
+			owner.SetAllow(utils.GroupDelete, groupID)
+			Expect(user_group_db.NewUserGroupDB(owner).DeleteUserGroupByGroupID(groupID)).To(Succeed())
+			Expect(user_group_db.NewUserGroupDB(rmngctx.NewRmngContext(user.NewUser("new-owner"))).CreateUserGroup(groupID)).To(Succeed())
+
+			response, err := HandleRequest(testCtx, deviceRequest)
+			Expect(err).To(BeNil())
+			Expect(response.StatusCode).To(Equal(http.StatusOK))
+		})
+	})
+
 	It("should successfully update schedule data", func() {
 		// API contract uses snake_case "schedules". The schedule service translates this to the firmware key "Schedules" before storage.
 		scheduleData := map[string]interface{}{

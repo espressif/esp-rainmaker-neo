@@ -15,6 +15,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_group_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/principal"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
@@ -161,7 +162,7 @@ type MatterNOCResponse struct {
 // handleMatterNOC generates a Node Operational Certificate for the current user in a Matter-enabled group.
 // The user must provide a CSR (Certificate Signing Request) in the request body.
 func handleMatterNOC(context context.Context, request events.APIGatewayProxyRequest, groupID string) (events.APIGatewayProxyResponse, error) {
-	ctx := user.NewContextWithAPIRequest(context, request)
+	ctx := principal.FromAPIRequest(context, request)
 
 	// Parse request body
 	var req MatterNOCRequest
@@ -215,7 +216,7 @@ type AddGroupCapabilitiesResponse struct {
 // rejected when the group already has a requested capability or when the caller is not
 // the group owner.
 func handleAddGroupCapabilities(context context.Context, request events.APIGatewayProxyRequest, groupID string) (events.APIGatewayProxyResponse, error) {
-	ctx := user.NewContextWithAPIRequest(context, request)
+	ctx := principal.FromAPIRequest(context, request)
 
 	if groupID == "" {
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Missing group ID")), nil
@@ -259,7 +260,7 @@ func handleAddGroupCapabilities(context context.Context, request events.APIGatew
 }
 
 func handleAcceptSharingRequest(context context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	ctx := user.NewContextWithAPIRequest(context, request)
+	ctx := principal.FromAPIRequest(context, request)
 	requestID := request.PathParameters["requestId"]
 	if requestID == "" {
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Missing requestId")), nil
@@ -282,7 +283,7 @@ func handleAcceptSharingRequest(context context.Context, request events.APIGatew
 }
 
 func handleRejectSharingRequest(context context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	ctx := user.NewContextWithAPIRequest(context, request)
+	ctx := principal.FromAPIRequest(context, request)
 	requestID := request.PathParameters["requestId"]
 	if requestID == "" {
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Missing requestId")), nil
@@ -302,7 +303,7 @@ func handleRejectSharingRequest(context context.Context, request events.APIGatew
 }
 
 func handleListSharingRequests(context context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	ctx := user.NewContextWithAPIRequest(context, request)
+	ctx := principal.FromAPIRequest(context, request)
 
 	sharingRequests, err := group.GetMySharingRequests(ctx)
 	if err != nil {
@@ -331,7 +332,10 @@ func handleListSharingRequests(context context.Context, request events.APIGatewa
 
 // handleListGroupSharingRequests serves GET on both the group and the subgroup sharing-requests routes; the subgroup route narrows the list to that subgroup.
 func handleListGroupSharingRequests(context context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	ctx := user.NewContextWithAPIRequest(context, request)
+	ctx := principal.FromAPIRequest(context, request)
+	if ctx == nil {
+		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Unauthorized")), nil
+	}
 
 	groupID := request.PathParameters["groupId"]
 	if groupID == "" {
@@ -378,7 +382,7 @@ func handleListGroupSharingRequests(context context.Context, request events.APIG
 }
 
 func handleCreateGroup(context context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	ctx := user.NewContextWithAPIRequest(context, request)
+	ctx := principal.FromAPIRequest(context, request)
 
 	// Creating a main group
 	var req CreateGroupRequest
@@ -420,7 +424,7 @@ func handleCreateGroup(context context.Context, request events.APIGatewayProxyRe
 }
 
 func handleCreateSubgroup(context context.Context, request events.APIGatewayProxyRequest, groupID string) (events.APIGatewayProxyResponse, error) {
-	ctx := user.NewContextWithAPIRequest(context, request)
+	ctx := principal.FromAPIRequest(context, request)
 
 	var req CreateSubgroupRequest
 	err := rmngrequest.ExtractRequestStruct(request, &req)
@@ -443,7 +447,7 @@ func handleCreateSubgroup(context context.Context, request events.APIGatewayProx
 }
 
 func handleListGroups(context context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	ctx := user.NewContextWithAPIRequest(context, request)
+	ctx := principal.FromAPIRequest(context, request)
 
 	groups, err := group.ListGroupsForUser(ctx, true)
 	if err != nil {
@@ -466,6 +470,41 @@ func handleListGroups(context context.Context, request events.APIGatewayProxyReq
 	}
 
 	return utils.APIGwRespJSON(http.StatusOK, response), nil
+}
+
+// handleGetGroup returns one group by id. Unlike GET /v1/groups, which enumerates the caller's
+// groups, this one is keyed on the path, so a caller that knows a group id can ask for exactly it.
+// ListGroupForUser resolves access for whoever is asking — a user from their membership row, a
+// device such as a RainMaker Neo Controller from its node's group — and loading the nodes is what grants
+// the per-node access that later reads check. A caller with no access and a group that does not
+// exist both answer 404, so the response never reveals whether a group exists.
+func handleGetGroup(context context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+	ctx := principal.FromAPIRequest(context, request)
+	if ctx == nil {
+		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Unauthorized")), nil
+	}
+
+	groupID := request.PathParameters["groupId"]
+	if groupID == "" {
+		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Missing group ID")), nil
+	}
+
+	groups, err := group.ListGroupForUser(ctx, groupID, true)
+	if err != nil {
+		rlog.Error(ctx).Err(err).Send()
+		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Failed to load group")), nil
+	}
+	if len(groups) == 0 {
+		return utils.APIGwRespJSON(http.StatusNotFound, utils.NewAPIStatus("Group not found")), nil
+	}
+
+	groupInfo, err := convertToGroupInfo(ctx, &groups[0])
+	if err != nil {
+		rlog.Error(ctx).Err(err).Send()
+		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Failed to build group")), nil
+	}
+
+	return utils.APIGwRespJSON(http.StatusOK, groupInfo), nil
 }
 
 func convertToGroupInfo(ctx *rmngctx.RmngContext, grp *group.Group) (GroupInfo, error) {
@@ -568,7 +607,7 @@ func handlePostGroup(ctx context.Context, request events.APIGatewayProxyRequest)
 }
 
 func handlePatchGroup(context context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	ctx := user.NewContextWithAPIRequest(context, request)
+	ctx := principal.FromAPIRequest(context, request)
 
 	groupID := request.PathParameters["groupId"]
 	if groupID == "" {
@@ -592,7 +631,7 @@ func handlePatchGroup(context context.Context, request events.APIGatewayProxyReq
 }
 
 func handlePatchSubGroup(context context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	ctx := user.NewContextWithAPIRequest(context, request)
+	ctx := principal.FromAPIRequest(context, request)
 
 	groupID := request.PathParameters["groupId"]
 	subgroupID := request.PathParameters["subGroupId"]
@@ -617,7 +656,7 @@ func handlePatchSubGroup(context context.Context, request events.APIGatewayProxy
 }
 
 func handleDeleteGroup(context context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	ctx := user.NewContextWithAPIRequest(context, request)
+	ctx := principal.FromAPIRequest(context, request)
 
 	groupID := request.PathParameters["groupId"]
 
@@ -664,7 +703,10 @@ func toGroupUserInfoResponses(users []group.GroupUserInfo) []GroupUserInfoRespon
 }
 
 func handleListGroupUsers(context context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	ctx := user.NewContextWithAPIRequest(context, request)
+	ctx := principal.FromAPIRequest(context, request)
+	if ctx == nil {
+		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Unauthorized")), nil
+	}
 
 	groupID := request.PathParameters["groupId"]
 	if groupID == "" {
@@ -681,7 +723,7 @@ func handleListGroupUsers(context context.Context, request events.APIGatewayProx
 }
 
 func handleDeleteSubgroup(context context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	ctx := user.NewContextWithAPIRequest(context, request)
+	ctx := principal.FromAPIRequest(context, request)
 
 	groupID := request.PathParameters["groupId"]
 	subGroupID := request.PathParameters["subGroupId"]
@@ -721,7 +763,7 @@ func resolveUserID(ctx *rmngctx.RmngContext, userID string) string {
 }
 
 func handleDeleteGroupUser(context context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	ctx := user.NewContextWithAPIRequest(context, request)
+	ctx := principal.FromAPIRequest(context, request)
 
 	groupID := request.PathParameters["groupId"]
 	userID := request.PathParameters["userId"]
@@ -753,7 +795,7 @@ func handleDeleteGroupUser(context context.Context, request events.APIGatewayPro
 }
 
 func handleSharingRequest(context context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	ctx := user.NewContextWithAPIRequest(context, request)
+	ctx := principal.FromAPIRequest(context, request)
 
 	var req CreateSharingRequestRequest
 	err := rmngrequest.ExtractRequestStruct(request, &req)
@@ -819,7 +861,7 @@ func handleSharingRequest(context context.Context, request events.APIGatewayProx
 }
 
 func handleDeleteSubgroupUser(context context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	ctx := user.NewContextWithAPIRequest(context, request)
+	ctx := principal.FromAPIRequest(context, request)
 
 	groupID := request.PathParameters["groupId"]
 	subgroupID := request.PathParameters["subGroupId"]
@@ -849,7 +891,7 @@ func handleDeleteSubgroupUser(context context.Context, request events.APIGateway
 }
 
 func handleUpdateSubgroupNodeOperation(context context.Context, request events.APIGatewayProxyRequest, groupID string, subGroupID string, nodeID string, action string) (events.APIGatewayProxyResponse, error) {
-	ctx := user.NewContextWithAPIRequest(context, request)
+	ctx := principal.FromAPIRequest(context, request)
 	var err_str string
 
 	var operationType group_node_db.SubGroupOperationType
@@ -882,7 +924,7 @@ func handleRemoveNodeFromGroup(context context.Context, request events.APIGatewa
 	if group.IsChildNode(nodeID) {
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("child nodes are managed by their parent node and cannot be removed from a group directly")), nil
 	}
-	ctx := user.NewContextWithAPIRequest(context, request)
+	ctx := principal.FromAPIRequest(context, request)
 
 	err := node.ShadowNodeRemoveFromGroup(ctx, nodeID, groupID)
 	if err != nil {
@@ -897,7 +939,10 @@ func handleRemoveNodeFromGroup(context context.Context, request events.APIGatewa
 }
 
 func handleListSubgroupUsers(context context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	ctx := user.NewContextWithAPIRequest(context, request)
+	ctx := principal.FromAPIRequest(context, request)
+	if ctx == nil {
+		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Unauthorized")), nil
+	}
 
 	groupID := request.PathParameters["groupId"]
 	subGroupID := request.PathParameters["subGroupId"]
@@ -1006,6 +1051,8 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 
 	case "/v1/groups/{groupId}":
 		switch request.HTTPMethod {
+		case "GET":
+			return handleGetGroup(ctx, request)
 		case "PATCH":
 			return handlePatchGroup(ctx, request)
 		case "DELETE":

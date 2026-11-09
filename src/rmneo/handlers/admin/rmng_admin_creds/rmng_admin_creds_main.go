@@ -12,6 +12,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/principal"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
@@ -66,7 +67,7 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Invalid request body")), nil
 	}
 
-	rctx := user.NewContextWithAPIRequest(ctx, request)
+	rctx := principal.FromAPIRequest(ctx, request)
 	if rctx == nil {
 		rlog.Error(ctx).Msg("Failed to resolve user context for admin creds")
 		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Unauthorized")), nil

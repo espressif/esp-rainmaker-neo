@@ -5,9 +5,7 @@
 package main
 
 import (
-	// Registration fires the node-register lifecycle hook. Linking bridge here
-	// installs it in-process (see src/bridge/hooks), so a bridge node gets its
-	// IoT policy without the Invoke round-trip this path used to pay.
+	// Blank imports register each capability module's node-register hook from init().
 	"context"
 	"errors"
 	"fmt"
@@ -18,11 +16,14 @@ import (
 	_ "github.com/espressif/esp-rainmaker-neo/src/bridge/hooks"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
+	_ "github.com/espressif/esp-rainmaker-neo/src/controller/hooks"
+
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_reg_req_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node/nodelifecycle"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/nodeadmin/bulk_job"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/nodeadmin/jobs_api"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/principal"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
@@ -151,7 +152,7 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 	var err error
 	var response interface{}
 
-	rctx := user.NewContextWithAPIRequest(ctx, request)
+	rctx := principal.FromAPIRequest(ctx, request)
 	if rctx == nil || rctx.GetAccessor() == nil || rctx.GetAccessor().GetID() == "" {
 		rlog.Error(ctx).Msg("Failed to resolve user context for admin nodes endpoint")
 		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Unauthorized")), nil
