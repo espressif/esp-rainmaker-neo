@@ -60,7 +60,8 @@ esp-morpheus user someone@example.com
 ```
 
 **A URL.** Point `--client-outputs` at a published outputs file, such as the per-region
-client-outputs in S3. It is fetched at startup, so nothing is downloaded by hand.
+client-outputs in S3. It is fetched at startup, so nothing is downloaded by hand. The bucket is
+always in `us-east-1`; the path names the deployment's region.
 
 ```bash
 esp-morpheus --client-outputs https://rmng-public-assets-123456789012.s3.us-east-1.amazonaws.com/ap-south-1/rmng-client-outputs.json \
@@ -106,9 +107,24 @@ esp-morpheus admin test-data setup
 ```
 
 On a fresh install this also writes `test_config.json` from the packaged defaults, generating
-passwords and device certificates. It needs admin AWS credentials, since it provisions users in
-Cognito. The seeded admin is marked `"admin": true`, which is how `esp-morpheus admin` finds it without
-naming one.
+passwords and device certificates. It holds secrets: never commit or share it. The seeded admin is
+marked `"admin": true`, which is how `esp-morpheus admin` finds it without naming one. `node_multi`
+and `node_switch` are associated with `test-user1@example.com`.
+
+It needs AWS credentials for the deployment's account (Cognito for the admin, IoT for node
+certificates), from any source boto3 reads. The region comes from the outputs.
+
+```bash
+export AWS_PROFILE=<profile>        # or AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY
+```
+
+"AWS account mismatch" means the credentials are for another account than the outputs name. A
+re-run reuses existing users, groups and certificates; "Node ... was not registered" means the node
+already exists.
+
+The file is `cli/test_config.json` inside a checkout and `~/.config/morpheus/test_config.json`
+elsewhere. Run from the other place, `setup` writes a new one with fresh passwords and certificates;
+`MORPHEUS_CONFIG` pins one path.
 
 ```bash
 esp-morpheus user someone@example.com
@@ -117,7 +133,7 @@ esp-morpheus device node_rsa
 
 `admin test-data destroy` removes them again: the seeded devices, their groups, and any leftover
 `test-*` certificates. It deletes only test-created things and leaves the rest of the deployment
-alone.
+alone; `--dry-run` lists what it would delete.
 
 ### Or create the CI bot user
 
@@ -281,9 +297,21 @@ entry also needs `node_cfg` and `node_tags`; only `node_multi` and `node_switch`
 default config.
 
 ```
-update-params {"Light":{"brightness":80}}
+update-params {"Colour Light":{"Power":true}}
 update-tags {"location":"hall"}
 ```
+
+It connects with the node's certificate and needs no AWS credentials. To control it from the phone
+app, sign in as the node's `associate_to` user (`test-user1@example.com` for `node_multi`); the
+password is in `test_config.json`. The simulator has no BLE, so there is no QR to scan: `test-data
+setup` already associated it. To use your own account, share the group and accept in the app:
+
+```bash
+esp-morpheus user test-user1@example.com group list
+esp-morpheus user test-user1@example.com group share <group_id> primary --username <your-email>
+```
+
+App changes print in the device-sim terminal; `update-params` sends changes back.
 
 ### `app-sim <identity>` — the app simulator
 
