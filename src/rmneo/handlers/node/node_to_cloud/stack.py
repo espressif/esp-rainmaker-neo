@@ -130,5 +130,6 @@ class PublishInputEventHandlerAPI(Construct):
         self.publish_input_function.add_permission(
             "PublishInputInvokePermission",
             principal=iam.ServicePrincipal("iot.amazonaws.com"),
-            action="lambda:InvokeFunction"
+            action="lambda:InvokeFunction",
+            source_arn=node_to_cloud_rule.attr_arn,
         )

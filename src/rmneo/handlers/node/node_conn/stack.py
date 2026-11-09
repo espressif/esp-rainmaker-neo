@@ -181,5 +181,6 @@ class PresenceEventHandlerAPI(Construct):
         self.presence_event_function.add_permission(
             "PresenceEventInvokePermission",
             principal=iam.ServicePrincipal("iot.amazonaws.com"),
-            action="lambda:InvokeFunction"
+            action="lambda:InvokeFunction",
+            source_arn=offline_rule.attr_arn,
         )

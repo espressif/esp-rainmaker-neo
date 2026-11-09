@@ -227,6 +227,7 @@ class TimeseriesCore(Construct):
             "TimeseriesIngestInvokePermission",
             principal=iam.ServicePrincipal("iot.amazonaws.com"),
             action="lambda:InvokeFunction",
+            source_arn=node_ts_batch_rule.attr_arn,
         )
 
         for dep in batch_sqs_infra.dependencies:
