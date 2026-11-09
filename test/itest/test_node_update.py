@@ -32,6 +32,8 @@ from test.itest.conftest import (
     IOT_ENDPOINT,
     REGION,
     connect_device_with_retry,
+    node_registrar_identity,
+    stored_node_type,
 )
 
 # ---------------------------------------------------------------------------
@@ -233,6 +235,46 @@ def test_update_node_metadata(admin_user, node_csv_uploader):
             except Exception:
                 pass
         _delete_s3_object(update_s3_path)
+
+
+def test_bulk_cert_update_keeps_the_bridge_node_type(_bridge_stack_deployed, admin_user):
+    """A bulk update supplies no capabilities, so replacing a bridge's cert must not touch its node_type."""
+    node_id = f"bridgeupd_{os.urandom(6).hex()}"
+
+    key_a_pem, cert_a_pem = generate_key_and_cert(thing_name=node_id, key_type="ec")
+    key_b_pem, cert_b_pem = generate_key_and_cert(thing_name=node_id, key_type="ec")
+    cert_b_only, _ = split_combined_cert_pem(cert_b_pem)
+
+    device_a = Device(node_id, key_a_pem, cert_a_pem, CA_CERT, IOT_ENDPOINT, REGION, DEBUG)
+    device_a.register_test_node(capabilities=["bridge"], caller_identity=node_registrar_identity())
+    device_b = Device(node_id, key_b_pem, cert_b_pem, CA_CERT, IOT_ENDPOINT, REGION, DEBUG)
+    update_s3_path = None
+    try:
+        assert stored_node_type(node_id) == "bridge"
+
+        update_csv = _build_update_csv_bytes(
+            rows=[{"node_id": node_id, "certs": cert_b_only}],
+            header=["node_id", "certs"],
+        )
+        update_s3_path = _upload_csv_via_user(admin_user, update_csv, "bridge_cert_update")
+        update_resp = admin_user.bulk_update_nodes(update_s3_path)
+        assert update_resp is not None, "Bulk update API returned None"
+        update_request_id = update_resp.get("request_id")
+        assert update_request_id, "No request_id in bulk_update_nodes response"
+
+        terminal = _poll_until_completed(admin_user, update_request_id,
+                                          admin_user.get_bulk_update_status)
+        assert terminal.get("success_count") == 1
+        assert terminal.get("failed_count") == 0
+
+        assert stored_node_type(node_id) == "bridge"
+    finally:
+        if update_s3_path:
+            _delete_s3_object(update_s3_path)
+        try:
+            device_b.destroy_test_node()
+        except Exception:
+            pass
 
 
 def test_update_node_cert(admin_user):

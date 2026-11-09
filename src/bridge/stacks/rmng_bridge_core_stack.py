@@ -6,7 +6,8 @@
 
 Owns the bridge's compute plane:
   - rmng-bridge-add-remove-child Lambda + IAM role + IoT invoke permission
-  - cascade_delete Lambda (deployed under NODE_LEFT_GROUP hook name)
+  - cascade_delete and demote_cascade Lambdas (deployed under the NODE_LEFT_GROUP
+    and NODE_TYPE_CHANGED hook names)
   - Three IoT rules:
       bridge_from_cloud_rewrite_rule   (Rule A — children's from_cloud rewrite)
       bridge_unicast_rewrite_rule      (Rule B — children's unicast rewrite, topic(5) fix)
@@ -308,12 +309,47 @@ class RMNGBridgeCoreStack(Stack):
         )
 
         # ---------------------------------------------------------------
-        # cascade_delete Lambda.
-        # Async-invoked by node.shadow_node when a bridge is removed
-        # from its group or moved to a new group. Spec §5.8.
+        # Cascade Lambdas (spec §5.8), both deleting a bridge's children.
+        # cascade_delete: async-invoked by node.shadow_node when a bridge is
+        # removed from its group or moved to a new group.
+        # demote_cascade: async-invoked by the claim handler when a re-claim
+        # changes or clears a node's non-empty node_type; only a demoted
+        # bridge has children to delete.
         # ---------------------------------------------------------------
-        cascade_fn_name = "cascade_delete"
-        cascade_role = create_base_lambda_role(self, cascade_fn_name, common_resources)
+        cascade_delete_fn = self._create_cascade_lambda(
+            "cascade_delete", BRIDGE_RESOURCES["CASCADE_DELETE_FUNCTION_NAME"],
+            common_resources, node_data_reset_fn_arn,
+        )
+        demote_cascade_fn = self._create_cascade_lambda(
+            "demote_cascade", BRIDGE_RESOURCES["DEMOTE_CASCADE_FUNCTION_NAME"],
+            common_resources, node_data_reset_fn_arn,
+        )
+
+        # The node-register hook and the presence cascade run in-process, inside
+        # the callers that already hold the registration and disconnect events
+        # (src/bridge/hooks), so this stack deploys no Lambda for either.
+
+        # ---------------------------------------------------------------
+        # CfnOutputs — consumed by test/bridge_register.py and tests.
+        # ---------------------------------------------------------------
+        CfnOutput(self, "AddRemoveChildLambdaName", value=add_remove_child_fn.function_name)
+        CfnOutput(self, "CascadeDeleteLambdaName", value=cascade_delete_fn.function_name)
+        CfnOutput(self, "DemoteCascadeLambdaName", value=demote_cascade_fn.function_name)
+        CfnOutput(self, "RuleAName", value=BRIDGE_RESOURCES["RULE_FROM_CLOUD_REWRITE"])
+        CfnOutput(self, "RuleBName", value=BRIDGE_RESOURCES["RULE_UNICAST_REWRITE"])
+        CfnOutput(
+            self, "BridgeToCloudRuleName",
+            value=BRIDGE_RESOURCES["RULE_TO_CLOUD"],
+        )
+
+    def _create_cascade_lambda(self, fn_name, aws_function_name, common_resources, node_data_reset_fn_arn):
+        """A Lambda that runs cascade.DeleteChildren, deployed under the core hook name core async-invokes.
+
+        The name is pinned rather than left to CDK's derivation: if the deployed name differs from the hook name, the cascade silently no-ops.
+        """
+        region = self.region
+        account = self.account
+        cascade_role = create_base_lambda_role(self, fn_name, common_resources)
 
         cascade_role.add_to_policy(
             iam.PolicyStatement(
@@ -357,35 +393,14 @@ class RMNGBridgeCoreStack(Stack):
             )
         )
 
-        # Deploy this Lambda under the node-left-group hook name core invokes
-        # (CASCADE_DELETE_FUNCTION_NAME resolves to NODE_LIFECYCLE_HOOKS
-        # ["NODE_LEFT_GROUP"]). Core async-invokes that exact name when a node
-        # leaves a group; if the deployed name differs, the cascade silently
-        # no-ops. Pinned explicitly rather than relying on CDK's name derivation.
-        cascade_delete_fn = create_lambda_function(
+        return create_lambda_function(
             self,
-            cascade_fn_name,
+            fn_name,
             common_resources,
             lambda_role=cascade_role,
-            aws_function_name=BRIDGE_RESOURCES["CASCADE_DELETE_FUNCTION_NAME"],
+            aws_function_name=aws_function_name,
             environment={
                 "NODE_DATA_RESET_FUNCTION_NAME":
                     EXTERNAL_FUNCTION_NAMES["NODE_DATA_RESET"],
             },
-        )
-
-        # The node-register hook and the presence cascade run in-process, inside
-        # the callers that already hold the registration and disconnect events
-        # (src/bridge/hooks), so this stack deploys no Lambda for either.
-
-        # ---------------------------------------------------------------
-        # CfnOutputs — consumed by test/bridge_register.py and tests.
-        # ---------------------------------------------------------------
-        CfnOutput(self, "AddRemoveChildLambdaName", value=add_remove_child_fn.function_name)
-        CfnOutput(self, "CascadeDeleteLambdaName", value=cascade_delete_fn.function_name)
-        CfnOutput(self, "RuleAName", value=BRIDGE_RESOURCES["RULE_FROM_CLOUD_REWRITE"])
-        CfnOutput(self, "RuleBName", value=BRIDGE_RESOURCES["RULE_UNICAST_REWRITE"])
-        CfnOutput(
-            self, "BridgeToCloudRuleName",
-            value=BRIDGE_RESOURCES["RULE_TO_CLOUD"],
         )

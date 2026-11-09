@@ -81,7 +81,8 @@ A bridge is a normal RainMaker node:
   subscriptions — identical to any other node.
 
 A bridge is distinguished by `node_type=bridge` on its `node_details` row,
-written at registration time from the value the register hook returns. (The
+written at registration time from the value the register hook returns, and
+rewritten on every re-claim (§5.8, "Bridge demotion on re-claim"). (The
 column is named `node_type` rather than a boolean `is_bridge` so future device
 classes — gateway, virtual node, etc. — can share it.) It is a DynamoDB column,
 not a Thing attribute: nothing queries device classes through Fleet Indexing,
@@ -860,6 +861,33 @@ children and recreates them via `add_child` against the new group.
 > children are tethered to the bridge's group and re-discovered fresh
 > after a move.
 
+#### Bridge demotion on re-claim
+
+A re-claim replaces `node_type` with the claim's classification
+([assisted-claiming.md §3.6](assisted-claiming.md)), so a bridge re-claimed
+without the `bridge` capability becomes unclassified. Its children are then
+deleted with the same cascade: nothing relays for them any more, and the
+presence cascade (§5.10) filters on `node_type=bridge`, so they would otherwise
+keep their last reported `online=true` indefinitely.
+
+```
+1. Claim handler writes the new node_type and, because a non-empty type was
+   changed or cleared, async-invokes the node-type-changed hook Lambda with
+   {node_id}
+2. bridge_demote_cascade Lambda looks up the node's current group — a re-claim
+   does not move it, and children are tethered to their bridge's group
+3. Steps 5–7 of the cascade above, against that group
+```
+
+Core never checks for `bridge`; it only filters on "the node had a type". The
+Lambda needs no type check either: only bridges have children, so for any
+other node step 3 finds none and does nothing.
+
+The demoted node itself stays in its group with its own data. If it is later
+re-claimed as a bridge, its children are recreated fresh via `add_child`, as
+after a group move. A bulk update never changes `node_type`, so it never
+triggers the demotion cascade.
+
 ### 5.9 Child Schedule / Trigger Version Sync on Bridge Reconnect
 
 A direct device that boots or reconnects publishes `getSchedVer` /
@@ -1250,9 +1278,9 @@ Two of the lifecycle hooks run inside core rather than as Lambdas of their own:
 the node-register hook installs itself into `nodelifecycle` and is linked by the
 binaries that register nodes, and the presence cascade is called by core's own
 presence handler, which already holds the disconnect event. Only
-`add_remove_child` (driven by its IoT rules) and the node-left-group cascade
-(deliberately kept asynchronous, since a bridge's child count is unbounded —
-§8) remain separate Lambdas.
+`add_remove_child` (driven by its IoT rules) and the node-left-group and
+node-type-changed cascades (deliberately kept asynchronous, since a bridge's
+child count is unbounded — §8) remain separate Lambdas.
 
 ### Upgrading from the single `rmng-bridge` stack
 
