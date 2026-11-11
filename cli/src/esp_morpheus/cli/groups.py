@@ -173,6 +173,35 @@ def share(user, group_id, access_type, username):
     output.emit_kv(None, {'request_id': request_id})
 
 
+@group_cmd.command('users')
+@click.argument('group_id')
+@click.option('--subgroup', 'subgroup_id', help='Only the users of this subgroup.')
+@pass_user
+def users(user, group_id, subgroup_id):
+    """List GROUP_ID's users and their access."""
+    api = Group(user)
+    if subgroup_id:
+        response = api.list_subgroup_users_raw(group_id, subgroup_id)
+        scope = f"subgroup {subgroup_id} of group {group_id}"
+    else:
+        response = api.list_group_users_raw(group_id)
+        scope = f"group {group_id}"
+    if response.status_code != 200:
+        output.fail_response(f"list users of {scope}", response)
+    entries = response.json().get('users') or []
+
+    if output.structured():
+        output.emit_json(entries)
+        return
+    if not entries:
+        output.info('No users.')
+        return
+    output.emit_table(['user_id', 'email', 'phone', 'access', 'subgroups'],
+                      [[output.cell(e.get(k)) for k in ('user_id', 'email', 'phone', 'access_type', 'subgroups')]
+                       for e in entries],
+                      title=f"Users of {scope}")
+
+
 # --- subgroups --------------------------------------------------------------
 
 @group_cmd.group('subgroup')

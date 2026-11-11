@@ -830,6 +830,14 @@ func GetMySharingRequests(ctx *rmngctx.RmngContext) ([]*sharing_request_db.Shari
 	return sharingRequests, nil
 }
 
+// ListGroupSharingRequests lists a group's pending sharing requests for its primary users. A non-empty subGroupID narrows the list to that subgroup; a non-empty sentBy keeps only the requests that user sent.
+func ListGroupSharingRequests(ctx *rmngctx.RmngContext, groupID, subGroupID, sentBy string, limit int64, startKey string) (*sharing_request_db.ListGroupSharingRequestsOutput, error) {
+	if _, err := GetUserGroupAccess(ctx, groupID); err != nil {
+		return nil, rmerror.NewRMError(errors.Join(ErrGroupAccessDenied, err), "group does not exist or access denied")
+	}
+	return sharing_request_db.NewSharingRequestDB(ctx).ListGroupSharingRequests(groupID, subGroupID, sentBy, limit, startKey)
+}
+
 // GroupUserInfo represents a user's access to a group, enriched with user details.
 type GroupUserInfo struct {
 	UserID       string

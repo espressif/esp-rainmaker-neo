@@ -1702,6 +1702,69 @@ paths:
                 message: "DELETE operation not allowed for config service"
 
   /v1/groups/{groupId}/sharing-requests:
+    get:
+      summary: List a group's pending sharing requests
+      description: |
+        Lists every pending sharing request the group has sent, whoever sent
+        it: group-level requests, subgroup requests and QR-code requests.
+        Expired requests are left out. Results are paginated.
+
+        Only users with primary access to the group can call this. Secondary
+        and subgroup-only members, and non-members, get `403`, which does not
+        reveal whether the group exists.
+
+        Each entry shows the invitee only as `target_username`, exactly what
+        the sharer typed, so it never exposes contact details the sharer did
+        not already have. A share to an unregistered username is listed the
+        same way as a real one, so this list does not reveal whether an
+        account exists.
+
+        A QR-code request has `is_qr: true` and an empty `target_username`;
+        its `sharing_request_id` is returned in full, since a primary user can
+        already create such an invite themselves.
+      tags:
+        - Group Sharing
+      security:
+        - sigv4: []
+      parameters:
+        - $ref: "#/components/parameters/GroupId"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/StartKey"
+        - $ref: "#/components/parameters/SharingRequestsSentBy"
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListGroupSharingRequestsResponse"
+              example:
+                sharing_requests:
+                  - sharing_request_id: 1c9b2f4e-6a3d-4c8b-9e2f-7d5a1b3c4d5e
+                    access_type: secondary
+                    subgroup_id: ""
+                    is_qr: false
+                    target_username: guest@example.com
+                    primary_user_id: user-abc-123
+                    primary_email: owner@example.com
+                    primary_phone_number: ""
+                    expiration_time: 1767225600
+                  - sharing_request_id: 7f3a9c1d-2b4e-4f6a-8c0d-1e2f3a4b5c6d
+                    access_type: secondary
+                    subgroup_id: ""
+                    is_qr: true
+                    target_username: ""
+                    primary_user_id: user-abc-123
+                    primary_email: owner@example.com
+                    primary_phone_number: ""
+                    expiration_time: 1767744000
+                next_key: eyJ1c2VyX2lkIjp7InZhbHVlIjoidXNlci1kZWYtNDU2IiwidHlwZSI6IlMifX0
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
     post:
       summary: Send group sharing-requests
       description: |
@@ -1755,6 +1818,38 @@ paths:
           $ref: "#/components/responses/InternalServerError"
 
   /v1/groups/{groupId}/subgroups/{subGroupId}/sharing-requests:
+    get:
+      summary: List a subgroup's pending sharing requests
+      description: |
+        Same as `GET /v1/groups/{groupId}/sharing-requests`, narrowed to the
+        requests for this subgroup. Primary access to the parent group is
+        required.
+
+        Returns an empty list when the subgroup has no pending requests,
+        whether or not the subgroup exists; the two cases are not told apart.
+      tags:
+        - Subgroup Sharing
+      security:
+        - sigv4: []
+      parameters:
+        - $ref: "#/components/parameters/GroupId"
+        - $ref: "#/components/parameters/SubGroupId"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/StartKey"
+        - $ref: "#/components/parameters/SharingRequestsSentBy"
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListGroupSharingRequestsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
     post:
       summary: Send subgroup sharing-requests
       description: |
@@ -4125,6 +4220,16 @@ components:
         Pagination cursor. Pass the `next_key` value from a previous
         response to fetch the next page. Omit on the first request.
 
+    SharingRequestsSentBy:
+      in: query
+      name: sent_by
+      schema:
+        type: string
+      example: me
+      description: |
+        Keep only the requests one user sent: a user ID, or `me` for the
+        caller. An ID that sent nothing returns an empty list.
+
   schemas:
     AssumeRoleRequest:
       type: object
@@ -4724,6 +4829,51 @@ components:
           description: Phone number of the user who created the sharing request
         message:
           type: string
+
+    ListGroupSharingRequestsResponse:
+      type: object
+      required: [sharing_requests]
+      properties:
+        sharing_requests:
+          type: array
+          items:
+            $ref: "#/components/schemas/GroupSharingRequestInfo"
+        next_key:
+          type: string
+          description: Pass as `start_key` to fetch the next page. Absent on the last page.
+
+    GroupSharingRequestInfo:
+      type: object
+      required: [sharing_request_id, access_type, subgroup_id, is_qr, target_username, primary_user_id, primary_email, primary_phone_number, expiration_time]
+      properties:
+        sharing_request_id:
+          type: string
+          format: uuid
+        access_type:
+          type: string
+          enum: [primary, secondary, subentity]
+        subgroup_id:
+          type: string
+          description: The subgroup the request is for; empty for a whole-group request.
+        is_qr:
+          type: boolean
+          description: True for a QR-code request, which names no invitee.
+        target_username:
+          type: string
+          description: The email address or phone number the sharer typed; empty for a QR-code request.
+        primary_user_id:
+          type: string
+          description: User ID of the user who created the sharing request
+        primary_email:
+          type: string
+          description: Email of the user who created the sharing request; empty if they have none
+        primary_phone_number:
+          type: string
+          description: Phone number of the user who created the sharing request; empty if they have none
+        expiration_time:
+          type: integer
+          format: int64
+          description: Unix time (seconds) after which the request can no longer be accepted.
 
     CreateSharingRequestRequest:
       type: object

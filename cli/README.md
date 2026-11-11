@@ -155,11 +155,11 @@ esp-morpheus [--client-outputs SRC] [--json] [--raw] [-v]
   user [--password PW] <identity> [SUBCOMMAND...]             # no subcommand -> prompt
       auth  connect  subscribe  publish  read-shadow  upload-file
       api                    get | post | put | patch | delete
-      group                  create | list | rename | add-capabilities | share
+      group                  create | list | rename | add-capabilities | share | users
       group subgroup         create | rename | add-node | remove-node | share
       node                   assoc | remove | claim
       matter                 initiate | verify | confirm | get-noc
-      sharing                list | accept | reject
+      sharing                received | sent | accept | reject
       push                   register-ios | register-android | register
   device <node> [SUBCOMMAND...]                               # no subcommand -> prompt
       connect  shadow-connect  subscribe  publish  to-cloud  group-info
@@ -206,7 +206,9 @@ api get v1/user/nodes                      # raw GET against the user API
 connect                                    # assume role, then connect to MQTT
 subscribe node_rsa params local            # subscribe to a node's named shadows
 push register-ios com.app.id <token>       # register a push endpoint
-sharing list                               # pending shares
+sharing received                           # shares sent to me
+sharing sent <group_id> --sent-by me       # shares my group sent that I sent
+group users <group_id>                     # a group's users and their access
 ```
 
 ### `admin` — deployment-wide operations

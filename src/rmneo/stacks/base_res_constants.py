@@ -54,6 +54,7 @@ INDEX_NAMES = {
     'USER_DETAILS_PHONE': 'espuser-user-details-by-phone',
     'GROUP_DEVICE_MAPPING_NODE_ID': 'rmng-group-node-assoc-by-node-id',
     'GROUP_DEVICE_MAPPING_ALIAS_INDEX': 'rmng-group-node-assoc-by-alias',
+    'SHARING_REQUESTS_GROUP': 'rmng-sharing-requests-by-group',
     'NODE_REG_REQS_LIST': 'rmng-node-reg-reqs-list',
     # rmng-node-id-reservations has no GSIs: claimant_id is its partition key,
     # so quota counting is a base-table query (see claim/handlers/base.py).
@@ -66,6 +67,7 @@ INDEX_TO_TABLE = {
     'USER_DETAILS_PHONE': 'USER_DETAILS',
     'GROUP_DEVICE_MAPPING_NODE_ID': 'GROUP_DEVICE_MAPPING',
     'GROUP_DEVICE_MAPPING_ALIAS_INDEX': 'GROUP_DEVICE_MAPPING',
+    'SHARING_REQUESTS_GROUP': 'SHARING_REQUESTS',
     'NODE_REG_REQS_LIST': 'NODE_REG_REQS',
 }
 

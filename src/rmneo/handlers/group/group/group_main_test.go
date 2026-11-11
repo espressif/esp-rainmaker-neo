@@ -1738,27 +1738,8 @@ var _ = Describe("Group Main", func() {
 			Expect(response.Body).To(ContainSubstring("Failed to create sharing request"))
 		})
 
-		shareGroupByUserName := func(userName string) events.APIGatewayProxyResponse {
-			shareRequest := events.APIGatewayProxyRequest{
-				HTTPMethod: "POST",
-				Resource:   "/v1/groups/{groupId}/sharing-requests",
-				Path:       "/v1/groups/" + groupID + "/sharing-requests",
-				Body:       `{"username": "` + userName + `", "access_type": "` + string(utils.GroupSecondaryAccess) + `"}`,
-				RequestContext: events.APIGatewayProxyRequestContext{
-					Identity: events.APIGatewayRequestIdentity{
-						CognitoIdentityID:             userID,
-						CognitoAuthenticationProvider: "https://issuer.example:" + userID,
-					},
-				},
-				PathParameters: map[string]string{"groupId": groupID},
-			}
-			response, err := handleSharingRequest(ctx, shareRequest)
-			Expect(err).To(BeNil())
-			return response
-		}
-
 		It("should share a group with a user named by E.164 phone number", func() {
-			response := shareGroupByUserName(otherUserPhone)
+			response := ShareRequestViaRouter(ctx, groupID, "", userID, otherUserPhone)
 			Expect(response.StatusCode).To(Equal(http.StatusCreated))
 
 			ApproveSharingRequest(ctx, otherUserID)
@@ -1768,21 +1749,23 @@ var _ = Describe("Group Main", func() {
 		})
 
 		It("should respond generically when sharing a group with an unregistered user name", func() {
-			response := shareGroupByUserName("nobody@example.com")
+			response := ShareRequestViaRouter(ctx, groupID, "", userID, "nobody@example.com")
 			Expect(response.StatusCode).To(Equal(http.StatusCreated))
 			var shareResponse CreateSharingRequestResponse
 			Expect(json.Unmarshal([]byte(response.Body), &shareResponse)).To(Succeed())
 			Expect(shareResponse.Message).To(Equal(sharingRequestAcceptedMessage))
 			Expect(shareResponse.RequestID).ToNot(BeEmpty())
+			// "decoy-" is only the stored partition key; the ID handed back must never carry it.
+			Expect(shareResponse.RequestID).ToNot(HavePrefix("decoy-"))
 			Expect(response.Body).NotTo(ContainSubstring("nobody@example.com"))
 		})
 
 		It("should reject accepting a decoy request id exactly like a foreign one", func() {
-			realResp := shareGroupByUserName(otherUserPhone)
+			realResp := ShareRequestViaRouter(ctx, groupID, "", userID, otherUserPhone)
 			var real CreateSharingRequestResponse
 			Expect(json.Unmarshal([]byte(realResp.Body), &real)).To(Succeed())
 
-			decoyResp := shareGroupByUserName("nobody@example.com")
+			decoyResp := ShareRequestViaRouter(ctx, groupID, "", userID, "nobody@example.com")
 			var decoy CreateSharingRequestResponse
 			Expect(json.Unmarshal([]byte(decoyResp.Body), &decoy)).To(Succeed())
 
@@ -1811,7 +1794,7 @@ var _ = Describe("Group Main", func() {
 		})
 
 		It("should fail to share a group with a user name that is neither email nor phone", func() {
-			response := shareGroupByUserName("INVALID")
+			response := ShareRequestViaRouter(ctx, groupID, "", userID, "INVALID")
 			Expect(response.StatusCode).To(Equal(http.StatusBadRequest))
 			Expect(response.Body).To(ContainSubstring("username must be an email address or an E.164 phone number"))
 		})
@@ -1824,13 +1807,13 @@ var _ = Describe("Group Main", func() {
 			plusUserID := "plus-user-id"
 			test_utils.SetupTestUser(ctx, plusUserID, plusEmail)
 
-			response := shareGroupByUserName(plusEmail)
+			response := ShareRequestViaRouter(ctx, groupID, "", userID, plusEmail)
 			Expect(response.StatusCode).To(Equal(http.StatusCreated))
 		})
 
 		It("should fail to share a group when the user id of a real user is passed as the user name", func() {
 			// Internal user IDs are deliberately not accepted on this endpoint.
-			response := shareGroupByUserName(otherUserID)
+			response := ShareRequestViaRouter(ctx, groupID, "", userID, otherUserID)
 			Expect(response.StatusCode).To(Equal(http.StatusBadRequest))
 			Expect(response.Body).To(ContainSubstring("username must be an email address or an E.164 phone number"))
 		})
@@ -2133,32 +2116,13 @@ var _ = Describe("Group Main", func() {
 			Expect(response.Body).To(ContainSubstring("Failed to create sharing request"))
 		})
 
-		shareSubgroupByUserName := func(userName string) events.APIGatewayProxyResponse {
-			shareRequest := events.APIGatewayProxyRequest{
-				HTTPMethod: "POST",
-				Resource:   "/v1/groups/{groupId}/subgroups/{subGroupId}/sharing-requests",
-				Path:       "/v1/groups/" + groupID + "/subgroups/" + subgroupID + "/sharing-requests",
-				Body:       `{"username": "` + userName + `"}`,
-				RequestContext: events.APIGatewayProxyRequestContext{
-					Identity: events.APIGatewayRequestIdentity{
-						CognitoIdentityID:             userID,
-						CognitoAuthenticationProvider: "https://issuer.example:" + userID,
-					},
-				},
-				PathParameters: map[string]string{"groupId": groupID, "subGroupId": subgroupID},
-			}
-			response, err := handleSharingRequest(ctx, shareRequest)
-			Expect(err).To(BeNil())
-			return response
-		}
-
 		It("should share a subgroup with a user named by E.164 phone number", func() {
-			response := shareSubgroupByUserName(otherUserPhone)
+			response := ShareRequestViaRouter(ctx, groupID, subgroupID, userID, otherUserPhone)
 			Expect(response.StatusCode).To(Equal(http.StatusCreated))
 		})
 
 		It("should respond generically when sharing a subgroup with an unregistered user name", func() {
-			response := shareSubgroupByUserName("nobody@example.com")
+			response := ShareRequestViaRouter(ctx, groupID, subgroupID, userID, "nobody@example.com")
 			Expect(response.StatusCode).To(Equal(http.StatusCreated))
 			var shareResponse CreateSharingRequestResponse
 			Expect(json.Unmarshal([]byte(response.Body), &shareResponse)).To(Succeed())
@@ -2167,9 +2131,118 @@ var _ = Describe("Group Main", func() {
 		})
 
 		It("should fail to share a subgroup with a user name that is neither email nor phone", func() {
-			response := shareSubgroupByUserName("INVALID")
+			response := ShareRequestViaRouter(ctx, groupID, subgroupID, userID, "INVALID")
 			Expect(response.StatusCode).To(Equal(http.StatusBadRequest))
 			Expect(response.Body).To(ContainSubstring("username must be an email address or an E.164 phone number"))
+		})
+	})
+
+	Describe("List group sharing requests (GET sharing-requests)", func() {
+		var groupID, subGroupID string
+
+		BeforeEach(func() {
+			groupID = CreateGroup(ctx, "Test Group", userID)
+			subGroupID = CreateSubgroup(ctx, groupID, "Test Subgroup", userID)
+		})
+
+		It("should return a group's invite with the username as typed, the sender and the expiry", func() {
+			reqID := ShareViaRouter(ctx, groupID, "", userID, otherUserEmail)
+
+			resp := ListGroupSharingRequests(ctx, groupID, "", userID, nil, http.StatusOK)
+			Expect(resp.SharingRequests).To(HaveLen(1))
+			info := resp.SharingRequests[0]
+			Expect(info.SharingRequestID).To(Equal(reqID))
+			Expect(info.AccessType).To(Equal(string(utils.GroupSecondaryAccess)))
+			Expect(info.SubgroupID).To(BeEmpty())
+			Expect(info.IsQR).To(BeFalse())
+			Expect(info.TargetUsername).To(Equal(otherUserEmail))
+			Expect(info.PrimaryUserID).To(Equal(userID))
+			Expect(info.PrimaryEmail).To(Equal(userEmail))
+			Expect(info.ExpirationTime).To(BeNumerically(">", 0))
+			Expect(resp.NextKey).To(BeEmpty())
+		})
+
+		It("should show only the phone number when the invite was sent by phone, never the invitee's email", func() {
+			ShareViaRouter(ctx, groupID, "", userID, otherUserPhone)
+
+			resp := ListGroupSharingRequests(ctx, groupID, "", userID, nil, http.StatusOK)
+			Expect(resp.SharingRequests).To(HaveLen(1))
+			Expect(resp.SharingRequests[0].TargetUsername).To(Equal(otherUserPhone))
+		})
+
+		It("should list a share to an unregistered username exactly like a share to a registered user", func() {
+			realID := ShareViaRouter(ctx, groupID, "", userID, otherUserEmail)
+			decoyID := ShareViaRouter(ctx, groupID, "", userID, "nobody@example.com")
+
+			byID := map[string]GroupSharingRequestInfo{}
+			for _, info := range ListGroupSharingRequests(ctx, groupID, "", userID, nil, http.StatusOK).SharingRequests {
+				Expect(info.SharingRequestID).ToNot(HavePrefix("decoy-"))
+				Expect(info.PrimaryUserID).ToNot(HavePrefix("decoy-"))
+				byID[info.SharingRequestID] = info
+			}
+			Expect(byID).To(HaveKey(decoyID))
+			real, decoy := byID[realID], byID[decoyID]
+			Expect(real.TargetUsername).To(Equal(otherUserEmail))
+			Expect(decoy.TargetUsername).To(Equal("nobody@example.com"))
+			Expect(decoy.ExpirationTime).To(BeNumerically("~", real.ExpirationTime, 5))
+
+			// Everything but the request's own ID, username and expiry must match, or the list tells registered and unregistered usernames apart.
+			for _, info := range []*GroupSharingRequestInfo{&real, &decoy} {
+				info.SharingRequestID, info.TargetUsername, info.ExpirationTime = "", "", 0
+			}
+			Expect(decoy).To(Equal(real))
+		})
+
+		It("should return 403 to a secondary member", func() {
+			ShareViaRouter(ctx, groupID, "", userID, otherUserEmail)
+			ApproveSharingRequest(ctx, otherUserID)
+
+			ListGroupSharingRequests(ctx, groupID, "", otherUserID, nil, http.StatusForbidden)
+		})
+
+		It("should return 403 to a non-member", func() {
+			ListGroupSharingRequests(ctx, groupID, "", otherUserID, nil, http.StatusForbidden)
+		})
+
+		It("should return an empty list for a subgroup that does not exist and for one with no requests alike", func() {
+			Expect(ListGroupSharingRequests(ctx, groupID, "no-such-subgroup", userID, nil, http.StatusOK).SharingRequests).To(BeEmpty())
+			Expect(ListGroupSharingRequests(ctx, groupID, subGroupID, userID, nil, http.StatusOK).SharingRequests).To(BeEmpty())
+		})
+
+		It("should return 400 for a malformed start_key", func() {
+			ListGroupSharingRequests(ctx, groupID, "", userID, map[string]string{"start_key": "not-a-token"}, http.StatusBadRequest)
+		})
+
+		It("should filter by sent_by=me and by any sender's user ID", func() {
+			reqID := ShareViaRouter(ctx, groupID, "", userID, "")
+
+			mine := ListGroupSharingRequests(ctx, groupID, "", userID, map[string]string{"sent_by": "me"}, http.StatusOK)
+			Expect(mine.SharingRequests).To(HaveLen(1))
+			Expect(mine.SharingRequests[0].SharingRequestID).To(Equal(reqID))
+
+			bySender := ListGroupSharingRequests(ctx, groupID, "", userID, map[string]string{"sent_by": userID}, http.StatusOK)
+			Expect(bySender.SharingRequests).To(HaveLen(1))
+
+			byOther := ListGroupSharingRequests(ctx, groupID, "", userID, map[string]string{"sent_by": otherUserID}, http.StatusOK)
+			Expect(byOther.SharingRequests).To(BeEmpty())
+		})
+
+		It("should page through invites with page_size and next_key", func() {
+			want := []string{}
+			for range 3 {
+				want = append(want, ShareViaRouter(ctx, groupID, "", userID, ""))
+			}
+
+			first := ListGroupSharingRequests(ctx, groupID, "", userID, map[string]string{"page_size": "2"}, http.StatusOK)
+			Expect(first.SharingRequests).To(HaveLen(2))
+			Expect(first.NextKey).ToNot(BeEmpty())
+			second := ListGroupSharingRequests(ctx, groupID, "", userID, map[string]string{"page_size": "2", "start_key": first.NextKey}, http.StatusOK)
+
+			got := []string{}
+			for _, r := range append(first.SharingRequests, second.SharingRequests...) {
+				got = append(got, r.SharingRequestID)
+			}
+			Expect(got).To(ConsistOf(want))
 		})
 	})
 
@@ -3277,6 +3350,77 @@ func ShareGroupAndApprove(ctx context.Context, groupID, ownerUserID, targetUserI
 	Expect(err).To(BeNil())
 	Expect(sharingRequests).ToNot(BeEmpty())
 	Expect(group.ApproveSharingRequest(targetCtx, sharingRequests[0].SharingRequestID)).To(Succeed())
+}
+
+// ShareRequestViaRouter POSTs a sharing request as callerID through handleRequest, on the subgroup route when subGroupID is set, and returns the raw response. An empty username creates a QR-code request.
+func ShareRequestViaRouter(ctx context.Context, groupID, subGroupID, callerID, username string) events.APIGatewayProxyResponse {
+	resource := "/v1/groups/{groupId}/sharing-requests"
+	path := "/v1/groups/" + groupID + "/sharing-requests"
+	pathParams := map[string]string{"groupId": groupID}
+	if subGroupID != "" {
+		resource = "/v1/groups/{groupId}/subgroups/{subGroupId}/sharing-requests"
+		path = "/v1/groups/" + groupID + "/subgroups/" + subGroupID + "/sharing-requests"
+		pathParams["subGroupId"] = subGroupID
+	}
+	response, err := handleRequest(ctx, events.APIGatewayProxyRequest{
+		HTTPMethod: "POST",
+		Resource:   resource,
+		Path:       path,
+		Body:       `{"username": "` + username + `"}`,
+		RequestContext: events.APIGatewayProxyRequestContext{
+			Identity: events.APIGatewayRequestIdentity{
+				CognitoIdentityID:             callerID,
+				CognitoAuthenticationProvider: "https://issuer.example:" + callerID,
+			},
+		},
+		PathParameters: pathParams,
+	})
+	Expect(err).To(BeNil())
+	return response
+}
+
+// ShareViaRouter is ShareRequestViaRouter for a share expected to succeed; it returns the new request's ID.
+func ShareViaRouter(ctx context.Context, groupID, subGroupID, callerID, username string) string {
+	response := ShareRequestViaRouter(ctx, groupID, subGroupID, callerID, username)
+	Expect(response.StatusCode).To(Equal(http.StatusCreated))
+
+	var shareResponse CreateSharingRequestResponse
+	Expect(json.Unmarshal([]byte(response.Body), &shareResponse)).To(Succeed())
+	return shareResponse.RequestID
+}
+
+// ListGroupSharingRequests GETs a group's sharing requests through handleRequest, on the subgroup route when subGroupID is set.
+func ListGroupSharingRequests(ctx context.Context, groupID, subGroupID, callerID string, query map[string]string, expectedStatusCode int) ListGroupSharingRequestsResponse {
+	resource := "/v1/groups/{groupId}/sharing-requests"
+	path := "/v1/groups/" + groupID + "/sharing-requests"
+	pathParams := map[string]string{"groupId": groupID}
+	if subGroupID != "" {
+		resource = "/v1/groups/{groupId}/subgroups/{subGroupId}/sharing-requests"
+		path = "/v1/groups/" + groupID + "/subgroups/" + subGroupID + "/sharing-requests"
+		pathParams["subGroupId"] = subGroupID
+	}
+	response, err := handleRequest(ctx, events.APIGatewayProxyRequest{
+		HTTPMethod: "GET",
+		Resource:   resource,
+		Path:       path,
+		RequestContext: events.APIGatewayProxyRequestContext{
+			Identity: events.APIGatewayRequestIdentity{
+				CognitoIdentityID:             callerID,
+				CognitoAuthenticationProvider: "https://issuer.example:" + callerID,
+			},
+		},
+		PathParameters:        pathParams,
+		QueryStringParameters: query,
+	})
+	Expect(err).To(BeNil())
+	Expect(response.StatusCode).To(Equal(expectedStatusCode), response.Body)
+
+	if expectedStatusCode != http.StatusOK {
+		return ListGroupSharingRequestsResponse{}
+	}
+	var listResponse ListGroupSharingRequestsResponse
+	Expect(json.Unmarshal([]byte(response.Body), &listResponse)).To(Succeed())
+	return listResponse
 }
 
 // ShareSubgroupAndApprove shares subgroupID (under groupID, owned by ownerUserID) with

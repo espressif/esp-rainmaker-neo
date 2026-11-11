@@ -56,6 +56,14 @@ class GroupBase(Construct):
             removal_policy=RemovalPolicy.DESTROY,
         )
 
+        # The sort key relies on sub_entity_id never being empty: a whole-group request stores "NONE", since DynamoDB rejects an empty string as an index key.
+        self.sharing_requests_table.add_global_secondary_index(
+            index_name=INDEX_NAMES['SHARING_REQUESTS_GROUP'],
+            partition_key=dynamodb.Attribute(name="group_id", type=dynamodb.AttributeType.STRING),
+            sort_key=dynamodb.Attribute(name="sub_entity_id", type=dynamodb.AttributeType.STRING),
+            projection_type=dynamodb.ProjectionType.ALL
+        )
+
         # Automations Table
         self.automations_table = ManagedTable(
             self, "AutomationsTable",

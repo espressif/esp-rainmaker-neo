@@ -115,6 +115,26 @@ type ListSharingRequestsResponse struct {
 	SharingRequests []SharingRequestInfo `json:"sharing_requests"`
 }
 
+// GroupSharingRequestInfo is one pending request in a group's sent list. TargetUsername is only what the sharer typed, so the list never exposes contact details the sharer did not already have; it is empty for a QR-code request.
+type GroupSharingRequestInfo struct {
+	SharingRequestID   string `json:"sharing_request_id"`
+	AccessType         string `json:"access_type"`
+	SubgroupID         string `json:"subgroup_id"`
+	IsQR               bool   `json:"is_qr"`
+	TargetUsername     string `json:"target_username"`
+	PrimaryUserID      string `json:"primary_user_id"`
+	PrimaryEmail       string `json:"primary_email"`
+	PrimaryPhoneNumber string `json:"primary_phone_number"`
+	ExpirationTime     int64  `json:"expiration_time"`
+}
+
+type ListGroupSharingRequestsResponse struct {
+	SharingRequests []GroupSharingRequestInfo `json:"sharing_requests"`
+	NextKey         string                    `json:"next_key,omitempty"`
+}
+
+const sentByMe = "me"
+
 type ListGroupUsersResponse struct {
 	Users []GroupUserInfoResponse `json:"users"`
 }
@@ -307,6 +327,54 @@ func handleListSharingRequests(context context.Context, request events.APIGatewa
 	}
 
 	return utils.APIGwRespJSON(http.StatusOK, response), nil
+}
+
+// handleListGroupSharingRequests serves GET on both the group and the subgroup sharing-requests routes; the subgroup route narrows the list to that subgroup.
+func handleListGroupSharingRequests(context context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+	ctx := user.NewContextWithAPIRequest(context, request)
+
+	groupID := request.PathParameters["groupId"]
+	if groupID == "" {
+		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Missing group ID")), nil
+	}
+	subGroupID := request.PathParameters["subGroupId"]
+
+	sentBy := request.QueryStringParameters["sent_by"]
+	if sentBy == sentByMe {
+		sentBy = ctx.Accessor.GetID()
+	}
+
+	startKey := request.QueryStringParameters["start_key"]
+	page, err := group.ListGroupSharingRequests(ctx, groupID, subGroupID, sentBy, rmngrequest.ParsePageSize(request.QueryStringParameters), startKey)
+	if err != nil {
+		rlog.Error(ctx).Err(err).Send()
+		switch {
+		case errors.Is(err, group.ErrGroupAccessDenied):
+			return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("Group not found or not accessible")), nil
+		case errors.Is(err, sharing_request_db.ErrListForbidden):
+			return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("Insufficient permissions to list sharing requests")), nil
+		case errors.Is(err, sharing_request_db.ErrInvalidStartKey):
+			return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Invalid start_key")), nil
+		}
+		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Failed to list sharing requests")), nil
+	}
+
+	infos := make([]GroupSharingRequestInfo, 0, len(page.Entries))
+	for _, r := range page.Entries {
+		infos = append(infos, GroupSharingRequestInfo{
+			SharingRequestID:   r.SharingRequestID,
+			AccessType:         r.AccessType,
+			SubgroupID:         r.SubgroupID(),
+			IsQR:               r.IsUnclaimed(),
+			TargetUsername:     r.TargetUsername,
+			PrimaryUserID:      r.PrimaryUserID,
+			PrimaryEmail:       r.PrimaryEmail,
+			PrimaryPhoneNumber: r.PrimaryPhoneNumber,
+			ExpirationTime:     r.ExpirationTime,
+		})
+	}
+
+	return utils.APIGwRespJSON(http.StatusOK, ListGroupSharingRequestsResponse{SharingRequests: infos, NextKey: page.NextKey}), nil
 }
 
 func handleCreateGroup(context context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
@@ -881,12 +949,12 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		}
 
 	// --- Group & Subgroup Sharing Requests ---
-	case "/v1/groups/{groupId}/sharing-requests":
-		if request.HTTPMethod == "POST" {
-			return handleSharingRequest(ctx, request)
-		}
-	case "/v1/groups/{groupId}/subgroups/{subGroupId}/sharing-requests":
-		if request.HTTPMethod == "POST" {
+	case "/v1/groups/{groupId}/sharing-requests",
+		"/v1/groups/{groupId}/subgroups/{subGroupId}/sharing-requests":
+		switch request.HTTPMethod {
+		case "GET":
+			return handleListGroupSharingRequests(ctx, request)
+		case "POST":
 			return handleSharingRequest(ctx, request)
 		}
 

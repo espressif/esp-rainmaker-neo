@@ -31,6 +31,11 @@ def assert_sharing_request_has_primary_user_info(user, group_id, subgroup_id="")
             return
     raise AssertionError(f"Sharing request for group {group_id} subgroup '{subgroup_id}' not found")
 
+def _listed(group_api, group_id, **kwargs):
+    """Sharing request ID -> entry for every request the group list returns."""
+    return {r["sharing_request_id"]: r for r in group_api.list_group_sharing_requests(group_id, **kwargs)["sharing_requests"]}
+
+
 def test_group_sharing_group_access(shared_group, subtests):
     def body(stage, data):
         if stage == "share_begin":
@@ -55,6 +60,17 @@ def test_subgroup_sharing_access(shared_subgroup, subtests):
             groups = user2_group_api.list_groups()
             shared_group = next((group for group in groups['groups'] if group['group_id'] == data['group_id']), None)
             assert shared_group is None or not any(subgroup['subgroup_id'] == data['subgroup_id'] for subgroup in shared_group.get('subgroups', [])), "Unshared subgroup still found in test_user2's groups"
+        if stage == "share_begin":
+            # A pending subgroup invite is listed on both the group's and the subgroup's sharing-request routes.
+            user1_group_api = data["user1_group_api"]
+            request_id = user1_group_api.share_subgroup_by_qr_code(data['group_id'], data['subgroup_id'])
+            try:
+                assert request_id in _listed(user1_group_api, data['group_id']), "Subgroup invite is missing from the group list"
+                sub_entry = _listed(user1_group_api, data['group_id'], subgroup_id=data['subgroup_id']).get(request_id)
+                assert sub_entry is not None, "Subgroup invite is missing from the subgroup list"
+                assert sub_entry["subgroup_id"] == data['subgroup_id']
+            finally:
+                data["test_user1"].reject_sharing_request(request_id)
         elif stage == "subgroup_share":
             groups = user2_group_api.list_groups()
             shared_group = next((group for group in groups['groups'] if group['group_id'] == data['group_id']), None)
@@ -635,7 +651,7 @@ def test_last_primary_cannot_leave_when_secondary_present(test_user1, test_user2
 # whoever scans the returned request_id claims it.
 
 def test_qr_code_sharing_request_claimed_by_scanner(test_user1, test_user2):
-    """A QR code request is invisible to everyone until claimed, then claimable by request id alone."""
+    """A QR code request is in no one's inbox but is in the group's list until claimed, then claimable by request id alone."""
     user1_group_api = Group(test_user1)
     user2_group_api = Group(test_user2)
     group_id = user1_group_api.create_group(f"Test Group {uuid.uuid4()}")
@@ -648,9 +664,16 @@ def test_qr_code_sharing_request_claimed_by_scanner(test_user1, test_user2):
         assert not any(r["sharing_request_id"] == request_id for r in reqs), \
             "Unclaimed QR request must not appear in a user's received list"
 
+        # The group's own list does show it, flagged as QR and naming no invitee.
+        entry = _listed(user1_group_api, group_id).get(request_id)
+        assert entry is not None, "QR-code invite is missing from the group's list"
+        assert entry["is_qr"] is True
+        assert entry["target_username"] == "", "A QR-code invite names no invitee"
+
         # test_user2 scans the code and claims it by request id alone.
         resp = test_user2.make_api_request("POST", f"/v1/sharing-requests/{request_id}/accept")
         assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        assert request_id not in _listed(user1_group_api, group_id), "A claimed invite is still listed"
 
         groups = user2_group_api.list_groups()
         shared = next((g for g in groups["groups"] if g["group_id"] == group_id), None)
@@ -738,3 +761,36 @@ def test_create_sharing_request_on_foreign_group_denied(two_tenants, test_user3)
     reqs = user_c.get_sharing_requests() or []
     assert not any(r["group_id"] == tenant_b["group_id"] for r in reqs), \
         "A non-member created a valid sharing request for a foreign group"
+
+
+# Listing a group's pending sharing requests: GET /v1/groups/{groupId}/sharing-requests.
+
+def test_primary_lists_group_invites_and_filters_by_sender(test_user1, test_user2, test_user3):
+    """Scenarios 1 and 2: every primary sees the group's invites, whoever sent them, and sent_by narrows the list to one sender."""
+    user1_group_api, user2_group_api = Group(test_user1), Group(test_user2)
+    group_id = user1_group_api.create_group(f"Test Group {uuid.uuid4()}")
+    mine = None
+    try:
+        user1_group_api.share_group(group_id, test_user2.username, "primary")
+        accept_sharing_request_for(test_user2, group_id, "")
+
+        mine = user1_group_api.share_group(group_id, test_user3.username, "secondary").json()["request_id"]
+        theirs = user2_group_api.share_group_by_qr_code(group_id, "secondary")
+
+        entry = _listed(user2_group_api, group_id).get(mine)
+        assert entry is not None, "user2 cannot see the invite user1 sent"
+        assert entry["primary_user_id"] == test_user1.user_id
+        assert entry["target_username"] == test_user3.username, "The list should show exactly the username user1 typed"
+        assert entry["access_type"] == "secondary"
+        assert entry["is_qr"] is False
+        assert entry["expiration_time"] > time.time()
+
+        assert {mine, theirs} <= set(_listed(user1_group_api, group_id)), "user1's list is missing an invite"
+        assert set(_listed(user1_group_api, group_id, sent_by="me")) == {mine}, \
+            "sent_by=me should return only the caller's own invites"
+        assert set(_listed(user1_group_api, group_id, sent_by=test_user2.user_id)) == {theirs}, \
+            "sent_by=<user ID> should return only that primary's invites"
+    finally:
+        if mine:
+            test_user3.reject_sharing_request(mine)
+        user1_group_api.delete_group(group_id, warn_error=True)

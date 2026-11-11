@@ -60,6 +60,10 @@ Query Patterns:
    - Query by user_id and sharing_request_id
    - Used during accept/reject operations
 
+3. List a group's pending requests:
+   - Query the by-group GSI by group_id, optionally narrowed to one sub_entity_id
+   - Used by primary users to see every invite their group has sent
+
 Lifecycle:
 1. Owner shares group/subgroup -> Creates request
 2. Target user accepts/rejects -> Creates user_group_mapping entry
@@ -100,6 +104,7 @@ package sharing_request_db
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
@@ -113,10 +118,13 @@ import (
 )
 
 const (
-	SharingRequestsTable = "rmng-sharing-requests"
+	SharingRequestsTable        = "rmng-sharing-requests"
+	SharingRequestsByGroupIndex = "rmng-sharing-requests-by-group"
 
 	// WholeGroupSubEntityID is the sub_entity_id of a request for the whole group. It is never "" so that sub_entity_id can serve as an index sort key, which DynamoDB requires to be non-empty.
 	WholeGroupSubEntityID = "NONE"
+
+	defaultGroupSharingRequestsPageSize = 20
 
 	// How long a pending request stays claimable. A named invite lands in the
 	// recipient's inbox and pushes them a notification, so a day is ample. A QR
@@ -127,10 +135,12 @@ const (
 	unclaimedSharingRequestTTL = 7 * 24 * time.Hour
 )
 
-// Handlers map these to 404 and 410 respectively.
+// Handlers map these to 404, 410, 400 and 403 respectively.
 var (
 	ErrSharingRequestNotFound = errors.New("sharing request not found")
 	ErrSharingRequestExpired  = errors.New("sharing request has expired")
+	ErrInvalidStartKey        = errors.New("invalid start_key")
+	ErrListForbidden          = errors.New("insufficient permissions to list sharing requests")
 )
 
 // unclaimedUserIDPrefix marks the placeholder partition key of an unclaimed
@@ -161,6 +171,9 @@ func NewSharingRequestDB(ctx *rmngctx.RmngContext) *SharingRequestDB {
 			Name:     SharingRequestsTable,
 			HashKey:  "user_id",
 			RangeKey: "sharing_request_id",
+			Indexes: map[string]ddbu.IndexKeys{
+				SharingRequestsByGroupIndex: {HashKey: "group_id", RangeKey: "sub_entity_id"},
+			},
 		}),
 	}
 }
@@ -246,12 +259,57 @@ func (e *SharingRequestEntry) IsExpired() bool {
 	return e.ExpirationTime != 0 && time.Now().Unix() > e.ExpirationTime
 }
 
+// IsUnclaimed reports whether this is a QR-code request still waiting for someone to claim it.
+func (e *SharingRequestEntry) IsUnclaimed() bool {
+	return strings.HasPrefix(e.UserID, unclaimedUserIDPrefix)
+}
+
 // SubgroupID returns the subgroup the request is for, or "" for the whole group: "sub1" -> "sub1", "NONE" -> "". Rows written before "NONE" was introduced already hold "".
 func (e *SharingRequestEntry) SubgroupID() string {
 	if e.SubEntityID == WholeGroupSubEntityID {
 		return ""
 	}
 	return e.SubEntityID
+}
+
+type ListGroupSharingRequestsOutput struct {
+	Entries []SharingRequestEntry
+	NextKey string
+}
+
+// ListGroupSharingRequests lists a group's pending requests through the by-group GSI. An empty subGroupID lists the whole group, subgroup requests included; an empty sentBy skips the sender filter.
+func (db *SharingRequestDB) ListGroupSharingRequests(groupID, subGroupID, sentBy string, limit int64, startKey string) (*ListGroupSharingRequestsOutput, error) {
+	if err := db.Ctx.IsAuthorized(utils.GroupShare, groupID); err != nil {
+		return nil, rmerror.NewRMError(errors.Join(ErrListForbidden, err), "insufficient permissions to list sharing requests")
+	}
+
+	keyCondition := expression.Key("group_id").Equal(expression.Value(groupID))
+	if subGroupID != "" {
+		keyCondition = keyCondition.And(expression.Key("sub_entity_id").Equal(expression.Value(subGroupID)))
+	}
+	// DynamoDB's TTL sweep can lag up to ~48 hours, so expired rows are filtered here rather than trusted to be gone.
+	filter := expression.Name("expiration_time").GreaterThan(expression.Value(time.Now().Unix()))
+	if sentBy != "" {
+		filter = filter.And(expression.Name("primary_user_id").Equal(expression.Value(sentBy)))
+	}
+
+	if limit <= 0 {
+		limit = defaultGroupSharingRequestsPageSize
+	}
+
+	page, err := db.requests.Query(db.Ctx.Context, keyCondition, ddbu.QueryOpts{
+		Index:      SharingRequestsByGroupIndex,
+		Filter:     filter,
+		Limit:      int(limit),
+		StartToken: startKey,
+	})
+	if errors.Is(err, ddbu.ErrInvalidToken) {
+		return nil, rmerror.NewRMError(errors.Join(ErrInvalidStartKey, err), "invalid start_key")
+	}
+	if err != nil {
+		return nil, rmerror.NewRMError(err, "failed to list group sharing requests")
+	}
+	return &ListGroupSharingRequestsOutput{Entries: page.Items, NextKey: page.NextToken}, nil
 }
 
 // getSharingRequestByUserIDAuthorized reads the request row stored under userID.

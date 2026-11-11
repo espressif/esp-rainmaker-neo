@@ -303,19 +303,36 @@ def _decode(response):
         return {'raw': text}
 
 
-def _error_for(response, body):
-    detail = ''
+def _detail(body):
     if isinstance(body, dict):
-        detail = body.get('description') or body.get('message') or body.get('raw') or ''
-    message = f"HTTP {response.status_code}{f': {detail}' if detail else ''}"
-    if response.status_code in (401, 403):
-        return AuthError(message)
-    return CommandError(message)
+        return body.get('description') or body.get('message') or body.get('raw') or ''
+    return ''
+
+
+def _error_class(response):
+    return AuthError if response.status_code in (401, 403) else CommandError
+
+
+def _error_for(response, body):
+    detail = _detail(body)
+    return _error_class(response)(f"HTTP {response.status_code}{f': {detail}' if detail else ''}")
 
 
 def fail(message):
     """Abort the current command with exit code 1."""
     raise CommandError(message)
+
+
+def fail_response(action, response):
+    """Abort with the API's own message: fail_response('accept sharing request r1', <404 {"message": "Not found"}>) -> `✗ Failed to accept sharing request r1: 404 Not found`."""
+    raise _error_class(response)(f"Failed to {action}: {response.status_code} {_detail(_decode(response))}".rstrip())
+
+
+def cell(value):
+    """A table cell, with `-` for an empty value so a blank column still reads as a column."""
+    if isinstance(value, (list, tuple)):
+        value = ', '.join(str(v) for v in value)
+    return '-' if value in (None, '') else value
 
 
 def missing_credentials(settings=None):

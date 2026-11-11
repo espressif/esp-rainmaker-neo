@@ -1234,6 +1234,56 @@ short-lived and single-use.
 
 The `primary_*` fields identify the user who created (sent) the sharing request.
 
+### List a Group's Sharing Requests
+
+#### External Flow
+- A primary user opens the group's pending invites
+- Client calls the group sharing-requests list API
+- Every pending invite the group has sent is displayed: who was invited, at what access level, by whom, and when it expires
+
+#### Internal Flow
+
+**API**: `GET /v1/groups/{groupId}/sharing-requests`, or `GET /v1/groups/{groupId}/subgroups/{subGroupId}/sharing-requests` for one subgroup
+
+**Query parameters**: `page_size`, `start_key` (the `next_key` of the previous page), and `sent_by` to keep only one user's requests: a user ID, or `me` for the caller.
+
+**Process**:
+1. Check the caller has group-level access (`rmng-user-group-assoc`) and `group:share` on the group. Non-members and subgroup-only members get `403`, as do secondary members; the response never reveals whether the group exists.
+2. The subgroup route does not check that the subgroup exists: that would need `group:listsubentities` on top of `group:share`, and an extra read. A missing subgroup and one with no pending requests both return an empty list.
+3. Query the `rmng-sharing-requests-by-group` GSI
+   - Partition key `group_id`, sort key `sub_entity_id` (`"NONE"` for a whole-group request)
+   - The group route lists all of the group's requests, subgroup ones included; the subgroup route adds `sub_entity_id = subGroupId` to the key condition
+   - Filter `expiration_time > now`: the TTL sweep can lag ~48 hours, so expired rows are filtered rather than trusted to be gone
+   - With `sent_by`, also filter `primary_user_id` to that user (`me` is resolved to the caller's ID by the handler)
+4. Build each entry
+   - `target_username` is the stored username exactly as the sharer typed it. The list never looks the invitee up, so a sharer who invited by email never sees the invitee's phone number, or the other way round.
+   - QR-code requests (`user_id` starts with `req-`) get `is_qr: true` and an empty `target_username`
+   - `subgroup_id` is `""` for a whole-group request (`"NONE"` in the table)
+
+**Account-existence oracle**: a share to an unregistered username stores a decoy row ([Share Group](#share-group), step 2) with the same attributes and lifetime as a real one. The list returns no `user_id`, and a decoy's entry differs from a real one only in its own ID, username and expiry, so the list cannot tell registered and unregistered usernames apart.
+
+QR-code request IDs are returned in full. A primary user can already create such an invite, so listing one hands them nothing they could not make themselves.
+
+**Response**:
+```json
+{
+  "sharing_requests": [
+    {
+      "sharing_request_id": "uuid-123",
+      "access_type": "secondary",
+      "subgroup_id": "",
+      "is_qr": false,
+      "target_username": "guest@example.com",
+      "primary_user_id": "user-abc-123",
+      "primary_email": "owner@example.com",
+      "primary_phone_number": "",
+      "expiration_time": 1767225600
+    }
+  ],
+  "next_key": "<opaque pagination token>"
+}
+```
+
 ### Approve/Decline Group/Subgroup Sharing Request
 
 #### External Flow
