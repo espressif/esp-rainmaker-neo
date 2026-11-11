@@ -121,6 +121,11 @@ First tagged release!
   - Admin dashboard — UI for all admin operations.
   - `morpheus` — a console client that exercises all paths as a user/admin or a simulated node.
 
+### Known issues
+
+- **Deployment**
+  - A fresh install can roll back the Alexa, Google Home and SmartThings stacks on a race condition. Fixed in 0.8.1 ([!894](https://gitlab.espressif.cn:6688/app-frameworks/esp-rainmaker-neo/-/merge_requests/894)).
+
 [Unreleased]: https://github.com/espressif/esp-rainmaker-neo/compare/v0.8.1...HEAD
 [0.8.1]: https://github.com/espressif/esp-rainmaker-neo/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/espressif/esp-rainmaker-neo/releases/tag/v0.8.0
