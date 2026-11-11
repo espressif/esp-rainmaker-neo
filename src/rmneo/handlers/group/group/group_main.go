@@ -766,6 +766,12 @@ func handleSharingRequest(context context.Context, request events.APIGatewayProx
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Missing group ID")), nil
 	}
 
+	// Checked before the username is resolved, so a caller who may not share learns nothing about which usernames are registered: every refusal is this same 403.
+	if err := group.CheckCanShareGroup(ctx, groupID); err != nil {
+		rlog.Error(ctx).Err(err).Send()
+		return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("Insufficient permissions to share this group")), nil
+	}
+
 	// An empty username requests the QR-code flow: create a real, claimable
 	// unclaimed request instead of resolving a specific invitee up front.
 	target := group.ShareTarget{Username: req.Username}

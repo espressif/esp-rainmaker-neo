@@ -1782,6 +1782,11 @@ paths:
         7 days for a QR-code request, which has to survive being printed or
         passed around rather than sitting in an inbox. Acting on an expired
         request answers `410`.
+
+        The caller's share permission is checked before `username` is looked
+        up: a caller who may not share the group gets `403` whatever username
+        they sent, so the endpoint cannot be used to test which usernames are
+        registered.
       tags:
         - Group Sharing
       security:
@@ -1814,6 +1819,8 @@ paths:
                   Invite sent if the user is registered with ESP RainMaker Neo
         "400":
           $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "500":
           $ref: "#/components/responses/InternalServerError"
 
@@ -1898,6 +1905,8 @@ paths:
                   Invite sent if the user is registered with ESP RainMaker Neo
         "400":
           $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "500":
           $ref: "#/components/responses/InternalServerError"
 

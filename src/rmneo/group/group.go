@@ -34,6 +34,7 @@ import (
 // from "not found/no access".
 // ErrNodeAddForbidden is mapped to 403: the caller lacks group:editnodes on the target group (e.g. secondary access).
 // ErrSubGroupNodesForbidden is mapped to 403: the caller can reach the subgroup but lacks group:editnodes (secondary or subentity access).
+// ErrShareForbidden is mapped to 403: the caller is not a member, or lacks group:share.
 var (
 	ErrGroupNotEmpty           = errors.New("group not empty")
 	ErrSubGroupNotEmpty        = errors.New("subgroup not empty")
@@ -46,6 +47,7 @@ var (
 	ErrNotMatterCapable        = errors.New("group does not have Matter capability")
 	ErrCapabilityAlreadyExists = errors.New("group already has capability")
 	ErrSelfSharingRequest      = errors.New("cannot accept your own sharing request")
+	ErrShareForbidden          = errors.New("insufficient permissions to share this group")
 )
 
 // IsChildNode reports whether nodeID denotes a child (sub-)node under the
@@ -603,6 +605,17 @@ func DeleteSubGroup(ctx *rmngctx.RmngContext, groupID string, subGroupID string)
 		// Don't fail the deletion — the subgroup is already removed
 	}
 
+	return nil
+}
+
+// CheckCanShareGroup returns ErrShareForbidden unless the caller is a member of groupID holding group:share. It never looks at an invitee, so callers can run it before resolving one.
+func CheckCanShareGroup(ctx *rmngctx.RmngContext, groupID string) error {
+	if _, err := GetUserGroupAccess(ctx, groupID); err != nil {
+		return rmerror.NewRMError(errors.Join(ErrShareForbidden, err), "insufficient permissions to share this group")
+	}
+	if err := ctx.IsAuthorized(utils.GroupShare, groupID); err != nil {
+		return rmerror.NewRMError(errors.Join(ErrShareForbidden, err), "insufficient permissions to share this group")
+	}
 	return nil
 }
 

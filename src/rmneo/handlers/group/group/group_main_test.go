@@ -1734,8 +1734,20 @@ var _ = Describe("Group Main", func() {
 
 			response, err := handleSharingRequest(ctx, shareRequest)
 			Expect(err).To(BeNil())
-			Expect(response.StatusCode).To(Equal(http.StatusInternalServerError))
-			Expect(response.Body).To(ContainSubstring("Failed to create sharing request"))
+			Expect(response.StatusCode).To(Equal(http.StatusForbidden))
+			Expect(response.Body).To(ContainSubstring("Insufficient permissions to share this group"))
+		})
+
+		It("should refuse a caller who cannot share identically for registered and unregistered usernames", func() {
+			// Non-member first, then the same user as a secondary member: neither may share, and neither may learn whether a username is registered.
+			for _, setup := range []func(){func() {}, func() { ShareGroupAndApprove(ctx, groupID, userID, otherUserID, utils.GroupSecondaryAccess) }} {
+				setup()
+				registered := ShareRequestViaRouter(ctx, groupID, "", otherUserID, userEmail)
+				unregistered := ShareRequestViaRouter(ctx, groupID, "", otherUserID, "nobody@example.com")
+				Expect(registered.StatusCode).To(Equal(http.StatusForbidden))
+				Expect(unregistered.StatusCode).To(Equal(registered.StatusCode))
+				Expect(unregistered.Body).To(Equal(registered.Body))
+			}
 		})
 
 		It("should share a group with a user named by E.164 phone number", func() {
@@ -2112,8 +2124,8 @@ var _ = Describe("Group Main", func() {
 
 			response, err := handleSharingRequest(ctx, shareRequest)
 			Expect(err).To(BeNil())
-			Expect(response.StatusCode).To(Equal(http.StatusInternalServerError))
-			Expect(response.Body).To(ContainSubstring("Failed to create sharing request"))
+			Expect(response.StatusCode).To(Equal(http.StatusForbidden))
+			Expect(response.Body).To(ContainSubstring("Insufficient permissions to share this group"))
 		})
 
 		It("should share a subgroup with a user named by E.164 phone number", func() {

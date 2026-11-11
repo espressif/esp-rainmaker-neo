@@ -1076,7 +1076,10 @@ IDs are rejected with HTTP 400. `username` is itself optional — omitting it
 creates a QR-code request instead of naming a recipient.
 
 **Process**:
-1. Verify user has permission (requires primary access)
+1. Verify user has permission (requires primary access), **before** looking
+   at `username`: a non-member, a subgroup-only member or a secondary member
+   gets the same `403`, whatever username they sent, so the endpoint cannot be
+   used to test which usernames are registered.
 2. Resolve the target `username` to a `user_id`. Skipped entirely when
    `username` is absent — there is nobody to resolve, and the request is stored
    unclaimed (step 4).
@@ -1539,7 +1542,7 @@ device.
 `access_type` is ignored for subgroup sharing — a subgroup can only be shared with `subentity` access.
 
 **Process**:
-1. Verify user has permission on parent group (requires primary access)
+1. Verify user has permission on parent group (requires primary access), before looking at `username`, with the same `403` as [Share Group](#share-group)
 2. Resolve the target `username` to a `user_id` — same lookup, validation and
    decoy behaviour as [Share Group](#share-group)
 3. Verify user is not sharing with themselves
