@@ -7,7 +7,7 @@ harness. For the contracts behind each step, follow the links to the specs.
 
 ## Step 1: Create admin user
 
-Configured in `cli/test_config.json`:
+Configured in `~/.espressif/rainmaker-neo/morpheus/test_config.<account-id>-<region>.json`:
 ```json
 {
   "users": [
@@ -20,7 +20,7 @@ Configured in `cli/test_config.json`:
 }
 ```
 
-The integration-test harness creates this user for you (`test/itest/conftest.py`), registering it in the admin Cognito pool. See [Authentication and Permissions](authentication.md) for what admin-pool membership buys.
+`esp-morpheus admin test-data setup` creates this user, registering it in the admin Cognito pool. See [Authentication and Permissions](authentication.md) for what admin-pool membership buys.
 
 ## Step 2: Register nodes
 

@@ -22,6 +22,7 @@ from cryptography.hazmat.primitives import serialization
 from ...sdk.group import Group
 from .. import output
 from ..context import pass_session
+from . import configsync
 
 # Thing-name prefix the integration tests generate ("test-<key_type>-device-<uuid>" and similar).
 TEST_THING_PREFIX = 'test-'
@@ -43,10 +44,12 @@ def test_data():
 @test_data.command('setup')
 @pass_session
 def setup(session):
-    """Provision every user and node in test_config.json, writing the file if it is absent."""
+    """Provision every user and node in test_config.json, first syncing it with this deployment's S3 copy.
+
+    A missing or unstamped local file is replaced by the S3 copy, or generated and uploaded when S3 has none.
+    """
     session.require_aws()
-    if not session.config_exists():
-        session.generate_config()
+    configsync.sync(session)
 
     user_map = _setup_users(session)
     _setup_nodes(session, user_map)

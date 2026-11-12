@@ -8,15 +8,16 @@ import threading
 from queue import Empty, Queue
 
 from .. import paths
-from ..outputs import TEST_CONFIG_PATH, RmngSettings
+from ..outputs import RmngSettings
 from ..sdk.device import Device
 
 
 class DeviceSim:
-    def __init__(self, device_id, config_path=TEST_CONFIG_PATH, rmng_outputs_path=None):
+    def __init__(self, device_id, config_path=None, rmng_outputs_path=None):
         self.device_id = device_id
 
         settings = RmngSettings.from_source(rmng_outputs_path)
+        config_path = config_path or paths.test_config_path(settings.account_id, settings.region)
         self.iot_endpoint = settings.iot_endpoint
         self.region = settings.region
 

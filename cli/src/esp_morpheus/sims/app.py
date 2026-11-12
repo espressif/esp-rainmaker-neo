@@ -13,7 +13,7 @@ from queue import Empty, Queue
 from prompt_toolkit import PromptSession
 
 from .. import paths
-from ..outputs import TEST_CONFIG_PATH, RmngSettings
+from ..outputs import RmngSettings
 from ..sdk.group import Group
 from ..sdk.user import User
 from ..sdk.util import shadow_to_unstructured
@@ -29,7 +29,7 @@ blue = "\033[94m"
 reset = "\033[0m"
 
 class AppSim:
-    def __init__(self, user_id, config_path=TEST_CONFIG_PATH, rmng_outputs_path=None, user=None):
+    def __init__(self, user_id, config_path=None, rmng_outputs_path=None, user=None):
         """Initialize the app simulator.
 
         `user` is an already-resolved User. Pass it to drive any account in the deployment,
@@ -39,6 +39,7 @@ class AppSim:
         self.user_id = user_id
 
         settings = RmngSettings.from_source(rmng_outputs_path)
+        config_path = config_path or paths.test_config_path(settings.account_id, settings.region)
         self.region = settings.region
         self.identity_pool_id = settings.identity_pool_id
         self.api_gateway_url = settings.api_gateway_url

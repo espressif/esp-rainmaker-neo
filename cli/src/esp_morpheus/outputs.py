@@ -30,7 +30,6 @@ REPO_ROOT = str(paths.repo_root()) if paths.repo_root() else None
 # by an older checkout still resolves.
 DEFAULT_OUTPUTS_FILE = 'rmng-outputs.json'
 
-TEST_CONFIG_PATH = str(paths.test_config_path())
 
 # Seeded end-user OIDC client id, used when the outputs predate the EspUserClientId output.
 DEFAULT_ESP_USER_CLIENT_ID = 'user-pool-client'
@@ -290,3 +289,14 @@ def verify_aws_identity(settings):
             else "no region is configured"
         print(f"Note: {settings.source} describes region {settings.region} and {described}; "
               f"using {settings.region}.")
+
+
+def __getattr__(name):
+    # Resolved on access rather than at import, since it depends on the deployment the outputs name. Empty when no outputs resolve: opening it raises FileNotFoundError, which every caller handles.
+    if name == 'TEST_CONFIG_PATH':
+        try:
+            settings = RmngSettings.from_source()
+        except (OutputsError, OSError, ValueError):
+            return ''
+        return str(paths.test_config_path(settings.account_id, settings.region))
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

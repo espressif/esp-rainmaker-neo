@@ -17,7 +17,7 @@ import traceback
 import click
 from botocore.exceptions import NoCredentialsError
 
-from .. import __version__, paths
+from .. import __version__
 from ..sdk.errors import NotReadyError
 from . import (
     device as device_commands,
@@ -134,7 +134,7 @@ def device_sim(ctx, node):
     from ..sims.device import DeviceSim
 
     session = ctx.find_object(Session)
-    sims.run(DeviceSim(node, config_path=str(paths.test_config_path()),
+    sims.run(DeviceSim(node, config_path=str(session.config_path()),
                        rmng_outputs_path=session.settings.source),
              sims.device_shell, f"node:{node}", 'device_sim')
 
