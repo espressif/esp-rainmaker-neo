@@ -7,6 +7,8 @@
 [![Download iOS App](https://img.shields.io/badge/Download-iOS_App-0066CC?logo=appstore)](https://apps.apple.com/us/app/esp-rainmaker-home/id1563728960)
 &nbsp;
 [![Download Android App](https://img.shields.io/badge/Download-Android_App-0066CC?logo=googleplay)](https://play.google.com/store/apps/details?id=com.espressif.novahome)
+&nbsp;
+[![esp-morpheus on PyPI](https://img.shields.io/pypi/v/esp-morpheus?label=esp-morpheus&logo=pypi&color=0066CC)](https://pypi.org/project/esp-morpheus/)
 
 **Documentation**
 
