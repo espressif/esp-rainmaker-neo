@@ -7,7 +7,7 @@
 Installed, the command runs from any directory, so nothing may anchor to the CWD. Each resolver
 below answers in the same order: an environment override, then the repo checkout when the caller
 is standing in one, then XDG. The checkout comes before XDG so a developer who already has
-cli/test_config.json and a .sim/ cache keeps using them after the install.
+a .sim/ cache keeps using it after the install. Test configs are the exception: one per deployment, always under ~/.espressif/rainmaker-neo/morpheus.
 """
 
 import os
@@ -17,7 +17,6 @@ import pathlib
 # happens to contain a cli/ folder is not mistaken for one.
 _REPO_MARKERS = ('cdk.json', 'cli/src/esp_morpheus')
 
-_ENV_CONFIG = 'MORPHEUS_CONFIG'
 _ENV_CONFIG_DIR = 'MORPHEUS_CONFIG_DIR'
 _ENV_CACHE_DIR = 'MORPHEUS_CACHE_DIR'
 
@@ -58,7 +57,7 @@ def _xdg(env_var, default):
 
 
 def config_dir():
-    """Directory for user-editable state: test_config.json, bot credentials."""
+    """Directory for user-editable state: bot credentials."""
     override = os.environ.get(_ENV_CONFIG_DIR)
     if override:
         return pathlib.Path(override).expanduser()
@@ -84,12 +83,17 @@ def ensure(path):
     return path
 
 
-def test_config_path():
-    """The seeded test users and nodes, written by `esp-morpheus admin test-data setup`."""
-    override = os.environ.get(_ENV_CONFIG)
+def test_config_dir():
+    """Where the per-deployment test configs live: one place for a checkout and an installed copy, so the two cannot drift."""
+    override = os.environ.get(_ENV_CONFIG_DIR)
     if override:
         return pathlib.Path(override).expanduser()
-    return config_dir() / 'test_config.json'
+    return pathlib.Path.home() / '.espressif' / 'rainmaker-neo' / 'morpheus'
+
+
+def test_config_path(account_id, region):
+    """The seeded test users and nodes of one deployment: ('111122223333', 'ap-south-1') -> ~/.espressif/rainmaker-neo/morpheus/test_config.111122223333-ap-south-1.json."""
+    return test_config_dir() / f'test_config.{account_id}-{region}.json'
 
 
 def bot_credentials_path():

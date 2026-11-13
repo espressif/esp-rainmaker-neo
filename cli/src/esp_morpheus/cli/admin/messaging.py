@@ -10,7 +10,6 @@ the account the outputs name.
 
 import click
 
-from ... import paths
 from .. import output
 from ..context import pass_session
 
@@ -26,7 +25,7 @@ def _mailosaur_credentials(session):
     api_key = session.config.get('mailosaur_api_key')
     if not server_id or not api_key:
         output.fail('Set mailosaur_server_id and mailosaur_api_key in '
-                    f"{paths.test_config_path()} to use --mailosaur.")
+                    f"{session.config_path()} to use --mailosaur.")
     return server_id, api_key
 
 

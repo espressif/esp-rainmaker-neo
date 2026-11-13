@@ -26,6 +26,9 @@ from . import output
 
 TEST_CONFIG_DEFAULTS = 'test_config.default.json'
 
+# test_config.json key naming the account and region its users and nodes were provisioned in.
+DEPLOYMENT_KEY = 'deployment'
+
 # Tries at the prompt before giving up, counting the first. Only a typed password is re-asked for:
 # one from --password or RMNG_PASSWORD came from a script, which cannot answer.
 PASSWORD_ATTEMPTS = 3
@@ -57,6 +60,7 @@ class Session:
         self.settings_error = None
         self._aws_verified = False
         self._config = None
+        self._config_path = None
         # The `user` and `device` groups record which identity was asked for; the object is built
         # on first use, so `esp-morpheus user 0 group --help` needs no credentials.
         self._user_identity = None
@@ -186,11 +190,39 @@ class Session:
     @property
     def config(self):
         if self._config is None:
-            self._config = self._read_config() or {}
+            config = self._read_config() or {}
+            self._check_deployment(config)
+            self._config = config
         return self._config
 
+    def deployment_stamp(self):
+        return {'account_id': self.settings.account_id, 'region': self.settings.region}
+
+    def _check_deployment(self, config):
+        """Refuse a test_config.json stamped for another deployment: its passwords and certs do not match this one's users and things."""
+        stamp = config.get(DEPLOYMENT_KEY)
+        if not stamp or self.try_settings() is None:
+            return
+        if stamp != self.deployment_stamp():
+            output.fail(f"{self.config_path()} belongs to account {stamp.get('account_id')} in "
+                        f"{stamp.get('region')}, but {self.settings.source} describes account "
+                        f"{self.settings.account_id} in {self.settings.region}. Point --client-outputs at "
+                        "that deployment, or move the file aside and run `esp-morpheus admin test-data "
+                        "setup` to fetch this deployment's copy from S3.")
+
+    def config_path(self):
+        """This deployment's test_config.json, fetched from S3 the first time this machine uses the deployment."""
+        if self._config_path is None:
+            self._config_path = paths.test_config_path(self.settings.account_id, self.settings.region)
+            if not self._config_path.exists():
+                from .admin import configsync  # late: configsync imports this module
+                configsync.fetch(self)
+        return self._config_path
+
     def _read_config(self):
-        path = paths.test_config_path()
+        if self.try_settings() is None:
+            return None
+        path = self.config_path()
         try:
             with open(path) as handle:
                 return json.load(handle)
@@ -202,19 +234,22 @@ class Session:
             output.fail(f"Invalid JSON in {path}: {e}")
 
     def config_exists(self):
-        return paths.test_config_path().exists()
+        return self.try_settings() is not None and self.config_path().exists()
 
     def write_config(self, config=None):
-        path = paths.test_config_path()
+        path = self.config_path()
         paths.ensure(path.parent)
+        if config is not None:
+            self._config = config
         with open(path, 'w') as handle:
-            json.dump(config if config is not None else self.config, handle, indent=2)
+            json.dump(self.config, handle, indent=2)
         return path
 
     def generate_config(self):
         """Write test_config.json from the packaged defaults, with fresh passwords and certs."""
         defaults = paths.data_dir() / TEST_CONFIG_DEFAULTS
         config = output.read_json_file(defaults, 'defaults file')
+        config[DEPLOYMENT_KEY] = self.deployment_stamp()
 
         for user in config.get('users', []):
             user['password'] = generate_password()
@@ -227,7 +262,6 @@ class Session:
             node['key'] = key_pem
 
         path = self.write_config(config)
-        self._config = config
         output.ok(f"Wrote {path}: {len(config.get('users', []))} user(s), "
                   f"{len(config.get('nodes', []))} node(s), passwords and certs auto-generated. "
                   "Gitignored — never commit it.")

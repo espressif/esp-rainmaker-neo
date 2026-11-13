@@ -35,6 +35,21 @@ def plain_output():
     output.configure(json_mode=False, verbose=0)
 
 
+@pytest.fixture(autouse=True)
+def isolated_config(tmp_path, monkeypatch):
+    """Configs under tmp_path, the fake deployment as the default outputs and an empty S3, so no test reads the developer's deployment or reaches AWS."""
+    from esp_morpheus import outputs
+    from esp_morpheus.cli.admin import configsync
+
+    monkeypatch.setenv('MORPHEUS_CONFIG_DIR', str(tmp_path))
+    default_outputs = tmp_path / 'default-outputs.json'
+    default_outputs.write_text(json.dumps(OUTPUTS))
+    monkeypatch.setattr(outputs, 'DEFAULT_OUTPUTS_FILE', str(default_outputs))
+    s3 = MockS3()
+    monkeypatch.setattr(configsync, '_s3_client', lambda region: s3)
+    return s3
+
+
 # --- the tree ---------------------------------------------------------------
 
 @pytest.mark.parametrize('args', [
@@ -94,7 +109,7 @@ def test_admin_is_the_only_config_key_that_grants_the_admin_pool(outputs_file, t
     from esp_morpheus.cli.admin import _configured_admin
 
     monkeypatch.setenv('MORPHEUS_CONFIG_DIR', str(tmp_path))
-    (tmp_path / 'test_config.json').write_text(json.dumps({'users': [
+    (tmp_path / CONFIG_NAME).write_text(json.dumps({'users': [
         {'name': 'stale@example.com', 'password': 'pw', 'super_admin': True},
         {'name': 'boss@example.com', 'password': 'pw', 'admin': True}]}))
     session = Session(outputs_source=outputs_file)
@@ -169,6 +184,10 @@ OUTPUTS = {
     },
     'espuser-base': {'EspUserApiUrl': 'https://user.example.com/'},
 }
+
+
+# The file the fake deployment in OUTPUTS reads its test users and nodes from.
+CONFIG_NAME = 'test_config.111122223333-ap-south-1.json'
 
 
 @pytest.fixture
@@ -513,13 +532,13 @@ def test_gen_device_stdout_prints_the_material_and_writes_nothing(run, tmp_path,
     result = run('admin', 'test-data', 'gen-device', 'node_test', 'ec', '--stdout')
     assert result.exit_code == 0
     assert 'BEGIN CERTIFICATE' in result.output
-    assert not (tmp_path / 'test_config.json').exists()
+    assert not (tmp_path / CONFIG_NAME).exists()
 
 
 def test_gen_device_appends_to_test_config(run, tmp_path, monkeypatch):
     """The point of the command: the node is usable as `esp-morpheus device <index>` straight after."""
     monkeypatch.setenv('MORPHEUS_CONFIG_DIR', str(tmp_path))
-    config = tmp_path / 'test_config.json'
+    config = tmp_path / CONFIG_NAME
     config.write_text(json.dumps({'nodes': [{'thing_name': 'node_ec', 'cert': 'c', 'key': 'k'}]}))
 
     assert run('admin', 'test-data', 'gen-device', 'node_test', 'ec').exit_code == 0
@@ -533,14 +552,14 @@ def test_gen_device_seeds_the_defaults_when_there_is_no_config(run, tmp_path, mo
     larger side effect than doing it here."""
     monkeypatch.setenv('MORPHEUS_CONFIG_DIR', str(tmp_path))
     assert run('admin', 'test-data', 'gen-device', 'node_test', 'ec').exit_code == 0
-    config = json.loads((tmp_path / 'test_config.json').read_text())
+    config = json.loads((tmp_path / CONFIG_NAME).read_text())
     assert config['users'] and config['ca_cert']
     assert config['nodes'][-1]['thing_name'] == 'node_test'
 
 
 def test_gen_device_refuses_to_overwrite_without_force(run, tmp_path, monkeypatch):
     monkeypatch.setenv('MORPHEUS_CONFIG_DIR', str(tmp_path))
-    config = tmp_path / 'test_config.json'
+    config = tmp_path / CONFIG_NAME
     config.write_text(json.dumps({'nodes': [{'thing_name': 'node_test', 'cert': 'c', 'key': 'k'}]}))
 
     result = run('admin', 'test-data', 'gen-device', 'node_test', 'ec')
@@ -551,7 +570,7 @@ def test_gen_device_refuses_to_overwrite_without_force(run, tmp_path, monkeypatc
 def test_gen_device_force_keeps_the_other_node_fields(run, tmp_path, monkeypatch):
     """A regenerated certificate must not drop the association the entry already carried."""
     monkeypatch.setenv('MORPHEUS_CONFIG_DIR', str(tmp_path))
-    config = tmp_path / 'test_config.json'
+    config = tmp_path / CONFIG_NAME
     config.write_text(json.dumps({'nodes': [
         {'thing_name': 'node_test', 'cert': 'c', 'key': 'k',
          'associate_to': 'test-user1@example.com', 'node_cfg': 'node_config_va_multi.json'}]}))
@@ -565,6 +584,188 @@ def test_gen_device_force_keeps_the_other_node_fields(run, tmp_path, monkeypatch
 
 def test_gen_device_rejects_a_bad_key_type(run):
     assert run('admin', 'test-data', 'gen-device', 'node_test', 'dsa').exit_code == output.EXIT_USAGE
+
+
+# --- test_config.json in S3 -------------------------------------------------
+
+class MockS3:
+    """One object in one bucket, with S3's conditional-write semantics."""
+
+    def __init__(self):
+        self.body = None
+        self.metadata = None
+        self.version = 0
+        self.buckets = set()
+
+    @staticmethod
+    def _error(code):
+        return ClientError({'Error': {'Code': code}}, 'S3')
+
+    def _etag(self):
+        return f'"v{self.version}"'
+
+    def head_object(self, Bucket, Key):
+        if self.body is None:
+            raise self._error('404')
+        return {'Metadata': dict(self.metadata), 'ETag': self._etag()}
+
+    def get_object(self, Bucket, Key):
+        body = self.body
+        return {'Body': type('Body', (), {'read': lambda self: body})()}
+
+    def put_object(self, Bucket, Key, Body, Metadata, IfMatch=None, IfNoneMatch=None, **kwargs):
+        if (IfNoneMatch and self.body is not None) or (IfMatch and IfMatch != self._etag()):
+            raise self._error('PreconditionFailed')
+        self.body, self.metadata = Body, Metadata
+        self.version += 1
+
+    def create_bucket(self, Bucket, **kwargs):
+        if Bucket in self.buckets:
+            raise self._error('BucketAlreadyOwnedByYou')
+        self.buckets.add(Bucket)
+
+    def put_public_access_block(self, **kwargs):
+        pass
+
+    def put_bucket_versioning(self, **kwargs):
+        pass
+
+    def put_bucket_policy(self, **kwargs):
+        pass
+
+    def remote(self):
+        return json.loads(self.body)
+
+
+@pytest.fixture
+def s3_sync(tmp_path, isolated_config, outputs_file):
+    """configsync.sync against the mock S3, with test_config.json under tmp_path."""
+    from esp_morpheus.cli.admin import configsync
+
+    def sync():
+        configsync.sync(Session(outputs_source=outputs_file))
+
+    sync.s3 = isolated_config
+    sync.config = tmp_path / CONFIG_NAME
+    sync.local = lambda: json.loads(sync.config.read_text())
+    sync.write = lambda config: sync.config.write_text(json.dumps(config))
+    return sync
+
+
+STAMP = {'account_id': '111122223333', 'region': 'ap-south-1'}
+
+
+def test_setup_uploads_the_config_it_generates(s3_sync):
+    s3_sync()
+    local = s3_sync.local()
+    assert local['deployment'] == STAMP
+    assert s3_sync.s3.remote()['users'] == local['users']
+    assert 'synced_sha256' not in s3_sync.s3.remote()
+
+
+def test_setup_fetches_a_lost_config_instead_of_generating_one(s3_sync):
+    """The original bug: fresh passwords for users that already exist with the old ones."""
+    s3_sync()
+    uploaded = s3_sync.s3.remote()
+    s3_sync.config.unlink()
+    s3_sync()
+    assert s3_sync.local()['users'] == uploaded['users']
+    assert s3_sync.s3.version == 1
+
+
+def test_setup_leaves_a_matching_config_alone(s3_sync):
+    s3_sync()
+    s3_sync()
+    assert s3_sync.s3.version == 1
+
+
+def test_setup_uploads_a_local_edit(s3_sync):
+    """gen-device, bot-user and ses-sender add to the local file; the next setup carries that to S3."""
+    s3_sync()
+    s3_sync.write({**s3_sync.local(), 'ci_bot_user': 'rmng-ci'})
+    s3_sync()
+    assert s3_sync.s3.remote()['ci_bot_user'] == 'rmng-ci'
+
+
+def test_setup_fetches_a_newer_s3_copy(s3_sync):
+    s3_sync()
+    newer = {**s3_sync.s3.remote(), 'ci_bot_user': 'rmng-ci'}
+    s3_sync.s3.body = json.dumps(newer).encode()
+    s3_sync.s3.metadata = {'content-sha256': 'newer'}
+    s3_sync()
+    assert s3_sync.local()['ci_bot_user'] == 'rmng-ci'
+
+
+def test_setup_refuses_when_both_sides_changed(s3_sync):
+    s3_sync()
+    s3_sync.s3.metadata = {'content-sha256': 'newer'}
+    s3_sync.write({**s3_sync.local(), 'ci_bot_user': 'local'})
+    with pytest.raises(output.CommandError, match='both changed'):
+        s3_sync()
+    assert s3_sync.local()['ci_bot_user'] == 'local'
+
+
+def test_setup_replaces_an_unstamped_config_with_the_s3_copy(s3_sync):
+    """A file from before the stamp could belong to any account, so S3 wins."""
+    s3_sync()
+    uploaded = s3_sync.s3.remote()
+    s3_sync.write({'users': [{'name': 'u@example.com', 'password': 'p'}]})
+    s3_sync()
+    assert s3_sync.local()['users'] == uploaded['users']
+    assert s3_sync.s3.version == 1
+
+
+def test_setup_replaces_an_unstamped_config_when_s3_has_none(s3_sync):
+    s3_sync.write({'users': [{'name': 'u@example.com', 'password': 'p'}]})
+    s3_sync()
+    assert s3_sync.local()['deployment'] == STAMP
+    assert s3_sync.s3.remote()['users'] != [{'name': 'u@example.com', 'password': 'p'}]
+
+
+def test_a_config_stamped_for_another_account_is_refused(outputs_file, tmp_path, monkeypatch):
+    """Checked on every command from the local file alone, so no command reads S3."""
+    monkeypatch.setenv('MORPHEUS_CONFIG_DIR', str(tmp_path))
+    (tmp_path / CONFIG_NAME).write_text(json.dumps({
+        'deployment': {'account_id': '123456789012', 'region': 'ap-south-1'}, 'users': []}))
+    with pytest.raises(output.CommandError, match='123456789012'):
+        _ = Session(outputs_source=outputs_file).config
+
+
+@pytest.fixture
+def per_deployment(tmp_path, outputs_file):
+    session = lambda: Session(outputs_source=outputs_file)  # noqa: E731
+    session.path = tmp_path / CONFIG_NAME
+    return session
+
+
+def test_each_deployment_has_its_own_config(per_deployment):
+    assert per_deployment().config_path() == per_deployment.path
+
+
+def test_a_missing_config_is_fetched_from_s3(per_deployment, isolated_config):
+    """The first use of a deployment on this machine; later commands read only the local file."""
+    isolated_config.body = json.dumps({'deployment': STAMP, 'users': [{'name': 'u@example.com'}]}).encode()
+    isolated_config.metadata = {'content-sha256': 'x'}
+    assert per_deployment().config['users'] == [{'name': 'u@example.com'}]
+    assert per_deployment.path.exists()
+
+
+def test_a_failed_fetch_leaves_the_command_running(per_deployment, monkeypatch):
+    """`user` and `device` need no AWS credentials, so a fetch without them must not fail the command."""
+    from botocore.exceptions import NoCredentialsError
+    from esp_morpheus.cli.admin import configsync
+
+    def no_credentials(**kwargs):
+        raise NoCredentialsError()
+
+    monkeypatch.setattr(configsync, '_s3_client', lambda region: type('S3', (), {'head_object': staticmethod(no_credentials)})())
+    assert per_deployment().config == {}
+
+
+def test_bucket_name_is_account_regional():
+    from esp_morpheus.cli.admin.configsync import bucket_name
+    settings = type('Settings', (), {'account_id': '111122223333', 'region': 'ap-south-1'})()
+    assert bucket_name(settings) == 'rmng-test-config-111122223333-ap-south-1-an'
 
 
 # --- bot-user ---------------------------------------------------------------
@@ -644,7 +845,7 @@ def bot(tmp_path, monkeypatch, outputs_file):
         return runner.invoke(cli, ['--client-outputs', outputs_file, 'admin', 'bot-user', *args])
 
     invoke.iam = iam
-    invoke.config = tmp_path / 'test_config.json'
+    invoke.config = tmp_path / CONFIG_NAME
     invoke.credentials = tmp_path / 'bot-iam-user-credentials.json'
     return invoke
 
@@ -780,14 +981,14 @@ def test_app_sim_drives_an_identity_outside_test_config(outputs_file, tmp_path, 
     sim = AppSim('someone@example.com', user=session.user, rmng_outputs_path=outputs_file)
     assert sim.user.username == 'someone@example.com'
     assert sim.config == {}
-    assert not (tmp_path / 'test_config.json').exists()
+    assert not (tmp_path / CONFIG_NAME).exists()
 
 
 def test_app_sim_still_reads_test_config_when_given_no_user(outputs_file, tmp_path):
     """The pre-existing lookup stays for callers that pass only an id."""
     from esp_morpheus.sims.app import AppSim
 
-    config = tmp_path / 'test_config.json'
+    config = tmp_path / CONFIG_NAME
     config.write_text(json.dumps({'users': [{'name': 'seeded@example.com', 'password': 'pw'}]}))
     sim = AppSim('seeded@example.com', config_path=str(config), rmng_outputs_path=outputs_file)
     assert sim.user.username == 'seeded@example.com'
