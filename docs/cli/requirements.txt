@@ -1,0 +1,6 @@
+# Builds docs/cli (the /cli/ pages of the API reference site). esp-morpheus itself is installed
+# from ./cli alongside, so mkdocs-click can read its commands.
+mkdocs==1.6.1
+mkdocs-material==9.8.1
+mkdocs-click==0.9.0
+pymdown-extensions==13.1

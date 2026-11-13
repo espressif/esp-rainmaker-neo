@@ -50,6 +50,7 @@ The cloud specification is published at [docs.espressif.com/projects/esp-rainmak
 
 - [Cloud Specification](https://docs.espressif.com/projects/esp-rainmaker-neo/en/latest/index.html)
 - [HTTP, MQTT, Events and MCP Reference](https://api.docs.neo.rainmaker.espressif.com)
+- [esp-morpheus CLI Reference](https://api.docs.neo.rainmaker.espressif.com/cli/)
 - [Glossary](docs/GLOSSARY.md)
 
 ## Contributing

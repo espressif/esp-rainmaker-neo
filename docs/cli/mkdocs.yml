@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# The esp-morpheus pages of the API reference site, published at /cli/ by the sync_cli CI job.
+# Nothing here is written twice:
+#   Overview           cli/README.md, included as is (pymdownx.snippets)
+#   Command reference  generated from the click code (mkdocs-click)
+#
+# Preview: pip install -r docs/cli/requirements.txt ./cli && mkdocs serve -f docs/cli/mkdocs.yml
+site_name: esp-morpheus CLI
+site_description: Console client for ESP RainMaker Neo deployments
+docs_dir: docs
+site_dir: ../../build/docs/cli
+use_directory_urls: true
+
+theme:
+  name: material
+  features:
+    - content.code.copy
+    - navigation.top
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle: { icon: material/brightness-7, name: Dark mode }
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle: { icon: material/brightness-4, name: Light mode }
+
+nav:
+  - Overview: index.md
+  - Command reference: reference.md
+  - "← API Reference Home": /
+
+markdown_extensions:
+  - mkdocs-click
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.snippets:
+      base_path: !relative $config_dir/../../cli
+      check_paths: true
+
+hooks:
+  - hooks/reference.py

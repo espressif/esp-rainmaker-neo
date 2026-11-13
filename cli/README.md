@@ -209,6 +209,8 @@ push register-ios com.app.id <token>       # register a push endpoint
 sharing list                               # pending shares
 ```
 
+`api <get|post|put|patch|delete> <path> ['<json>']` calls any end-user endpoint in the [REST API reference](https://api.docs.neo.rainmaker.espressif.com/http/), signed with the user's credentials: take the method and the path from the endpoint, without the leading `/`. Admin-only endpoints answer 403, because `user` signs in as an end user.
+
 ### `admin` — deployment-wide operations
 
 Its commands split in two:

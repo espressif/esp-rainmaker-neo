@@ -22,6 +22,7 @@ cli/src/*.egg-info/
 *.txt
 # Exempt from the *.txt rule above; the docs build needs it tracked.
 !docs/requirements.txt
+!docs/cli/requirements.txt
 .sim/
 *.test
 node_modules/
