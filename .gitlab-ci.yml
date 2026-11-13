@@ -326,6 +326,9 @@ unittest:
 # -------------------------
 cli_test:
   stage: unittest
+  # Like unittest: start at once instead of waiting for the lint stage, and still run when a
+  # lint job fails.
+  needs: []
   image: $CI_REGISTRY_IMAGE/rmng:go1.26.11_node24
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
