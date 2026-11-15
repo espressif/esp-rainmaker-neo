@@ -213,6 +213,27 @@ class Group:
         assert request_id, "Response should contain request_id"
         return request_id
 
+    def list_group_sharing_requests(self, group_id: str, subgroup_id: str = None, sent_by: str = None,
+                                    page_size: int = None, start_key: str = None) -> dict:
+        response = self.list_group_sharing_requests_raw(group_id, subgroup_id, sent_by, page_size, start_key)
+        assert response.status_code == 200, f"Expected 200, but got {response.status_code}: {response.text}"
+        return response.json()
+
+    def list_group_sharing_requests_raw(self, group_id: str, subgroup_id: str = None, sent_by: str = None,
+                                        page_size: int = None, start_key: str = None):
+        """Returns the raw response without asserting status code. A subgroup_id narrows the list to that subgroup; sent_by is a user ID or "me"."""
+        path = f'/v1/groups/{group_id}/sharing-requests'
+        if subgroup_id:
+            path = f'/v1/groups/{group_id}/subgroups/{subgroup_id}/sharing-requests'
+        params = {}
+        if sent_by:
+            params['sent_by'] = sent_by
+        if page_size:
+            params['page_size'] = page_size
+        if start_key:
+            params['start_key'] = start_key
+        return self.user.make_api_request('GET', path, params=params or None)
+
     def unshare_group(self, group_id: str, target_user_id: str):
         print("Unsharing group", group_id, "with user", target_user_id)
         unshare_response = self.user.make_api_request('DELETE', f'/v1/groups/{group_id}/users/{target_user_id}')

@@ -34,6 +34,7 @@ import (
 // from "not found/no access".
 // ErrNodeAddForbidden is mapped to 403: the caller lacks group:editnodes on the target group (e.g. secondary access).
 // ErrSubGroupNodesForbidden is mapped to 403: the caller can reach the subgroup but lacks group:editnodes (secondary or subentity access).
+// ErrShareForbidden is mapped to 403: the caller is not a member, or lacks group:share.
 var (
 	ErrGroupNotEmpty           = errors.New("group not empty")
 	ErrSubGroupNotEmpty        = errors.New("subgroup not empty")
@@ -46,6 +47,7 @@ var (
 	ErrNotMatterCapable        = errors.New("group does not have Matter capability")
 	ErrCapabilityAlreadyExists = errors.New("group already has capability")
 	ErrSelfSharingRequest      = errors.New("cannot accept your own sharing request")
+	ErrShareForbidden          = errors.New("insufficient permissions to share this group")
 )
 
 // IsChildNode reports whether nodeID denotes a child (sub-)node under the
@@ -606,23 +608,45 @@ func DeleteSubGroup(ctx *rmngctx.RmngContext, groupID string, subGroupID string)
 	return nil
 }
 
+// CheckCanShareGroup returns ErrShareForbidden unless the caller is a member of groupID holding group:share. It never looks at an invitee, so callers can run it before resolving one.
+func CheckCanShareGroup(ctx *rmngctx.RmngContext, groupID string) error {
+	if _, err := GetUserGroupAccess(ctx, groupID); err != nil {
+		return rmerror.NewRMError(errors.Join(ErrShareForbidden, err), "insufficient permissions to share this group")
+	}
+	if err := ctx.IsAuthorized(utils.GroupShare, groupID); err != nil {
+		return rmerror.NewRMError(errors.Join(ErrShareForbidden, err), "insufficient permissions to share this group")
+	}
+	return nil
+}
+
+// ShareTarget names a sharing request's invitee. UserID is the resolved account, empty when Username resolved to none; Username is what the sharer typed, empty for a QR-code request.
+type ShareTarget struct {
+	UserID   string
+	Username string
+}
+
 // ShareGroup shares a group with a user. Pass an empty targetUserID for the
 // QR-code flow: this creates an unclaimed request that anyone holding the
 // returned request ID can claim via ApproveSharingRequest/RejectSharingRequest
 // (see sharing_request_db.SharingRequestDB.CreateSharingRequest).
 func ShareGroup(ctx *rmngctx.RmngContext, groupID string, targetUserID string, accessType utils.GroupAccessType, primaryUserInfo auth.UserInfo) (string, error) {
+	return ShareGroupWithTarget(ctx, groupID, ShareTarget{UserID: targetUserID}, accessType, primaryUserInfo)
+}
+
+// ShareGroupWithTarget is ShareGroup that also records the username the sharer typed. A Username with no UserID stores a decoy request (see sharing_request_db).
+func ShareGroupWithTarget(ctx *rmngctx.RmngContext, groupID string, target ShareTarget, accessType utils.GroupAccessType, primaryUserInfo auth.UserInfo) (string, error) {
 	// check if we have permission to access the group
 	_, err := GetUserGroupAccess(ctx, groupID)
 	if err != nil {
 		return "", rmerror.NewRMError(err, "parent group does not exist")
 	}
 
-	if targetUserID == ctx.Accessor.GetID() {
+	if target.UserID == ctx.Accessor.GetID() {
 		return "", rmerror.NewRMError(nil, "Cannot share with self")
 	}
 
 	sharingRequestDB := sharing_request_db.NewSharingRequestDB(ctx)
-	requestID, err := sharingRequestDB.CreateSharingRequest(targetUserID, groupID, "", string(accessType), primaryUserInfo.Email, primaryUserInfo.PhoneNumber)
+	requestID, err := sharingRequestDB.CreateSharingRequest(target.UserID, target.Username, groupID, sharing_request_db.WholeGroupSubEntityID, string(accessType), primaryUserInfo.Email, primaryUserInfo.PhoneNumber)
 	if err != nil {
 		return "", rmerror.NewRMError(err, "failed to create sharing request")
 	}
@@ -677,18 +701,23 @@ func UnshareGroup(ctx *rmngctx.RmngContext, groupID string, targetUserID string)
 // They can never share this sub-group further
 // Pass an empty targetUserID for the QR-code flow — see ShareGroup.
 func ShareSubGroup(ctx *rmngctx.RmngContext, parentGroupID string, subGroupID string, targetUserID string, primaryUserInfo auth.UserInfo) (string, error) {
+	return ShareSubGroupWithTarget(ctx, parentGroupID, subGroupID, ShareTarget{UserID: targetUserID}, primaryUserInfo)
+}
+
+// ShareSubGroupWithTarget is ShareSubGroup that also records the username the sharer typed — see ShareGroupWithTarget.
+func ShareSubGroupWithTarget(ctx *rmngctx.RmngContext, parentGroupID string, subGroupID string, target ShareTarget, primaryUserInfo auth.UserInfo) (string, error) {
 	// check if we have permission to access the group
 	_, err := GetUserGroupAccess(ctx, parentGroupID)
 	if err != nil {
 		return "", rmerror.NewRMError(err, "parent group does not exist")
 	}
 
-	if targetUserID == ctx.Accessor.GetID() {
+	if target.UserID == ctx.Accessor.GetID() {
 		return "", rmerror.NewRMError(nil, "Cannot share with self")
 	}
 
 	sharingRequestDB := sharing_request_db.NewSharingRequestDB(ctx)
-	requestID, err := sharingRequestDB.CreateSharingRequest(targetUserID, parentGroupID, subGroupID, string(utils.GroupSubEntityAccess), primaryUserInfo.Email, primaryUserInfo.PhoneNumber)
+	requestID, err := sharingRequestDB.CreateSharingRequest(target.UserID, target.Username, parentGroupID, subGroupID, string(utils.GroupSubEntityAccess), primaryUserInfo.Email, primaryUserInfo.PhoneNumber)
 	if err != nil {
 		return "", rmerror.NewRMError(err, "failed to create sharing request")
 	}
@@ -812,6 +841,14 @@ func GetMySharingRequests(ctx *rmngctx.RmngContext) ([]*sharing_request_db.Shari
 		return nil, err
 	}
 	return sharingRequests, nil
+}
+
+// ListGroupSharingRequests lists a group's pending sharing requests for its primary users. A non-empty subGroupID narrows the list to that subgroup; a non-empty sentBy keeps only the requests that user sent.
+func ListGroupSharingRequests(ctx *rmngctx.RmngContext, groupID, subGroupID, sentBy string, limit int64, startKey string) (*sharing_request_db.ListGroupSharingRequestsOutput, error) {
+	if _, err := GetUserGroupAccess(ctx, groupID); err != nil {
+		return nil, rmerror.NewRMError(errors.Join(ErrGroupAccessDenied, err), "group does not exist or access denied")
+	}
+	return sharing_request_db.NewSharingRequestDB(ctx).ListGroupSharingRequests(groupID, subGroupID, sentBy, limit, startKey)
 }
 
 // GroupUserInfo represents a user's access to a group, enriched with user details.

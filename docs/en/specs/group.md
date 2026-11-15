@@ -1076,7 +1076,10 @@ IDs are rejected with HTTP 400. `username` is itself optional — omitting it
 creates a QR-code request instead of naming a recipient.
 
 **Process**:
-1. Verify user has permission (requires primary access)
+1. Verify user has permission (requires primary access), **before** looking
+   at `username`: a non-member, a subgroup-only member or a secondary member
+   gets the same `403`, whatever username they sent, so the endpoint cannot be
+   used to test which usernames are registered.
 2. Resolve the target `username` to a `user_id`. Skipped entirely when
    `username` is absent — there is nobody to resolve, and the request is stored
    unclaimed (step 4).
@@ -1086,29 +1089,37 @@ creates a QR-code request instead of naming a recipient.
      IndexName `espuser-user-details-by-email` (PK `email`). Neither → HTTP 400.
    - Projection is the `user_id` only, limit 1. Matched exactly as stored —
      signup writes the address through verbatim, so case must match.
-   - No match → a **byte-identical `201`** carrying a freshly generated decoy
-     `request_id` and the same `message` as a real share. The endpoint must not
-     confirm whether an address is registered, or it becomes an
-     account-existence oracle for any authenticated caller — so the unresolved
-     case is indistinguishable from success and nothing is written.
+   - No match → a **decoy request** is written (step 4) and the response is
+     the same `201` as a real share. The endpoint must not confirm whether an
+     address is registered, or it becomes an account-existence oracle for any
+     authenticated caller.
      A value that is neither an email address nor an E.164 phone number is a
      `400` (there is no index to resolve it against, and that is a client bug
      rather than a lookup miss).
-   - Consequence for any future sharer-side lookup of `request_id`: it must
-     fabricate decoy rows too, or it re-opens the oracle this closes.
+   - The decoy is a real row, not just a fake `request_id`, so that a listing
+     of a group's requests, which shows stored rows, shows registered and
+     unregistered usernames alike.
 3. Verify user is not sharing with themselves
 4. Create sharing request in database
-   - TableName: `rmng-sharing-reqs`
+   - TableName: `rmng-sharing-requests`
    - Attributes: `user_id` (PK), `sharing_request_id` (SK)
-   - `user_id`: Target user ID, or `"req-" + sharing_request_id` when the
+   - `user_id`: Target user ID; `"req-" + sharing_request_id` when the
      request is unclaimed (see [QR-code sharing
-     requests](#qr-code-sharing-requests))
+     requests](#qr-code-sharing-requests)); `"decoy-" + sharing_request_id`
+     when the username resolved to no account. No accept or reject lookup keys
+     on the `decoy-` prefix, so nobody can claim a decoy, and no user's received
+     list contains one.
    - `sharing_request_id`: Generated UUID
    - `group_id`: Group ID
-   - `sub_entity_id`: `"NONE"` (for full group)
+   - `sub_entity_id`: `"NONE"` (for full group). Never empty, so it can serve
+     as an index sort key; DynamoDB rejects an empty string as an index key.
+     Requests written before this rule hold `""`; both are read as the full
+     group.
+   - `target_username`: The `username` exactly as the sharer typed it (email
+     address or phone number); empty for an unclaimed request
    - `access_type`: Provided access type (`primary` or `secondary`)
    - `expiration_time`: Unix timestamp — current time + 24 hours for a named
-     invitee, + 7 days for an unclaimed request
+     invitee or a decoy, + 7 days for an unclaimed request
 
 **Response** (HTTP 201):
 ```json
@@ -1127,7 +1138,7 @@ sequenceDiagram
     participant ShareAPI as "Share Group API"
     participant UserGroupDB as "DynamoDB rmng-user-group-assoc"
     participant UsersDB as "DynamoDB users"
-    participant SharingDB as "DynamoDB rmng-sharing-reqs"
+    participant SharingDB as "DynamoDB rmng-sharing-requests"
     
     Owner->>ShareAPI: POST /v1/groups/{groupId}/sharing-requests<br/>{username, access_type}
     activate ShareAPI
@@ -1138,14 +1149,14 @@ sequenceDiagram
     
     ShareAPI->>ShareAPI: Classify username<br/>(+ → phone, @ → email, else 400)
     ShareAPI->>UsersDB: Query by email / phone<br/>(espuser-user-details-by-email<br/>or -by-phone)
-    UsersDB->>ShareAPI: Return target user_id<br/>(no match → decoy 201, nothing written)
+    UsersDB->>ShareAPI: Return target user_id<br/>(no match → decoy row, same 201)
     
     ShareAPI->>ShareAPI: Verify not sharing with self
     
     ShareAPI->>ShareAPI: Generate sharing_request_id (UUID)
     ShareAPI->>ShareAPI: Calculate expiration_time<br/>(current time + 24 hours)
     
-    ShareAPI->>SharingDB: CreateSharingRequest<br/>(target_user_id, sharing_request_id,<br/>group_id, "NONE", access_type, expiration_time)
+    ShareAPI->>SharingDB: CreateSharingRequest<br/>(target_user_id or decoy key, sharing_request_id,<br/>group_id, sub_entity_id "NONE", target_username,<br/>access_type, expiration_time)
     activate SharingDB
     SharingDB->>ShareAPI: Success
     deactivate SharingDB
@@ -1162,7 +1173,7 @@ sharer shows the returned `request_id` as a QR code and whoever scans it claims
 it. This is for the case the named flow cannot serve: inviting someone whose
 sign-in address the sharer does not know, or does not want to type.
 
-**Storage**. `rmng-sharing-reqs` is keyed by the recipient's `user_id`, and an
+**Storage**. `rmng-sharing-requests` is keyed by the recipient's `user_id`, and an
 unclaimed request has no recipient, so it is stored under the placeholder
 partition key `"req-" + sharing_request_id`. The `req-` prefix keeps placeholder
 keys disjoint from the real `user_id` namespace by construction — real ids are
@@ -1198,14 +1209,14 @@ short-lived and single-use.
 
 **Process**:
 1. Query sharing requests for current user
-   - TableName: `rmng-sharing-reqs`
+   - TableName: `rmng-sharing-requests`
    - Query by `user_id` (PK) to get all requests for the current user
    - Unclaimed QR-code requests never appear here. They are keyed by a
      placeholder `user_id`, not the scanner's, and the scanner reaches one by
      the `request_id` they scanned rather than by listing an inbox.
 2. Filter out expired requests (compare `expiration_time` with current time)
 3. Enrich each request with the inviting user's details (email and phone number)
-4. Return all pending requests
+4. Return all pending requests. A whole-group request is returned with `subgroup_id: ""`, though it is stored as `"NONE"`.
 
 **Response**:
 ```json
@@ -1226,6 +1237,56 @@ short-lived and single-use.
 
 The `primary_*` fields identify the user who created (sent) the sharing request.
 
+### List a Group's Sharing Requests
+
+#### External Flow
+- A primary user opens the group's pending invites
+- Client calls the group sharing-requests list API
+- Every pending invite the group has sent is displayed: who was invited, at what access level, by whom, and when it expires
+
+#### Internal Flow
+
+**API**: `GET /v1/groups/{groupId}/sharing-requests`, or `GET /v1/groups/{groupId}/subgroups/{subGroupId}/sharing-requests` for one subgroup
+
+**Query parameters**: `page_size`, `start_key` (the `next_key` of the previous page), and `sent_by` to keep only one user's requests: a user ID, or `me` for the caller.
+
+**Process**:
+1. Check the caller has group-level access (`rmng-user-group-assoc`) and `group:share` on the group. Non-members and subgroup-only members get `403`, as do secondary members; the response never reveals whether the group exists.
+2. The subgroup route does not check that the subgroup exists: that would need `group:listsubentities` on top of `group:share`, and an extra read. A missing subgroup and one with no pending requests both return an empty list.
+3. Query the `rmng-sharing-requests-by-group` GSI
+   - Partition key `group_id`, sort key `sub_entity_id` (`"NONE"` for a whole-group request)
+   - The group route lists all of the group's requests, subgroup ones included; the subgroup route adds `sub_entity_id = subGroupId` to the key condition
+   - Filter `expiration_time > now`: the TTL sweep can lag ~48 hours, so expired rows are filtered rather than trusted to be gone
+   - With `sent_by`, also filter `primary_user_id` to that user (`me` is resolved to the caller's ID by the handler)
+4. Build each entry
+   - `target_username` is the stored username exactly as the sharer typed it. The list never looks the invitee up, so a sharer who invited by email never sees the invitee's phone number, or the other way round.
+   - QR-code requests (`user_id` starts with `req-`) get `is_qr: true` and an empty `target_username`
+   - `subgroup_id` is `""` for a whole-group request (`"NONE"` in the table)
+
+**Account-existence oracle**: a share to an unregistered username stores a decoy row ([Share Group](#share-group), step 2) with the same attributes and lifetime as a real one. The list returns no `user_id`, and a decoy's entry differs from a real one only in its own ID, username and expiry, so the list cannot tell registered and unregistered usernames apart.
+
+QR-code request IDs are returned in full. A primary user can already create such an invite, so listing one hands them nothing they could not make themselves.
+
+**Response**:
+```json
+{
+  "sharing_requests": [
+    {
+      "sharing_request_id": "uuid-123",
+      "access_type": "secondary",
+      "subgroup_id": "",
+      "is_qr": false,
+      "target_username": "guest@example.com",
+      "primary_user_id": "user-abc-123",
+      "primary_email": "owner@example.com",
+      "primary_phone_number": "",
+      "expiration_time": 1767225600
+    }
+  ],
+  "next_key": "<opaque pagination token>"
+}
+```
+
 ### Approve/Decline Group/Subgroup Sharing Request
 
 #### External Flow
@@ -1244,7 +1305,7 @@ The `primary_*` fields identify the user who created (sent) the sharing request.
 
 **Process** (Accept):
 1. Get sharing request
-   - TableName: `rmng-sharing-reqs`
+   - TableName: `rmng-sharing-requests`
    - Query by `user_id` (PK) and `sharing_request_id` (SK)
 2. Verify request exists and is not expired
 3. Verify existing access:
@@ -1257,20 +1318,20 @@ The `primary_*` fields identify the user who created (sent) the sharing request.
    - `user_id`: Current user
    - `group_id`: From sharing request
    - `sub_entity_ids`:
-     - Empty list if full group (if user previously had subgroup access, the list is reset to empty as group access supersedes)
+     - Empty list if full group, i.e. the request's `sub_entity_id` is `"NONE"` (or `""` on older requests). If the user previously had subgroup access, the list is reset to empty as group access supersedes.
      - Append subgroup Id to list if subgroup
      - Never empty for `subentity` access — see [Scope encoding](#scope-encoding). A `subentity` grant naming no subgroup is rejected at write time.
    - `access_type`: From sharing request (`primary`, `secondary`, or `subentity`). When switching between `primary` and `secondary`, the access type is overwritten.
 5. Delete sharing request
-   - TableName: `rmng-sharing-reqs`
+   - TableName: `rmng-sharing-requests`
    - Delete by `user_id` (PK) and `sharing_request_id` (SK)
 
 **Process** (Reject):
 1. Get sharing request
-   - TableName: `rmng-sharing-reqs`
+   - TableName: `rmng-sharing-requests`
    - Query by `user_id` (PK) and `sharing_request_id` (SK)
 2. Delete sharing request
-   - TableName: `rmng-sharing-reqs`
+   - TableName: `rmng-sharing-requests`
    - Delete by `user_id` (PK) and `sharing_request_id` (SK)
 
 **Response**:
@@ -1288,7 +1349,7 @@ sequenceDiagram
     
     participant User
     participant SharingAPI as "Sharing Request API"
-    participant SharingDB as "DynamoDB rmng-sharing-reqs"
+    participant SharingDB as "DynamoDB rmng-sharing-requests"
     participant UserGroupDB as "DynamoDB rmng-user-group-assoc"
     
     User->>SharingAPI: POST /v1/sharing-requests/{requestId}/accept
@@ -1481,17 +1542,18 @@ device.
 `access_type` is ignored for subgroup sharing — a subgroup can only be shared with `subentity` access.
 
 **Process**:
-1. Verify user has permission on parent group (requires primary access)
+1. Verify user has permission on parent group (requires primary access), before looking at `username`, with the same `403` as [Share Group](#share-group)
 2. Resolve the target `username` to a `user_id` — same lookup, validation and
-   decoy-`201` behaviour as [Share Group](#share-group)
+   decoy behaviour as [Share Group](#share-group)
 3. Verify user is not sharing with themselves
 4. Create sharing request in database
-   - TableName: `rmng-sharing-reqs`
-   - Attributes: `user_id` (PK), `sharing_request_id` (SK), `group_id`, `sub_entity_id`, `access_type`, `expiration_time`
-   - `user_id`: Target user ID
+   - TableName: `rmng-sharing-requests`
+   - Attributes: `user_id` (PK), `sharing_request_id` (SK), `group_id`, `sub_entity_id`, `target_username`, `access_type`, `expiration_time`
+   - `user_id`: Target user ID, or the unclaimed or decoy key as in [Share Group](#share-group)
    - `sharing_request_id`: Generated UUID
    - `group_id`: Parent group ID
    - `sub_entity_id`: Subgroup ID
+   - `target_username`: The `username` as the sharer typed it
    - `access_type`: `"subentity"` (subgroups can only be shared with subentity access)
    - `expiration_time`: Current time + 24 hours (Unix timestamp)
 

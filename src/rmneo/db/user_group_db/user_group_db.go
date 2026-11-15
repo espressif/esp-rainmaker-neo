@@ -564,7 +564,7 @@ func (db *UserGroupDB) removeSubGroupFromUser(userID, groupID, subGroupID string
 
 // ConfirmSharingRequest confirms a sharing request for a user with the group or sub-group
 func (db *UserGroupDB) ConfirmSharingRequest(sharingRequest *sharing_request_db.SharingRequestEntry) error {
-	return db.createUserGroupEntry(sharingRequest.GroupID, sharingRequest.UserID, sharingRequest.SubEntityID, utils.GroupAccessType(sharingRequest.AccessType))
+	return db.createUserGroupEntry(sharingRequest.GroupID, sharingRequest.UserID, sharingRequest.SubgroupID(), utils.GroupAccessType(sharingRequest.AccessType))
 }
 
 // UnshareUserGroup removes a user from a group.

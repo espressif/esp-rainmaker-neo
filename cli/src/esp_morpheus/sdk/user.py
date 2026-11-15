@@ -1657,8 +1657,12 @@ class User:
     def generate_mobile_device_token(self):
         return ''.join(random.choices(string.ascii_uppercase + string.digits, key=16))
 
+    def get_sharing_requests_raw(self):
+        """Returns the raw response without checking the status code."""
+        return self.make_api_request('GET', '/v1/sharing-requests/received')
+
     def get_sharing_requests(self):
-        response = self.make_api_request('GET', '/v1/sharing-requests/received')
+        response = self.get_sharing_requests_raw()
         if response.status_code in (200, 201):
             return json.loads(response.text).get('sharing_requests', [])
         else:
@@ -1672,8 +1676,7 @@ class User:
             user_log(f"Invalid action: {action}. Must be 'accept' or 'reject'.")
             return False
 
-        path = f'/v1/sharing-requests/{sharing_request_id}/{action}'
-        response = self.make_api_request('POST', path)
+        response = self.process_sharing_request_raw(sharing_request_id, action)
 
         if response.status_code in (200, 201):
             user_log(f"Successfully {action}ed sharing request: {sharing_request_id}")
@@ -1682,6 +1685,10 @@ class User:
             user_log(f"Failed to {action} sharing request. Status code: {response.status_code}")
             user_log(f"Response: {response.text}")
             return False
+
+    def process_sharing_request_raw(self, sharing_request_id, action):
+        """Returns the raw response without checking the status code. action is 'accept' or 'reject'."""
+        return self.make_api_request('POST', f'/v1/sharing-requests/{sharing_request_id}/{action}')
 
     def accept_sharing_request(self, sharing_request_id):
         return self.process_sharing_request(sharing_request_id, 'accept')

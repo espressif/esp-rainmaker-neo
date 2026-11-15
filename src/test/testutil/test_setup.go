@@ -142,6 +142,7 @@ func TestSetup() {
 	dynamoDBMock.AddSecondaryIndex(group_node_db.GroupDeviceMappingByAliasIndex, group_node_db.GroupDeviceMappingTable, "alias", "")
 	dynamoDBMock.AddTable(node_details_db.NodeDetailsTable, "node_id", "")
 	dynamoDBMock.AddTable(sharing_request_db.SharingRequestsTable, "user_id", "sharing_request_id")
+	dynamoDBMock.AddSecondaryIndex(sharing_request_db.SharingRequestsByGroupIndex, sharing_request_db.SharingRequestsTable, "group_id", "sub_entity_id")
 	dynamoDBMock.AddTable(user_integration_db.UserEndpointsTable, "user_id", "integration_endpoint")
 	dynamoDBMock.AddTable(nodes_online_db.NodesOnlineTable, "clientId", "")
 	dynamoDBMock.AddTable(automation_db.AutomationsTable, "group_id", "automation_id")

@@ -23,7 +23,6 @@ import (
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/google/uuid"
 )
 
 type CreateGroupRequest struct {
@@ -115,6 +114,26 @@ type SharingRequestInfo struct {
 type ListSharingRequestsResponse struct {
 	SharingRequests []SharingRequestInfo `json:"sharing_requests"`
 }
+
+// GroupSharingRequestInfo is one pending request in a group's sent list. TargetUsername is only what the sharer typed, so the list never exposes contact details the sharer did not already have; it is empty for a QR-code request.
+type GroupSharingRequestInfo struct {
+	SharingRequestID   string `json:"sharing_request_id"`
+	AccessType         string `json:"access_type"`
+	SubgroupID         string `json:"subgroup_id"`
+	IsQR               bool   `json:"is_qr"`
+	TargetUsername     string `json:"target_username"`
+	PrimaryUserID      string `json:"primary_user_id"`
+	PrimaryEmail       string `json:"primary_email"`
+	PrimaryPhoneNumber string `json:"primary_phone_number"`
+	ExpirationTime     int64  `json:"expiration_time"`
+}
+
+type ListGroupSharingRequestsResponse struct {
+	SharingRequests []GroupSharingRequestInfo `json:"sharing_requests"`
+	NextKey         string                    `json:"next_key,omitempty"`
+}
+
+const sentByMe = "me"
 
 type ListGroupUsersResponse struct {
 	Users []GroupUserInfoResponse `json:"users"`
@@ -296,7 +315,7 @@ func handleListSharingRequests(context context.Context, request events.APIGatewa
 		sharingRequestInfos = append(sharingRequestInfos, SharingRequestInfo{
 			SharingRequestID:   sharingRequest.SharingRequestID,
 			GroupID:            sharingRequest.GroupID,
-			SubgroupID:         sharingRequest.SubEntityID,
+			SubgroupID:         sharingRequest.SubgroupID(),
 			AccessType:         sharingRequest.AccessType,
 			PrimaryUserID:      sharingRequest.PrimaryUserID,
 			PrimaryEmail:       sharingRequest.PrimaryEmail,
@@ -308,6 +327,54 @@ func handleListSharingRequests(context context.Context, request events.APIGatewa
 	}
 
 	return utils.APIGwRespJSON(http.StatusOK, response), nil
+}
+
+// handleListGroupSharingRequests serves GET on both the group and the subgroup sharing-requests routes; the subgroup route narrows the list to that subgroup.
+func handleListGroupSharingRequests(context context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+	ctx := user.NewContextWithAPIRequest(context, request)
+
+	groupID := request.PathParameters["groupId"]
+	if groupID == "" {
+		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Missing group ID")), nil
+	}
+	subGroupID := request.PathParameters["subGroupId"]
+
+	sentBy := request.QueryStringParameters["sent_by"]
+	if sentBy == sentByMe {
+		sentBy = ctx.Accessor.GetID()
+	}
+
+	startKey := request.QueryStringParameters["start_key"]
+	page, err := group.ListGroupSharingRequests(ctx, groupID, subGroupID, sentBy, rmngrequest.ParsePageSize(request.QueryStringParameters), startKey)
+	if err != nil {
+		rlog.Error(ctx).Err(err).Send()
+		switch {
+		case errors.Is(err, group.ErrGroupAccessDenied):
+			return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("Group not found or not accessible")), nil
+		case errors.Is(err, sharing_request_db.ErrListForbidden):
+			return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("Insufficient permissions to list sharing requests")), nil
+		case errors.Is(err, sharing_request_db.ErrInvalidStartKey):
+			return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Invalid start_key")), nil
+		}
+		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Failed to list sharing requests")), nil
+	}
+
+	infos := make([]GroupSharingRequestInfo, 0, len(page.Entries))
+	for _, r := range page.Entries {
+		infos = append(infos, GroupSharingRequestInfo{
+			SharingRequestID:   r.SharingRequestID,
+			AccessType:         r.AccessType,
+			SubgroupID:         r.SubgroupID(),
+			IsQR:               r.IsUnclaimed(),
+			TargetUsername:     r.TargetUsername,
+			PrimaryUserID:      r.PrimaryUserID,
+			PrimaryEmail:       r.PrimaryEmail,
+			PrimaryPhoneNumber: r.PrimaryPhoneNumber,
+			ExpirationTime:     r.ExpirationTime,
+		})
+	}
+
+	return utils.APIGwRespJSON(http.StatusOK, ListGroupSharingRequestsResponse{SharingRequests: infos, NextKey: page.NextKey}), nil
 }
 
 func handleCreateGroup(context context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
@@ -699,25 +766,26 @@ func handleSharingRequest(context context.Context, request events.APIGatewayProx
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Missing group ID")), nil
 	}
 
+	// Checked before the username is resolved, so a caller who may not share learns nothing about which usernames are registered: every refusal is this same 403.
+	if err := group.CheckCanShareGroup(ctx, groupID); err != nil {
+		rlog.Error(ctx).Err(err).Send()
+		return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("Insufficient permissions to share this group")), nil
+	}
+
 	// An empty username requests the QR-code flow: create a real, claimable
 	// unclaimed request instead of resolving a specific invitee up front.
-	var targetUserID string
+	target := group.ShareTarget{Username: req.Username}
 	if req.Username != "" {
-		// An unresolved username gets a byte-identical 201 with a decoy UUID; any
-		// future sharer-side lookup of request_id must fake decoys too, or it becomes
-		// an enumeration oracle.
+		// An unresolved username still stores a request, a decoy nobody can claim, so neither this 201 nor a listing of the group's requests reveals whether the username is registered.
 		targetUser, err := user.NewUserFromUserName(ctx, req.Username)
 		if err != nil {
 			rlog.Error(ctx).Err(err).Send()
 			if errors.Is(err, user.ErrInvalidUserName) {
 				return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("username must be an email address or an E.164 phone number")), nil
 			}
-			return utils.APIGwRespJSON(http.StatusCreated, CreateSharingRequestResponse{
-				RequestID: uuid.New().String(),
-				Message:   sharingRequestAcceptedMessage,
-			}), nil
+		} else {
+			target.UserID = targetUser.UserID
 		}
-		targetUserID = targetUser.UserID
 	}
 
 	subgroupID := request.PathParameters["subGroupId"]
@@ -728,14 +796,14 @@ func handleSharingRequest(context context.Context, request events.APIGatewayProx
 
 	// Share subgroup
 	if subgroupID != "" {
-		requestID, shareErr = group.ShareSubGroup(ctx, groupID, subgroupID, targetUserID, primaryUserInfo)
+		requestID, shareErr = group.ShareSubGroupWithTarget(ctx, groupID, subgroupID, target, primaryUserInfo)
 	} else { // Share group
 		// This route grants group-level access only, subgroup shares take the branch above and carry the subgroup in the path. Collapsing everything but "primary" to the least-privilege default keeps a subgroup access type from ever reaching the DB layer, where it would name no subgroup.
 		accessType := req.AccessType
 		if accessType != utils.GroupPrimaryAccess {
 			accessType = utils.GroupSecondaryAccess
 		}
-		requestID, shareErr = group.ShareGroup(ctx, groupID, targetUserID, accessType, primaryUserInfo)
+		requestID, shareErr = group.ShareGroupWithTarget(ctx, groupID, target, accessType, primaryUserInfo)
 
 	}
 
@@ -887,12 +955,12 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		}
 
 	// --- Group & Subgroup Sharing Requests ---
-	case "/v1/groups/{groupId}/sharing-requests":
-		if request.HTTPMethod == "POST" {
-			return handleSharingRequest(ctx, request)
-		}
-	case "/v1/groups/{groupId}/subgroups/{subGroupId}/sharing-requests":
-		if request.HTTPMethod == "POST" {
+	case "/v1/groups/{groupId}/sharing-requests",
+		"/v1/groups/{groupId}/subgroups/{subGroupId}/sharing-requests":
+		switch request.HTTPMethod {
+		case "GET":
+			return handleListGroupSharingRequests(ctx, request)
+		case "POST":
 			return handleSharingRequest(ctx, request)
 		}
 

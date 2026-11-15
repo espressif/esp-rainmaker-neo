@@ -38,6 +38,7 @@ class GroupAPI(Construct):
                 get_index_arn('GROUP_DEVICE_MAPPING_NODE_ID', region),
                 get_index_arn('USER_GROUP_MAPPING_GROUP_ID', region),
                 get_table_arn(TABLE_NAMES['SHARING_REQUESTS'], region),
+                get_index_arn('SHARING_REQUESTS_GROUP', region),
                 get_table_arn(TABLE_NAMES['USER_ENDPOINTS'], region),
                 get_table_arn(TABLE_NAMES['NODE_DETAILS'], region),
                 get_table_arn(TABLE_NAMES['AUTOMATIONS'], region),
@@ -213,10 +214,14 @@ class GroupAPI(Construct):
             self, "GroupSharingRequestsPostMethod", common_resources,
             group_sharing_requests_resource_id, "POST", self.group_function
         )
-        
+        create_cfn_api_method(
+            self, "GroupSharingRequestsGetMethod", common_resources,
+            group_sharing_requests_resource_id, "GET", self.group_function
+        )
+
         add_cors_options(
             self, "GroupSharingRequestsOptionsMethod", common_resources,
-            group_sharing_requests_resource_id, allowed_methods=["POST"]
+            group_sharing_requests_resource_id, allowed_methods=["GET", "POST"]
         )
 
         # Add users resource: /v1/groups/{groupId}/users
@@ -349,10 +354,14 @@ class GroupAPI(Construct):
             self, "SubgroupSharingRequestsPostMethod", common_resources,
             subgroup_sharing_requests_resource_id, "POST", self.group_function
         )
-        
+        create_cfn_api_method(
+            self, "SubgroupSharingRequestsGetMethod", common_resources,
+            subgroup_sharing_requests_resource_id, "GET", self.group_function
+        )
+
         add_cors_options(
             self, "SubgroupSharingRequestsOptionsMethod", common_resources,
-            subgroup_sharing_requests_resource_id, allowed_methods=["POST"]
+            subgroup_sharing_requests_resource_id, allowed_methods=["GET", "POST"]
         )
 
         # Add users resource: /v1/groups/{groupId}/subgroups/{subGroupId}/users

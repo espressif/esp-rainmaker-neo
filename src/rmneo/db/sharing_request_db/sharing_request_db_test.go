@@ -40,7 +40,7 @@ var _ = Describe("SharingRequestDB", func() {
 		ctx.SetAllowMultiple(utils.GetGroupPermissions(utils.GroupPrimaryAccess), groupID)
 		sharingDB := sharing_request_db.NewSharingRequestDB(ctx)
 		for range 10 {
-			_, err := sharingDB.CreateSharingRequest(userID, groupID, "", string(utils.GroupSecondaryAccess), "primary@example.com", "")
+			_, err := sharingDB.CreateSharingRequest(userID, "", groupID, "", string(utils.GroupSecondaryAccess), "primary@example.com", "")
 			Expect(err).ToNot(HaveOccurred())
 		}
 

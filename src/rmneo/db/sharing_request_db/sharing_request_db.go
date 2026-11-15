@@ -17,6 +17,11 @@ Schema:
   recipient, 7 days for an unclaimed QR-code request)
 - group_id (String): ID of the group being shared
 - sub_entity_id (String): ID of subgroup if sharing subgroup, "NONE" for full group
+  (never empty, so it can serve as an index sort key). Rows written before
+  "NONE" was introduced store "", which SubgroupID also reads as the full group.
+- target_username (String): The email address or E.164 phone number the sharer
+  typed, so a listing of the group's requests shows only what the sharer already
+  knew. Empty for a QR-code request.
 - access_type (String): Type of access being granted
   - "primary": Full access, including node management and sharing
   - "secondary": Primary without node management, group delete, sharing, fabric conversion or the full member list
@@ -30,6 +35,7 @@ Example Records:
      "expiration_time": 1234567890,
      "group_id": "group-789",
      "sub_entity_id": "NONE",
+     "target_username": "invitee@example.com",
      "access_type": "primary"
    }
 
@@ -40,6 +46,7 @@ Example Records:
      "expiration_time": 1234567890,
      "group_id": "group-789",
      "sub_entity_id": "subgroup-456",
+     "target_username": "+911234567890",
      "access_type": "subentity"
    }
 
@@ -52,6 +59,10 @@ Query Patterns:
 2. Get specific request:
    - Query by user_id and sharing_request_id
    - Used during accept/reject operations
+
+3. List a group's pending requests:
+   - Query the by-group GSI by group_id, optionally narrowed to one sub_entity_id
+   - Used by primary users to see every invite their group has sent
 
 Lifecycle:
 1. Owner shares group/subgroup -> Creates request
@@ -75,6 +86,14 @@ Unclaimed (QR code) requests:
   Rejecting deletes the row exactly as accepting does, whether that is a
   scanner declining or the sharer taking their own invite back.
 
+Decoy requests:
+- A username that resolves to no account still gets a row, stored under
+  user_id == "decoy-" + sharing_request_id with the named-invite lifetime.
+- No accept or reject lookup ever keys on that prefix, so nobody can claim it,
+  and it is in no user's received list.
+- It looks exactly like a real request in a listing of the group's requests, so
+  such a listing cannot reveal whether a username is registered.
+
 Access Control:
 - Creating requests requires group sharing permission
 - Users can only view/accept their own requests
@@ -85,6 +104,7 @@ package sharing_request_db
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
@@ -98,7 +118,13 @@ import (
 )
 
 const (
-	SharingRequestsTable = "rmng-sharing-reqs"
+	SharingRequestsTable        = "rmng-sharing-requests"
+	SharingRequestsByGroupIndex = "rmng-sharing-requests-by-group"
+
+	// WholeGroupSubEntityID is the sub_entity_id of a request for the whole group. It is never "" so that sub_entity_id can serve as an index sort key, which DynamoDB requires to be non-empty.
+	WholeGroupSubEntityID = "NONE"
+
+	defaultGroupSharingRequestsPageSize = 20
 
 	// How long a pending request stays claimable. A named invite lands in the
 	// recipient's inbox and pushes them a notification, so a day is ample. A QR
@@ -109,10 +135,12 @@ const (
 	unclaimedSharingRequestTTL = 7 * 24 * time.Hour
 )
 
-// Handlers map these to 404 and 410 respectively.
+// Handlers map these to 404, 410, 400 and 403 respectively.
 var (
 	ErrSharingRequestNotFound = errors.New("sharing request not found")
 	ErrSharingRequestExpired  = errors.New("sharing request has expired")
+	ErrInvalidStartKey        = errors.New("invalid start_key")
+	ErrListForbidden          = errors.New("insufficient permissions to list sharing requests")
 )
 
 // unclaimedUserIDPrefix marks the placeholder partition key of an unclaimed
@@ -128,6 +156,9 @@ func unclaimedUserID(sharingRequestID string) string {
 	return unclaimedUserIDPrefix + sharingRequestID
 }
 
+// decoyUserIDPrefix marks the partition key of a decoy request (see the package doc). Like unclaimedUserIDPrefix, it can never collide with a real user_id.
+const decoyUserIDPrefix = "decoy-"
+
 type SharingRequestDB struct {
 	Ctx      *rmngctx.RmngContext
 	requests *ddbu.Table[SharingRequestEntry]
@@ -140,6 +171,9 @@ func NewSharingRequestDB(ctx *rmngctx.RmngContext) *SharingRequestDB {
 			Name:     SharingRequestsTable,
 			HashKey:  "user_id",
 			RangeKey: "sharing_request_id",
+			Indexes: map[string]ddbu.IndexKeys{
+				SharingRequestsByGroupIndex: {HashKey: "group_id", RangeKey: "sub_entity_id"},
+			},
 		}),
 	}
 }
@@ -150,13 +184,15 @@ type SharingRequestEntry struct {
 	ExpirationTime     int64  `dynamodbav:"expiration_time"`
 	GroupID            string `dynamodbav:"group_id"`
 	SubEntityID        string `dynamodbav:"sub_entity_id"`
+	TargetUsername     string `dynamodbav:"target_username"`
 	AccessType         string `dynamodbav:"access_type"`
 	PrimaryUserID      string `dynamodbav:"primary_user_id"`
 	PrimaryEmail       string `dynamodbav:"primary_email"`
 	PrimaryPhoneNumber string `dynamodbav:"primary_phone_number"`
 }
 
-func (db *SharingRequestDB) CreateSharingRequest(userID, groupID, subEntityID, accessType, primaryEmail, primaryPhoneNumber string) (string, error) {
+// CreateSharingRequest stores a request for userID, the invitee's account, keeping targetUsername as the sharer typed it. Both empty makes a QR-code request; only userID empty makes a decoy (see the package doc).
+func (db *SharingRequestDB) CreateSharingRequest(userID, targetUsername, groupID, subEntityID, accessType, primaryEmail, primaryPhoneNumber string) (string, error) {
 	if err := db.Ctx.IsAuthorized(utils.GroupShare, groupID); err != nil {
 		return "", err
 	}
@@ -169,9 +205,16 @@ func (db *SharingRequestDB) CreateSharingRequest(userID, groupID, subEntityID, a
 	// gets the longer unclaimed lifetime.
 	storedUserID := userID
 	ttl := namedSharingRequestTTL
-	if storedUserID == "" {
+	switch {
+	case userID == "" && targetUsername == "":
 		storedUserID = unclaimedUserID(requestID)
 		ttl = unclaimedSharingRequestTTL
+	case userID == "":
+		storedUserID = decoyUserIDPrefix + requestID
+	}
+
+	if subEntityID == "" {
+		subEntityID = WholeGroupSubEntityID
 	}
 
 	err := db.requests.Put(db.Ctx.Context, SharingRequestEntry{
@@ -180,6 +223,7 @@ func (db *SharingRequestDB) CreateSharingRequest(userID, groupID, subEntityID, a
 		ExpirationTime:     time.Now().Add(ttl).Unix(),
 		GroupID:            groupID,
 		SubEntityID:        subEntityID,
+		TargetUsername:     targetUsername,
 		AccessType:         accessType,
 		PrimaryUserID:      db.Ctx.Accessor.GetID(),
 		PrimaryEmail:       primaryEmail,
@@ -213,6 +257,59 @@ func (db *SharingRequestDB) GetMySharingRequests() ([]*SharingRequestEntry, erro
 // IsExpired reports whether the request is past its expiration_time. A zero value means no expiry was recorded (older rows), which is treated as not expired.
 func (e *SharingRequestEntry) IsExpired() bool {
 	return e.ExpirationTime != 0 && time.Now().Unix() > e.ExpirationTime
+}
+
+// IsUnclaimed reports whether this is a QR-code request still waiting for someone to claim it.
+func (e *SharingRequestEntry) IsUnclaimed() bool {
+	return strings.HasPrefix(e.UserID, unclaimedUserIDPrefix)
+}
+
+// SubgroupID returns the subgroup the request is for, or "" for the whole group: "sub1" -> "sub1", "NONE" -> "". Rows written before "NONE" was introduced already hold "".
+func (e *SharingRequestEntry) SubgroupID() string {
+	if e.SubEntityID == WholeGroupSubEntityID {
+		return ""
+	}
+	return e.SubEntityID
+}
+
+type ListGroupSharingRequestsOutput struct {
+	Entries []SharingRequestEntry
+	NextKey string
+}
+
+// ListGroupSharingRequests lists a group's pending requests through the by-group GSI. An empty subGroupID lists the whole group, subgroup requests included; an empty sentBy skips the sender filter.
+func (db *SharingRequestDB) ListGroupSharingRequests(groupID, subGroupID, sentBy string, limit int64, startKey string) (*ListGroupSharingRequestsOutput, error) {
+	if err := db.Ctx.IsAuthorized(utils.GroupShare, groupID); err != nil {
+		return nil, rmerror.NewRMError(errors.Join(ErrListForbidden, err), "insufficient permissions to list sharing requests")
+	}
+
+	keyCondition := expression.Key("group_id").Equal(expression.Value(groupID))
+	if subGroupID != "" {
+		keyCondition = keyCondition.And(expression.Key("sub_entity_id").Equal(expression.Value(subGroupID)))
+	}
+	// DynamoDB's TTL sweep can lag up to ~48 hours, so expired rows are filtered here rather than trusted to be gone.
+	filter := expression.Name("expiration_time").GreaterThan(expression.Value(time.Now().Unix()))
+	if sentBy != "" {
+		filter = filter.And(expression.Name("primary_user_id").Equal(expression.Value(sentBy)))
+	}
+
+	if limit <= 0 {
+		limit = defaultGroupSharingRequestsPageSize
+	}
+
+	page, err := db.requests.Query(db.Ctx.Context, keyCondition, ddbu.QueryOpts{
+		Index:      SharingRequestsByGroupIndex,
+		Filter:     filter,
+		Limit:      int(limit),
+		StartToken: startKey,
+	})
+	if errors.Is(err, ddbu.ErrInvalidToken) {
+		return nil, rmerror.NewRMError(errors.Join(ErrInvalidStartKey, err), "invalid start_key")
+	}
+	if err != nil {
+		return nil, rmerror.NewRMError(err, "failed to list group sharing requests")
+	}
+	return &ListGroupSharingRequestsOutput{Entries: page.Items, NextKey: page.NextToken}, nil
 }
 
 // getSharingRequestByUserIDAuthorized reads the request row stored under userID.

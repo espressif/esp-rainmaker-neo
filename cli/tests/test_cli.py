@@ -66,9 +66,12 @@ def isolated_config(tmp_path, monkeypatch):
     ['user', 'someone', 'api', '--help'],
     ['user', 'someone', 'group', '--help'],
     ['user', 'someone', 'group', 'subgroup', '--help'],
+    ['user', 'someone', 'group', 'users', '--help'],
     ['user', 'someone', 'matter', '--help'],
     ['user', 'someone', 'node', '--help'],
     ['user', 'someone', 'sharing', '--help'],
+    ['user', 'someone', 'sharing', 'received', '--help'],
+    ['user', 'someone', 'sharing', 'sent', '--help'],
     ['user', 'someone', 'push', '--help'],
     ['device', 'node_light', 'subscribe', '--help'],
 ])
@@ -76,6 +79,38 @@ def test_help_needs_no_deployment(run, args):
     """Help renders everywhere without credentials or an outputs file."""
     result = run(*args)
     assert result.exit_code == 0, result.output
+
+
+def test_a_sharing_request_names_its_sender_and_expiry_with_fallbacks():
+    from esp_morpheus.cli.sharing import _expires, _primary
+
+    assert _primary({'primary_email': 'owner@example.com', 'primary_user_id': 'u1'}) == 'owner@example.com'
+    assert _primary({'primary_email': '', 'primary_phone_number': '+14155550100', 'primary_user_id': 'u1'}) == '+14155550100'
+    assert _primary({'primary_user_id': 'u1'}) == 'u1'
+    assert _primary({}) == '-'
+    assert _expires(1_000 + 18 * 3600, now=1_000).endswith('(in 18h)')
+    assert _expires(1_000 + 6 * 86400 + 60, now=1_000).endswith('(in 6d)')
+    assert _expires(1_000 + 30, now=1_000).endswith('(in 1m)')
+    assert _expires(1_000, now=2_000).endswith('(expired)')
+    assert _expires(None) == '-'
+
+
+class _Response:
+    def __init__(self, status_code, body):
+        self.status_code, self.text = status_code, json.dumps(body)
+
+    def json(self):
+        return json.loads(self.text)
+
+
+def test_an_api_failure_names_the_action_status_and_api_message():
+    with pytest.raises(output.CommandError) as failed:
+        output.fail_response('accept sharing request r1', _Response(404, {'message': 'Not found'}))
+    assert failed.value.format_message() == 'Failed to accept sharing request r1: 404 Not found'
+    assert failed.value.exit_code == output.EXIT_FAILURE
+
+    with pytest.raises(output.AuthError):
+        output.fail_response('list users of group g1', _Response(403, {'message': 'Forbidden'}))
 
 
 def test_unknown_command_is_a_usage_error(run):
