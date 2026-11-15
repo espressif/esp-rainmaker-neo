@@ -326,6 +326,9 @@ unittest:
 # -------------------------
 cli_test:
   stage: unittest
+  # Like unittest: start at once instead of waiting for the lint stage, and still run when a
+  # lint job fails.
+  needs: []
   image: $CI_REGISTRY_IMAGE/rmng:go1.26.11_node24
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
@@ -552,6 +555,41 @@ sync_mcp:
     - aws cloudfront create-invalidation --distribution-id E3F6AIL6K7W45G
       --paths "/mcp/*"
     - 'echo "MCP tools: https://api.docs.neo.rainmaker.espressif.com/mcp/"'
+
+# -------------------------
+# esp-morpheus CLI pages sync to S3
+# -------------------------
+sync_cli:
+  stage: swagger
+  # Publishes to the prod bucket: a cancelled run leaves the cli/ prefix half-synced.
+  interruptible: false
+  # Same reasoning as sync_swagger -- no dependency on the build or deploy stages.
+  needs: []
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.11_node24
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      changes:
+        # The pages are generated from the CLI (README and click commands), so a
+        # change to either republishes.
+        - cli/**/*
+        - docs/cli/**/*
+  variables:
+    AWS_DEFAULT_REGION: us-east-1
+  script:
+    - export AWS_ACCESS_KEY_ID=${RMNG_PROD_ACCESS_KEY}
+    - export AWS_SECRET_ACCESS_KEY=${RMNG_PROD_SECRET_ACCESS_KEY}
+    # MkDocs is baked into the image (deployment/docker/Dockerfile); this install is a no-op
+    # for it once the image is rebuilt, and covers the runs before that. mkdocs-click imports
+    # esp-morpheus to read its commands, so the CLI is installed too.
+    - pip3 install -r docs/cli/requirements.txt ./cli
+    - mkdocs build --strict -f docs/cli/mkdocs.yml
+    # --delete is scoped to the cli/ prefix.
+    - aws s3 sync build/docs/cli/ s3://esp-rainmaker-neo-api/cli/ --delete
+    - aws cloudfront create-invalidation --distribution-id E3F6AIL6K7W45G
+      --paths "/cli/*"
+    - 'echo "esp-morpheus CLI: https://api.docs.neo.rainmaker.espressif.com/cli/"'
 
 # -------------------------
 # AsyncAPI sync to S3 — MQTT (node/user/bridge) and notification/event payloads.
