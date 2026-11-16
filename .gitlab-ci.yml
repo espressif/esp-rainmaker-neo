@@ -176,7 +176,7 @@ license_headers:
       "$CI_MERGE_REQUEST_DIFF_BASE_SHA"
 
 # -------------------------
-# Commit-message gate. Blocking: a Co-authored-by trailer anywhere in the MR's commits
+# Commit-message gate. Blocking: a Co-authored-by trailer for anyone outside @espressif.com
 # fails the pipeline. Same range as license_headers, so it sees exactly the MR's commits.
 # -------------------------
 commit_messages:
