@@ -31,6 +31,7 @@ packages:
       - smartthings
       - claim
       - bridge
+      - controller
 
   enterprise:
     friendly_name: "Enterprise Plan"
@@ -100,9 +101,16 @@ groups:
       - espuser-pro-base
       - espuser-pro-core
 
+  controller:
+    friendly_name: "ESP RainMaker Neo Controller"
+    description: "RainMaker Neo Controller device type support: a node that reads and controls its group"
+    mandatory: false
+    stacks:
+      - rmng-controller-base
+
   bridge:
     friendly_name: "ESP Bridge"
-    description: "Bridge and Controller device type support"
+    description: "Bridge device type support"
     mandatory: false
     stacks:
       - rmng-bridge-base
@@ -297,6 +305,17 @@ stacks:
     template: rmng-bridge-core.template.json
     depends_on:
       - rmng-bridge-base
+    regions:
+      mode: all
+      explicit: []
+    parameters: {}
+
+  rmng-controller-base:
+    friendly_name: "RainMaker Neo Controller Base"
+    stack_name: rmng-controller-base
+    template: rmng-controller-base.template.json
+    depends_on:
+      - rmng-base
     regions:
       mode: all
       explicit: []

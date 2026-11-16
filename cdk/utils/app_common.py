@@ -221,6 +221,7 @@ def common_api_policy(lambda_role: iam.Role, common_resources: CommonResources, 
     # RLOG: persistent log-level config read at Lambda cold start
     rlog_arn = f"arn:aws:ssm:{region}:{Aws.ACCOUNT_ID}:parameter/rmng/rlog/*"
     jwks_resources.append(rlog_arn)
+    from src.rmneo.stacks.base_res_constants import TABLE_NAMES
 
     # Only add SSM policy if we have at least one SSM parameter
     if jwks_resources:
@@ -234,10 +235,15 @@ def common_api_policy(lambda_role: iam.Role, common_resources: CommonResources, 
     # NewContextWithAPIRequest resolves an OIDC end-user caller by reading their
     # espuser-user-details row (GetItem by user_id); admins still resolve via Cognito.
     # Every end-user lambda needs this read now that end users are OIDC-federated.
-    from src.rmneo.stacks.base_res_constants import TABLE_NAMES
     lambda_role.add_to_policy(iam.PolicyStatement(
         actions=["dynamodb:GetItem"],
         resources=[get_table_arn(TABLE_NAMES['USER_DETAILS'], region)]
+    ))
+
+    # The RBAC checkpoint (rmneo/principal) resolves a device caller from the certificate its credential-provider session is named after.
+    lambda_role.add_to_policy(iam.PolicyStatement(
+        actions=["iot:ListPrincipalThings"],
+        resources=[f"arn:aws:iot:{region}:{Aws.ACCOUNT_ID}:cert/*"]
     ))
 
 
@@ -1056,6 +1062,52 @@ def create_ssm_string_parameter(
     )
     param.node.default_child.override_logical_id(stable_logical_id("SSMParam", parameter_name))
     return param
+
+
+def create_write_once_secret(scope: Construct, id: str, *, parameter_name: str, physical_id: str) -> None:
+    """Generate a random secret into a SecureString SSM parameter on first deploy. Writes only when the parameter is absent, so a redeploy never rotates it, and the value never enters a template."""
+    stack = Stack.of(scope)
+    param_arn = f"arn:aws:ssm:{stack.region}:{stack.account}:parameter{parameter_name}"
+    seed_fn = lambda_.Function(
+        scope, f"{id}Function",
+        runtime=lambda_.Runtime.PYTHON_3_12,
+        handler="index.handler",
+        timeout=Duration.seconds(60),
+        code=lambda_.Code.from_inline("""
+import secrets, boto3, urllib3
+
+http = urllib3.PoolManager()
+PARAM = "%s"
+PHYSICAL_ID = "%s"
+
+def send(event, context, status):
+    import json
+    body = json.dumps({
+        "Status": status, "Reason": "See CloudWatch " + context.log_stream_name,
+        "PhysicalResourceId": PHYSICAL_ID, "StackId": event["StackId"],
+        "RequestId": event["RequestId"], "LogicalResourceId": event["LogicalResourceId"],
+    }).encode("utf-8")
+    http.request("PUT", event["ResponseURL"], body=body, headers={"content-type": ""})
+
+def handler(event, context):
+    try:
+        if event["RequestType"] != "Delete":
+            ssm = boto3.client("ssm")
+            try:
+                ssm.get_parameter(Name=PARAM, WithDecryption=True)
+            except ssm.exceptions.ParameterNotFound:
+                ssm.put_parameter(Name=PARAM, Value=secrets.token_urlsafe(48), Type="SecureString")
+        send(event, context, "SUCCESS")
+    except Exception as e:
+        print("seed secret error:", e)
+        send(event, context, "FAILED")
+""" % (parameter_name, physical_id)),  # noqa: UP031 - the handler source is full of braces, so .format would need every one escaped
+    )
+    seed_fn.add_to_role_policy(iam.PolicyStatement(
+        actions=["ssm:GetParameter", "ssm:PutParameter"],
+        resources=[param_arn],
+    ))
+    CustomResource(scope, id, service_token=seed_fn.function_arn)
 
 
 # CloudFormation re-invokes a custom resource only when its properties change, but the

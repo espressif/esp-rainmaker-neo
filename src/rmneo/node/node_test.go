@@ -1339,11 +1339,11 @@ type hookCall struct {
 	CertArn      string
 }
 
-// installHook registers a node-register hook that records its calls and returns
-// the given result, and returns the slice those calls land in. Registration is
-// undone by the next TestSetup-driven install, so each spec sees its own.
+// installHook registers a node-register hook that records its calls and returns the given result. Hooks accumulate, so it clears the set before and after the spec; a leftover failing hook would break every later registration.
 func installHook(nodeType string, hookErr error) *[]hookCall {
 	calls := &[]hookCall{}
+	nodelifecycle.RegisterNodeRegisterHook(nil)
+	DeferCleanup(func() { nodelifecycle.RegisterNodeRegisterHook(nil) })
 	nodelifecycle.RegisterNodeRegisterHook(func(_ *rmngctx.RmngContext, nodeID string, capabilities []string, certArn string) (string, error) {
 		*calls = append(*calls, hookCall{NodeID: nodeID, Capabilities: capabilities, CertArn: certArn})
 		return nodeType, hookErr

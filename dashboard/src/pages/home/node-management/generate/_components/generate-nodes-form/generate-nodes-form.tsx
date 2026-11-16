@@ -18,9 +18,11 @@ import { useGenerateNodesForm } from "../../_hooks/use-generate-nodes-form";
 import { EachDeviceSummary } from "../each-device-summary";
 import { GenerateStatus } from "../generate-status";
 import { DeviceCountField } from "./_components/device-count-field";
+import { IncludeApiUrlField } from "./_components/include-api-url-field";
 import { MatterOptionsField } from "./_components/matter-options-field";
 import type { GenerateNodesFormProps } from "./generate-nodes-form.props";
 import { voidFormSubmit } from "@/lib/void-form-submit";
+import { isControllerEnabled } from "@/lib/config";
 
 export default function GenerateNodesForm(_props: GenerateNodesFormProps) {
   const {
@@ -82,6 +84,7 @@ export default function GenerateNodesForm(_props: GenerateNodesFormProps) {
               <div className="flex flex-col gap-6">
                 <DeviceCountField />
                 <MatterOptionsField />
+                {isControllerEnabled() && <IncludeApiUrlField />}
               </div>
             </SectionCard>
 

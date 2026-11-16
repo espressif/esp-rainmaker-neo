@@ -18,6 +18,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/principal"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
@@ -109,7 +110,7 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		return *errResp, nil
 	}
 
-	rmng_context := user.NewContextWithAPIRequest(ctx, request)
+	rmng_context := principal.FromAPIRequest(ctx, request)
 
 	lambdaCfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {

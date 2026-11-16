@@ -13,7 +13,7 @@ import (
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/principal"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
@@ -34,7 +34,7 @@ type UserTagsUpdateRequest struct {
 }
 
 func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	userCtx := user.NewContextWithAPIRequest(ctx, request)
+	userCtx := principal.FromAPIRequest(ctx, request)
 	if userCtx == nil {
 		rlog.Error(ctx).Msg("Failed to create user context")
 		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Unauthorized")), nil

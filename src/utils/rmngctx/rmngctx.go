@@ -23,6 +23,18 @@ type AccessorEntity interface {
 	GetPermissions() *rbac.EntityPermissions
 }
 
+// NodeScopedAccessor is a principal whose group access derives from one node's live membership
+// rather than from a user-group-assoc row: a headless device acting on a session token. Package
+// group branches on it to resolve "which groups can the caller see" without importing the package
+// that builds the principal (rmneo/principal), which itself imports group.
+type NodeScopedAccessor interface {
+	AccessorEntity
+	// ScopedNodeID is the node whose membership this principal's access derives from.
+	ScopedNodeID() string
+	// ScopedGroupID is the group that node belonged to when the context was built. Empty when it belongs to none.
+	ScopedGroupID() string
+}
+
 type RmngContext struct {
 	Context  context.Context
 	Accessor AccessorEntity

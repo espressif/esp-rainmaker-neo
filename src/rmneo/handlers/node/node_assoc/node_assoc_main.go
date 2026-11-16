@@ -29,6 +29,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/lambdautil"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/principal"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
@@ -60,7 +61,7 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 }
 
 func handleInitiate(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	rmngCtx := user.NewContextWithAPIRequest(ctx, request)
+	rmngCtx := principal.FromAPIRequest(ctx, request)
 
 	requestID := ids.GenerateRequestId()
 	userID := rmngCtx.GetAccessor().(*user.User).UserID
@@ -121,7 +122,7 @@ func handleInitiate(ctx context.Context, request events.APIGatewayProxyRequest) 
 }
 
 func handleVerify(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	rmngCtx := user.NewContextWithAPIRequest(ctx, request)
+	rmngCtx := principal.FromAPIRequest(ctx, request)
 	requestID := request.PathParameters["requestId"]
 	pathGroupID := request.PathParameters["groupId"]
 	if requestID == "" || pathGroupID == "" {
@@ -553,7 +554,7 @@ type ConfirmRequestBody struct {
 // handleConfirm handles the final confirmation step for Matter groups
 // This is called after the device has received and installed the NOC
 func handleConfirm(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	rmngCtx := user.NewContextWithAPIRequest(ctx, request)
+	rmngCtx := principal.FromAPIRequest(ctx, request)
 
 	requestID := request.PathParameters["requestId"]
 	pathGroupID := request.PathParameters["groupId"]

@@ -14,7 +14,10 @@
     "matterHint": "在 RainMaker 凭证之外，同时生成 Matter 认证证书和配网数据。",
     "matterAriaLabel": "Matter 节点数据",
     "vendorId": "DAC 厂商 ID (VID)",
-    "productId": "DAC 产品 ID (PID)"
+    "productId": "DAC 产品 ID (PID)",
+    "includeApiUrl": "在 NVS 中写入云端 API 地址",
+    "includeApiUrlHint": "将 REST API 基础地址写入设备 NVS，使控制器固件能够访问会话接口。仅在生成控制器节点时启用。",
+    "includeApiUrlAriaLabel": "控制器 API 地址配置"
   },
   "info": {
     "title": "每个节点将获得：",

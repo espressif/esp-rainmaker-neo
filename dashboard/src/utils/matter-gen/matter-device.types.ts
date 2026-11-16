@@ -26,6 +26,8 @@ export interface GenerateMatterDeviceParams {
   mqttHost?: string
   mqttCredHost?: string
   filesBucket?: string
+  // Written into rmaker_creds/api_base_url when set. Controller nodes only.
+  apiBaseUrl?: string
 }
 
 export interface MatterDevice {

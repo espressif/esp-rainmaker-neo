@@ -80,6 +80,7 @@ function mapClientOutputs(outputs: ClientOutputs): RuntimeConfig {
     ALEXA_ENABLED: Boolean(outputs['rmng-alexa-cfg-core']),
     SMARTTHINGS_ENABLED: Boolean(outputs['rmng-st-cfg-core']),
     BRIDGE_ENABLED: Boolean(outputs['rmng-bridge-core']),
+    CONTROLLER_ENABLED: Boolean(outputs['rmng-controller-base']),
   }
 }
 

@@ -20,9 +20,7 @@ See docs/en/specs/assisted-claiming.md.
 package main
 
 import (
-	// Registration fires the node-register lifecycle hook. Linking bridge here
-	// installs it in-process (see src/bridge/hooks), so a bridge node gets its
-	// IoT policy without the Invoke round-trip this path used to pay.
+	// Blank imports register each capability module's node-register hook from init().
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -36,6 +34,7 @@ import (
 	"time"
 
 	_ "github.com/espressif/esp-rainmaker-neo/src/bridge/hooks"
+	_ "github.com/espressif/esp-rainmaker-neo/src/controller/hooks"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/kmsutil"
@@ -45,6 +44,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_id_reservation_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node/nodelifecycle"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/principal"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/certissuer"
@@ -100,7 +100,7 @@ func resolveCaller(ctx context.Context, request events.APIGatewayProxyRequest, v
 		return rmngctx.NewRmngContextWithCtx(ctx, user.NewUser("")), "", 0
 	}
 
-	rctx := user.NewContextWithAPIRequest(ctx, request)
+	rctx := principal.FromAPIRequest(ctx, request)
 	if rctx == nil || rctx.GetAccessor() == nil || rctx.GetAccessor().GetID() == "" {
 		return nil, "", http.StatusUnauthorized
 	}
@@ -263,8 +263,10 @@ var errNotClaimed = errors.New("node not claimed")
 var errInvalidCSR = errors.New("invalid csr")
 
 type ClaimVerifyRequest struct {
-	MacAddr      string   `json:"mac_addr" validate:"required"`
-	CSR          string   `json:"csr" validate:"required,startswith=-----BEGIN"`
+	MacAddr string `json:"mac_addr" validate:"required"`
+	CSR     string `json:"csr" validate:"required,startswith=-----BEGIN"`
+
+	// Unrestricted on purpose: under user_authenticated the claiming user declares capabilities, as an admin does on POST /v1/admin/nodes; a device_attested variant must derive them from the attestation.
 	Capabilities []string `json:"capabilities,omitempty" validate:"omitempty,dive,required"`
 }
 

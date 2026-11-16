@@ -62,6 +62,10 @@
       "bridge": {
         "label": "Bridge",
         "description": "Enable bridge behavior for gateway nodes."
+      },
+      "controller": {
+        "label": "Controller",
+        "description": "Let the node read and control the other nodes in its group."
       }
     },
     "tags": {

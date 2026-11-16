@@ -3,12 +3,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reject commit messages that carry a Co-authored-by trailer.
+"""Reject commit messages that carry a Co-authored-by trailer naming anyone outside Espressif.
 
     python3 scripts/check_commit_messages.py --since "$CI_MERGE_REQUEST_DIFF_BASE_SHA"
     python3 scripts/check_commit_messages.py --since origin/main
 
-Authorship in this repository is the committer alone, so the gate runs on every MR commit.
+A trailer is accepted only when it names an @espressif.com address, so Espressif colleagues can be credited while tool-added trailers (e.g. an AI assistant's noreply address) are refused. The gate runs on every MR commit.
 """
 
 from __future__ import annotations
@@ -18,7 +18,9 @@ import re
 import subprocess
 import sys
 
-COAUTHOR_RE = re.compile(r"^\s*co-authored-by\s*:", re.IGNORECASE)
+COAUTHOR_RE = re.compile(r"^\s*co-authored-by\s*:(.*)$", re.IGNORECASE)
+# A trailer passes only when its address is at @espressif.com; any other domain, or no address at all, fails.
+ALLOWED_COAUTHOR_RE = re.compile(r"<[^<>@\s]+@espressif\.com>\s*$", re.IGNORECASE)
 
 # Commit records are separated by a NUL so a body may hold blank lines or any text.
 LOG_FORMAT = "%H%x00%s%x00%B%x00"
@@ -49,7 +51,10 @@ def commits_since(ref: str) -> list[tuple[str, str, str]]:
 
 
 def offending_lines(body: str) -> list[str]:
-    return [line.strip() for line in body.splitlines() if COAUTHOR_RE.match(line)]
+    return [
+        line.strip() for line in body.splitlines()
+        if (m := COAUTHOR_RE.match(line)) and not ALLOWED_COAUTHOR_RE.search(m.group(1))
+    ]
 
 
 def main() -> int:
@@ -61,13 +66,13 @@ def main() -> int:
     if not bad:
         return 0
 
-    print(f"{len(bad)} commit(s) carry a Co-authored-by trailer, which this repository does not accept:", file=sys.stderr)
+    print(f"{len(bad)} commit(s) carry a Co-authored-by trailer for someone outside @espressif.com, which this repository does not accept:", file=sys.stderr)
     for sha, subject, lines in bad:
         print(f"  {sha[:12]} {subject}", file=sys.stderr)
         for line in lines:
             print(f"      {line}", file=sys.stderr)
     print(
-        "\nRemove the trailer and rewrite the commit (git commit --amend, or git rebase -i onto the target branch),"
+        "\nRemove the trailer (or use the co-author's @espressif.com address) and rewrite the commit (git commit --amend, or git rebase -i onto the target branch),"
         " then force-push the branch. Turn the trailer off in the tool that adds it so it does not come back.",
         file=sys.stderr,
     )

@@ -33,6 +33,7 @@ from app_common import (
     create_rest_api,
     create_s3_bucket,
     create_ssm_string_parameter,
+    create_write_once_secret,
     discover_api_custom_domain,
     discover_cognito_custom_domain,
     discover_cognito_email_configuration,
@@ -297,53 +298,10 @@ def handler(event, context):
         self.seed_oauth_clients_cr.node.add_dependency(self.oauth_clients_table)
 
     def _seed_refresh_secret(self) -> None:
-        """Generate the refresh-token HMAC secret into a SecureString SSM param on first deploy.
-        Inline custom resource; writes only if the param is absent, so a redeploy never rotates
-        it (rotation would invalidate every outstanding refresh token). The value never enters
-        the CloudFormation template."""
-        stack = Stack.of(self)
-        param_name = USER_SSM_PARAMETERS['ESP_USER_REFRESH_SECRET']
-        param_arn = f"arn:aws:ssm:{stack.region}:{stack.account}:parameter{param_name}"
-        seed_fn = lambda_.Function(
-            self, "SeedRefreshSecretFunction",
-            runtime=lambda_.Runtime.PYTHON_3_12,
-            handler="index.handler",
-            timeout=Duration.seconds(60),
-            code=lambda_.Code.from_inline("""
-import secrets, boto3, urllib3
-from botocore.exceptions import ClientError
-
-http = urllib3.PoolManager()
-PARAM = "%s"
-
-def send(event, context, status):
-    import json
-    body = json.dumps({
-        "Status": status, "Reason": "See CloudWatch " + context.log_stream_name,
-        "PhysicalResourceId": "seed-refresh-secret", "StackId": event["StackId"],
-        "RequestId": event["RequestId"], "LogicalResourceId": event["LogicalResourceId"],
-    }).encode("utf-8")
-    http.request("PUT", event["ResponseURL"], body=body, headers={"content-type": ""})
-
-def handler(event, context):
-    try:
-        if event["RequestType"] != "Delete":
-            ssm = boto3.client("ssm")
-            try:
-                ssm.get_parameter(Name=PARAM, WithDecryption=True)
-            except ssm.exceptions.ParameterNotFound:
-                ssm.put_parameter(Name=PARAM, Value=secrets.token_urlsafe(48), Type="SecureString")
-        send(event, context, "SUCCESS")
-    except Exception as e:
-        print("seed refresh secret error:", e)
-        send(event, context, "FAILED")
-""" % (param_name,)),  # noqa: UP031 - the handler source is full of braces, so .format would need every one escaped
-        )
-        seed_fn.add_to_role_policy(iam.PolicyStatement(
-            actions=["ssm:GetParameter", "ssm:PutParameter"],
-            resources=[param_arn],
-        ))
-        CustomResource(self, "SeedRefreshSecret", service_token=seed_fn.function_arn)
+        """Rotating this secret would invalidate every outstanding refresh token, hence write-once."""
+        create_write_once_secret(self, "SeedRefreshSecret",
+                                 parameter_name=USER_SSM_PARAMETERS['ESP_USER_REFRESH_SECRET'],
+                                 physical_id="seed-refresh-secret")
 
 class CreateDiscoveryStorage(Construct):
     """Storage for the static OIDC/OAuth discovery documents.

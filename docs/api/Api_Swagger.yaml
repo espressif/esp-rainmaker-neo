@@ -884,6 +884,10 @@ paths:
           $ref: "#/components/responses/InternalServerError"
 
   # ----------------------------------------------------------------------
+  # ----------------------------------------------------------------------
+  # CONTROLLER
+  # ----------------------------------------------------------------------
+
   # GROUP MANAGEMENT
   # ----------------------------------------------------------------------
 
@@ -1046,6 +1050,40 @@ paths:
           $ref: "#/components/responses/InternalServerError"
 
   /v1/groups/{groupId}:
+    get:
+      summary: Get a group
+      description: |
+        Returns one group with its node ids, subgroups and per-node capability details.
+
+        Unlike `GET /v1/groups`, which lists the groups the caller is a member of, this endpoint is
+        group-keyed: the group is resolved from the path. That lets a group-scoped principal holding
+        no membership row read the group it is bound to — a RainMaker Neo Controller signing with the
+        credentials the IoT credential provider issued for its certificate, which identifies it.
+
+        A caller with no access to the group, and a group id that does not exist, both return the
+        same `404` so the response does not reveal whether the group exists.
+      tags:
+        - Group Management
+      security:
+        - sigv4: []
+      parameters:
+        - $ref: "#/components/parameters/GroupId"
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroupInfo"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
     patch:
       summary: Update group information
       description: Updates the information of an existing group
@@ -4395,7 +4433,8 @@ components:
             type: string
           description: |
             Optional capabilities to apply to the issued certificate's policy
-            ("s3", "kvs", "bridge"). Must be re-supplied on a re-claim, since they are
+            ("s3", "kvs", "bridge", "controller"). Accepts the same values as node
+            registration. Must be re-supplied on a re-claim, since they are
             applied to the new certificate. "bridge" is rejected with 400 when the
             optional bridge stack is not deployed.
           example: ["s3"]
@@ -4704,8 +4743,8 @@ components:
           description: The name of the group
         access_type:
           type: string
-          enum: [primary, secondary, subgroup]
-          description: The user's access level for this group
+          enum: [primary, secondary, subgroup, controller]
+          description: The caller's access level for this group. `controller` is returned to a RainMaker Neo Controller reading its own group with its credential-provider credentials; it grants read only.
         node_ids:
           type: array
           items:
@@ -6046,12 +6085,14 @@ components:
           type: array
           items:
             type: string
-            enum: [s3, kvs, bridge]
+            enum: [s3, kvs, bridge, controller]
           description: |
             Optional list of device capabilities to enable during registration.
             - "s3": Attaches DeviceFilePolicy for S3 file access via IoT Credential Provider.
             - "kvs": Attaches DeviceVideoPolicy for KVS streaming via IoT Credential Provider.
             - "bridge": Attaches the bridge policy and marks the node as a bridge; returns 400 when the optional bridge stack is not deployed.
+            - "controller": Attaches the controller policy, making the node a RainMaker Neo Controller that
+              can read and control the other nodes in its group.
             If omitted, only the DefaultThingPolicy (MQTT/shadow) is attached.
 
     RegisterSingleNodeResponse:
@@ -6091,12 +6132,14 @@ components:
           type: array
           items:
             type: string
-            enum: [s3, kvs, bridge]
+            enum: [s3, kvs, bridge, controller]
           description: |
             Optional list of device capabilities to enable for ALL nodes.
             - "s3": Attaches DeviceFilePolicy for S3 file access via IoT Credential Provider.
             - "kvs": Attaches DeviceVideoPolicy for KVS streaming via IoT Credential Provider.
             - "bridge": Attaches the bridge policy and marks the node as a bridge; a node fails registration when the optional bridge stack is not deployed.
+            - "controller": Attaches the controller policy to every node in the job. Register
+              controllers in their own batch, since the list applies to the whole CSV.
             If omitted, only the DefaultThingPolicy (MQTT/shadow) is attached.
 
     RegisterBulkNodesResponse:

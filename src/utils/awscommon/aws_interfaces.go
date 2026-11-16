@@ -41,6 +41,7 @@ type DynamoDBClientInterface interface {
 
 type IoTClientInterface interface {
 	ListThingPrincipals(ctx context.Context, params *iot.ListThingPrincipalsInput, optFns ...func(*iot.Options)) (*iot.ListThingPrincipalsOutput, error)
+	ListPrincipalThings(ctx context.Context, params *iot.ListPrincipalThingsInput, optFns ...func(*iot.Options)) (*iot.ListPrincipalThingsOutput, error)
 	DescribeCertificate(ctx context.Context, params *iot.DescribeCertificateInput, optFns ...func(*iot.Options)) (*iot.DescribeCertificateOutput, error)
 	RegisterCertificateWithoutCA(ctx context.Context, params *iot.RegisterCertificateWithoutCAInput, optFns ...func(*iot.Options)) (*iot.RegisterCertificateWithoutCAOutput, error)
 	CreateThing(ctx context.Context, params *iot.CreateThingInput, optFns ...func(*iot.Options)) (*iot.CreateThingOutput, error)

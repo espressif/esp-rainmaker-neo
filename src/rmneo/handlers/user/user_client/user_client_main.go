@@ -13,6 +13,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_integration_db"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification/push"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/principal"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
@@ -92,7 +93,7 @@ func handleRegisterEndpoint(ctx context.Context, request events.APIGatewayProxyR
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Missing integrationId")), nil
 	}
 
-	rctx := user.NewContextWithAPIRequest(ctx, request)
+	rctx := principal.FromAPIRequest(ctx, request)
 	if rctx == nil {
 		rlog.Error(ctx).Msg("Failed to create request context")
 		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Unauthorized")), nil
@@ -162,7 +163,7 @@ func handleUnregisterEndpoint(ctx context.Context, request events.APIGatewayProx
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Missing endpointId")), nil
 	}
 
-	rctx := user.NewContextWithAPIRequest(ctx, request)
+	rctx := principal.FromAPIRequest(ctx, request)
 	if rctx == nil {
 		rlog.Error(ctx).Msg("Failed to create request context")
 		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Unauthorized")), nil

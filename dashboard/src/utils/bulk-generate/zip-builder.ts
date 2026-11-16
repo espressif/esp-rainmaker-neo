@@ -41,7 +41,9 @@ function toHex(bytes: Uint8Array): string {
     .join('')
 }
 
-function buildConfigCsv(): string {
+// Mirrors the NVS row list in buildRmakerNvsRows exactly; the two must stay in step or the manifest
+// will not describe the partition it ships with.
+function buildConfigCsv(includeApiBaseUrl: boolean): string {
   return [
     'rmaker_creds,namespace,',
     'node_id,data,binary',
@@ -51,6 +53,7 @@ function buildConfigCsv(): string {
     'client_cert,file,binary',
     'client_key,file,binary',
     'random,data,hex2bin',
+    ...(includeApiBaseUrl ? ['api_base_url,data,binary'] : []),
     '',
   ].join('\n')
 }
@@ -74,6 +77,8 @@ export interface BulkMfgZipParams {
   mqttHost: string
   mqttCredHost?: string
   filesBucket?: string
+  // Written into NVS as rmaker_creds/api_base_url when set. Controller nodes only.
+  apiBaseUrl?: string
   onProgress: (info: ProgressInfo) => void
 }
 
@@ -91,6 +96,7 @@ export async function generateBulkMfgZip({
   mqttHost,
   mqttCredHost = '',
   filesBucket = '',
+  apiBaseUrl = '',
   onProgress,
 }: BulkMfgZipParams): Promise<BulkMfgZipResult> {
   const PREFIX = generatePrefix()
@@ -150,6 +156,7 @@ export async function generateBulkMfgZip({
       mqttHost,
       mqttCredHost,
       filesBucket,
+      apiBaseUrl,
       random: randomHex,
     })
 
@@ -164,6 +171,7 @@ export async function generateBulkMfgZip({
       `client_cert,file,binary,${PREFIX}/node_details/${dirName}/node.crt`,
       `client_key,file,binary,${PREFIX}/node_details/${dirName}/node.key`,
       `random,data,hex2bin,${randomHex}`,
+      ...(apiBaseUrl ? [`api_base_url,data,binary,${apiBaseUrl}`] : []),
       '',
     ].join('\n')
 
@@ -185,7 +193,7 @@ export async function generateBulkMfgZip({
   onProgress({ phase: 'zip', message: 'Building archive...' })
 
   const common = requireFolder(mfg, 'common')
-  common.file('config.csv', buildConfigCsv())
+  common.file('config.csv', buildConfigCsv(Boolean(apiBaseUrl)))
   common.file('endpoint.txt', mqttHost)
   common.file('mqtt_cred_host.txt', mqttCredHost)
   common.file('files_bucket.txt', filesBucket)

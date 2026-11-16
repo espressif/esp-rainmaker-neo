@@ -16,6 +16,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/nodeadmin/bulk_job"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/nodeadmin/jobs_api"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/principal"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
@@ -109,7 +110,7 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 	var err error
 	var response interface{}
 
-	rctx := user.NewContextWithAPIRequest(ctx, request)
+	rctx := principal.FromAPIRequest(ctx, request)
 	// Fail closed: never fall back to a SystemActor. A nil/empty context means
 	// the caller's identity did not resolve to a real user; a SystemActor holds
 	// *:* permissions and would bypass the admin gate below.

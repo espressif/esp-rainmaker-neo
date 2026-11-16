@@ -167,10 +167,15 @@ class GroupAPI(Construct):
             self, "GroupIdPatchMethod", common_resources,
             group_id_resource_id, "PATCH", self.group_function
         )
-        
+
+        create_cfn_api_method(
+            self, "GroupIdGetMethod", common_resources,
+            group_id_resource_id, "GET", self.group_function
+        )
+
         add_cors_options(
             self, "GroupIdOptionsMethod", common_resources,
-            group_id_resource_id, allowed_methods=["DELETE", "PATCH"]
+            group_id_resource_id, allowed_methods=["GET", "DELETE", "PATCH"]
         )
 
         # /v1/groups/{groupId}/matter-nocs - Get User NOC for Matter groups

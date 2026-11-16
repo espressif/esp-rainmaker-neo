@@ -11,12 +11,12 @@ import (
 	"net/http"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/principal"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/config"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/schedule"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/timeseries"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/trigger"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 
@@ -39,7 +39,10 @@ func initialize() {
 // HandleRequest processes API Gateway requests for service operations
 func HandleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	// Create the user context directly using the request
-	userCtx := user.NewContextWithAPIRequest(ctx, request)
+	userCtx := principal.FromAPIRequest(ctx, request)
+	if userCtx == nil {
+		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Unauthorized")), nil
+	}
 
 	// Add query parameters to the context for services that need them
 	if len(request.QueryStringParameters) > 0 {
@@ -82,15 +85,15 @@ func HandleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		return utils.APIGwRespJSON(http.StatusNotFound, utils.NewAPIStatus("Resource route not found")), nil
 	}
 
-	// Verify group access first - like in group_main.go
+	// Verify group access first, the same way for every principal: ListGroupForUser resolves a user
+	// from their user-group-assoc row and a device from its node's membership. Loading the group's
+	// nodes is also what grants the per-node access the service call below checks.
+	groupFound := false
 	groups, err := group.ListGroupForUser(userCtx, groupID, true)
 	if err != nil {
 		rlog.Error(userCtx).Err(err).Send()
 		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Failed to verify group access")), nil
 	}
-
-	// Check if the user can access this specific group
-	groupFound := false
 	for _, g := range groups {
 		if g.GroupID == groupID {
 			groupFound = true

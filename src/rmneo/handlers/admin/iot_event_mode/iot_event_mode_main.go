@@ -20,6 +20,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/iot"
 	iottypes "github.com/aws/aws-sdk-go-v2/service/iot/types"
 
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/principal"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
@@ -336,7 +337,7 @@ func dispatch(ctx context.Context, raw json.RawMessage) (interface{}, error) {
 }
 
 func handleAPIRequest(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	rctx := user.NewContextWithAPIRequest(ctx, request)
+	rctx := principal.FromAPIRequest(ctx, request)
 	if rctx == nil {
 		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Unauthorized")), nil
 	}

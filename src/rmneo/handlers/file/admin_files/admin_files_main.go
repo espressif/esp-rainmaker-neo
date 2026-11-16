@@ -14,6 +14,7 @@ import (
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/file"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/notification/push"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/principal"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
@@ -105,7 +106,7 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 	var err error
 	var response interface{}
 	var statusCode = http.StatusOK
-	rctx := user.NewContextWithAPIRequest(ctx, request)
+	rctx := principal.FromAPIRequest(ctx, request)
 	isAuthorized := rctx.GetAccessor().(*user.User).IsAdmin(rctx)
 	if !isAuthorized {
 		rlog.Error(rctx).Bool("isAuthorized", isAuthorized).Msg("User is not authorized")

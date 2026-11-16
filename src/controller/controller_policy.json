@@ -1,0 +1,34 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["iot:Subscribe", "iot:Receive", "iot:Publish"],
+      "Resource": [
+        "arn:aws:iot:__REGION__:__ACCOUNT__:*/$aws/things/*/shadow/name/params-${iot:Connection.Thing.Attributes[group_id]}*/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["iot:Publish"],
+      "Resource": [
+        "arn:aws:iot:__REGION__:__ACCOUNT__:topic/rainmaker/nodes/*/user/params-${iot:Connection.Thing.Attributes[group_id]}*/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["iot:Publish", "iot:Subscribe", "iot:Receive"],
+      "Resource": [
+        "arn:aws:iot:__REGION__:__ACCOUNT__:*/rainmaker/nodes/groups/${iot:Connection.Thing.Attributes[group_id]}/control",
+        "arn:aws:iot:__REGION__:__ACCOUNT__:*/rainmaker/nodes/groups/${iot:Connection.Thing.Attributes[group_id]}/subgroups/*/control"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["iot:AssumeRoleWithCertificate"],
+      "Resource": [
+        "arn:aws:iot:__REGION__:__ACCOUNT__:rolealias/__CONTROLLER_ROLE_ALIAS__"
+      ]
+    }
+  ]
+}

@@ -228,6 +228,44 @@ func (m *IoTClientMock) ListThingPrincipals(ctx context.Context, params *iot.Lis
 	}, nil
 }
 
+func (m *IoTClientMock) ListPrincipalThings(ctx context.Context, params *iot.ListPrincipalThingsInput, optFns ...func(*iot.Options)) (*iot.ListPrincipalThingsOutput, error) {
+	certID, err := iotutil.ExtractCertIDFromARN(*params.Principal)
+	if err != nil {
+		return nil, rmerror.NewRMError(err, "failed to extract certificate ID from ARN")
+	}
+
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+
+	// Matched on the certificate ID because the mock mints its ARNs in a fixed region.
+	things := []string{}
+	for name, thing := range m.Things {
+		if slices.Contains(thing.CertificateIds, certID) {
+			things = append(things, name)
+		}
+	}
+	return &iot.ListPrincipalThingsOutput{Things: things}, nil
+}
+
+// AttachTestCertificate attaches an active certificate with the given ID to thingName, creating the thing if needed, as registration would.
+func (m *IoTClientMock) AttachTestCertificate(thingName, certID string) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	m.Certificates[certID] = Certificate{
+		Arn:    fmt.Sprintf("arn:aws:iot:us-west-2:123456789012:cert/%s", certID),
+		Status: types.CertificateStatusActive,
+	}
+	thing, exists := m.Things[thingName]
+	if !exists {
+		thing = Things{Name: thingName, Attributes: map[string]string{}}
+	}
+	if !slices.Contains(thing.CertificateIds, certID) {
+		thing.CertificateIds = append(thing.CertificateIds, certID)
+	}
+	m.Things[thingName] = thing
+}
+
 func (m *IoTClientMock) DescribeCertificate(ctx context.Context, params *iot.DescribeCertificateInput, optFns ...func(*iot.Options)) (*iot.DescribeCertificateOutput, error) {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()

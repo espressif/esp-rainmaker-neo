@@ -55,6 +55,8 @@ const (
 	GroupPrimaryAccess   GroupAccessType = "primary"
 	GroupSecondaryAccess GroupAccessType = "secondary"
 	GroupSubEntityAccess GroupAccessType = "subentity"
+	// GroupDeviceAccess is a headless device's read access to the group its node belongs to; it has no user-group-assoc row. Wire value "controller": RainMaker Neo Controller firmware matches on it.
+	GroupDeviceAccess GroupAccessType = "controller"
 )
 
 func GetGroupPermissions(accessType GroupAccessType) []string {
@@ -66,6 +68,9 @@ func GetGroupPermissions(accessType GroupAccessType) []string {
 		return []string{GroupCreateSubGroup.String(), GroupGet.String(), GroupListSubEntities.String(), GroupUpdate.String(), GroupUpdateSubGroup.String(), GroupGetAutomation.String(), GroupEditAutomation.String(), GroupDeleteAutomation.String(), GroupDeleteSubGroup.String(), GroupListPrimaryUsers.String()}
 	case GroupSubEntityAccess:
 		return []string{GroupListSubEntities.String(), GroupUpdateSubGroup.String(), GroupListPrimaryUsers.String()}
+	case GroupDeviceAccess:
+		// Group read only. GroupGet gates reading the group itself, GroupListSubEntities gates reaching its nodes. Deliberately no update/share/delete and no automation actions.
+		return []string{GroupGet.String(), GroupListSubEntities.String()}
 	default:
 		return []string{}
 	}

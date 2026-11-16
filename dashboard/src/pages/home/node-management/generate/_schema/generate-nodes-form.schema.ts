@@ -72,6 +72,7 @@ export function buildGenerateNodesFormSchema(
       }
     }),
     matter: z.boolean(),
+    includeApiUrl: z.boolean(),
   });
 }
 

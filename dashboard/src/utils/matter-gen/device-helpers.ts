@@ -57,4 +57,7 @@ export function appendRainmakerRows(
     { key: 'client_id', type: 'data', encoding: 'binary', value: clientId },
     { key: 'random', type: 'data', encoding: 'hex2bin', value: toHexLocal(randomBytes(16)) },
   )
+  if (params.apiBaseUrl) {
+    nvsRows.push({ key: 'api_base_url', type: 'data', encoding: 'binary', value: params.apiBaseUrl })
+  }
 }

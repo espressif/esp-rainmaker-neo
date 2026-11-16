@@ -32,6 +32,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/ssmutil"
 	"github.com/espressif/esp-rainmaker-neo/src/claim"
 	"github.com/espressif/esp-rainmaker-neo/src/claim/ca_bootstrap"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/principal"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
@@ -77,7 +78,7 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 }
 
 func route(ctx context.Context, request events.APIGatewayProxyRequest) (int, interface{}, error) {
-	rctx := user.NewContextWithAPIRequest(ctx, request)
+	rctx := principal.FromAPIRequest(ctx, request)
 	if rctx == nil || rctx.GetAccessor() == nil {
 		return http.StatusForbidden, utils.NewAPIStatus("Forbidden"), nil
 	}
