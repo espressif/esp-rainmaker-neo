@@ -132,8 +132,9 @@ def exchange_code_for_tokens(auth_code, code_verifier, client_id):
 def fetch_mcp_tokens(user):
     """Run the full CIMD + PKCE OAuth flow for ``user`` and return the token bundle.
 
-    The bundle contains ``access_token`` and ``id_token`` (both minted for
-    ``mcp-oauth-client``, so both pass the MCP authorizer's client binding).
+    The bundle contains ``access_token`` and ``id_token``. The proxy requests its own RFC 8707
+    resource, so the access token's aud is the MCP server's; the id token is for the client and
+    the MCP server refuses it.
     """
     code_verifier, code_challenge = generate_pkce_pair()
     client_id = fetch_test_cimd_client_id()

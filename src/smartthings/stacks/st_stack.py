@@ -51,6 +51,12 @@ class STStack(Stack):
             description="AWS region where the rmng stack is deployed",
             default=st_params.get("rmng_region", "")
         )
+        rmng_api_audiences_param = CfnParameter(
+            self, "RmngApiAudiences",
+            type="String",
+            description="Comma-separated audiences of the neo REST API (from rmng-base outputs)",
+            default=st_params.get("rmng_api_audiences", "")
+        )
         esp_user_issuer_param = CfnParameter(
             self, "EspUserIssuer",
             type="String",
@@ -99,6 +105,7 @@ class STStack(Stack):
         # parameter value across updates and can leave USER_ISSUER empty. The CfnParameter remains
         # the fallback for the publish flow.
         esp_user_issuer = st_params.get("esp_user_issuer") or esp_user_issuer_param.value_as_string
+        rmng_api_audiences = st_params.get("rmng_api_audiences") or rmng_api_audiences_param.value_as_string
         esp_user_client_id = esp_user_client_id_param.value_as_string
         esp_admin_user_pool_id = esp_admin_user_pool_id_param.value_as_string
         esp_admin_user_pool_client_id = esp_admin_user_pool_client_id_param.value_as_string
@@ -219,6 +226,7 @@ class STStack(Stack):
             "AWS_ACCOUNT_ID": Aws.ACCOUNT_ID,
             "RMNG_REGION": rmng_region,
             "USER_ISSUER": esp_user_issuer,
+            "ACCEPTED_AUDIENCES": rmng_api_audiences,
             "USER_CLIENT_ID": esp_user_client_id,
             "USER_JWKS_PARA_NAME": esp_user_jwks,
             "ADMIN_USER_POOL_ID": esp_admin_user_pool_id,

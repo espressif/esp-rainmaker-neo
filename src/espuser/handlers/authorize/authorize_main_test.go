@@ -40,12 +40,19 @@ func TestAuthorizeHandler(t *testing.T) {
 }
 
 const (
-	testClientID = "user-pool-client"
-	redirectURI  = "com.example://callback"
+	testClientID        = "user-pool-client"
+	redirectURI         = "com.example://callback"
+	testResource        = "https://api.example.com"
+	testAccountResource = "https://account.example.com"
 )
 
+// getRequest builds a GET the way API Gateway delivers it, with every query parameter in both maps.
 func getRequest(path string, query map[string]string) events.APIGatewayProxyRequest {
-	return events.APIGatewayProxyRequest{HTTPMethod: http.MethodGet, Path: path, QueryStringParameters: query}
+	multi := make(map[string][]string, len(query))
+	for k, v := range query {
+		multi[k] = []string{v}
+	}
+	return events.APIGatewayProxyRequest{HTTPMethod: http.MethodGet, Path: path, QueryStringParameters: query, MultiValueQueryStringParameters: multi}
 }
 
 // validQuery is a well-formed authorize request; overrides tweak/remove params per spec.
@@ -94,7 +101,8 @@ var _ = Describe("GET /oauth2/authorize", func() {
 		Expect(clientsDB.CreateClient(&oauth_clients_db.OAuthClientEntry{
 			ClientID: testClientID, ClientType: oauth_clients_db.ClientTypePublic,
 			RedirectURIs: []string{redirectURI}, Scopes: []string{"openid", "email"},
-			RequirePKCE: utils.Ptr(true), // public clients always require PKCE
+			RequirePKCE:      utils.Ptr(true), // public clients always require PKCE
+			AllowedResources: []string{testResource, testAccountResource}, DefaultResource: testResource,
 		})).To(Succeed())
 	})
 
@@ -197,7 +205,8 @@ var _ = Describe("GET /oauth2/authorize", func() {
 			Expect(clientsDB.CreateClient(&oauth_clients_db.OAuthClientEntry{
 				ClientID: "https_client", ClientType: oauth_clients_db.ClientTypePublic,
 				RedirectURIs: []string{"https://app.example.com/cb"}, Scopes: []string{"openid", "email"},
-				RequirePKCE: utils.Ptr(true),
+				RequirePKCE:      utils.Ptr(true),
+				AllowedResources: []string{testResource, testAccountResource}, DefaultResource: testResource,
 			})).To(Succeed())
 
 			resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathAuthorize,
@@ -228,7 +237,8 @@ var _ = Describe("GET /oauth2/authorize", func() {
 		Expect(clientsDB.CreateClient(&oauth_clients_db.OAuthClientEntry{
 			ClientID: "conf_nopkce", ClientType: oauth_clients_db.ClientTypeConfidential,
 			RedirectURIs: []string{redirectURI}, Scopes: []string{"openid"},
-			RequirePKCE: utils.Ptr(false),
+			RequirePKCE:      utils.Ptr(false),
+			AllowedResources: []string{testResource, testAccountResource}, DefaultResource: testResource,
 		})).To(Succeed())
 		q := validQuery(map[string]string{"client_id": "conf_nopkce", "scope": "openid", "code_challenge": "", "code_challenge_method": ""})
 		resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathAuthorize, q))
@@ -265,16 +275,13 @@ var _ = Describe("GET /oauth2/authorize", func() {
 		Expect(resp.Headers["Location"]).NotTo(ContainSubstring("code="), "no code is issued")
 	})
 
-	It("rejects two resource values without rendering a redirect (negative)", func() {
-		// One resource, one aud. Two would be one token good at two APIs.
+	It("lets one sign-in cover several resources (RFC 8707 s2.1)", func() {
 		req := getRequest(pathAuthorize, validQuery(nil))
-		req.MultiValueQueryStringParameters = map[string][]string{
-			"resource": {"https://a.example.com", "https://b.example.com"},
-		}
+		req.MultiValueQueryStringParameters["resource"] = []string{testResource, testAccountResource}
 		resp, err := handleAuthorizeRequest(context.Background(), req)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
-		Expect(resp.Headers).NotTo(HaveKey("Location"))
+		Expect(resp.StatusCode).To(Equal(http.StatusFound))
+		Expect(resp.Headers["Location"]).NotTo(ContainSubstring("error="))
 	})
 
 	It("redirects the client with invalid_scope when a scope is outside the client's allowed set (negative)", func() {
@@ -438,7 +445,8 @@ var _ = Describe("GET /oauth2/authorize with a session (SSO)", func() {
 		Expect(clientsDB.CreateClient(&oauth_clients_db.OAuthClientEntry{
 			ClientID: testClientID, ClientType: oauth_clients_db.ClientTypePublic,
 			RedirectURIs: []string{redirectURI}, Scopes: []string{"openid", "email"},
-			RequirePKCE: utils.Ptr(true),
+			RequirePKCE:      utils.Ptr(true),
+			AllowedResources: []string{testResource, testAccountResource}, DefaultResource: testResource,
 		})).To(Succeed())
 	})
 
@@ -504,6 +512,21 @@ var _ = Describe("GET /oauth2/authorize with a session (SSO)", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(flow.Subject).To(Equal("user-sso-2"))
 		Expect(flow.SID).NotTo(BeEmpty(), "the flow carries the session id so the refresh family can be tied to it")
+	})
+
+	It("reads an empty resource as none requested: the code covers the client's default, not invalid_target (RFC 6749 s3.1)", func() {
+		cookie := establishSession("user-sso-empty-resource", time.Now().Unix())
+		req := withCookie(getRequest(pathAuthorize, validQuery(nil)), cookie)
+		req.MultiValueQueryStringParameters["resource"] = []string{""}
+
+		resp, err := handleAuthorizeRequest(context.Background(), req)
+		Expect(err).NotTo(HaveOccurred())
+		loc, err := url.Parse(resp.Headers["Location"])
+		Expect(err).NotTo(HaveOccurred())
+		Expect(loc.Query().Get("error")).To(BeEmpty())
+		flow, err := auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).GetFlowByCode(loc.Query().Get("code"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(flow.Resources).To(Equal([]string{testResource}))
 	})
 
 	It("prompt=none with a live session answers silently with a code", func() {
@@ -667,7 +690,8 @@ var _ = Describe("GET /oauth2/federation/callback establishes the session", func
 		Expect(clientsDB.CreateClient(&oauth_clients_db.OAuthClientEntry{
 			ClientID: testClientID, ClientType: oauth_clients_db.ClientTypePublic,
 			RedirectURIs: []string{redirectURI}, Scopes: []string{"openid"},
-			RequirePKCE: utils.Ptr(false),
+			RequirePKCE:      utils.Ptr(false),
+			AllowedResources: []string{testResource, testAccountResource}, DefaultResource: testResource,
 		})).To(Succeed())
 
 		req := getRequest(pathFederationCallback, map[string]string{"code": "upstream-code", "state": leg.State})
@@ -766,6 +790,7 @@ var _ = Describe("allowed_providers is enforced, not decorative", func() {
 				ClientID: clientID, ClientType: oauth_clients_db.ClientTypePublic,
 				RedirectURIs: []string{redirectURI}, Scopes: []string{"openid", "email"},
 				AllowedProviders: allowed, RequirePKCE: utils.Ptr(true),
+				AllowedResources: []string{testResource, testAccountResource}, DefaultResource: testResource,
 			})).To(Succeed())
 	}
 

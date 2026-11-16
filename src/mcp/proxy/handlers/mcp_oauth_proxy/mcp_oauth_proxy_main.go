@@ -420,6 +420,8 @@ func handleAuthorize(ctx context.Context, request events.APIGatewayV2HTTPRequest
 	params.Set("state", encodedState)
 	params.Set("code_challenge", codeChallenge)
 	params.Set("code_challenge_method", codeChallengeMethod)
+	// RFC 8707: the token is for this server, by the same name its protected-resource metadata advertises.
+	params.Set("resource", baseURL+"/v1/mcp")
 	if scope != "" {
 		params.Set("scope", scope)
 	}
@@ -566,6 +568,7 @@ func handleToken(ctx context.Context, request events.APIGatewayV2HTTPRequest) (e
 		tokenParams.Set("code", wc.ESPCode)
 		tokenParams.Set("redirect_uri", baseURL+"/oauth2/callback")
 		tokenParams.Set("code_verifier", codeVerifier)
+		tokenParams.Set("resource", baseURL+"/v1/mcp")
 	case oidc.GrantRefreshToken:
 		if clientID == "" || formValues.Get("refresh_token") == "" {
 			return errorResponse(http.StatusBadRequest, "invalid_request"), nil

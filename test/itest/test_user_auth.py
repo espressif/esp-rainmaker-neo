@@ -26,8 +26,10 @@ from test.itest.conftest import (
     ADMIN_USER_POOL_ID,
     API_GATEWAY_URL,
     END_USER_POOL_ID,
+    ESPUSER_RESOURCE,
     IDENTITY_POOL_ID,
     IOT_ENDPOINT,
+    NEO_RESOURCE,
     REGION,
     USER_API_GATEWAY_URL,
     complete_federation_login,
@@ -46,6 +48,26 @@ def _new_user(email):
                 API_GATEWAY_URL, USER_API_GATEWAY_URL, IOT_ENDPOINT)
     user.mailosaur_email = email
     return user
+
+
+def _second_login(user):
+    """The same person as `user` on a User of its own, so a test that rotates or revokes its login never spends the pooled user's refresh token, which user_api_token() redeems for whichever test borrows it next."""
+    return User(user.username, user.password, REGION, IDENTITY_POOL_ID,
+                API_GATEWAY_URL, USER_API_GATEWAY_URL, IOT_ENDPOINT)
+
+
+def _assert_neo_takes_only_its_own_token(neo_tokens, espuser_token):
+    """neo accepts only its own token and refuses the ESP User API's with 401 (RFC 9068 s4, RFC 6750 s3.1); the ESP User API's own endpoints take a token for either."""
+    neo_token, id_token = neo_tokens["access_token"], neo_tokens["id_token"]
+    creds_url = f"{API_GATEWAY_URL}/v1/user/credentials"
+    me_url = f"{USER_API_GATEWAY_URL}/v1/users/me"
+    bearer = lambda token: {"Authorization": f"Bearer {token}"}  # noqa: E731
+    assert requests.post(creds_url, headers=bearer(neo_token), json={"id_token": id_token}).status_code == 200
+    assert requests.post(creds_url, headers=bearer(espuser_token), json={"id_token": id_token}).status_code == 401, \
+        "neo must refuse a token addressed to the ESP User API"
+    assert requests.get(me_url, headers=bearer(espuser_token)).status_code == 200
+    assert requests.get(me_url, headers=bearer(neo_token)).status_code == 200, \
+        "the ESP User API's own endpoints take a token addressed to any of our APIs"
 
 
 
@@ -192,24 +214,43 @@ def test_userinfo_returns_scope_gated_claims_and_refuses_bad_tokens(test_user1):
     assert rejected.json().get("error") == "invalid_token", rejected.text
 
 
+def test_userinfo_accepts_a_token_for_any_of_our_apis(test_user1):
+    """/oauth2/userinfo is the issuer's own endpoint (OIDC Core s5.3), not one API's, so one sign-in's neo token and ESP User API token both resolve there to the same subject."""
+    signin = test_user1.signin()
+    assert signin.status_code == 200, signin.text
+    neo_token = signin.json()["access_token"]
+    espuser_token = test_user1.user_api_token()
+    assert decode_jwt_claims(neo_token)["aud"] == NEO_RESOURCE
+    assert decode_jwt_claims(espuser_token)["aud"] == ESPUSER_RESOURCE
+
+    subjects = []
+    for token in (neo_token, espuser_token):
+        info = test_user1.oauth_userinfo(token)
+        assert info.status_code == 200, \
+            f"userinfo must accept a token for {decode_jwt_claims(token)['aud']}: {info.status_code} {info.text}"
+        subjects.append(info.json().get("sub"))
+    assert subjects[0] == subjects[1] == decode_jwt_claims(neo_token)["sub"], f"one sign-in is one subject: {subjects}"
+
+
 def test_revocation_ends_the_login_on_both_surfaces(test_user1):
     """Revoking ends a login wherever it is asked: the RFC 7009 endpoint and the legacy signout both
     leave the presented refresh token unredeemable."""
     if not USER_API_GATEWAY_URL:
         pytest.skip("USER_API_GATEWAY_URL not configured")
 
-    first = test_user1.signin()
+    login = _second_login(test_user1)
+    first = login.signin()
     assert first.status_code == 200, first.text
     token = first.json()["refresh_token"]
-    assert test_user1.oauth_revoke(token, token_type_hint="refresh_token").status_code == 200
-    assert test_user1.refresh_tokens(token).status_code == 400, "a revoked token must not redeem"
+    assert login.oauth_revoke(token, token_type_hint="refresh_token").status_code == 200
+    assert login.refresh_tokens(token).status_code == 400, "a revoked token must not redeem"
 
     # A fresh login, ended through the legacy surface instead.
-    second = test_user1.signin()
+    second = login.signin()
     assert second.status_code == 200, second.text
     legacy_token = second.json()["refresh_token"]
-    assert test_user1.signout(refresh_token=legacy_token).status_code == 200
-    assert test_user1.refresh_tokens(legacy_token).status_code != 200, \
+    assert login.signout(refresh_token=legacy_token).status_code == 200
+    assert login.refresh_tokens(legacy_token).status_code != 200, \
         "signout must revoke the family it was given"
 
 
@@ -229,7 +270,7 @@ def test_credentials_endpoint_rejects_id_token(test_user1):
     creds_url = f"{API_GATEWAY_URL}/v1/user/credentials"
     rejected = requests.post(creds_url, headers={"Authorization": f"Bearer {id_token}"},
                              json={"id_token": id_token})
-    assert rejected.status_code == 403, \
+    assert rejected.status_code == 401, \
         f"an id token in the Authorization header must be rejected, got {rejected.status_code}: {rejected.text}"
     # The body is mandatory: the endpoint pairs the two halves of one sign-in.
     no_body = requests.post(creds_url, headers={"Authorization": f"Bearer {access_token}"})
@@ -240,6 +281,44 @@ def test_credentials_endpoint_rejects_id_token(test_user1):
                              json={"id_token": id_token})
     assert accepted.status_code == 200, \
         f"the matched pair from the same login must be accepted, got {accepted.status_code}: {accepted.text}"
+
+
+def test_password_sign_in_covers_neo_and_esp_user_one_token_each(test_user1):
+    """One password sign-in, which names no resource, covers both APIs the password client is granted
+    (RFC 8707): neo accepts only its own token and refuses the other with 401 (RFC 9068 s4, RFC 6750
+    s3.1), while the ESP User API takes either; the ESP User token comes from a refresh that names it."""
+    signin = test_user1.signin()
+    assert signin.status_code == 200, signin.text
+    tokens = signin.json()
+    assert decode_jwt_claims(tokens["access_token"])["aud"] == NEO_RESOURCE, "the password client's default"
+
+    espuser_token = test_user1.user_api_token()
+    assert decode_jwt_claims(espuser_token)["aud"] == ESPUSER_RESOURCE
+
+    _assert_neo_takes_only_its_own_token(tokens, espuser_token)
+
+
+def test_rotated_refresh_token_still_covers_every_api_of_the_sign_in(test_user1):
+    """Rotation renews a sign-in, never narrows it (RFC 8707 s2.2): after two rotations the refresh token still gets neo a token and the ESP User API a token, and neo accepts only its own."""
+    login = _second_login(test_user1)
+    signin = login.signin()
+    assert signin.status_code == 200, signin.text
+    refresh_token = signin.json()["refresh_token"]
+    for _ in range(2):
+        rotated = login.refresh_tokens(refresh_token)
+        assert rotated.status_code == 200, rotated.text
+        assert rotated.json()["refresh_token"] != refresh_token, "every redemption must rotate"
+        refresh_token = rotated.json()["refresh_token"]
+
+    espuser = login.refresh_tokens(refresh_token, resource=ESPUSER_RESOURCE)
+    assert espuser.status_code == 200, f"the rotated token must still cover the ESP User API: {espuser.text}"
+    neo = login.refresh_tokens(espuser.json()["refresh_token"], resource=NEO_RESOURCE)
+    assert neo.status_code == 200, f"and still cover neo after narrowing to the ESP User API: {neo.text}"
+    espuser_token, neo_tokens = espuser.json()["access_token"], neo.json()
+    assert decode_jwt_claims(espuser_token)["aud"] == ESPUSER_RESOURCE
+    assert decode_jwt_claims(neo_tokens["access_token"])["aud"] == NEO_RESOURCE
+
+    _assert_neo_takes_only_its_own_token(neo_tokens, espuser_token)
 
 
 # --- Federated identity: which contact resolves an account, and which claims ride along. ---
@@ -284,6 +363,7 @@ def fed_client(admin_user):
         "client_id": client_id, "client_name": "itest federation", "client_type": "public",
         "redirect_uris": [_FED_REDIRECT_URI], "grant_types": ["authorization_code", "refresh_token"],
         "scopes": ["openid", "email", "phone", "profile"], "require_pkce": True,
+        "allowed_resources": [NEO_RESOURCE], "default_resource": NEO_RESOURCE,
     })
     assert created.status_code == 201, created.text
     yield client_id
@@ -377,6 +457,7 @@ def fed_confidential_client(admin_user):
         "client_id": client_id, "client_name": "itest confidential", "client_type": "confidential",
         "redirect_uris": [_FED_REDIRECT_URI], "grant_types": ["authorization_code", "refresh_token"],
         "scopes": ["openid", "email", "phone", "profile"],
+        "allowed_resources": [NEO_RESOURCE], "default_resource": NEO_RESOURCE,
     })
     assert created.status_code == 201, created.text
     yield client_id, created.json()["client_secret"]
@@ -677,6 +758,7 @@ def m2m_client(admin_user):
         "grant_types": ["client_credentials"],
         "scopes": _CC_SCOPES,
         "allowed_resources": [_CC_RESOURCE],
+        "default_resource": _CC_RESOURCE,
     })
     assert create.status_code == 201, create.text
     secret = create.json().get("client_secret")
@@ -690,8 +772,8 @@ def m2m_client(admin_user):
 def test_client_credentials_mints_one_scoped_access_token(admin_user, m2m_client):
     """One exchange, every property of the response, and the audience binding folded in. There is no
     user, so no refresh_token and no id_token; RFC 9068 s2.2.1 makes sub the client; and `aud` names
-    the callee -- the API when a resource is asked for, the client itself when none is, never
-    conflating the two, which is the bug this grant must not repeat."""
+    the callee -- the API asked for, else the client's default, and never the client itself, which is
+    the bug this grant must not repeat."""
     client_id, secret = m2m_client
     resp = admin_user.oauth_client_credentials(client_id, secret, scope="account.admin")
     assert resp.status_code == 200, resp.text
@@ -704,7 +786,7 @@ def test_client_credentials_mints_one_scoped_access_token(admin_user, m2m_client
     c = _cc_claims(body["access_token"])
     assert c["sub"] == client_id, "RFC 9068 s2.2.1: with no resource owner, sub is the client"
     assert c["client_id"] == client_id and c["token_use"] == "access"
-    assert c["aud"] == client_id, "no resource requested leaves aud as the client id"
+    assert c["aud"] == _CC_RESOURCE, "no resource requested is the client's default, never the client id"
 
     # Body credentials must work as well as Basic: Google account linking sends one, Alexa the other,
     # and a regression in either is invisible from the server's own logs.

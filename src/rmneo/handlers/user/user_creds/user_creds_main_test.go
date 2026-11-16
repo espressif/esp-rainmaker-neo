@@ -158,10 +158,10 @@ var _ = Describe("User Creds Main", func() {
 			Expect(response.StatusCode).To(Equal(403))
 		})
 
-		It("returns 403 when the header carries an id_token instead of an access token", func() {
+		It("returns 401 when the header carries an id_token instead of an access token", func() {
 			response := CallUserCredsHandler(ctx, buildRequest(testToken, testToken))
 
-			Expect(response.StatusCode).To(Equal(403))
+			Expect(response.StatusCode).To(Equal(401))
 		})
 
 		It("returns 403 for an id_token minted in a pool RMNG does not own", func() {
@@ -232,6 +232,37 @@ var _ = Describe("User Creds Main", func() {
 			response := CallUserCredsHandler(ctx, buildRequest(access, otherID))
 
 			Expect(response.StatusCode).To(Equal(403))
+		})
+
+		// RFC 6750 s3.1: a token for another API is invalid_token here, the same 401 the ESP User API gives.
+		// The API's names come from the request API Gateway delivered, not from the Lambda's environment.
+		throughDomain := func(access, id, domain string) events.APIGatewayProxyRequest {
+			GinkgoT().Setenv("ACCEPTED_AUDIENCES", "")
+			request := buildRequest(access, id)
+			request.RequestContext = events.APIGatewayProxyRequestContext{
+				APIID: "abc123", Stage: "prod", DomainName: domain,
+				Path: "/v1/user/credentials", ResourcePath: "/v1/user/credentials",
+			}
+			return request
+		}
+
+		It("accepts a token addressed to the custom domain the request came in on", func() {
+			access, id := tokenHarness.MintPair(testSub)
+			cognitoIdentityMock.AddTokenMapping(id, testIdentityId)
+
+			response := CallUserCredsHandler(ctx, throughDomain(access, id, strings.TrimPrefix(test_utils.TestAPIAudience, "https://")))
+
+			Expect(response.StatusCode).To(Equal(200))
+		})
+
+		It("returns 401 for an access token addressed to another API", func() {
+			access, id := tokenHarness.MintPair(testSub)
+			cognitoIdentityMock.AddTokenMapping(id, testIdentityId)
+
+			response := CallUserCredsHandler(ctx, throughDomain(access, id, "other-api.example.com"))
+
+			Expect(response.StatusCode).To(Equal(401))
+			Expect(cognitoIdentityMock.LastGetIdInput).To(BeNil())
 		})
 
 		It("refuses an access token in the body where an id_token belongs", func() {

@@ -61,10 +61,10 @@ type OAuthClientEntry struct {
 	PostLogoutRedirectURIs []string `dynamodbav:"post_logout_redirect_uris,stringset,omitempty"`
 	GrantTypes             []string `dynamodbav:"grant_types,omitempty"`
 	Scopes                 []string `dynamodbav:"scopes,omitempty"`
-	// AllowedResources are the RFC 8707 resource identifiers this client may request an
-	// access token for. Empty means the client may request none -- a token then carries
-	// aud = client_id, which is what a deployment that never uses the extension sees.
+	// AllowedResources are the RFC 8707 resource identifiers this client may request an access token for. Empty means none.
 	AllowedResources []string `dynamodbav:"allowed_resources,omitempty"`
+	// DefaultResource is the one resource used when a request names none (RFC 9068 s3); empty means such a request fails with invalid_target.
+	DefaultResource string `dynamodbav:"default_resource,omitempty"`
 	// AllowedProviders narrows which identity providers this client offers at login.
 	//
 	// Absent means NO RESTRICTION -- the opposite of AllowedResources above, deliberately.

@@ -74,7 +74,7 @@ var _ = Describe("OIDC userinfo endpoint", func() {
 			contact.PhoneNumber = phone
 		}
 		minter := jwtutil.NewMinter(backend.Issuer, backend.SigningKey, oidc.SigningKeyID)
-		token, err := minter.AccessToken(userID, testClientID, scope, "", "", contact)
+		token, err := minter.AccessToken(userID, testClientID, scope, "", "https://api.example.com", contact)
 		Expect(err).NotTo(HaveOccurred())
 		return token
 	}
@@ -113,6 +113,15 @@ var _ = Describe("OIDC userinfo endpoint", func() {
 		Expect(body["email"]).To(Equal("a@example.com"))
 		_, hasPhone := body["phone_number"]
 		Expect(hasPhone).To(BeFalse())
+	})
+
+	It("answers for a token addressed to any of our APIs: it describes the sign-in, not an API (OIDC Core s5.3)", func() {
+		minter := jwtutil.NewMinter(backend.Issuer, backend.SigningKey, oidc.SigningKeyID)
+		token, err := minter.AccessToken("user-123", testClientID, "openid", "", "https://other.example.com", jwtutil.Contact{})
+		Expect(err).NotTo(HaveOccurred())
+		resp, err := handleUserinfoRequest(context.Background(), getRequest(token))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.StatusCode).To(Equal(200))
 	})
 
 	It("rejects a missing bearer token with 401 invalid_token (negative)", func() {

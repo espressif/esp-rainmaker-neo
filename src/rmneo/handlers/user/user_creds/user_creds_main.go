@@ -64,11 +64,14 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("id_token is required in the request body")), nil
 	}
 
+	ctx = auth.AddAcceptedAudiencesToCtx(ctx, rmngrequest.GetAcceptedAudiencesFromAPIRequest(request))
 	if err := verifyPair(ctx, accessToken, req.IDToken); err != nil {
 		rlog.Warn(ctx).Err(err).Msg("credentials request denied")
-		// An unreadable or untrusted issuer means the caller is unauthenticated; a verified
-		// token whose pair does not match is authenticated but forbidden this exchange.
-		if errors.Is(err, auth.ErrUntrustedIssuer) || jwtutil.IsUnreadableToken(err) {
+		// A bearer that does not verify (unreadable, untrusted issuer, expired, or for another API)
+		// leaves the caller unauthenticated (RFC 6750 s3.1); a verified token whose pair does not
+		// match is authenticated but forbidden this exchange.
+		if errors.Is(err, auth.ErrUntrustedIssuer) || jwtutil.IsUnreadableToken(err) ||
+			errors.Is(err, jwtutil.ErrInvalidAccessToken) {
 			return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Unauthorized")), nil
 		}
 		return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("id_token does not match the authenticated session")), nil

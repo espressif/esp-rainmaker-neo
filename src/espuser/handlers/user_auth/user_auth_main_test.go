@@ -10,9 +10,12 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/identity_providers_db"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/oauth_clients_db"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/jwtutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
@@ -31,10 +34,12 @@ func TestUserAuthHandler(t *testing.T) {
 
 var _ = Describe("legacy token responses (RFC 6749 s5.1)", func() {
 	const (
-		poolID   = "eu-west-2_testpool"
-		clientID = "native-client"
-		email    = "legacy@example.com"
-		password = "Password1!"
+		poolID          = "eu-west-2_testpool"
+		clientID        = "native-client"
+		email           = "legacy@example.com"
+		password        = "Password1!"
+		neoResource     = "https://api.example.com"
+		accountResource = "https://account.example.com"
 	)
 
 	BeforeEach(func() {
@@ -53,9 +58,15 @@ var _ = Describe("legacy token responses (RFC 6749 s5.1)", func() {
 			ProviderName: "cognito", Type: identity_providers_db.TypeOIDC, Enabled: &yes,
 			ClientID: clientID, ClientSecret: "provider-client-secret", PasswordGrant: &yes,
 		})).To(Succeed())
+		// The password API signs in as the legacy client, covering every resource it is granted.
+		Expect(oauth_clients_db.NewOAuthClientsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).CreateClient(&oauth_clients_db.OAuthClientEntry{
+			ClientID: "user-pool-client", ClientType: oauth_clients_db.ClientTypePublic,
+			RedirectURIs: []string{"com.example://cb"}, RequirePKCE: utils.Ptr(true),
+			AllowedResources: []string{neoResource, accountResource}, DefaultResource: neoResource,
+		})).To(Succeed())
 	})
 
-	post := func(path string, body map[string]string) events.APIGatewayProxyResponse {
+	post := func(path string, body map[string]any) events.APIGatewayProxyResponse {
 		raw, err := json.Marshal(body)
 		Expect(err).NotTo(HaveOccurred())
 		resp, err := handler(context.Background(), events.APIGatewayProxyRequest{HTTPMethod: http.MethodPost, Path: path, Body: string(raw)})
@@ -63,18 +74,74 @@ var _ = Describe("legacy token responses (RFC 6749 s5.1)", func() {
 		return resp
 	}
 
+	tokenSet := func(resp events.APIGatewayProxyResponse) map[string]any {
+		Expect(resp.StatusCode).To(Equal(http.StatusOK), resp.Body)
+		var tokens map[string]any
+		Expect(json.Unmarshal([]byte(resp.Body), &tokens)).To(Succeed())
+		return tokens
+	}
+
+	audience := func(tokens map[string]any) any {
+		claims := jwt.MapClaims{}
+		_, _, err := jwt.NewParser().ParseUnverified(tokens["access_token"].(string), claims)
+		Expect(err).NotTo(HaveOccurred())
+		return claims["aud"]
+	}
+
 	It("marks the signin and refresh token sets uncacheable", func() {
-		signin := post(pathToken, map[string]string{"username": email, "password": password})
+		signin := post(pathToken, map[string]any{"username": email, "password": password})
 		Expect(signin.StatusCode).To(Equal(http.StatusOK))
 		Expect(signin.Headers).To(HaveKeyWithValue("Cache-Control", "no-store"))
 		Expect(signin.Headers).To(HaveKeyWithValue("Pragma", "no-cache"))
 
 		var tokens map[string]any
 		Expect(json.Unmarshal([]byte(signin.Body), &tokens)).To(Succeed())
-		refresh := post(pathRefresh, map[string]string{"refresh_token": tokens["refresh_token"].(string)})
+		refresh := post(pathRefresh, map[string]any{"refresh_token": tokens["refresh_token"].(string)})
 		Expect(refresh.StatusCode).To(Equal(http.StatusOK))
 		Expect(refresh.Headers).To(HaveKeyWithValue("Cache-Control", "no-store"))
 		Expect(refresh.Headers).To(HaveKeyWithValue("Pragma", "no-cache"))
+	})
+
+	It("signs in for every resource the client is granted and narrows to the ESP User one on refresh (RFC 8707 s2.2)", func() {
+		signin := tokenSet(post(pathToken, map[string]any{"username": email, "password": password}))
+		Expect(audience(signin)).To(Equal(neoResource), "the client's default")
+		refresh := tokenSet(post(pathRefresh, map[string]any{"refresh_token": signin["refresh_token"], "resource": []string{accountResource}}))
+		Expect(audience(refresh)).To(Equal(accountResource))
+	})
+
+	It("narrows a refresh to the one resource named when another value is empty (RFC 6749 s3.2)", func() {
+		signin := tokenSet(post(pathToken, map[string]any{"username": email, "password": password}))
+		refresh := tokenSet(post(pathRefresh, map[string]any{"refresh_token": signin["refresh_token"], "resource": []string{"", accountResource}}))
+		Expect(audience(refresh)).To(Equal(accountResource))
+	})
+
+	It("refuses a refresh naming two resources, so no token is good at two APIs (negative)", func() {
+		tokens := tokenSet(post(pathToken, map[string]any{"username": email, "password": password}))
+		refresh := post(pathRefresh, map[string]any{"refresh_token": tokens["refresh_token"], "resource": []string{neoResource, accountResource}})
+		Expect(refresh.StatusCode).To(Equal(http.StatusBadRequest))
+		Expect(refresh.Body).To(MatchJSON(`{"message":"Only one resource may be requested; a token is never issued for two audiences."}`))
+	})
+})
+
+var _ = Describe("resource refusals (RFC 8707 s2)", func() {
+	DescribeTable("names what the client must fix",
+		func(err error, message string) {
+			resp, refused := resourceRefusal(err)
+			Expect(refused).To(BeTrue())
+			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
+			Expect(resp.Body).To(MatchJSON(`{"message":"` + message + `"}`))
+		},
+		Entry("resource not registered", auth.ErrResourceNotAllowed, "This client is not registered for the requested resource."),
+		Entry("no resource and no default", auth.ErrResourceRequired, "A resource is required: this client has no default resource."),
+		Entry("two resources", auth.ErrOneResourcePerToken, "Only one resource may be requested; a token is never issued for two audiences."),
+		Entry("resource outside the authorization", auth.ErrResourceNotAuthorized, "The requested resource is not part of this authorization."),
+		Entry("several authorized and none named", auth.ErrResourceAmbiguous, "This authorization covers several resources; name one with the resource parameter."),
+		Entry("resource taken off the client", auth.ErrResourceNoLongerAllowed, "This login was issued for a resource the client may no longer request. Start a new authorization."),
+	)
+
+	It("leaves a refresh-token failure to the caller (negative)", func() {
+		_, refused := resourceRefusal(auth.ErrInvalidGrant)
+		Expect(refused).To(BeFalse())
 	})
 })
 

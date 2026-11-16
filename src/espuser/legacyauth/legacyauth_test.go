@@ -12,8 +12,11 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/identity_providers_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/user_details_db"
+	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
@@ -37,6 +40,8 @@ const (
 	testPassword  = "Password1!"
 	// The code CognitoProviderMock issues for every signup (its DefaultConfirmationCode).
 	mockConfirmationCode = "123456"
+	neoResource          = "https://api.example.com"
+	accountResource      = "https://account.example.com"
 )
 
 // seedPasswordProvider registers the enabled provider row NewService resolves its app client from.
@@ -52,6 +57,14 @@ func seedPasswordProvider(clientID string, attributeMapping map[string]string) {
 		PasswordGrant:    &yes,
 		AttributeMapping: attributeMapping,
 	})).To(Succeed())
+}
+
+// unverifiedAudience reads a token's aud without verifying it; these specs assert on what was minted.
+func unverifiedAudience(token string) any {
+	claims := jwt.MapClaims{}
+	_, _, err := jwt.NewParser().ParseUnverified(token, claims)
+	Expect(err).NotTo(HaveOccurred())
+	return claims["aud"]
 }
 
 var _ = Describe("SigninWithPassword", func() {
@@ -79,6 +92,12 @@ var _ = Describe("SigninWithPassword", func() {
 		awscommon.SetCognitoProviderClient(cog)
 
 		seedPasswordProvider(testClientID2, up.mapping)
+		_, err := clients.NewService(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).Create(clients.CreateInput{
+			ClientID: legacyClientID, ClientName: "RainMaker", ClientType: "public", RedirectURIs: []string{"com.example://cb"},
+			GrantTypes: []string{"authorization_code", "refresh_token"}, RequirePKCE: utils.Ptr(true),
+			AllowedResources: []string{neoResource, accountResource}, DefaultResource: neoResource,
+		})
+		Expect(err).NotTo(HaveOccurred())
 		svc, err := NewService(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 		return svc
@@ -116,7 +135,7 @@ var _ = Describe("SigninWithPassword", func() {
 		claims, err := jwtutil.VerifyJWT(tokens.AccessToken, keySet)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(claims["iss"]).To(Equal(backend.Issuer))
-		Expect(claims["aud"]).To(Equal(legacyClientID))
+		Expect(claims["aud"]).To(Equal(neoResource), "the client's default, never the client id")
 		Expect(claims["scope"]).To(Equal(legacyScope))
 	})
 
@@ -160,6 +179,40 @@ var _ = Describe("SigninWithPassword", func() {
 		Expect(entry.Name).To(Equal("Ada"))
 	})
 
+	It("covers every resource the password client may request, and a refresh narrows to the ESP User one (RFC 8707 s2.2)", func() {
+		svc := newService("multi@example.com", true)
+		backend.DBMock.ProfileReset()
+		tokens, err := svc.SigninWithPassword(context.Background(), "multi@example.com", testPassword)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(unverifiedAudience(tokens.AccessToken)).To(Equal(neoResource), "the client's default")
+		Expect(backend.DBMock.ProfileGet().Accesses["espuser-oauth-clients"].ReadCount).To(Equal(1), "the client row the mint reads supplies the resources")
+
+		renewed, err := svc.RefreshLegacy(context.Background(), tokens.RefreshToken, accountResource)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(unverifiedAudience(renewed.AccessToken)).To(Equal(accountResource))
+	})
+
+	It("refuses a refresh naming a resource the password client was not granted (negative)", func() {
+		svc := newService("other@example.com", true)
+		tokens, err := svc.SigninWithPassword(context.Background(), "other@example.com", testPassword)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = svc.RefreshLegacy(context.Background(), tokens.RefreshToken, "https://other.example.com")
+		Expect(err).To(MatchError(auth.ErrResourceNotAuthorized))
+	})
+
+	It("refuses the sign-in when the password client is granted no resource (negative)", func() {
+		svc := newService("bare@example.com", true)
+		clientsSvc := clients.NewService(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
+		Expect(clientsSvc.Delete(legacyClientID)).To(Succeed())
+		_, err := clientsSvc.Create(clients.CreateInput{
+			ClientID: legacyClientID, ClientName: "RainMaker", ClientType: "public", RedirectURIs: []string{"com.example://cb"},
+			GrantTypes: []string{"authorization_code", "refresh_token"}, RequirePKCE: utils.Ptr(true),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = svc.SigninWithPassword(context.Background(), "bare@example.com", testPassword)
+		Expect(err).To(MatchError(auth.ErrResourceRequired))
+	})
+
 	It("rejects a login whose contact is unverified (negative)", func() {
 		svc := newService("u2@example.com", false)
 		_, err := svc.SigninWithPassword(context.Background(), "u2@example.com", testPassword)
@@ -200,6 +253,15 @@ var _ = Describe("SigninWithPassword", func() {
 	})
 
 	It("changes the password when the caller's own token and old password both check out", func() {
+		svc := newService("u@example.com", true)
+		tokens, err := svc.SigninWithPassword(context.Background(), "u@example.com", testPassword)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(svc.ChangePassword(context.Background(), tokens.AccessToken, testPassword, "NewPass#123")).To(Succeed())
+	})
+
+	It("changes the password with the token a legacy sign-in returns, although it is addressed to the RainMaker API and not this one", func() {
+		GinkgoT().Setenv("ACCEPTED_AUDIENCES", accountResource)
 		svc := newService("u@example.com", true)
 		tokens, err := svc.SigninWithPassword(context.Background(), "u@example.com", testPassword)
 		Expect(err).NotTo(HaveOccurred())

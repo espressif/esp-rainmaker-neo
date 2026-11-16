@@ -163,6 +163,25 @@ var _ = Describe("clients.Service", func() {
 			}
 		})
 
+		It("stores a default_resource that is one of allowed_resources", func() {
+			_, err := svc.Create(clients.CreateInput{
+				ClientID: "rm_def", ClientName: "S", ClientType: "confidential", GrantTypes: []string{"client_credentials"},
+				AllowedResources: []string{"https://api.example.com", "https://account.example.com"}, DefaultResource: "https://api.example.com",
+			})
+			Expect(err).NotTo(HaveOccurred())
+			got, err := svc.Get("rm_def")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got.DefaultResource).To(Equal("https://api.example.com"))
+		})
+
+		It("rejects a default_resource the client may not request (negative)", func() {
+			_, err := svc.Create(clients.CreateInput{
+				ClientID: "rm_def", ClientName: "S", ClientType: "confidential", GrantTypes: []string{"client_credentials"},
+				AllowedResources: []string{"https://api.example.com"}, DefaultResource: "https://other.example.com",
+			})
+			Expect(err).To(MatchError(ContainSubstring("default_resource")))
+		})
+
 		It("rejects an unknown client_type (negative)", func() {
 			in := publicClient("rm_x")
 			in.ClientType = "spaceship"
@@ -220,6 +239,19 @@ var _ = Describe("clients.Service", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(got.RedirectURIs).To(BeEmpty())
+		})
+
+		It("rejects an update that takes the default_resource out of allowed_resources (negative)", func() {
+			_, err := svc.Create(clients.CreateInput{
+				ClientID: "rm_def", ClientName: "S", ClientType: "confidential", GrantTypes: []string{"client_credentials"},
+				AllowedResources: []string{"https://api.example.com"}, DefaultResource: "https://api.example.com",
+			})
+			Expect(err).NotTo(HaveOccurred())
+			_, err = svc.Update("rm_def", clients.UpdateInput{
+				ClientName: "S", GrantTypes: []string{"client_credentials"},
+				AllowedResources: []string{"https://account.example.com"}, DefaultResource: "https://api.example.com",
+			})
+			Expect(err).To(MatchError(ContainSubstring("default_resource")))
 		})
 
 		It("rejects a missing client_name (required)", func() {

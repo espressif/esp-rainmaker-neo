@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"os"
+	"strings"
 
 	mcpserver "mcp-server"
 
@@ -44,7 +45,7 @@ func resolveRmngUser(ctx context.Context, userID string) (mcpserver.UserContext,
 var createServerAuth = func() mcpserver.Authenticator {
 	return mcpserver.NewOIDCAuthenticator(
 		os.Getenv("USER_ISSUER"),
-		os.Getenv("MCP_CLIENT_ID"),
+		strings.FieldsFunc(os.Getenv("ACCEPTED_AUDIENCES"), func(r rune) bool { return r == ',' }),
 		os.Getenv("USER_JWKS_PARA_NAME"),
 		resolveRmngUser,
 	)

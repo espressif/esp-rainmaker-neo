@@ -62,12 +62,9 @@ type AuthFlow struct {
 	RequestedScope []string `dynamodbav:"requested_scope,omitempty"`
 	State          string   `dynamodbav:"state,omitempty"`
 	CodeChallenge  string   `dynamodbav:"code_challenge,omitempty"`
-	// Resource is the RFC 8707 identifier the client asked the token to be addressed to.
-	// Captured and validated at /authorize but not used until the code is exchanged minutes
-	// later, so like RedirectURI and CodeChallenge it has to survive in the flow record.
-	// Empty means none was requested, and the token falls back to aud = client_id.
-	Resource            string `dynamodbav:"resource,omitempty"`
-	CodeChallengeMethod string `dynamodbav:"code_challenge_method,omitempty"`
+	// Resources are the RFC 8707 resources this sign-in covers, settled at /authorize and read at the code exchange.
+	Resources           []string `dynamodbav:"resources,omitempty"`
+	CodeChallengeMethod string   `dynamodbav:"code_challenge_method,omitempty"`
 	// Prompt and MaxAge are the relying party's authentication demands, parked on the flow so the federation leg, a separate request minutes later, can forward them to the upstream provider.
 	Prompt string `dynamodbav:"prompt,omitempty"`
 	MaxAge string `dynamodbav:"max_age,omitempty"`

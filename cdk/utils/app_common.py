@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import NamedTuple
 
 from aws_cdk import (
     ArnFormat,
@@ -1314,6 +1315,7 @@ def handler(event, context):
             props = event['ResourceProperties']
             api_id = props['ApiId']
             default_url = props['DefaultUrl']
+            resource_path = props.get('ResourcePath', '')
             mappings = _rest_mappings(api_id) if props['ApiType'] == 'REST' else _http_mappings(api_id)
             if props.get('IsIssuer') == 'true':
                 domain_name, base_path = _only_mapping(mappings, api_id)
@@ -1322,22 +1324,33 @@ def handler(event, context):
             print(f'Discovered domain={domain_name!r} base_path={base_path!r}')
             # Resolve the fallback here rather than with a CfnCondition: CloudFormation
             # forbids referencing resource attributes from the Conditions block.
+            execute_api_url = default_url.rstrip('/')
             if domain_name:
-                base_url = 'https://' + domain_name
                 # base_path is empty for a root mapping, so no trailing slash.
-                url = base_url + '/' + base_path if base_path else base_url
+                url = 'https://' + domain_name + ('/' + base_path if base_path else '')
             else:
-                url = default_url.rstrip('/')
-                base_url = default_url.rstrip('/')
+                url = execute_api_url
+            resource = url + resource_path
+            # The execute-api name stays accepted so tokens minted before a domain was mapped keep working.
+            audiences = ','.join(dict.fromkeys([execute_api_url + resource_path, resource]))
             cfnresponse.send(event, context, cfnresponse.SUCCESS,
-                             {'DomainName': domain_name, 'BasePath': base_path,
-                              'Url': url, 'BaseUrl': base_url}, physical_id)
+                             {'Url': url, 'Resource': resource, 'Audiences': audiences}, physical_id)
         else:
             cfnresponse.send(event, context, cfnresponse.SUCCESS, {}, physical_id)
     except Exception as e:
         print(f'Error: {str(e)}')
         cfnresponse.send(event, context, cfnresponse.FAILED, {}, physical_id)
 """
+
+
+class DiscoveredApi(NamedTuple):
+    """An API's addresses as discovered at deploy time; ``resource`` and ``audiences`` are its RFC 8707 names."""
+    # The custom domain's URL with its base path when one is mapped, else the execute-api URL; no trailing slash.
+    url: str
+    # The name clients request: url plus any resource path.
+    resource: str
+    # Comma-separated names an access token's aud may carry: the execute-api name and, when mapped, the domain's.
+    audiences: str
 
 
 def discover_api_custom_domain(
@@ -1348,14 +1361,12 @@ def discover_api_custom_domain(
     api_id: str,
     api_type: str,
     default_url: str,
+    resource_path: str = "",
     is_issuer: bool = False,
-) -> tuple:
+) -> DiscoveredApi:
     """Discover the custom domain mapped to an API Gateway API at deploy time.
 
-    Returns ``(custom_domain, url, base_url)`` where ``custom_domain`` is "" when no
-    custom domain is mapped and the URLs fall back to ``default_url`` in that case.
-    ``url`` keeps the trailing slash; ``base_url`` omits it, for callers appending
-    "/path" suffixes.
+    ``resource_path`` is appended to both RFC 8707 names, e.g. "/v1/mcp" for a server whose resource is a path on its API.
 
     Discovery is used instead of a CfnParameter because a parameter the installer
     forgets to re-supply reverts to its default, which would silently drop the
@@ -1397,7 +1408,7 @@ def discover_api_custom_domain(
             stable_logical_id("LambdaFunc", "api-custom-domain-discovery"))
 
     properties = {"ApiId": api_id, "ApiType": api_type, "DefaultUrl": default_url,
-                  "RediscoverOn": _DISCOVERY_SALT}
+                  "ResourcePath": resource_path, "RediscoverOn": _DISCOVERY_SALT}
     if is_issuer:
         properties["IsIssuer"] = "true"
 
@@ -1407,9 +1418,9 @@ def discover_api_custom_domain(
     # The handler applies the fallback and returns the final URLs. CloudFormation
     # forbids referencing resource attributes from the Conditions block, so this cannot
     # be a CfnCondition on the discovered domain.
-    return (resource.get_att_string("DomainName"),
-            resource.get_att_string("Url"),
-            resource.get_att_string("BaseUrl"))
+    return DiscoveredApi(resource.get_att_string("Url"),
+                         resource.get_att_string("Resource"),
+                         resource.get_att_string("Audiences"))
 
 
 _IOT_DOMAIN_DISCOVERY_CODE = """

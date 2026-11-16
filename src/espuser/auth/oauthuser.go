@@ -46,6 +46,8 @@ import (
 type OAuthUserAuthService struct {
 	issuer string
 	jwks   jwk.Set
+	// audiences are this API's RFC 8707 names (see GetAcceptedAudiences); an access token must carry one of them.
+	audiences []string
 }
 
 var _ AuthService = (*OAuthUserAuthService)(nil)
@@ -66,18 +68,22 @@ func NewOAuthUserAuthService(ctx context.Context) (*OAuthUserAuthService, error)
 		return nil, rmerror.NewRMError(err, "failed to parse JWKS for parameter")
 	}
 
-	return &OAuthUserAuthService{issuer: os.Getenv("USER_ISSUER"), jwks: keySet}, nil
+	return &OAuthUserAuthService{
+		issuer:    os.Getenv("USER_ISSUER"),
+		jwks:      keySet,
+		audiences: GetAcceptedAudiences(ctx),
+	}, nil
 }
 
 // mintTokenSet mints signed access/id tokens (via jwt) plus a fresh refresh-token
 // family (via refreshtoken). The two service packages compose symmetrically here.
 // sid ties the family to the browser session the login ran under; empty means none.
-func (s *OAuthUserAuthService) mintTokenSet(rmngCtx *rmngctx.RmngContext, userID, clientID, scope, resource, sid string, authTime int64) (*UserTokens, error) {
-	refreshToken, err := refreshtoken.NewService(rmngCtx).MintRefreshtoken(userID, clientID, scope, resource, sid, authTime)
+func (s *OAuthUserAuthService) mintTokenSet(rmngCtx *rmngctx.RmngContext, userID, clientID, scope string, resources []string, audience, sid string, authTime int64) (*UserTokens, error) {
+	refreshToken, err := refreshtoken.NewService(rmngCtx).MintRefreshtoken(userID, clientID, scope, resources, sid, authTime)
 	if err != nil {
 		return nil, err
 	}
-	return s.signTokens(rmngCtx.Context, userID, clientID, scope, resource, refreshToken, sid, authTime)
+	return s.signTokens(rmngCtx.Context, userID, clientID, scope, audience, refreshToken, sid, authTime)
 }
 
 // VerifyIDTokenHint verifies one of OUR OWN id tokens presented as an id_token_hint and returns
@@ -107,7 +113,7 @@ func (s *OAuthUserAuthService) VerifyIDTokenHint(hint string) (sub string, aud [
 
 // signTokens mints a signed access token and, when openid is in scope, an id token,
 // pairing them with the supplied (already-persisted) refresh token.
-func (s *OAuthUserAuthService) signTokens(ctx context.Context, userID, clientID, scope, resource, refreshToken, sid string, authTime int64) (*UserTokens, error) {
+func (s *OAuthUserAuthService) signTokens(ctx context.Context, userID, clientID, scope, audience, refreshToken, sid string, authTime int64) (*UserTokens, error) {
 	minter, err := s.newMinter(ctx)
 	if err != nil {
 		return nil, err
@@ -117,8 +123,7 @@ func (s *OAuthUserAuthService) signTokens(ctx context.Context, userID, clientID,
 
 	authEventID := jwtutil.NewAuthEventID()
 
-	// resource is the access token's audience; empty leaves it as the client id.
-	accessToken, err := minter.AccessToken(userID, clientID, scope, authEventID, resource, contact, sid)
+	accessToken, err := minter.AccessToken(userID, clientID, scope, authEventID, audience, contact, sid)
 	if err != nil {
 		return nil, err
 	}
@@ -148,14 +153,21 @@ func (s *OAuthUserAuthService) signTokens(ctx context.Context, userID, clientID,
 // and here there is no user -- the client already holds credentials it can present again.
 // No id token either; there is no human to describe.
 //
-// resource is the RFC 8707 identifier of the API the token is for. The caller has already
-// checked the client may target it; empty leaves the audience as the client id.
-func (s *OAuthUserAuthService) MintClientCredentialsToken(ctx context.Context, clientID, scope, resource string) (*UserTokens, error) {
+// resource is the RFC 8707 resource the token is for, or "" for the client's default; the request is the whole grant, so one resource at most.
+func (s *OAuthUserAuthService) MintClientCredentialsToken(ctx context.Context, client *clients.ClientResponse, scope, resource string) (*UserTokens, error) {
+	var requested []string
+	if resource != "" {
+		requested = []string{resource}
+	}
+	resources, err := authorizedResources(client, requested)
+	if err != nil {
+		return nil, err
+	}
 	minter, err := s.newMinter(ctx)
 	if err != nil {
 		return nil, err
 	}
-	accessToken, err := minter.ClientCredentialsToken(clientID, scope, resource)
+	accessToken, err := minter.ClientCredentialsToken(client.ClientID, scope, resources[0])
 	if err != nil {
 		return nil, err
 	}
@@ -353,45 +365,27 @@ func isValidSubject(id string) bool {
 	return true
 }
 
-// ErrResourceNoLongerAllowed is a renewal refused because the family's RFC 8707 resource has
-// since been taken off the client's allowed_resources. Distinct from every other refresh
-// failure because it must not read as invalid_grant: the token is perfectly good, the
-// entitlement behind it is not, and the caller's remedy is a fresh authorization without
-// that resource rather than another retry.
-var ErrResourceNoLongerAllowed = errors.New("the family's resource is no longer allowed for this client")
-
-// RefreshToken rotates the opaque refresh token (rotate-on-use + reuse detection); a replayed spent token revokes the whole family.
-func (s *OAuthUserAuthService) RefreshToken(ctx context.Context, clientID, refreshToken string) (*UserTokens, error) {
+// RefreshToken rotates the opaque refresh token (a replayed spent one revokes the whole family); resource narrows the renewed access token to one of the sign-in's resources (RFC 8707 s2.2).
+func (s *OAuthUserAuthService) RefreshToken(ctx context.Context, client *clients.ClientResponse, refreshToken, resource string) (*UserTokens, error) {
 	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, nil)
 	refresh := refreshtoken.NewService(rmngCtx)
 
-	// A registry revocation has to reach tokens already in flight. The resource is stamped on
-	// the family at login and replayed on every renewal, so removing an API from
-	// allowed_resources must stop the family renewing, not only stop new logins asking for it.
-	// This runs as Rotate's precheck -- after the family is loaded, before the counter advances --
-	// so a refusal leaves the login untouched and restoring the entitlement resumes it, and the
-	// family is read once rather than once here and once inside Rotate.
-	rotation, err := refresh.Rotate(clientID, refreshToken, func(family *refresh_tokens_db.FamilyEntry) error {
-		if family.Resource == "" {
-			return nil
+	// Rotate's precheck runs before the counter advances, so a refused audience leaves the login usable.
+	var audience string
+	rotation, err := refresh.Rotate(client.ClientID, refreshToken, func(family *refresh_tokens_db.FamilyEntry) error {
+		// A family minted before resources were recorded has no audience to renew into, so that login starts over.
+		if len(family.Resources) == 0 {
+			return ErrInvalidGrant
 		}
-		client, err := clients.NewService(rmngCtx).Get(clientID)
-		if err != nil || client == nil || !client.AllowsResource(family.Resource) {
-			rlog.Warn(ctx).Str("client_id", clientID).Str("resource", family.Resource).
-				Msg("refresh: family resource is no longer in the client's allowed_resources; refusing to renew")
-			return ErrResourceNoLongerAllowed
-		}
-		return nil
+		var err error
+		audience, err = SetTokenAudienceFromResource(client, family.Resources, resource)
+		return err
 	})
 	if err != nil {
 		return nil, err
 	}
-	// The family remembers the resource the original login asked for, so a silent renewal
-	// stays addressed to the same API instead of quietly reverting to aud = client_id.
-	// The rotated token keeps the family's sid, so a refreshed access token still names the
-	// session it belongs to and a sessions list stays correct across a refresh.
-	// auth_time is the family's, so a refreshed ID token still names the original sign-in.
-	return s.signTokens(ctx, rotation.UserID, clientID, rotation.Scope, rotation.Resource, rotation.Token, rotation.SID, rotation.AuthTime)
+	// sid and auth_time are the family's, so a renewal still names the original session and sign-in.
+	return s.signTokens(ctx, rotation.UserID, client.ClientID, rotation.Scope, audience, rotation.Token, rotation.SID, rotation.AuthTime)
 }
 
 // lookupContact resolves an email/phone to the account holding it, or nil when no account does — a
@@ -500,7 +494,7 @@ func (s *OAuthUserAuthService) VerifyTokenPair(ctx context.Context, accessToken,
 
 	accessClaims, err := s.VerifyAccessToken(accessToken)
 	if err != nil {
-		return rmerror.NewRMError(err, "access token failed validation")
+		return fmt.Errorf("%w: %w", jwtutil.ErrInvalidAccessToken, err)
 	}
 	if err := jwtutil.RequireAllowedClientID([]string{accessClaims.ClientID}, allowedClientIDs); err != nil {
 		return rmerror.NewRMError(err, "access token was issued for a different app client")
@@ -557,8 +551,28 @@ func FirstPartyClientIDs() []string {
 	return clientIDs
 }
 
-// VerifyAccessToken verifies one of our own user access tokens. An id token is refused (RFC 9700 token substitution), as is a client_credentials token: its subject is a client id, not a person.
+// VerifyAccessToken verifies one of our own user access tokens addressed to this API, whose aud must be one of its names (RFC 9068 s4).
 func (s *OAuthUserAuthService) VerifyAccessToken(token string) (TokenClaims, error) {
+	claims, err := s.verifyUserAccessToken(token)
+	if err != nil {
+		return TokenClaims{}, err
+	}
+	if len(s.audiences) == 0 {
+		return TokenClaims{}, rmerror.NewRMError(nil, "this API has no names to accept, so no access token is accepted")
+	}
+	if err := jwtutil.AssertAudience(claims, s.audiences...); err != nil {
+		return TokenClaims{}, rmerror.NewRMError(err, "access token is not addressed to this API")
+	}
+	return claims, nil
+}
+
+// VerifyUserTokenForAnyAPI verifies one of our user access tokens whatever API it is addressed to, for the ESP User API's own endpoints, which serve the signed-in account rather than one API: /oauth2/userinfo (OIDC Core s5.3), /v1/users/*, /v1/user/sessions and the legacy password change.
+func (s *OAuthUserAuthService) VerifyUserTokenForAnyAPI(token string) (TokenClaims, error) {
+	return s.verifyUserAccessToken(token)
+}
+
+// verifyUserAccessToken verifies one of our own user access tokens. An id token is refused (RFC 9700 token substitution), as is a client_credentials token: its subject is a client id, not a person.
+func (s *OAuthUserAuthService) verifyUserAccessToken(token string) (TokenClaims, error) {
 	claims, err := s.verifyOwnToken(token, jwtutil.TokenUseAccess)
 	if err != nil {
 		return TokenClaims{}, err

@@ -172,7 +172,7 @@ class User:
     not_ready_subject = 'user'
     not_ready_log = staticmethod(user_log)
 
-    def __init__(self, username, password, region, identity_pool_id, api_gateway_url, user_api_gateway_url, iot_endpoint, admin_user_pool_id="", admin_client_id="", is_admin=False, end_user_pool_id=""):
+    def __init__(self, username, password, region, identity_pool_id, api_gateway_url, user_api_gateway_url, iot_endpoint, admin_user_pool_id="", admin_client_id="", is_admin=False, end_user_pool_id="", user_api_resource=""):
         self.username = username
         self.password = password
         self.region = region
@@ -184,6 +184,9 @@ class User:
         self.identity_pool_id = identity_pool_id
         self.api_gateway_url = api_gateway_url
         self.user_api_gateway_url = user_api_gateway_url
+        # The ESP User API's RFC 8707 resource: the sign-in covers it, and a refresh naming it gets that API its own access token.
+        self.user_api_resource = user_api_resource
+        self.user_api_access_token = None
         self.token = None
         self.access_token = None
         self.refresh_token = None
@@ -1845,8 +1848,9 @@ class User:
     def alexa_set_lambda_arn(self, lambda_arn):
         self.alexa_lambda_arn = lambda_arn
 
-    def alexa_discover_devices(self, region=None):
+    def alexa_discover_devices(self, region=None, token=None):
         # region: optional AWS region for the Lambda client (e.g. us-east-1 for rmng-alexa-core). If None, uses self.region.
+        # token: the bearer Alexa sends; None sends this user's access token.
         # Create discovery request payload
         discovery_request = {
             "directive": {
@@ -1859,7 +1863,7 @@ class User:
                 "payload": {
                     "scope": {
                         "type": "BearerToken",
-                        "token": self.access_token #This has the normal pool token, it will be va client token in case of Alexa
+                        "token": token or self.access_token #This has the normal pool token, it will be va client token in case of Alexa
                     }
                 }
             }
@@ -3224,7 +3228,7 @@ class User:
         data = {"flow_id": flow_id, "otp": code}
         return self.make_user_api_request('POST', '/v1/auth/otp/verify', data=data, require_token=False)
 
-    def oauth_token_refresh(self, refresh_token, client_id):
+    def oauth_token_refresh(self, refresh_token, client_id, resource=None):
         """Redeem a refresh token at the OAuth token endpoint (POST /oauth2/token).
 
         The token endpoint is form-encoded (RFC 6749), unlike the JSON OTP APIs,
@@ -3233,16 +3237,20 @@ class User:
         Args:
             refresh_token (str): the current (unspent) refresh token.
             client_id (str): the client the token was issued to.
+            resource (str): one of the sign-in's APIs to narrow the new access token to (RFC 8707 s2.2); None leaves the client's default.
 
         Returns:
             requests.Response: the API response (carries the rotated token set on success).
         """
         url = f"{self.user_api_gateway_url}/oauth2/token"
-        body = urlencode({
+        fields = {
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
             "client_id": client_id,
-        })
+        }
+        if resource:
+            fields["resource"] = resource
+        body = urlencode(fields)
         response = self.session.post(
             url, headers={"Content-Type": "application/x-www-form-urlencoded"}, data=body,
         )
@@ -3473,6 +3481,7 @@ class User:
                 f"{self.user_api_gateway_url}/v1/user/auth/token",
                 json={"username": username, "password": password},
             )
+            self.user_api_access_token = None
 
         # If successful, update tokens
         if response.status_code in (200, 201):
@@ -3500,12 +3509,13 @@ class User:
 
         return response
 
-    def refresh_tokens(self, refresh_token=None):
+    def refresh_tokens(self, refresh_token=None, resource=None):
         """Rotate end-user tokens at the OAuth token endpoint
         (POST /oauth2/token, grant_type=refresh_token).
 
         Args:
             refresh_token (str): Refresh token (defaults to self.refresh_token)
+            resource (str): one of the sign-in's APIs to narrow the new access token to (RFC 8707 s2.2)
 
         Returns:
             requests.Response: The API response
@@ -3513,7 +3523,7 @@ class User:
         if refresh_token is None:
             refresh_token = self.refresh_token
 
-        response = self.oauth_token_refresh(refresh_token, ESP_USER_CLIENT_ID)
+        response = self.oauth_token_refresh(refresh_token, ESP_USER_CLIENT_ID, resource=resource)
 
         # If successful, update tokens
         if response.status_code in (200, 201):
@@ -3622,11 +3632,12 @@ class User:
         # Ensure we have a fresh access token for the body.
         if not self.access_token:
             self.get_cognito_token()
+        access_token = self.access_token if is_admin else self.user_api_token()
 
         data = {}
         # Access token is required in body for authenticated password change
-        if self.access_token:
-            data["access_token"] = self.access_token
+        if access_token:
+            data["access_token"] = access_token
         if old_password:
             data["old_password"] = old_password
         if new_password:
@@ -3637,7 +3648,7 @@ class User:
         # authorizer validates the ID token; the end-user methods declare scopes and
         # take the access token (the default). See make_api_request_with_token.
         return self.make_user_api_request(
-            'POST', path, data=data, token=self.token if is_admin else None)
+            'POST', path, data=data, token=self.token if is_admin else access_token)
 
 
     def get_user_details(self, user_id='me'):
@@ -3653,7 +3664,27 @@ class User:
         Returns:
             requests.Response: The API response.
         """
-        return self.make_user_api_request('GET', f'/v1/users/{user_id}')
+        return self.make_user_api_request('GET', f'/v1/users/{user_id}', token=self.user_api_token())
+
+    def user_api_token(self):
+        """An access token addressed to the ESP User API, taken from the sign-in by a refresh that names its resource (RFC 8707 s2.2).
+
+        Falls back to the sign-in's own access token when no user_api_resource is configured.
+        """
+        if not self.user_api_resource or not self.refresh_token:
+            return self.access_token
+        # Narrowed again 30 s before it expires, so a run longer than one access-token lifetime never sends an expired token.
+        if not self.user_api_access_token or jwt.decode(self.user_api_access_token, options={"verify_signature": False})["exp"] <= time.time() + 30:
+            response = self.session.post(
+                f"{self.user_api_gateway_url}/v1/user/auth/token/refresh",
+                json={"refresh_token": self.refresh_token, "resource": [self.user_api_resource]},
+            )
+            if response.status_code != 200:
+                raise RuntimeError(f"narrowing refresh to {self.user_api_resource} failed: {response.status_code} {response.text}")
+            tokens = response.json()
+            self.user_api_access_token = tokens["access_token"]
+            self.refresh_token = tokens.get("refresh_token", self.refresh_token)
+        return self.user_api_access_token
 
     @property
     def user_id(self):

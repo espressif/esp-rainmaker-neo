@@ -33,6 +33,7 @@ Account linking runs against the ESP User OIDC identity provider, not Cognito. A
 - **Redirect URIs**: registered dynamically by the config API (there are no hardcoded initial values); each POST unions its URIs onto the client's existing set, so the SmartThings, Alexa and Google Voice redirect URIs coexist on the shared `va-client` row. The SmartThings config API registers the three fixed SmartThings callback URLs (`https://c2c-us.smartthings.com/oauth/callback`, `https://c2c-eu.smartthings.com/oauth/callback`, `https://c2c-ap.smartthings.com/oauth/callback`) — they are not part of the request body.
 - **Client ID**: `va-client` — the registry client id (also available in SSM `/espuser/base/va-client-id`)
 - **Client Secret**: the generated secret for `va-client`, retrievable via the admin clients API (`GET /v1/admin/clients?get_secret=true`) or SSM `/espuser/base/va-client-secret`
+- **Resources**: `allowed_resources` and `default_resource` must both name the neo API's resource (`RmngApiResource`). The assistant sends no `resource`, so its tokens are for the default, and the skill accepts only tokens addressed to neo (`RmngApiAudiences`)
 - **OIDC endpoints**: the `authorization_endpoint` and `token_endpoint` published in the discovery document (`/.well-known/openid-configuration`). Both are served on the ESP User API Gateway base (`EspUserApiUrl`): `<api-url>/oauth2/authorize` and `<api-url>/oauth2/token`.
 
 ### SmartThings Developer Center Setup

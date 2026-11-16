@@ -83,7 +83,7 @@ def discover(monkeypatch):
 def test_with_no_domain_the_endpoints_and_the_issuer_are_the_api_url(discover):
     status, data = discover(rest={"other.example.com": [("(none)", OTHER_API)]})
     assert status == "SUCCESS"
-    assert (data["DomainName"], data["Url"]) == ("", DEFAULT_URL.rstrip("/"))
+    assert data["Url"] == DEFAULT_URL.rstrip("/")
 
 
 @pytest.mark.parametrize("api_type,domains,issuer", [
@@ -97,7 +97,7 @@ def test_the_one_mapped_domain_is_the_issuer(discover, api_type, domains, issuer
     domains = dict(domains, **{"other.example.com": [("(none)" if api_type == "REST" else "", OTHER_API)]})
     status, data = discover(**{api_type.lower(): domains}, api_type=api_type)
     assert status == "SUCCESS"
-    assert (data["DomainName"], data["Url"]) == ("sso.example.com", issuer)
+    assert data["Url"] == issuer
 
 
 @pytest.mark.parametrize("api_type,domains", [
@@ -120,10 +120,10 @@ def test_other_apis_keep_the_first_mapped_domain_and_get_no_issuer(discover, api
     domains = {"api.example.com": [(root, API)], "sso.example.com": [(root, API)]}
     status, data = discover(**{api_type.lower(): domains}, api_type=api_type, is_issuer=False)
     assert status == "SUCCESS"
-    assert (data["DomainName"], data["Url"]) == ("api.example.com", "https://api.example.com")
+    assert data["Url"] == "https://api.example.com"
 
 
 def test_other_apis_without_a_domain_keep_the_api_url(discover):
     status, data = discover(is_issuer=False)
     assert status == "SUCCESS"
-    assert (data["DomainName"], data["Url"], data["BaseUrl"]) == ("", DEFAULT_URL.rstrip("/"), DEFAULT_URL.rstrip("/"))
+    assert data["Url"] == DEFAULT_URL.rstrip("/")

@@ -213,7 +213,7 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		return oidc.OAuthErrorResp(http.StatusNotFound, oidc.OAuthErrInvalidRequest, "Not found."), nil
 	}
 
-	rmngCtx := user.NewContextWithAPIRequest(ctx, request)
+	rmngCtx := user.NewContextWithAnyAPIToken(ctx, request)
 	identity := user.ClaimsFrom(rmngCtx)
 	if identity.Subject == "" {
 		rlog.Info(ctx).Msg("sessions: token rejected")
@@ -221,12 +221,11 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 	}
 	// First-party is a client-registration attribute, not a token claim, so revoking a client's standing takes effect on its next call rather than when its tokens expire.
 	// A registry failure is ours (500); a valid token from a non-first-party client is authenticated but not allowed (403), since 401 invalid_token would make it retry with an identical token forever.
-	client, err := clients.NewService(rmngCtx).Get(identity.ClientID)
-	if err != nil && !errors.Is(err, clients.ErrClientNotFound) {
-		rlog.Error(ctx).Err(err).Str("client_id", identity.ClientID).Msg("sessions: client registry read failed")
-		return oidc.OAuthErrorResp(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
-	}
-	if client == nil || !client.FirstParty {
+	if err := clients.NewService(rmngCtx).RequireFirstParty(identity.ClientID); err != nil {
+		if !errors.Is(err, clients.ErrNotFirstParty) {
+			rlog.Error(ctx).Err(err).Str("client_id", identity.ClientID).Msg("sessions: client registry read failed")
+			return oidc.OAuthErrorResp(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
+		}
 		rlog.Info(ctx).Str("client_id", identity.ClientID).Msg("sessions: refused non-first-party client")
 		return oidc.OAuthErrorResp(http.StatusForbidden, oidc.OAuthErrAccessDenied, "This client may not manage sessions."), nil
 	}

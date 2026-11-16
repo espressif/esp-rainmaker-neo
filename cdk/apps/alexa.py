@@ -95,6 +95,8 @@ alexa_params = {
     # USER_ISSUER and reject every linked token.
     "esp_user_issuer": esp_user_base.get('EspUserDiscoveryIssuer', ''),
     "identity_pool_id": rmng_base.get('IdentityPoolId', ''),
+    # The skill acts on neo's data, so it accepts the tokens addressed to neo.
+    "rmng_api_audiences": rmng_base.get('RmngApiAudiences', ''),
 }
 
 # Construct id sets the synth artifact name (must match Stackfile: rmng-alexa-core.template.json).

@@ -72,6 +72,8 @@ These OAuth 2.1 client invariants are enforced at create/patch so the admin UI f
 
 8. **`allowed_resources` are absolute URIs with a host and without a fragment**, validated at write time. RFC 8707 §2 requires only an absolute URI without a fragment; **requiring an authority is ours and is deliberately stricter**, because `https:/api.example.com` (one slash) is a legal absolute URI with an empty host that would register happily and then never match the `https://api.example.com` a client sends. A non-authority form such as `urn:` is therefore rejected; revisit if a deployment needs one. They are the resource identifiers the client may request an access token for; the token's `aud` is the one it asks for. **Absent means none, never any** — otherwise the parameter enforces nothing for exactly the clients nobody configured. Exact string equality, like `redirect_uris` and for the same reason.
 
+   **`default_resource` is at most one of them**: the resource an access token is for when a request names none (RFC 9068 §3). A value outside `allowed_resources` is refused at write time. Absent means a request that names no resource is refused with `invalid_target`; no token is ever addressed to the client id.
+
 9. **`first_party` marks an app we ship ourselves** — the RainMaker app, a mobile client — as opposed to a
    delegated partner registered in the same table (the voice assistant `va-client`, the MCP proxy
    `mcp-oauth-client`). It is what account-management endpoints gate on: `GET`/`DELETE /v1/user/sessions`
@@ -100,7 +102,7 @@ All requests carry the admin Cognito token in `Authorization`. Errors use the AP
 | `scopes` | `["openid", "profile", "email", "phone"]` |  |
 | `require_pkce` | `true` |  |
 | `first_party` | `true` | marks an app **we ship ourselves** (vs a delegated partner); only a first-party client may call account-management endpoints such as `GET /v1/user/sessions`. Optional, default `false` |
-> **Scope of this slice.** The body carries only fields with a live consumer today. Reserved for later slices (not accepted yet): `jwks_uri`, `audiences`, `branding_id`, and `token_ttls` — (M2M/`private_key_jwt`, hosted-UI branding, and per-client TTLs are later slices). `allowed_resources`, `allowed_providers` and `post_logout_redirect_uris` are accepted now: RFC 8707 resource indicators and RP-Initiated Logout have landed, and a field the logout endpoint validates against but no API can write is a check that can never pass. They will be added to the schema when their features land; adding fields is Native.
+> **Scope of this slice.** The body carries only fields with a live consumer today. Reserved for later slices (not accepted yet): `jwks_uri`, `audiences`, `branding_id`, and `token_ttls` — (M2M/`private_key_jwt`, hosted-UI branding, and per-client TTLs are later slices). `allowed_resources`, `default_resource`, `allowed_providers` and `post_logout_redirect_uris` are accepted now: RFC 8707 resource indicators and RP-Initiated Logout have landed, and a field the logout endpoint validates against but no API can write is a check that can never pass. They will be added to the schema when their features land; adding fields is Native.
 
 **Process**:
 1. Authorize (token verified against the admin Cognito pool).
@@ -126,7 +128,7 @@ Returns every client. By default the `secret` is omitted; pass **`?get_secret=tr
 
 **API**: `PUT /v1/admin/clients/{client_id}`
 
-**Full replace** of the mutable fields (client name, redirect URIs, post-logout redirect URIs, grant types, scopes, allowed resources, allowed providers, `require_pkce`, `first_party`): the body is the complete desired state, so an omitted field resets to empty/default. `client_id`, `client_type`, and the secret are immutable and rejected in the body. `client_name` is required. Re-runs the Key-Rule validation on the result. `404` if unknown.
+**Full replace** of the mutable fields (client name, redirect URIs, post-logout redirect URIs, grant types, scopes, allowed resources, default resource, allowed providers, `require_pkce`, `first_party`): the body is the complete desired state, so an omitted field resets to empty/default. `client_id`, `client_type`, and the secret are immutable and rejected in the body. `client_name` is required. Re-runs the Key-Rule validation on the result. `404` if unknown.
 
 ### Delete Client
 

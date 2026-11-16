@@ -77,6 +77,8 @@ type tokenReq struct {
 	Username     string `json:"username,omitempty"`
 	Password     string `json:"password,omitempty"`
 	RefreshToken string `json:"refresh_token,omitempty"`
+	// Resource is read by refresh only: at most one RFC 8707 resource, the API the renewed access token is for.
+	Resource []string `json:"resource,omitempty"`
 }
 
 type signupReq struct {
@@ -162,7 +164,14 @@ func handleRefresh(ctx context.Context, request events.APIGatewayProxyRequest, s
 	if err := rmngrequest.ExtractRequestStruct(request, &req); err != nil {
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Invalid request body")), nil
 	}
-	tokens, err := svc.RefreshLegacy(ctx, req.RefreshToken)
+	resource, err := auth.RequestedResourceForTokenRequest(req.Resource)
+	if resp, refused := resourceRefusal(err); refused {
+		return resp, nil
+	}
+	tokens, err := svc.RefreshLegacy(ctx, req.RefreshToken, resource)
+	if resp, refused := resourceRefusal(err); refused {
+		return resp, nil
+	}
 	if err != nil {
 		rlog.Error(ctx).Err(err).Msg("legacy refresh failed")
 		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Invalid refresh token")), nil
@@ -263,6 +272,15 @@ func handlePassword(ctx context.Context, request events.APIGatewayProxyRequest, 
 		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Password change failed")), nil
 	}
 	return utils.APIGwRespJSON(http.StatusOK, utils.NewAPIStatus("Password changed successfully")), nil
+}
+
+// resourceRefusal answers an RFC 8707 refusal with a 400 naming it, so a client can fix its request rather than retry.
+func resourceRefusal(err error) (events.APIGatewayProxyResponse, bool) {
+	message, ok := auth.TargetDescription(err)
+	if !ok {
+		return events.APIGatewayProxyResponse{}, false
+	}
+	return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(message)), true
 }
 
 func withBearer(t *auth.UserTokens) *auth.UserTokens {

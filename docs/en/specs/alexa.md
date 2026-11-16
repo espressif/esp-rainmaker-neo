@@ -30,6 +30,7 @@ Account linking runs against the ESP User OIDC identity provider, not Cognito. A
 - **Redirect URIs**: registered dynamically by the config API (there are no hardcoded initial values); each POST unions its URIs onto the client's existing set, so the Alexa and Google Voice redirect URIs coexist on the shared `va-client` row
 - **Client ID**: `va-client` — the registry client id (also available in SSM `/espuser/base/va-client-id`)
 - **Client Secret**: the generated secret for `va-client`, retrievable via the admin clients API (`GET /v1/admin/clients?get_secret=true`) or SSM `/espuser/base/va-client-secret`
+- **Resources**: `allowed_resources` and `default_resource` must both name the neo API's resource (`RmngApiResource`). The assistant sends no `resource`, so its tokens are for the default, and the skill accepts only tokens addressed to neo (`RmngApiAudiences`)
 - **OIDC endpoints**: the `authorization_endpoint` and `token_endpoint` published in the discovery document (`/.well-known/openid-configuration`). Both are served on the ESP User API Gateway base (`EspUserApiUrl`): `<api-url>/oauth2/authorize` and `<api-url>/oauth2/token`.
 
 ### Automated Setup (recommended)
@@ -220,7 +221,7 @@ esp-morpheus admin <admin-email> integrations alexa setup alexa_skills_manual_co
 
 ### Authentication
 
-Alexa sends an ESP User access token (issued to the voice-assistant client at account linking) in the `scope.token` field of the directive payload or endpoint. The Lambda extracts the user ID using this token. The `alexa_skill` Lambda is invoked directly by the Alexa service (not via API Gateway) — the Alexa service principal `alexa-connectedhome.amazon.com` has Lambda invoke permission gated by the skill ID.
+Alexa sends an ESP User access token (issued to the voice-assistant client at account linking) in the `scope.token` field of the directive payload or endpoint. The Lambda extracts the user ID using this token, which must be addressed to the neo API (one of `ACCEPTED_AUDIENCES`). The `alexa_skill` Lambda is invoked directly by the Alexa service (not via API Gateway) — the Alexa service principal `alexa-connectedhome.amazon.com` has Lambda invoke permission gated by the skill ID.
 
 ### Endpoint ID Format
 

@@ -46,6 +46,7 @@ type ClientWriteRequest struct {
 	// AllowedResources are the RFC 8707 resource identifiers this client may request a
 	// token for. Absent means none -- never "any".
 	AllowedResources *[]string `json:"allowed_resources,omitempty"`
+	DefaultResource  *string   `json:"default_resource,omitempty"`
 	// Which identity providers this client offers at login. Absent means all of them.
 	AllowedProviders *[]string `json:"allowed_providers,omitempty"`
 	RequirePKCE      *bool     `json:"require_pkce,omitempty"`
@@ -85,6 +86,7 @@ func handleCreate(ctx context.Context, request events.APIGatewayProxyRequest) (e
 		GrantTypes:             derefSlice(req.GrantTypes),
 		Scopes:                 derefSlice(req.Scopes),
 		AllowedResources:       derefSlice(req.AllowedResources),
+		DefaultResource:        derefStr(req.DefaultResource),
 		AllowedProviders:       derefSlice(req.AllowedProviders),
 		RequirePKCE:            req.RequirePKCE,
 		FirstParty:             req.FirstParty,
@@ -127,6 +129,7 @@ func handlePut(ctx context.Context, request events.APIGatewayProxyRequest) (even
 		GrantTypes:             derefSlice(req.GrantTypes),
 		Scopes:                 derefSlice(req.Scopes),
 		AllowedResources:       derefSlice(req.AllowedResources),
+		DefaultResource:        derefStr(req.DefaultResource),
 		AllowedProviders:       derefSlice(req.AllowedProviders),
 		RequirePKCE:            req.RequirePKCE,
 		FirstParty:             req.FirstParty,

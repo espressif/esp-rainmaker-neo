@@ -49,7 +49,7 @@ func handleRevoke(ctx context.Context, request events.APIGatewayProxyRequest) (e
 		return oidc.OAuthErrorResp(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "client_id is required."), nil
 	}
 	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, nil)
-	if errCode, internal := clients.NewService(rmngCtx).AuthenticateForOAuth(clientID, clientSecret); errCode != "" {
+	if _, errCode, internal := clients.NewService(rmngCtx).AuthenticateForOAuth(clientID, clientSecret); errCode != "" {
 		status := http.StatusUnauthorized
 		if internal {
 			status = http.StatusInternalServerError

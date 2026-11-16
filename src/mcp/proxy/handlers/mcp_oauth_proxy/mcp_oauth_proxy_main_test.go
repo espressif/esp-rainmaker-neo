@@ -194,6 +194,7 @@ var _ = Describe("OAuth Proxy", func() {
 			Expect(location).To(ContainSubstring("redirect_uri="))
 			Expect(location).To(ContainSubstring("code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"))
 			Expect(location).To(ContainSubstring("code_challenge_method=S256"))
+			Expect(location).To(ContainSubstring("resource="+url.QueryEscape("https://api.example.com/v1/mcp")), "the token must be for this server, by the name its metadata advertises")
 			Expect(location).To(ContainSubstring("state="))
 			Expect(response.Headers["Cache-Control"]).To(Equal("no-store"))
 		})
@@ -422,6 +423,7 @@ var _ = Describe("OAuth Proxy", func() {
 			Expect(capturedBody).NotTo(ContainSubstring("client_secret="))
 			Expect(capturedBody).To(ContainSubstring("code=auth-code-123"))
 			Expect(capturedBody).To(ContainSubstring("code_verifier=" + verifier))
+			Expect(capturedBody).To(ContainSubstring("resource=" + url.QueryEscape("https://api.example.com/v1/mcp")))
 			Expect(capturedBody).To(ContainSubstring(url.QueryEscape("https://api.example.com/oauth2/callback")))
 
 			var tokenResp map[string]interface{}

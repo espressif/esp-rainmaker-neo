@@ -19,7 +19,7 @@ needs no change:
 | Route | Body | Returns |
 |---|---|---|
 | `POST /v1/user/auth/token` | `{username, password}` | token set |
-| `POST /v1/user/auth/token/refresh` | `{refresh_token}` | token set |
+| `POST /v1/user/auth/token/refresh` | `{refresh_token, resource?}` | token set |
 | `POST /v1/user/auth/signup` | `{email?\|phone_number?, password}` | `{user_id, requires_verification, message}` |
 | `POST /v1/user/auth/signup/verify` | `{email?\|phone_number?, code}` | `{message}` |
 | `POST /v1/user/auth/password-recovery` | `{username}` | `{message}` |
@@ -59,8 +59,12 @@ sequenceDiagram
   (reading claims through the provider row's [attribute mapping](federation.md#attribute-mapping)), and mint **our** access/id/refresh tokens. The Cognito tokens
   are discarded. So a legacy password login and a federated/OTP login for the same
   verified contact resolve to the same `user_id` and issue the same shape of token.
+  Like the client id, the resource is not a parameter here: the sign-in covers every API the password
+  client's `allowed_resources` name, and its access token is for the client's `default_resource`
+  ([resource-indicators.md](resource-indicators.md)).
 - **`/token/refresh`**: rotates **our** refresh token via our refresh service —
-  it never calls Cognito. See rotation note below.
+  it never calls Cognito. See rotation note below. `resource`, an array of at most one,
+  picks which of the sign-in's APIs the renewed access token is for.
 - **signup / verify / password-recovery / password**: operate directly on the
   Cognito pool (`SignUp`, `ConfirmSignUp`, `ForgotPassword`, `ConfirmForgotPassword`,
   `ChangePassword`), exactly as `main`. These do not mint tokens.
@@ -69,7 +73,8 @@ sequenceDiagram
   refresh families of ours, which a provider-side sign-out does not touch, so a success there would
   mean nothing was ended.
 - **password**: the client presents our access token plus the old password. The token is verified
-  before anything else, because it names whose password is being changed. The old password is then
+  before anything else, because it names whose password is being changed, and it must be addressed
+  to the ESP User API ([resource-indicators.md](resource-indicators.md)). The old password is then
   re-presented to the provider to obtain a provider access token, which is what the provider's
   change-password operation requires — the client never holds one.
 

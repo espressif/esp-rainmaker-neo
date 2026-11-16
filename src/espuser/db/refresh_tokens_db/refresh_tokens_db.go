@@ -60,12 +60,8 @@ type FamilyEntry struct {
 	FamilyID     string `dynamodbav:"family_id,omitempty"`
 	Counter      int64  `dynamodbav:"counter"`
 	Scope        string `dynamodbav:"scope,omitempty"`
-	// Resource pins the audience of every access token this family will ever mint. The
-	// access token is renewed silently for as long as the login lasts, so a family that
-	// forgot it would start issuing tokens the resource server refuses, an hour after the
-	// login and nowhere near the cause. Empty on families minted before the field existed;
-	// those keep producing aud = client_id, which is what they always did.
-	Resource string `dynamodbav:"resource,omitempty"`
+	// Resources are the RFC 8707 resources the sign-in covers; every renewal mints its one audience from among them.
+	Resources []string `dynamodbav:"resources,omitempty"`
 	// SID names the browser session this login ran under (the sessions table's public id), so ending a session can end the refresh families created through it. Empty when the session write failed or the family predates sessions.
 	SID string `dynamodbav:"sid,omitempty"`
 	// AuthTime is the login's authentication time, so a refreshed ID token never claims a fresh sign-in; zero on older families.

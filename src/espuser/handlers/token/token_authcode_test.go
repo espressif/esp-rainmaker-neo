@@ -43,6 +43,7 @@ var _ = Describe("OAuth token endpoint (authorization_code grant)", func() {
 			RequestedScope:      []string{"openid", "email"},
 			CodeChallenge:       testChallenge(),
 			CodeChallengeMethod: "S256",
+			Resources:           []string{testResource},
 			ExpiresOn:           time.Now().Add(10 * time.Minute).Unix(),
 		})).To(Succeed())
 		Expect(db.IssueCode("fl_"+code, "user-123", []string{"openid", "email"}, code, "", 0)).Error().NotTo(HaveOccurred())
@@ -189,13 +190,13 @@ var _ = Describe("OAuth token endpoint (authorization_code grant)", func() {
 		// seedConfCode registers a confidential client (no require_pkce) and a code bound to it.
 		seedConfCode := func(code string) {
 			cs := clients.NewService(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
-			res, err := cs.Create(clients.CreateInput{ClientID: confID, ClientName: "C", ClientType: "confidential", GrantTypes: []string{"authorization_code"}})
+			res, err := cs.Create(clients.CreateInput{ClientID: confID, ClientName: "C", ClientType: "confidential", GrantTypes: []string{"authorization_code"}, AllowedResources: []string{testResource}})
 			Expect(err).NotTo(HaveOccurred())
 			confSecret = res.ClientSecret
 			db := auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
 			Expect(db.CreateFlow(&auth_flows_db.AuthFlow{
 				FlowID: "fl_" + code, ClientID: confID, RedirectURI: redirectURI,
-				RequestedScope: []string{"openid"}, ExpiresOn: time.Now().Add(10 * time.Minute).Unix(),
+				RequestedScope: []string{"openid"}, Resources: []string{testResource}, ExpiresOn: time.Now().Add(10 * time.Minute).Unix(),
 			})).To(Succeed())
 			Expect(db.IssueCode("fl_"+code, "user-123", []string{"openid"}, code, "", 0)).Error().NotTo(HaveOccurred())
 		}
@@ -271,30 +272,30 @@ var _ = Describe("RFC 8707 resource on the authorization-code flow", func() {
 		_, err := svc.Create(clients.CreateInput{
 			ClientID: resClientID, ClientName: "Web", ClientType: "public",
 			RedirectURIs: []string{resRedirect}, GrantTypes: []string{"authorization_code", "refresh_token"},
-			Scopes: []string{"openid", "email"}, AllowedResources: []string{resAPI},
+			Scopes: []string{"openid", "email"}, AllowedResources: []string{resAPI, otherAPI},
 			RequirePKCE: utils.Ptr(true),
 		})
 		Expect(err).NotTo(HaveOccurred())
 	}
 
 	// seedCodeWithResource writes the post-login flow state a real /authorize would have left.
-	seedCodeWithResource := func(code, resource string) {
+	seedCodeWithResource := func(code string, resources ...string) {
 		db := auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
 		Expect(db.CreateFlow(&auth_flows_db.AuthFlow{
 			FlowID: "fl_" + code, ClientID: resClientID, RedirectURI: resRedirect,
 			RequestedScope: []string{"openid", "email"},
 			CodeChallenge:  testChallenge(), CodeChallengeMethod: "S256",
-			Resource:  resource,
+			Resources: resources,
 			ExpiresOn: time.Now().Add(10 * time.Minute).Unix(),
 		})).To(Succeed())
 		Expect(db.IssueCode("fl_"+code, "user-123", []string{"openid", "email"}, code, "", 0)).Error().NotTo(HaveOccurred())
 	}
 
-	exchange := func(code string) map[string]any {
+	exchange := func(code string, resource ...string) map[string]any {
 		form := url.Values{
 			"grant_type": {"authorization_code"}, "code": {code},
 			"code_verifier": {testVerifier}, "client_id": {resClientID},
-			"redirect_uri": {resRedirect},
+			"redirect_uri": {resRedirect}, "resource": resource,
 		}
 		resp, err := handleTokenRequest(context.Background(), formRequest(form.Encode()))
 		Expect(err).NotTo(HaveOccurred())
@@ -319,11 +320,9 @@ var _ = Describe("RFC 8707 resource on the authorization-code flow", func() {
 		Expect(unverifiedClaims(tokens["id_token"].(string))["aud"]).To(Equal(resClientID))
 	})
 
-	It("falls back to aud = client_id when no resource was requested", func() {
-		// The compatibility argument for the whole extension: a deployment that never uses
-		// it sees exactly what it saw before.
-		seedCodeWithResource("ac_nores", "")
-		Expect(unverifiedClaims(exchange("ac_nores")["access_token"].(string))["aud"]).To(Equal(resClientID))
+	It("narrows the exchange to the one resource named when the sign-in covers several", func() {
+		seedCodeWithResource("ac_two", resAPI, otherAPI)
+		Expect(unverifiedClaims(exchange("ac_two", otherAPI)["access_token"].(string))["aud"]).To(Equal(otherAPI))
 	})
 
 	It("carries the resource through a refresh, so a renewed token is still usable", func() {
@@ -349,8 +348,8 @@ var _ = Describe("RFC 8707 resource on the authorization-code flow", func() {
 		db := auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
 		Expect(db.CreateFlow(&auth_flows_db.AuthFlow{
 			FlowID: "fl_ac_authtime", ClientID: resClientID, RedirectURI: resRedirect,
-			RequestedScope: []string{"openid", "email"},
-			CodeChallenge:  testChallenge(), CodeChallengeMethod: "S256",
+			RequestedScope: []string{"openid", "email"}, Resources: []string{resAPI},
+			CodeChallenge: testChallenge(), CodeChallengeMethod: "S256",
 			ExpiresOn: time.Now().Add(10 * time.Minute).Unix(),
 		})).To(Succeed())
 		Expect(db.IssueCode("fl_ac_authtime", "user-123", []string{"openid", "email"}, "ac_authtime", "", signedIn)).Error().NotTo(HaveOccurred())
@@ -369,7 +368,7 @@ var _ = Describe("RFC 8707 resource on the authorization-code flow", func() {
 	})
 
 	It("stamps now when the flow recorded no auth_time (flows issued before the field existed)", func() {
-		seedCodeWithResource("ac_noauthtime", "")
+		seedCodeWithResource("ac_noauthtime", resAPI)
 		before := time.Now().Unix()
 		at := unverifiedClaims(exchange("ac_noauthtime")["id_token"].(string))["auth_time"]
 		Expect(at).To(BeNumerically(">=", before))

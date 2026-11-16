@@ -307,7 +307,7 @@ var _ = Describe("Minter over a crypto.Signer", func() {
 		kid := jwtutil.RSAThumbprint(&priv.PublicKey)
 		minter := jwtutil.NewMinter("https://issuer.example", priv, kid)
 
-		token, err := minter.AccessToken("u1", "c1", "openid email", "", "", jwtutil.Contact{Email: "u@example.com"})
+		token, err := minter.AccessToken("u1", "c1", "openid email", "", "https://api.example.com", jwtutil.Contact{Email: "u@example.com"})
 		Expect(err).NotTo(HaveOccurred())
 
 		jwks := jwtutil.BuildJWKS(jwtutil.BuildJWK(&priv.PublicKey, kid))
@@ -316,6 +316,18 @@ var _ = Describe("Minter over a crypto.Signer", func() {
 		claims, err := jwtutil.VerifyOIDCToken(string(jwksJSON), "https://issuer.example", token)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(claims["email"]).To(Equal("u@example.com"))
+		Expect(claims["aud"]).To(Equal("https://api.example.com"))
+	})
+
+	It("refuses to mint an access token that names no API, never falling back to the client id (negative)", func() {
+		priv, err := rsa.GenerateKey(rand.Reader, 2048)
+		Expect(err).NotTo(HaveOccurred())
+		minter := jwtutil.NewMinter("https://issuer.example", priv, jwtutil.RSAThumbprint(&priv.PublicKey))
+
+		_, err = minter.AccessToken("u1", "c1", "openid", "", "", jwtutil.Contact{})
+		Expect(err).To(MatchError(jwtutil.ErrNoAudience))
+		_, err = minter.ClientCredentialsToken("c1", "account.admin", "")
+		Expect(err).To(MatchError(jwtutil.ErrNoAudience))
 	})
 })
 

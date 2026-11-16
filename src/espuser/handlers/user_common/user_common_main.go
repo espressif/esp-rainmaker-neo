@@ -6,9 +6,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/user_details_db"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
@@ -32,10 +34,18 @@ func handleGetUser(ctx context.Context, request events.APIGatewayProxyRequest) (
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Missing userId")), nil
 	}
 
-	rctx := user.NewContextWithAPIRequest(ctx, request)
+	rctx := user.NewContextWithAnyAPIToken(ctx, request)
 	claims := user.ClaimsFrom(rctx)
 	if claims.Subject == "" {
 		return oidc.OAuthUnauthorizedResp(), nil
+	}
+	// Any of our APIs' tokens is accepted here, so a third party's token is refused by its client until scopes gate the account's endpoints.
+	if err := clients.NewService(rctx).RequireFirstParty(claims.ClientID); err != nil {
+		if !errors.Is(err, clients.ErrNotFirstParty) {
+			rlog.Error(ctx).Err(err).Str("client_id", claims.ClientID).Msg("Failed to read the client registration")
+			return oidc.OAuthErrorResp(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
+		}
+		return oidc.OAuthErrorResp(http.StatusForbidden, oidc.OAuthErrAccessDenied, "This client may not read the account."), nil
 	}
 
 	if userIDParam != "me" && userIDParam != claims.Subject {

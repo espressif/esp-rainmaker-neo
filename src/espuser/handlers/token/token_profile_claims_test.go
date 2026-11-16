@@ -63,6 +63,7 @@ var _ = Describe("profile claims in minted tokens", func() {
 			RequestedScope:      granted,
 			CodeChallenge:       testChallenge(),
 			CodeChallengeMethod: "S256",
+			Resources:           []string{testResource},
 			ExpiresOn:           time.Now().Add(10 * time.Minute).Unix(),
 		})).To(Succeed())
 		Expect(flowDB.IssueCode("fl_"+code, profileUserID, granted, code, "", 0)).Error().NotTo(HaveOccurred())

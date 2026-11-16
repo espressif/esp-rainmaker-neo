@@ -93,7 +93,7 @@ Starts the flow. Validates the request, writes a `LOGIN` flow record, and redire
 | `state` | recommended | Opaque; echoed back on the redirect (client CSRF token). |
 | `code_challenge` | conditional | PKCE (RFC 7636). Required when the client is registered with `require_pkce` (always true for public clients — RFC 9700 §2.1.1); optional otherwise. |
 | `code_challenge_method` | conditional | Must be `S256` when a `code_challenge` is present. |
-| `resource` | no | RFC 8707: the API the access token is for. **Omitted, `aud` is the `client_id`** — the pre-RFC-8707 behaviour every existing caller still sees. When present it must be one of the client's `allowed_resources`, or the request redirects with `invalid_target`; at most one value, and that value becomes the token's `aud`. Remembered on the flow and by the refresh family, so every renewal keeps the audience. |
+| `resource` | no | RFC 8707: the APIs this sign-in covers, repeatable. Each must be one of the client's `allowed_resources`; omitted, the sign-in covers the client's `default_resource`, and a client without one is refused. Either refusal redirects with `invalid_target`. Remembered on the flow and by the refresh family; each access token is for one of them ([resource-indicators.md](resource-indicators.md)). |
 | `prompt` | no | OIDC Core §3.1.2.1: `none` answers silently from the session or redirects with `login_required`; `login` always re-authenticates; other values disable the session shortcut. |
 | `max_age` | no | Maximum acceptable age (seconds) of the session's `auth_time`. An older session is not used. |
 | `id_token_hint` | no | A previously issued ID token naming the expected subject. A session belonging to anyone else, or an unverifiable hint, is not used — the flow never switches to the hinted user. |
@@ -145,6 +145,7 @@ code=<authorization code>
 code_verifier=<PKCE verifier>   (required iff the code was bound to a challenge)
 client_id=<client>
 redirect_uri=<same redirect_uri used at authorize>
+resource=<one of the sign-in's resources>   (optional)
 ```
 
 **Process**:
@@ -152,8 +153,9 @@ redirect_uri=<same redirect_uri used at authorize>
 2. Look up the `CODE` flow record by `code`. Unknown/expired/already-consumed → `invalid_grant` (a consumed code additionally burns the flow — reuse = theft).
 3. Verify `client_id` and `redirect_uri` equal those stamped on the record; mismatch → `invalid_grant`.
 4. Verify PKCE: `BASE64URL(SHA256(code_verifier)) == code_challenge`. Mismatch, or a verifier supplied for a code with no challenge (or vice-versa), → `invalid_grant` (RFC 9700 §2.1.1).
-5. Consume the code (conditional `consumed = false → true`); a lost race → `invalid_grant`.
-6. Mint the token set for the record's `subject` + `granted_scope`: RS256 access token, a fresh refresh-token family, and an id_token when `openid` is in scope.
+5. Pick the access token's one resource from the record's `resources`: the `resource` named, else the only one, else the client's default ([resource-indicators.md](resource-indicators.md)). A refusal → `invalid_target`, and the code stays unspent.
+6. Consume the code (conditional `consumed = false → true`); a lost race → `invalid_grant`.
+7. Mint the token set for the record's `subject` + `granted_scope`: RS256 access token, a fresh refresh-token family covering every resource of the sign-in, and an id_token when `openid` is in scope.
 
 **Response** (`200`, `application/json`) — same shape as the refresh grant:
 | field | example | notes |
@@ -168,6 +170,7 @@ redirect_uri=<same redirect_uri used at authorize>
 **Errors** (RFC 6749 §5.2 error object):
 - `400 invalid_request` — missing/malformed `code`, `code_verifier`, `client_id`, or `redirect_uri`.
 - `400 invalid_grant` — unknown/expired/consumed code, client or redirect mismatch, or PKCE failure (uniform; no oracle).
+- `400 invalid_target` — a `resource` the sign-in does not cover, two `resource` values, or several covered and no default among them.
 - `400 unsupported_grant_type` — a `grant_type` this endpoint does not serve.
 
 ## espuser-auth-flows
@@ -185,7 +188,7 @@ The flow record threading a request from `/oauth2/authorize` through OTP login t
 | `redirect_uri` | String | Validated, exact-match. |
 | `state` | String | Echoed on the redirect (client CSRF token). |
 | `code_challenge` / `code_challenge_method` | String | PKCE (`S256`). |
-| `resource` | String | RFC 8707 audience the login asked for; read at the code exchange and carried onto the refresh family. Empty ⇒ `aud = client_id`. |
+| `resources` | List<String> | The RFC 8707 resources this sign-in covers; read at the code exchange and carried onto the refresh family. |
 | `sid` | String | The browser session this login ran under; ties the refresh family to its parent session. |
 | `subject` | String | Resolved `user_id`; set by in-flow OTP verify. |
 | `granted_scope` | List<String> | Stamped at code issuance (= requested, first-party no-consent). |

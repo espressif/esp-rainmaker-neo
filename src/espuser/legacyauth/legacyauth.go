@@ -18,6 +18,7 @@ import (
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/cognitoutil"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/identity_providers_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/user_details_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/idp"
@@ -107,6 +108,7 @@ func regionFromCognitoIssuer(issuer string) string {
 	return ""
 }
 
+// SigninWithPassword covers every resource the password client may request, since this API takes no resource; a refresh narrows the access token to one of them.
 func (s *Service) SigninWithPassword(ctx context.Context, username, password string) (*auth.UserTokens, error) {
 	if username == "" || password == "" {
 		return nil, rmerror.NewRMError(nil, "username and password are required")
@@ -131,14 +133,20 @@ func (s *Service) SigninWithPassword(ctx context.Context, username, password str
 	// families are reachable by sid, even though a ROPC client holds no browser and gets no SSO.
 	// auth_time is now (Establish defaults it): the authentication happened here, not upstream.
 	return s.oauth.MintTokenSetForFirstPartyLogin(ctx, userID, legacyClientID, legacyScope, auth.FirstPartyLogin{
-		Provider: s.providerName,
-		AMR:      []string{"pwd"},
-		Origin:   session.OriginApp,
+		AllAllowedResources: true,
+		Provider:            s.providerName,
+		AMR:                 []string{"pwd"},
+		Origin:              session.OriginApp,
 	})
 }
 
-func (s *Service) RefreshLegacy(ctx context.Context, refreshToken string) (*auth.UserTokens, error) {
-	return s.oauth.RefreshToken(ctx, legacyClientID, refreshToken)
+// RefreshLegacy renews a password sign-in; resource narrows the access token to one of its resources, or "" to let the sign-in decide.
+func (s *Service) RefreshLegacy(ctx context.Context, refreshToken, resource string) (*auth.UserTokens, error) {
+	client, err := clients.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil)).Get(legacyClientID)
+	if err != nil {
+		return nil, rmerror.NewRMError(err, "legacyauth: password client unreadable")
+	}
+	return s.oauth.RefreshToken(ctx, client, refreshToken, resource)
 }
 
 // Signup registers the credential with the provider. No user_id is returned: ids are opaque and are
@@ -206,10 +214,12 @@ func (s *Service) ChangePassword(ctx context.Context, accessToken, oldPassword, 
 	if accessToken == "" || oldPassword == "" || newPassword == "" {
 		return rmerror.NewRMError(nil, "access token, old password and new password are required")
 	}
-	info, err := s.oauth.ParseUserInfoFromToken(ctx, accessToken)
+	// Any API's token will do: a legacy sign-in's is addressed to its client's default API, and the token only names the account, whose old password is the proof.
+	claims, err := s.oauth.VerifyUserTokenForAnyAPI(accessToken)
 	if err != nil {
 		return rmerror.NewRMError(err, "legacyauth: access token rejected")
 	}
+	info := claims.UserInfo()
 	username := info.Email
 	if username == "" {
 		username = info.PhoneNumber

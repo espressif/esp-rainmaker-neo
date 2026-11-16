@@ -289,16 +289,8 @@ class CreateIdentityPool(Construct):
     def __init__(self, scope: Construct, id: str, iot_user_role: iam.Role, common_resources, **kwargs) -> None:
         super().__init__(scope, id, **kwargs)
 
-        # IAM OIDC identity provider for the ESP User issuer. End users present an
-        # RS256 access token from this issuer; the identity pool federates it to the
-        # default authenticated role (DeviceUsersRole). ClientIDList is the set of
-        # OIDC client_ids (token `aud`) end users authenticate with.
-        # thumbprint_list is required by the API but ignored for the OIDC providers
-        # STS trusts via its own CA store; the standard root-CA thumbprint is used.
-        # Only the first-party client is federated. esp_mcp_client_id and esp_user_va_client_id are
-        # deliberately NOT here: both audiences are delegated to third parties (MCP clients, Alexa
-        # and Google), and federating an audience is what makes its tokens exchangeable for the role
-        # above. Neither integration calls /v1/user/credentials, so neither needs federating.
+        # The identity pool federates an ID token, whose aud is the client it was issued to, so this lists only our own apps: listing a delegated client (MCP, the voice assistants) would let a third party exchange its tokens for DeviceUsersRole.
+        # thumbprint_list is required by the API but ignored, since STS trusts these providers through its own CA store.
         esp_user_oidc_provider = iam.CfnOIDCProvider(
             self, "EspUserOidcProvider",
             url=common_resources.esp_user_issuer,
@@ -988,7 +980,7 @@ class RMNGBaseStack(Stack):
         ):
             self.gsi_readiness.node.add_dependency(base)
 
-        api_custom_domain, api_gateway_url, _ = discover_api_custom_domain(
+        neo_api = discover_api_custom_domain(
             self, "ApiCustomDomainDiscovery",
             name="api-custom-domain-discovery",
             api_id=self.api_gateway_cfn.rest_api_id,
@@ -999,14 +991,26 @@ class RMNGBaseStack(Stack):
         create_ssm_string_parameter(
             self, "ApiGatewayUrlParameter",
             parameter_name=SSM_PARAMETERS['API_GATEWAY_URL'],
-            string_value=api_gateway_url,
+            string_value=neo_api.url,
             description="API Gateway base URL (custom domain when configured, else execute-api). No trailing slash.",
         )
 
         CfnOutput(
             self, "ApiGatewayUrl",
             description="The URL of the API Gateway endpoint",
-            value=api_gateway_url
+            value=neo_api.url
+        )
+
+        CfnOutput(
+            self, "RmngApiResource",
+            description="RFC 8707 resource a client requests to get an access token for this REST API",
+            value=neo_api.resource
+        )
+
+        CfnOutput(
+            self, "RmngApiAudiences",
+            description="Comma-separated audiences this REST API accepts in an access token",
+            value=neo_api.audiences
         )
 
         CfnOutput(

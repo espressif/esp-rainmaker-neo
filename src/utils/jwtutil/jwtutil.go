@@ -122,16 +122,13 @@ func NewAuthEventID() string {
 // authEventID ties this token to the id token minted alongside it; pass the same value to
 // IDToken. Empty omits the claim, for a token issued outside any pair.
 //
-// audience is the RFC 8707 resource the token is for -- the API it will be spent at, which
-// is what an access token's aud means. Empty falls back to the client id, which is what
-// every token looked like before resource indicators and what a caller not using them still
-// gets. Note the contrast with IDToken below, whose audience is the client by definition.
+// audience is the RFC 8707 resource the token is for, the API it will be spent at (RFC 9068 s3); it is required, unlike IDToken's, which is the client by definition.
 // sid is optional and names the browser session this token was minted under (OIDC Core
 // s2). A resource server needs it to answer "which of my sessions is this request on" --
 // the session cookie lives on the issuer's origin and never reaches a product's API.
 func (m *Minter) AccessToken(userID, clientID, scope, authEventID, audience string, contact Contact, sid ...string) (string, error) {
 	if audience == "" {
-		audience = clientID
+		return "", ErrNoAudience
 	}
 	now := time.Now()
 	claims := jwt.MapClaims{
@@ -159,18 +156,12 @@ func addSID(claims jwt.MapClaims, sid []string) {
 
 // ClientCredentialsToken mints an access token for the client itself (RFC 6749 s4.4).
 //
-// Two claims differ from AccessToken deliberately. sub is the client, because no resource
-// owner is involved and RFC 9068 s2.2.1 asks for an identifier the server uses for the
-// client application. aud is the requested resource (RFC 8707) rather than the client:
-// an access token's audience is the API it will be spent at, and conflating that with the
-// caller is what lets a token minted for one service be replayed against another. When no
-// resource is requested the audience falls back to the client id, which keeps the shape a
-// caller sees today and never leaves aud absent.
+// sub is the client, because no resource owner is involved (RFC 9068 s2.2.1); aud is the required resource, as for AccessToken.
 //
 // There is no contact and no auth event: both describe a human sign-in that did not happen.
 func (m *Minter) ClientCredentialsToken(clientID, scope, audience string) (string, error) {
 	if audience == "" {
-		audience = clientID
+		return "", ErrNoAudience
 	}
 	now := time.Now()
 	return SignRS256(jwt.MapClaims{
@@ -341,7 +332,14 @@ func UnverifiedIssuer(tokenString string) (string, error) {
 // no verifier can be chosen for it.
 var ErrUnreadableToken = errors.New("unreadable token")
 
+// ErrNoAudience refuses to mint an access token that names no API, since a client id is never an audience.
+var ErrNoAudience = errors.New("access token has no audience")
+
 // IsUnreadableToken reports whether err came from a token that could not be parsed.
+// ErrInvalidAccessToken means the bearer access token itself failed verification (expired, badly
+// signed, not an access token, or for another API), which RFC 6750 s3.1 answers with 401 invalid_token.
+var ErrInvalidAccessToken = errors.New("invalid access token")
+
 func IsUnreadableToken(err error) bool {
 	return errors.Is(err, ErrUnreadableToken)
 }
@@ -446,16 +444,14 @@ func AssertTokenUseOneOf(tokenUse string, allowed ...string) error {
 	return nil
 }
 
-// AssertAudience reports whether want is present in the token's aud claim (RFC 7519: a single
-// string or an array), using the library's own aud parsing. A caller that gates on a single
-// client id uses this; the multi-client user service does not.
-func AssertAudience(claims jwt.MapClaims, want string) error {
+// AssertAudience reports whether the token's aud claim (RFC 7519: a string or an array) names one of accepted; an empty aud or an empty accepted list never matches.
+func AssertAudience(claims jwt.Claims, accepted ...string) error {
 	auds, err := claims.GetAudience()
 	if err != nil {
 		return fmt.Errorf("failed to read token audience: %w", err)
 	}
 	for _, a := range auds {
-		if a == want {
+		if a != "" && slices.Contains(accepted, a) {
 			return nil
 		}
 	}

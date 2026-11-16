@@ -29,7 +29,7 @@ info:
     Token lifecycle after login:
 
     1. `POST /oauth2/token` (`grant_type=refresh_token`) - rotate the token set
-       (native `/v1/user/auth/token/refresh` is reuse-tolerant instead).
+       (native `/v1/user/auth/token/refresh` rotates the same way).
     2. Send `access_token` as a `Bearer` `Authorization` header on subsequent
        calls. To call the platform API you must first exchange the token for AWS
        credentials at `POST /v1/user/credentials` and SigV4-sign every request.
@@ -282,18 +282,22 @@ paths:
           in: query
           required: false
           description: |
-            RFC 8707 resource indicator: the API the access token is for, stamped into
-            `aud` on that token and on every token the resulting refresh family later
-            mints. Must appear in the client's `allowed_resources`, or the request is
-            rejected with `invalid_target`.
+            RFC 8707 resource indicators: the APIs this sign-in covers, one `resource`
+            parameter each. Every value must appear in the client's `allowed_resources`,
+            or the request redirects with `invalid_target`.
 
-            **Default when omitted:** `aud` is the `client_id`. **At most one** value; two
-            are refused rather than minting a token good at two APIs. An ID token's `aud`
-            is the `client_id` either way — it is a statement to that client.
+            **Omitted or empty:** the sign-in covers the client's `default_resource`; a client
+            without one is refused with `invalid_target`. Each access token is for exactly
+            one covered API, picked at `/oauth2/token`. An ID token's `aud` is the
+            `client_id` either way — it is a statement to that client.
+          style: form
+          explode: true
           schema:
-            type: string
-            format: uri
-          example: "https://api.accounts.espressif.com"
+            type: array
+            items:
+              type: string
+              format: uri
+          example: ["https://api.example.com"]
         - name: prompt
           in: query
           required: false
@@ -465,7 +469,7 @@ paths:
         - `refresh_token`: a new token set; the refresh token rotates
         - `client_credentials`: a confidential client's own access token; no user, refresh token or id token
 
-        Other grants return `unsupported_grant_type`. A confidential client authenticates with HTTP Basic (`401 invalid_client` on failure); a public client sends `client_id` with no secret.
+        Other grants return `unsupported_grant_type`. A confidential client authenticates with HTTP Basic (`client_secret_basic`) or with `client_id` and `client_secret` in the body (`client_secret_post`), Basic winning when both are sent (`401 invalid_client` on failure); a public client sends `client_id` with no secret.
       tags:
         - OAuth2 / OIDC Core
       security:
@@ -482,21 +486,90 @@ paths:
                 - $ref: "#/components/schemas/TokenClientCredentialsRequest"
               discriminator:
                 propertyName: grant_type
+            examples:
+              authorizationCode:
+                summary: authorization_code, public client with PKCE
+                value:
+                  grant_type: authorization_code
+                  code: "<authorization-code>"
+                  code_verifier: "<pkce-code-verifier>"
+                  client_id: rm_mobile
+                  redirect_uri: "com.example://callback"
+              authorizationCodeSecretPost:
+                summary: authorization_code, confidential client with client_secret_post
+                value:
+                  grant_type: authorization_code
+                  code: "<authorization-code>"
+                  client_id: example_web_client
+                  client_secret: "<client-secret>"
+                  redirect_uri: "https://app.example.com/callback"
+              refreshToken:
+                summary: refresh_token, no resource named
+                value:
+                  grant_type: refresh_token
+                  refresh_token: "<refresh-token>"
+                  client_id: rm_mobile
+              refreshTokenWithResource:
+                summary: refresh_token naming one resource the sign-in covers
+                description: The renewed access token's `aud` is this resource; a resource the sign-in does not cover returns `invalid_target` and leaves the refresh token unspent.
+                value:
+                  grant_type: refresh_token
+                  refresh_token: "<refresh-token>"
+                  client_id: rm_mobile
+                  resource: "https://account.example.com"
+              clientCredentials:
+                summary: client_credentials, credentials in the HTTP Basic header
+                value:
+                  grant_type: client_credentials
+                  scope: account.admin
+                  resource: "https://api.example.com"
       responses:
         "200":
-          description: "A fresh token set, including a new refresh token, sent with `Cache-Control: no-store` and `Pragma: no-cache` (RFC 6749 §5.1)."
+          description: "A fresh token set, including a new refresh token, sent with `Cache-Control: no-store` and `Pragma: no-cache` (RFC 6749 §5.1). `client_credentials` returns an access token only."
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/TokenSet"
+              examples:
+                userTokenSet:
+                  summary: authorization_code or refresh_token with openid in scope
+                  value:
+                    access_token: "<access-token>"
+                    token_type: Bearer
+                    expires_in: 3600
+                    refresh_token: "<refresh-token>"
+                    id_token: "<id-token>"
+                clientCredentials:
+                  summary: client_credentials
+                  value:
+                    access_token: "<access-token>"
+                    token_type: Bearer
+                    expires_in: 3600
         "400":
-          description: invalid_request / invalid_grant / unsupported_grant_type. A refresh token whose session has ended gets invalid_grant.
+          description: invalid_request / invalid_grant / invalid_scope / invalid_target / unauthorized_client / unsupported_grant_type. A refresh token whose session has ended gets invalid_grant.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/OAuthError"
+              examples:
+                invalidTarget:
+                  summary: refresh_token naming a resource the sign-in does not cover
+                  value:
+                    error: invalid_target
+                    error_description: "The requested resource is not part of this authorization."
+                invalidGrant:
+                  summary: unknown, expired, spent or revoked refresh token
+                  value:
+                    error: invalid_grant
+                    error_description: "The refresh token is invalid, expired, or revoked."
         "401":
-          description: invalid_client
+          description: invalid_client — unknown client, a confidential client with a bad or missing secret, or `client_credentials` with no client authentication.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+        "500":
+          description: server_error — the token set could not be issued; retry with backoff.
           content:
             application/json:
               schema:
@@ -902,6 +975,7 @@ paths:
       summary: Password sign-in
       description: |
         Signs in with `username` and `password`, verified against the bundled Cognito pool, and returns an ESP User token set.
+        The sign-in covers every API the password client is granted (RFC 8707), and its access token is for the client's `default_resource`; `/v1/user/auth/token/refresh` with `resource` narrows it to another.
       tags:
         - User Auth
       security: []
@@ -911,6 +985,12 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/LegacyTokenRequest"
+            examples:
+              passwordSignin:
+                summary: Password sign-in
+                value:
+                  username: user@example.com
+                  password: "<password>"
       responses:
         "200":
           description: "ESP User token set, sent with `Cache-Control: no-store` and `Pragma: no-cache` (RFC 6749 §5.1)."
@@ -947,6 +1027,17 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/LegacyRefreshRequest"
+            examples:
+              refresh:
+                summary: Refresh, no resource named
+                value:
+                  refresh_token: "<refresh-token>"
+              refreshWithResource:
+                summary: Refresh naming one resource the sign-in covers
+                description: The renewed access token's `aud` is this resource.
+                value:
+                  refresh_token: "<refresh-token>"
+                  resource: ["https://account.example.com"]
       responses:
         "200":
           description: "ESP User token set, sent with `Cache-Control: no-store` and `Pragma: no-cache` (RFC 6749 §5.1)."
@@ -955,7 +1046,17 @@ paths:
               schema:
                 $ref: "#/components/schemas/TokenSet"
         "400":
-          $ref: "#/components/responses/BadRequest"
+          description: |
+            `Invalid request body`, or an RFC 8707 refusal naming the problem, e.g. `Only one resource may be requested; a token is never issued for two audiences.` or `The requested resource is not part of this authorization.`
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                resourceNotAuthorized:
+                  summary: Refresh naming a resource the sign-in does not cover
+                  value:
+                    message: "The requested resource is not part of this authorization."
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -1093,7 +1194,7 @@ paths:
     post:
       summary: Change password
       description: |
-        Changes the caller's password. Requires this issuer's access token and the current password. Other sessions stay signed in.
+        Changes the caller's password. Requires an access token from this issuer, addressed to any of its APIs, and the current password. Other sessions stay signed in.
       tags:
         - User Auth
       security: []
@@ -1557,6 +1658,16 @@ components:
         refresh_token:
           type: string
           description: Refresh token from this surface; spent once redeemed.
+        resource:
+          type: array
+          maxItems: 1
+          description:
+            The one API the renewed access token is for, from among those the
+            sign-in covers. Omitted or empty, the only covered API, else the default.
+          items:
+            type: string
+            format: uri
+          example: ["https://account.example.com"]
 
     LegacySignupRequest:
       type: object
@@ -1611,6 +1722,7 @@ components:
             - invalid_scope
             - invalid_target
             - invalid_token
+            - server_error
           example: "invalid_grant"
         error_description:
           type: string
@@ -1638,6 +1750,14 @@ components:
           type: string
           enum: ["client_credentials"]
           example: "client_credentials"
+        client_id:
+          type: string
+          description: The client, when it authenticates in the body (`client_secret_post`) instead of HTTP Basic.
+          example: "example_service_client"
+        client_secret:
+          type: string
+          format: password
+          description: A confidential client's secret when it authenticates in the body (`client_secret_post`) instead of HTTP Basic.
         scope:
           type: string
           description: |
@@ -1651,14 +1771,14 @@ components:
           description: |
             RFC 8707 resource indicator: the API this token is for, stamped into `aud`.
             Must appear in the client's `allowed_resources` or the request is rejected
-            with `invalid_target`; a client with none registered may request none.
+            with `invalid_target`.
 
             **At most one.** Two `resource` values are rejected rather than producing a
             multi-audience token, so a leaked token is useful against exactly one API.
 
-            Omitted leaves `aud` as the `client_id`, which is the shape a caller that does
-            not use this extension sees.
-          example: "https://api.accounts.espressif.com"
+            **Omitted or empty:** the client's `default_resource`; a client without one is refused
+            with `invalid_target`.
+          example: "https://api.example.com"
 
     TokenCodeRequest:
       type: object
@@ -1670,7 +1790,6 @@ components:
       required:
         - grant_type
         - code
-        - client_id
         - redirect_uri
       properties:
         grant_type:
@@ -1690,19 +1809,30 @@ components:
           example: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
         client_id:
           type: string
-          description: Must equal the client that started the flow.
+          description: Must equal the client that started the flow. Required unless the client authenticates with HTTP Basic.
           example: "user-pool-client"
+        client_secret:
+          type: string
+          format: password
+          description: A confidential client's secret when it authenticates in the body (`client_secret_post`) instead of HTTP Basic.
         redirect_uri:
           type: string
           description: Must equal the redirect_uri used at authorize.
           example: "com.example://callback"
+        resource:
+          type: string
+          format: uri
+          description:
+            The one API this access token is for, from among those the sign-in
+            covers (RFC 8707 s2.2). Omitted or empty, the only covered API, else the client's
+            `default_resource`. At most one; otherwise `invalid_target`.
+          example: "https://api.example.com"
 
     TokenRefreshRequest:
       type: object
       required:
         - grant_type
         - refresh_token
-        - client_id
       properties:
         grant_type:
           type: string
@@ -1716,8 +1846,20 @@ components:
           example: "a1b2c3d4.9f8e7d6c..."
         client_id:
           type: string
-          description: The client the token was issued to. Required.
+          description: The client the token was issued to. Required unless the client authenticates with HTTP Basic.
           example: "rm_mobile"
+        client_secret:
+          type: string
+          format: password
+          description: A confidential client's secret when it authenticates in the body (`client_secret_post`) instead of HTTP Basic.
+        resource:
+          type: string
+          format: uri
+          description:
+            The one API the renewed access token is for, from among those the
+            sign-in covers (RFC 8707 s2.2). Omitted or empty, the only covered API, else the
+            client's `default_resource`. A refusal does not spend the refresh token.
+          example: "https://account.example.com"
 
     UserinfoResponse:
       type: object
@@ -1861,6 +2003,14 @@ components:
           items:
             type: string
             format: uri
+        default_resource:
+          type: string
+          format: uri
+          description:
+            The one resource an access token is for when a request names no `resource`
+            (RFC 9068 s3). Must be one of `allowed_resources`. Absent means a request that
+            names no resource is refused with `invalid_target`.
+          example: https://api.example.com
         allowed_providers:
           type: array
           description:
@@ -1967,6 +2117,14 @@ components:
           items:
             type: string
             format: uri
+        default_resource:
+          type: string
+          format: uri
+          description:
+            The one resource an access token is for when a request names no `resource`
+            (RFC 9068 s3). Must be one of `allowed_resources`. Absent means a request that
+            names no resource is refused with `invalid_target`.
+          example: https://api.example.com
         allowed_providers:
           type: array
           description:
@@ -2038,6 +2196,14 @@ components:
           items:
             type: string
             format: uri
+        default_resource:
+          type: string
+          format: uri
+          description:
+            The one resource an access token is for when a request names no `resource`
+            (RFC 9068 s3). Must be one of `allowed_resources`. Absent means a request that
+            names no resource is refused with `invalid_target`.
+          example: https://api.example.com
         allowed_providers:
           type: array
           description:

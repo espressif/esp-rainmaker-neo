@@ -410,6 +410,10 @@ stacks:
         value: ${rmng-base.outputs.IdentityPoolId}
         prompt: false
         description: "Cognito Identity Pool ID"
+      RmngApiAudiences:
+        value: ${rmng-base.outputs.RmngApiAudiences}
+        prompt: false
+        description: "Comma-separated audiences of the neo REST API"
 
   rmng-st-cfg-core:
     friendly_name: "RainMaker SmartThings Cfg Core"
@@ -467,3 +471,7 @@ stacks:
         value: ${rmng-base.outputs.IdentityPoolId}
         prompt: false
         description: "Cognito Identity Pool ID"
+      RmngApiAudiences:
+        value: ${rmng-base.outputs.RmngApiAudiences}
+        prompt: false
+        description: "Comma-separated audiences of the neo REST API"

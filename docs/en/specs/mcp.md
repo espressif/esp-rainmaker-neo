@@ -225,9 +225,12 @@ request returns `401` with a `WWW-Authenticate: Bearer resource_metadata="..."` 
 (RFC 9728). `initialize` and `notifications/initialized` do not *validate* the token;
 `tools/list` and `tools/call` do.
 
-Validation requires `aud == mcp-oauth-client`: a first-party app token must not authorize MCP
-calls (RFC 9700 audience restriction). ID tokens are rejected; only access tokens are
-accepted. The JWKS is read from SSM and cached in-process.
+Validation requires `aud` to be one of the server's own RFC 8707 names (`McpAudiences`: its
+`/v1/mcp` URL on the execute-api host and, once mapped, on its custom domain), so a token for
+another API must not authorize MCP calls (RFC 9068 §4, RFC 9700 audience restriction). The OAuth
+proxy asks ESP User for exactly that resource, the name its protected-resource metadata
+advertises (`McpResource`). ID tokens are rejected; only access tokens are accepted. The JWKS is
+read from SSM and cached in-process.
 
 The authenticated subject becomes an ordinary `rmngctx.RmngContext`, so every RBAC check in
 the DB layer applies exactly as it does for the REST API. Authorization is not re-implemented

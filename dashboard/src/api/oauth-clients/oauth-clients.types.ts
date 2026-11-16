@@ -22,6 +22,7 @@ export interface OAuthClient {
   grant_types?: string[]
   scopes?: string[]
   allowed_resources?: string[]
+  default_resource?: string
   allowed_providers?: string[]
   require_pkce?: boolean
   first_party?: boolean
@@ -53,6 +54,7 @@ export interface UpdateOAuthClientRequest {
   grant_types: string[]
   scopes: string[]
   allowed_resources: string[] | undefined
+  default_resource: string | undefined
   allowed_providers: string[] | undefined
   require_pkce: boolean | undefined
   first_party: boolean | undefined

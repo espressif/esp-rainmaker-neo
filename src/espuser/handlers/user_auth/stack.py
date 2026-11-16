@@ -77,6 +77,12 @@ class UserAuthAPI(Construct):
             ],
         ))
 
+        # Sign-in and refresh read the password client's allowed and default resources.
+        role.add_to_policy(iam.PolicyStatement(
+            actions=["dynamodb:GetItem"],
+            resources=[get_table_arn(USER_TABLE_NAMES['OAUTH_CLIENTS'], region)],
+        ))
+
         # The password app client is resolved from the provider registry, not from deployment config.
         role.add_to_policy(iam.PolicyStatement(
             actions=["dynamodb:Scan"],

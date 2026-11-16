@@ -136,23 +136,24 @@ func VerifyCognitoTokenPair(pool CognitoPool, accessToken, idToken string) (Cogn
 		return CognitoClaims{}, fmt.Errorf("both an access token and an id_token are required")
 	}
 
+	// The access token authenticates the caller, so it is verified first and its failure is told
+	// apart from a pair that does not match. Verified here rather than taken from an authorizer's
+	// claim passthrough, so the comparison below is between values this function checked itself.
+	accessClaims, err := ExtractCogntioClaimsFromOurToken(pool.JWKS, pool.PoolID, accessToken)
+	if err != nil {
+		return CognitoClaims{}, fmt.Errorf("%w: %w", ErrInvalidAccessToken, err)
+	}
+	// Access tokens name the client in `client_id` rather than `aud`.
+	if err := RequireAllowedClientID([]string{accessClaims.ClientId}, pool.AllowedClientIDs); err != nil {
+		return CognitoClaims{}, fmt.Errorf("access token was issued for a different app client: %w", err)
+	}
+
 	idClaims, err := ExtractCognitoIDTokenClaims(pool.JWKS, pool.PoolID, idToken)
 	if err != nil {
 		return CognitoClaims{}, fmt.Errorf("id_token failed validation: %w", err)
 	}
 	if err := RequireAllowedClientID(idClaims.Audience, pool.AllowedClientIDs); err != nil {
 		return CognitoClaims{}, fmt.Errorf("id_token was issued for a different app client: %w", err)
-	}
-
-	// Verified here rather than taken from an authorizer's claim passthrough, so the
-	// comparison below is between values this function checked itself.
-	accessClaims, err := ExtractCogntioClaimsFromOurToken(pool.JWKS, pool.PoolID, accessToken)
-	if err != nil {
-		return CognitoClaims{}, fmt.Errorf("access token failed validation: %w", err)
-	}
-	// Access tokens name the client in `client_id` rather than `aud`.
-	if err := RequireAllowedClientID([]string{accessClaims.ClientId}, pool.AllowedClientIDs); err != nil {
-		return CognitoClaims{}, fmt.Errorf("access token was issued for a different app client: %w", err)
 	}
 
 	if err := RequireSameAuthEvent(accessClaims, idClaims); err != nil {

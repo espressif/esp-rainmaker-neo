@@ -141,6 +141,7 @@ async function ensurePreviewRedirectUri(
     grant_types: client.grant_types,
     scopes: client.scopes ?? [],
     allowed_resources: client.allowed_resources,
+    default_resource: client.default_resource,
     allowed_providers: client.allowed_providers,
     require_pkce: client.require_pkce,
     first_party: client.first_party,

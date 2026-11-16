@@ -23,6 +23,7 @@ import pytest
 
 from py_sdk.espuser_oauth import WebClient, client_ids_under, sids_in
 from test.itest.conftest import (
+    ESPUSER_RESOURCE,
     FLOW_COOKIE,
     SESSION_COOKIE,
     UPSTREAM_PROVIDER,
@@ -128,7 +129,7 @@ def test_login_sso_sessions_and_signout_end_to_end(login_ui_clients, espuser_per
         claims_a = decode_jwt_claims(tokens_a["access_token"])
         assert "cognito-idp" not in claims_a["iss"], \
             f"the client must receive our token, never a Cognito-issued one: iss={claims_a['iss']}"
-        assert claims_a["aud"] == app_a.client_id, f"token must be audienced to app A: {claims_a}"
+        assert claims_a["aud"] == ESPUSER_RESOURCE, f"token must be for app A's default resource, never its id: {claims_a}"
 
         # ── Act 2: silent single sign-on to app B, same browser ────────────────────────────────
         # /oauth2/authorize returns a code immediately, with no login page and no trip to the provider.
@@ -145,7 +146,7 @@ def test_login_sso_sessions_and_signout_end_to_end(login_ui_clients, espuser_per
         assert exchanged_b.status_code == 200, exchanged_b.text
         claims_b = decode_jwt_claims(exchanged_b.json()["access_token"])
         assert claims_b["sub"] == claims_a["sub"], "single sign-on must resolve to the same person"
-        assert claims_b["aud"] == app_b.client_id, f"token must be audienced to app B: {claims_b}"
+        assert claims_b["aud"] == ESPUSER_RESOURCE, f"token must be for app B's default resource, never its id: {claims_b}"
 
         # ── Act 3: the device list -- one browser, both apps nested under it ────────────────────
         listing = WebClient.sessions(tokens_a["access_token"])

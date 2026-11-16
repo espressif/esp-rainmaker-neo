@@ -511,7 +511,7 @@ class EspUserBaseStack(Stack):
 
         # Resolved before the end-user pool, so its callbacks use the custom-domain /oauth2/* endpoints.
         # The issuer is the API's one custom domain, else its own execute-api URL; the deploy fails when more than one domain is mapped.
-        self.api_custom_domain, esp_user_api_url, esp_user_api_base_url = discover_api_custom_domain(
+        esp_user_api = discover_api_custom_domain(
             self, "EspUserApiCustomDomainDiscovery",
             name="espuser-api-custom-domain-discovery",
             api_id=self.common_base_resources.esp_user_api.rest_api_id,
@@ -520,11 +520,11 @@ class EspUserBaseStack(Stack):
             is_issuer=True,
         )
 
-        # base_url has no trailing slash, so the "/path" suffix joins correctly whether or not a
+        # url has no trailing slash, so the "/path" suffix joins correctly whether or not a
         # custom domain is mapped. Federated sign-in breaks if this host is not the one the IdPs
         # are registered against, so it has to be the resolved hostname, not the execute-api one.
-        federation_callback_url = f"{esp_user_api_base_url}/oauth2/federation/callback"
-        logout_done_url = f"{esp_user_api_base_url}/oauth2/logout/done"
+        federation_callback_url = f"{esp_user_api.url}/oauth2/federation/callback"
+        logout_done_url = f"{esp_user_api.url}/oauth2/logout/done"
         self.end_user_pool = CreateEndUserPoolResources(
             self, "CreateEndUserPoolResources",
             federation_callback_url=federation_callback_url,
@@ -532,7 +532,7 @@ class EspUserBaseStack(Stack):
         )
         self._publish_end_user_pool_params()
 
-        self.discovery_storage.publish(common_resources=self.common_resources, issuer=esp_user_api_url)
+        self.discovery_storage.publish(common_resources=self.common_resources, issuer=esp_user_api.url)
 
         self.gsi_readiness = GsiReadinessGate(
             self, "GsiReadiness",
@@ -567,8 +567,18 @@ class EspUserBaseStack(Stack):
         self._seed_identity_providers()
 
         CfnOutput(self, "EspUserApiUrl",
-            value=esp_user_api_url,
+            value=esp_user_api.url,
             description="ESP User API Gateway URL"
+        )
+
+        CfnOutput(self, "EspUserApiResource",
+            value=esp_user_api.resource,
+            description="RFC 8707 resource a client requests to get an access token for the ESP User API"
+        )
+
+        CfnOutput(self, "EspUserApiAudiences",
+            value=esp_user_api.audiences,
+            description="Comma-separated audiences the ESP User API accepts in an access token"
         )
 
         CfnOutput(self, "EspUserIssuer",
@@ -579,7 +589,7 @@ class EspUserBaseStack(Stack):
         # discover_api_custom_domain returns the base with no trailing slash (both the
         # custom-domain and the rstrip'd default branch), so the separator has to be explicit —
         # interpolating the path directly yielded `...espressif.comoauth2/token`.
-        oauth2_base = f"{esp_user_api_url}/oauth2"
+        oauth2_base = f"{esp_user_api.url}/oauth2"
 
         CfnOutput(self, "EspUserAuthorizeUrl",
             value=f"{oauth2_base}/authorize",
@@ -708,7 +718,7 @@ class EspUserBaseStack(Stack):
         create_ssm_string_parameter(
             self, "EspUserApiUrlParameter",
             parameter_name=USER_SSM_PARAMETERS['ESP_USER_API_URL'],
-            string_value=esp_user_api_url,
+            string_value=esp_user_api.url,
             description="ESP User API Gateway URL"
         )
 

@@ -26,6 +26,9 @@ import requests
 
 from py_sdk.espuser_oauth import Browser, WebClient, client_ids_under, sids_in
 from test.itest.conftest import (
+    API_GATEWAY_URL,
+    ESPUSER_RESOURCE,
+    NEO_RESOURCE,
     SESSION_COOKIE,
     SESSIONS_SCOPE,
     UPSTREAM_PROVIDER,
@@ -263,10 +266,11 @@ def test_sso_a_code_is_single_use(apps, espuser_person):
     assert replayed.status_code in (400, 401), f"{replayed.status_code} {replayed.text[:200]}"
 
 
-def test_sso_the_shortcut_still_honours_the_registered_redirect_uri(apps, espuser_person):
+def test_sso_the_shortcut_still_honours_the_registered_redirect_uri(register_espuser_client, apps, espuser_person):
     """The SSO path issues a code without a login page, so it is the path where a skipped
     redirect_uri check would go unnoticed. An unregistered URI must be refused on our own page,
-    before any code exists -- never by redirecting to it."""
+    before any code exists -- never by redirecting to it. Likewise a client with no
+    default_resource that names no resource gets invalid_target (RFC 8707 s2), never a code."""
     first, second = apps
     browser = Browser()
     assert first.sign_in(browser, espuser_person).used_upstream
@@ -277,6 +281,12 @@ def test_sso_the_shortcut_still_honours_the_registered_redirect_uri(apps, espuse
     assert refused.code is None, "a live session must not excuse an unregistered redirect_uri"
     assert refused.response.status_code == 400, \
         f"an unregistered redirect_uri must fail on our page, never by redirecting to it: {refused!r}"
+
+    uri = CALLBACK.format("no-default")
+    no_default = WebClient(register_espuser_client(redirect_uris=[uri], default_resource="").client_id, uri)
+    unnamed = no_default.authorize(browser)
+    assert unnamed.error == "invalid_target", f"expected invalid_target, got {unnamed!r}"
+    assert unnamed.code is None, "a live session must not excuse a sign-in that covers no resource"
 
 
 # ── the device list ───────────────────────────────────────────────────────────────
@@ -392,13 +402,14 @@ def test_sso_another_persons_session_id_is_a_404_not_a_403(apps, espuser_person,
         "and of course it must not actually have ended their session"
 
 
-def test_sso_sessions_endpoint_requires_the_sessions_scope(register_espuser_client, apps, espuser_person):
+def test_sso_sessions_endpoint_requires_the_sessions_scope(register_espuser_client, espuser_person):
     """Being able to sign somebody in is not a reason to enumerate every device they use, so the
     device list has a scope of its own -- and it must reject anything that is not an access token
     bearing it. A token without account:sessions is 403 with a challenge that names the scope
     (RFC 6750 s3); a missing token is 401 with a Bearer challenge; an id token -- validly signed by
     this same issuer but audienced to the client, not this API -- must be 401 too, or every client's
-    own token becomes a key here (RFC 9700 token substitution)."""
+    own token becomes a key here (RFC 9700 token substitution).
+    One sign-in may cover neo as well (RFC 8707); the access token narrowed to neo is accepted here, since the account's own endpoints take any of our APIs' tokens."""
     uri = CALLBACK.format("noscope")
     client = register_espuser_client(redirect_uris=[uri], scopes=["openid", "email"])
     app = WebClient(client.client_id, uri, scope="openid email")
@@ -413,8 +424,12 @@ def test_sso_sessions_endpoint_requires_the_sessions_scope(register_espuser_clie
     assert WebClient.end_all_sessions(noscope["access_token"]).status_code == 403, \
         "and the same gate on the destructive verb, which is the one that matters"
 
-    first, _ = apps
-    tokens = signed_in(first, Browser(), espuser_person)
+    two_apis_uri = CALLBACK.format("two-apis")
+    two_apis = WebClient(register_espuser_client(redirect_uris=[two_apis_uri]).client_id, two_apis_uri,
+                         resource=[ESPUSER_RESOURCE, NEO_RESOURCE])
+    tokens = signed_in(two_apis, Browser(), espuser_person)
+    assert decode_jwt_claims(tokens["access_token"])["aud"] == ESPUSER_RESOURCE, "the client's default"
+    assert WebClient.sessions(tokens["access_token"]).status_code == 200
     missing = requests.get(f"{USER_API_GATEWAY_URL}/v1/user/sessions", timeout=30)
     assert missing.status_code == 401 and "Bearer" in bearer_challenge(missing), \
         f"a 401 with no challenge tells a client nothing about how to authenticate: {dict(missing.headers)}"
@@ -422,6 +437,42 @@ def test_sso_sessions_endpoint_requires_the_sessions_scope(register_espuser_clie
     assert substituted.status_code == 401, \
         "an id token is audienced to the client, not this API; accepting one here would make " \
         f"every client's own token a key to this endpoint: {substituted.text[:200]}"
+
+    neo = two_apis.refresh(tokens["refresh_token"], resource=NEO_RESOURCE)
+    assert neo.status_code == 200, f"narrowing refresh: {neo.status_code} {neo.text[:300]}"
+    assert decode_jwt_claims(neo.json()["access_token"])["aud"] == NEO_RESOURCE
+    assert WebClient.sessions(neo.json()["access_token"]).status_code == 200, "the ESP User API takes a token addressed to any of our APIs"
+
+
+def test_sso_rotated_refresh_token_still_covers_every_api_of_the_sign_in(register_espuser_client, espuser_person):
+    """Rotation renews an authorization, never narrows it (RFC 8707 s2.2): after two rotations the refresh token still gets a token for each API the authorize request named, and neo refuses the ESP User API's with 401 (RFC 9068 s4) while the ESP User API takes either."""
+    uri = CALLBACK.format("rotated")
+    app = WebClient(register_espuser_client(redirect_uris=[uri]).client_id, uri, resource=[ESPUSER_RESOURCE, NEO_RESOURCE])
+    refresh_token = signed_in(app, Browser(), espuser_person)["refresh_token"]
+    for _ in range(2):
+        rotated = app.refresh(refresh_token)
+        assert rotated.status_code == 200, f"rotation: {rotated.status_code} {rotated.text[:300]}"
+        assert rotated.json()["refresh_token"] != refresh_token, "every redemption must rotate"
+        refresh_token = rotated.json()["refresh_token"]
+
+    espuser = app.refresh(refresh_token, resource=ESPUSER_RESOURCE)
+    assert espuser.status_code == 200, f"the rotated token must still cover the ESP User API: {espuser.text[:300]}"
+    neo = app.refresh(espuser.json()["refresh_token"], resource=NEO_RESOURCE)
+    assert neo.status_code == 200, f"and still cover neo after narrowing to the ESP User API: {neo.text[:300]}"
+    espuser_tokens, neo_tokens = espuser.json(), neo.json()
+    assert decode_jwt_claims(espuser_tokens["access_token"])["aud"] == ESPUSER_RESOURCE
+    assert decode_jwt_claims(neo_tokens["access_token"])["aud"] == NEO_RESOURCE
+
+    assert WebClient.sessions(espuser_tokens["access_token"]).status_code == 200
+    assert WebClient.sessions(neo_tokens["access_token"]).status_code == 200, "the ESP User API takes a token addressed to any of our APIs"
+    creds_url = f"{API_GATEWAY_URL}/v1/user/credentials"
+    refused = requests.post(creds_url, headers={"Authorization": f"Bearer {espuser_tokens['access_token']}"},
+                            json={"id_token": espuser_tokens["id_token"]}, timeout=30)
+    assert refused.status_code == 401, f"neo must refuse a token addressed to the ESP User API: {refused.text[:200]}"
+    # An itest client is not one of neo's first-party apps, so its neo token clears the audience check and only the client binding refuses it.
+    own = requests.post(creds_url, headers={"Authorization": f"Bearer {neo_tokens['access_token']}"},
+                        json={"id_token": neo_tokens["id_token"]}, timeout=30)
+    assert own.status_code == 403, f"neo must accept the audience of its own token: {own.status_code} {own.text[:200]}"
 
 
 # ── RP-initiated sign-out ─────────────────────────────────────────────────────────

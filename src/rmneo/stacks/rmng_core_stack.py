@@ -246,7 +246,7 @@ class RMNGCoreStack(Stack):
                 "UpdateExpression": "ADD redirect_uris :uris",
                 "ConditionExpression": "attribute_exists(client_id)",
                 "ExpressionAttributeValues": {
-                    ":uris": {"SS": [f"{self.mcp_oauth.api_endpoint}/oauth2/callback"]},
+                    ":uris": {"SS": [f"{self.mcp_oauth.mcp_api.url}/oauth2/callback"]},
                 },
             },
             physical_resource_id=cr.PhysicalResourceId.of("mcp-callback-registration"),
@@ -297,4 +297,6 @@ class RMNGCoreStack(Stack):
         CfnOutput(self, "BulkNodeSubnetIds", value=self.nodeadmin_core.register_container.container_params["public_subnet_ids"])
         CfnOutput(self, "BulkNodeSecurityGroupId", value=self.nodeadmin_core.register_container.container_params["security_group_id"])
 
-        CfnOutput(self, "McpHttpApiUrl", value=self.mcp_oauth.api_url)
+        CfnOutput(self, "McpHttpApiUrl", value=self.mcp_oauth.mcp_api.url)
+        CfnOutput(self, "McpResource", value=self.mcp_oauth.mcp_api.resource, description="RFC 8707 resource a client requests to get an access token for the MCP server")
+        CfnOutput(self, "McpAudiences", value=self.mcp_oauth.mcp_api.audiences, description="Comma-separated audiences the MCP server accepts in an access token")

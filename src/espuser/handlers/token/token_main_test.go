@@ -12,6 +12,7 @@ import (
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/oauth_clients_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/refreshtoken"
@@ -29,7 +30,11 @@ func TestTokenHandler(t *testing.T) {
 	RunSpecs(t, "Token Endpoint Suite")
 }
 
-const testClientID = "rm_mobile"
+const (
+	testClientID        = "rm_mobile"
+	testResource        = "https://api.example.com"
+	testAccountResource = "https://account.example.com"
+)
 
 func formRequest(body string) events.APIGatewayProxyRequest {
 	return events.APIGatewayProxyRequest{
@@ -51,13 +56,17 @@ func seedPublicClient(clientID string) {
 	db := oauth_clients_db.NewOAuthClientsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
 	Expect(db.CreateClient(&oauth_clients_db.OAuthClientEntry{
 		ClientID: clientID, ClientType: oauth_clients_db.ClientTypePublic, RequirePKCE: utils.Ptr(true),
+		AllowedResources: []string{testResource, testAccountResource}, DefaultResource: testResource,
 	})).To(Succeed())
 }
 
-// mintRefreshToken seeds a live refresh-token family and returns its opaque token.
-func mintRefreshToken(userID, scope string) string {
+// mintRefreshToken seeds a live refresh-token family covering testResource and returns its opaque token.
+func mintRefreshToken(userID, scope string, resources ...string) string {
+	if len(resources) == 0 {
+		resources = []string{testResource}
+	}
 	svc := refreshtoken.NewService(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
-	token, err := svc.MintRefreshtoken(userID, testClientID, scope, "", "", 0)
+	token, err := svc.MintRefreshtoken(userID, testClientID, scope, resources, "", 0)
 	Expect(err).NotTo(HaveOccurred())
 	return token
 }
@@ -79,17 +88,49 @@ var _ = Describe("OAuth token endpoint (refresh_token grant)", func() {
 	}
 
 	Describe("refresh_token grant", func() {
-		It("keeps minting today's audience for a family that carries no resource", func() {
-			// Families predating the resource field store none. They must go on working and
-			// go on producing aud = client_id, never an empty audience.
-			token := mintRefreshToken("user-legacy", "openid email")
+		It("narrows each renewal to one of the sign-in's resources, the default when none is named (RFC 8707 s2.2)", func() {
+			token := mintRefreshToken("user-multi", "openid", testResource, testAccountResource)
+			refresh := func(token, resource string) map[string]any {
+				resp, err := handleTokenRequest(context.Background(), formRequest(form(map[string]string{
+					"grant_type": "refresh_token", "refresh_token": token, "client_id": testClientID, "resource": resource,
+				})))
+				Expect(err).NotTo(HaveOccurred())
+				Expect(resp.StatusCode).To(Equal(200), resp.Body)
+				return decodeBody[map[string]any](resp)
+			}
+			account := refresh(token, testAccountResource)
+			Expect(unverifiedClaims(account["access_token"].(string))["aud"]).To(Equal(testAccountResource))
+			neo := refresh(account["refresh_token"].(string), "")
+			Expect(unverifiedClaims(neo["access_token"].(string))["aud"]).To(Equal(testResource))
+		})
+
+		It("refuses a resource the sign-in does not cover, without spending the token (negative)", func() {
+			token := mintRefreshToken("user-one", "openid")
 			resp, err := handleTokenRequest(context.Background(), formRequest(form(map[string]string{
+				"grant_type": "refresh_token", "refresh_token": token, "client_id": testClientID, "resource": testAccountResource,
+			})))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(400))
+			Expect(decodeBody[map[string]string](resp)).To(Equal(map[string]string{
+				"error": "invalid_target", "error_description": "The requested resource is not part of this authorization.",
+			}))
+			resp, err = handleTokenRequest(context.Background(), formRequest(form(map[string]string{
 				"grant_type": "refresh_token", "refresh_token": token, "client_id": testClientID,
 			})))
 			Expect(err).NotTo(HaveOccurred())
-			Expect(resp.StatusCode).To(Equal(200), resp.Body)
-			claims := unverifiedClaims(decodeBody[map[string]any](resp)["access_token"].(string))
-			Expect(claims["aud"]).To(Equal(testClientID))
+			Expect(resp.StatusCode).To(Equal(200), "the refused request must not have spent the token")
+		})
+
+		It("starts the login over for a family minted before resources were recorded (negative)", func() {
+			svc := refreshtoken.NewService(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
+			legacy, err := svc.MintRefreshtoken("user-legacy", testClientID, "openid", nil, "", 0)
+			Expect(err).NotTo(HaveOccurred())
+			resp, err := handleTokenRequest(context.Background(), formRequest(form(map[string]string{
+				"grant_type": "refresh_token", "refresh_token": legacy, "client_id": testClientID,
+			})))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(400))
+			Expect(decodeBody[map[string]string](resp)["error"]).To(Equal("invalid_grant"))
 		})
 
 		It("rotates a valid refresh token and returns a fresh token set (openid → id_token present)", func() {
@@ -283,5 +324,27 @@ var _ = Describe("OAuth token endpoint (refresh_token grant)", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp.StatusCode).To(Equal(405))
 		})
+	})
+})
+
+var _ = Describe("invalid_target refusals (RFC 8707 s2)", func() {
+	DescribeTable("names what the client must fix",
+		func(err error, description string) {
+			resp, refused := targetRefusal(err)
+			Expect(refused).To(BeTrue())
+			Expect(resp.StatusCode).To(Equal(400))
+			Expect(decodeBody[map[string]string](resp)).To(Equal(map[string]string{"error": "invalid_target", "error_description": description}))
+		},
+		Entry("resource not registered", auth.ErrResourceNotAllowed, "This client is not registered for the requested resource."),
+		Entry("no resource and no default", auth.ErrResourceRequired, "A resource is required: this client has no default resource."),
+		Entry("two resources", auth.ErrOneResourcePerToken, "Only one resource may be requested; a token is never issued for two audiences."),
+		Entry("resource outside the authorization", auth.ErrResourceNotAuthorized, "The requested resource is not part of this authorization."),
+		Entry("several authorized and none named", auth.ErrResourceAmbiguous, "This authorization covers several resources; name one with the resource parameter."),
+		Entry("resource taken off the client", auth.ErrResourceNoLongerAllowed, "This login was issued for a resource the client may no longer request. Start a new authorization."),
+	)
+
+	It("leaves a grant failure to the caller (negative)", func() {
+		_, refused := targetRefusal(auth.ErrInvalidGrant)
+		Expect(refused).To(BeFalse())
 	})
 })

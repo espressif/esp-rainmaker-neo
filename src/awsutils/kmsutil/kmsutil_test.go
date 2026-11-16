@@ -52,7 +52,7 @@ var _ = Describe("KMS-backed signing", func() {
 		signer, err := kmsutil.NewRSASigner(ctx, testKeyARN)
 		Expect(err).NotTo(HaveOccurred())
 		minter := jwtutil.NewMinter("https://issuer.example", signer, kid)
-		token, err := minter.AccessToken("user-1", "client-1", "openid email", "", "", jwtutil.Contact{Email: "u@example.com"})
+		token, err := minter.AccessToken("user-1", "client-1", "openid email", "", "https://api.example.com", jwtutil.Contact{Email: "u@example.com"})
 		Expect(err).NotTo(HaveOccurred())
 
 		claims, err := jwtutil.VerifyOIDCToken(string(jwksJSON), "https://issuer.example", token)
@@ -66,7 +66,7 @@ var _ = Describe("KMS-backed signing", func() {
 		signer, err := kmsutil.NewRSASigner(ctx, testKeyARN)
 		Expect(err).NotTo(HaveOccurred())
 		minter := jwtutil.NewMinter("https://issuer.example", signer, "kid")
-		_, err = minter.AccessToken("u", "c", "openid", "", "", jwtutil.Contact{})
+		_, err = minter.AccessToken("u", "c", "openid", "", "https://api.example.com", jwtutil.Contact{})
 		Expect(err).To(HaveOccurred())
 	})
 

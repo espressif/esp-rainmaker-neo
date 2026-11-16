@@ -52,14 +52,6 @@ func handleAuthorize(ctx context.Context, request events.APIGatewayProxyRequest)
 		return errorPage(http.StatusBadRequest, code, "response_type must be code."), nil
 	}
 
-	// At most one resource. Two would mean a token good at two APIs, so a single leak opens
-	// both doors; a client needing two makes two requests. The single-value
-	// map cannot tell one from two, so the multi-value map is the one to ask.
-	if len(request.MultiValueQueryStringParameters["resource"]) > 1 {
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidTarget,
-			"Only one resource may be requested."), nil
-	}
-
 	svc, err := auth.NewOAuthUserAuthService(ctx)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Msg("Failed to build auth service")
@@ -73,9 +65,10 @@ func handleAuthorize(ctx context.Context, request events.APIGatewayProxyRequest)
 		State:               q["state"],
 		CodeChallenge:       q["code_challenge"],
 		CodeChallengeMethod: q["code_challenge_method"],
-		Resource:            q["resource"],
-		Prompt:              q["prompt"],
-		MaxAge:              q["max_age"],
+		// Repeatable (RFC 8707 s2.1), so only the multi-value map holds every one.
+		Resources: request.MultiValueQueryStringParameters["resource"],
+		Prompt:    q["prompt"],
+		MaxAge:    q["max_age"],
 	})
 	if err != nil {
 		return authorizeError(q, err), nil

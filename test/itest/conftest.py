@@ -73,6 +73,9 @@ DEVICE_VIDEO_ROLE_ALIAS = rmng_base_outputs['NodeVideoRoleAliases'].split(',')[-
 # Absent unless the optional controller stack group is deployed; the controller suite skips itself.
 CONTROLLER_ROLE_ALIAS = (rmng_controller_base_outputs.get('ControllerRoleAliases') or '').split(',')[-1]
 FILES_BUCKET_NAME = rmng_base_outputs['FilesBucketName']
+# The RFC 8707 resources clients request for neo and for the ESP User API.
+NEO_RESOURCE = rmng_base_outputs['RmngApiResource']
+ESPUSER_RESOURCE = esp_user_base_outputs['EspUserApiResource']
 
 
 # pkce_pair and cognito_hosted_login now live in py_sdk.espuser_oauth (imported above) and are
@@ -355,7 +358,8 @@ def _init_user():
     """
     email = generate_random_email()
 
-    user = User(email, generate_test_password(), REGION, IDENTITY_POOL_ID, API_GATEWAY_URL, USER_API_GATEWAY_URL, IOT_ENDPOINT, end_user_pool_id=END_USER_POOL_ID)
+    user = User(email, generate_test_password(), REGION, IDENTITY_POOL_ID, API_GATEWAY_URL, USER_API_GATEWAY_URL, IOT_ENDPOINT, end_user_pool_id=END_USER_POOL_ID,
+                user_api_resource=ESPUSER_RESOURCE)
     user.mailosaur_email = email
 
     # Try to authenticate first - if successful, user already exists and we can reuse it
@@ -2626,6 +2630,8 @@ def register_espuser_client(admin_user):
             "scopes": ["openid", "email", "profile", SESSIONS_SCOPE],
             "require_pkce": True,
             "first_party": True,
+            "allowed_resources": [ESPUSER_RESOURCE, NEO_RESOURCE],
+            "default_resource": ESPUSER_RESOURCE,
         }
         body.update(overrides)
         created = admin_user.create_oauth_client(body)

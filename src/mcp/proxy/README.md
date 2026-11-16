@@ -72,10 +72,10 @@ func handleMyTool(user mcpserver.UserContext, id json.RawMessage, args json.RawM
 
 func main() {
     // Verifies ESP User OIDC RS256 tokens (iss == USER_ISSUER) against the JWKS read from
-    // the USER_JWKS_PARA_NAME SSM parameter, requiring aud == MCP_CLIENT_ID.
+    // the USER_JWKS_PARA_NAME SSM parameter, requiring aud to be one of ACCEPTED_AUDIENCES.
     auth := mcpserver.NewOIDCAuthenticator(
         os.Getenv("USER_ISSUER"),
-        os.Getenv("MCP_CLIENT_ID"),
+        strings.Split(os.Getenv("ACCEPTED_AUDIENCES"), ","),
         os.Getenv("USER_JWKS_PARA_NAME"),
         resolveUser,
     )
@@ -113,7 +113,7 @@ func main() {
 
 - `JSONRPCSuccessResponse(id, result)` — builds a JSON-RPC 2.0 success response
 - `JSONRPCErrorResponse(id, code, message, data)` — builds a JSON-RPC 2.0 error response
-- `NewOIDCAuthenticator(issuer, clientID, jwksParamName, resolver)` — creates an `Authenticator` that validates ESP User OIDC RS256 JWTs (iss == `issuer`, aud == `clientID`) against the JWKS in the `jwksParamName` SSM parameter
+- `NewOIDCAuthenticator(issuer, audiences, jwksParamName, resolver)` — creates an `Authenticator` that validates ESP User OIDC RS256 JWTs (iss == `issuer`, aud one of `audiences`, the server's own RFC 8707 names) against the JWKS in the `jwksParamName` SSM parameter; no audiences refuses every token
 
 ## CDK Construct Integration
 
@@ -160,7 +160,7 @@ mcp_config = McpOAuthConfig(
 self.mcp_oauth = McpOAuthConstruct(self, "McpOAuth", mcp_config)
 
 # Access the HTTP API if needed (e.g., for CfnOutput)
-api_endpoint = self.mcp_oauth.api_endpoint
+api_url = self.mcp_oauth.mcp_api.url
 http_api = self.mcp_oauth.http_api
 ```
 
@@ -197,7 +197,7 @@ http_api = self.mcp_oauth.http_api
 | Property | Type | Description |
 |---|---|---|
 | `http_api` | `HttpApi` | The API Gateway v2 HTTP API (for adding routes or CfnOutput) |
-| `api_endpoint` | `str` | The HTTP API endpoint URL |
+| `mcp_api` | `DiscoveredApi` | The API's discovered `url` (the custom domain when one is mapped) and the MCP server's RFC 8707 `resource` and `audiences` |
 | `mcp_function` | `Function` | The MCP Lambda function |
 | `oauth_proxy_function` | `Function` | The OAuth Proxy Lambda function |
 

@@ -38,6 +38,9 @@ var (
 	ErrClientAuthFailed = errors.New("client authentication failed")
 )
 
+// ErrNotFirstParty refuses a client that is not one of our own apps, or not registered at all, on the account's own endpoints.
+var ErrNotFirstParty = errors.New("client is not first-party")
+
 // Service manages the OAuth client registry.
 type Service struct {
 	db *oauth_clients_db.OAuthClientsDB
@@ -60,6 +63,7 @@ type ClientResponse struct {
 	ResponseTypes           []string `json:"response_types"`
 	Scopes                  []string `json:"scopes,omitempty"`
 	AllowedResources        []string `json:"allowed_resources,omitempty"`
+	DefaultResource         string   `json:"default_resource,omitempty"`
 	AllowedProviders        []string `json:"allowed_providers,omitempty"`
 	RequirePKCE             bool     `json:"require_pkce"`
 	// FirstParty marks a client we ship ourselves; only a first-party client may manage a user's own sessions.
@@ -132,6 +136,7 @@ type CreateInput struct {
 	GrantTypes             []string
 	Scopes                 []string
 	AllowedResources       []string
+	DefaultResource        string
 	AllowedProviders       []string
 	RequirePKCE            *bool
 	FirstParty             bool
@@ -146,6 +151,7 @@ type UpdateInput struct {
 	GrantTypes             []string
 	Scopes                 []string
 	AllowedResources       []string
+	DefaultResource        string
 	AllowedProviders       []string
 	RequirePKCE            *bool
 	FirstParty             bool
@@ -185,48 +191,47 @@ func (s *Service) IsRegistered(clientID string) (bool, error) {
 	return true, nil
 }
 
-// AuthenticateClient authenticates a client per RFC 6749 §2.3: a confidential client must present its matching secret, a public client must present none.
-func (s *Service) AuthenticateClient(clientID, clientSecret string) error {
+// AuthenticateClient authenticates a client per RFC 6749 §2.3 (a confidential client must present its matching secret, a public client none) and returns the client it read, so the caller need not read it again.
+func (s *Service) AuthenticateClient(clientID, clientSecret string) (*ClientResponse, error) {
 	if clientID == "" {
-		return ErrClientAuthFailed
+		return nil, ErrClientAuthFailed
 	}
 	entry, err := s.db.GetClient(clientID)
 	if err != nil {
 		if errors.Is(err, oauth_clients_db.ErrOAuthClientNotFound) {
-			return ErrClientNotFound
+			return nil, ErrClientNotFound
 		}
-		return err
+		return nil, err
 	}
 
 	if entry.ClientType == oauth_clients_db.ClientTypeConfidential {
 		// Constant-time compare to avoid leaking the secret via timing.
 		if clientSecret == "" || subtle.ConstantTimeCompare([]byte(clientSecret), []byte(entry.Secret)) != 1 {
-			return ErrClientAuthFailed
+			return nil, ErrClientAuthFailed
 		}
-		return nil
+	} else if clientSecret != "" {
+		return nil, ErrClientAuthFailed
 	}
-	if clientSecret != "" {
-		return ErrClientAuthFailed
-	}
-	return nil
+	client := toClient(entry, false)
+	return &client, nil
 }
 
 // AuthenticateForOAuth authenticates a client and maps the outcome to an OAuth response for the
 // token/revoke endpoints: errCode is the RFC 6749 §5.2 code ("" when authenticated), and internal
 // is true only for an unexpected (non-auth) error so the caller can pick 500 vs 401. Callers build
 // the actual response so the clients package stays free of the HTTP/response layer.
-func (s *Service) AuthenticateForOAuth(clientID, clientSecret string) (errCode string, internal bool) {
-	err := s.AuthenticateClient(clientID, clientSecret)
+func (s *Service) AuthenticateForOAuth(clientID, clientSecret string) (client *ClientResponse, errCode string, internal bool) {
+	client, err := s.AuthenticateClient(clientID, clientSecret)
 	switch {
 	case err == nil:
-		return "", false
+		return client, "", false
 	case errors.Is(err, ErrClientNotFound), errors.Is(err, ErrClientAuthFailed):
-		return oidc.OAuthErrInvalidClient, false
+		return nil, oidc.OAuthErrInvalidClient, false
 	default:
 		// An unexpected (non-auth) error — e.g. a DynamoDB failure reading the registry. Log it:
 		// the caller collapses this to a generic server_error, so this is the only record of the cause.
 		rlog.Error(context.TODO()).Err(err).Str("client_id", clientID).Msg("Client authentication failed on an internal error")
-		return oidc.OAuthErrServerError, true
+		return nil, oidc.OAuthErrServerError, true
 	}
 }
 
@@ -241,6 +246,18 @@ func (s *Service) Get(clientID string) (*ClientResponse, error) {
 	}
 	c := toClient(entry, false)
 	return &c, nil
+}
+
+// RequireFirstParty reads the client's registration on every call, so taking first-party standing away applies to its next request rather than when its tokens expire.
+func (s *Service) RequireFirstParty(clientID string) error {
+	client, err := s.Get(clientID)
+	if err != nil && !errors.Is(err, ErrClientNotFound) {
+		return err
+	}
+	if client == nil || !client.FirstParty {
+		return ErrNotFirstParty
+	}
+	return nil
 }
 
 // List returns every client. The stored secret is included only when getSecret is true.
@@ -269,6 +286,7 @@ func (s *Service) Update(clientID string, in UpdateInput) (*ClientResponse, erro
 	entry.GrantTypes = in.GrantTypes
 	entry.Scopes = in.Scopes
 	entry.AllowedResources = in.AllowedResources
+	entry.DefaultResource = in.DefaultResource
 	entry.AllowedProviders = in.AllowedProviders
 	entry.FirstParty = in.FirstParty
 	// Public clients are forced to require PKCE; otherwise take what was sent (nil ⇒ false).
@@ -320,6 +338,7 @@ func buildEntry(in CreateInput) (*oauth_clients_db.OAuthClientEntry, error) {
 		GrantTypes:             in.GrantTypes,
 		Scopes:                 in.Scopes,
 		AllowedResources:       in.AllowedResources,
+		DefaultResource:        in.DefaultResource,
 		AllowedProviders:       in.AllowedProviders,
 		RequirePKCE:            in.RequirePKCE,
 		FirstParty:             in.FirstParty,
@@ -375,6 +394,9 @@ func validateEntry(e *oauth_clients_db.OAuthClientEntry) error {
 			return rmerror.NewRMError(nil, fmt.Sprintf(
 				"allowed_resource %q must be an absolute URI with a host and no fragment (e.g. https://api.example.com)", r))
 		}
+	}
+	if e.DefaultResource != "" && !collections.Contains(e.AllowedResources, e.DefaultResource) {
+		return rmerror.NewRMError(nil, fmt.Sprintf("default_resource %q must be one of allowed_resources", e.DefaultResource))
 	}
 	// A blank provider name would silently narrow the chooser to nothing matchable.
 	for _, p := range e.AllowedProviders {
@@ -486,6 +508,7 @@ func toClient(e *oauth_clients_db.OAuthClientEntry, getSecret bool) ClientRespon
 		ResponseTypes:           []string{oidc.ResponseTypeCode},
 		Scopes:                  e.Scopes,
 		AllowedResources:        e.AllowedResources,
+		DefaultResource:         e.DefaultResource,
 		AllowedProviders:        e.AllowedProviders,
 		RequirePKCE:             derefBool(e.RequirePKCE),
 		FirstParty:              e.FirstParty,

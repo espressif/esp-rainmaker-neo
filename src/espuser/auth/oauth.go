@@ -46,8 +46,8 @@ type AuthorizeRequest struct {
 	State               string
 	CodeChallenge       string
 	CodeChallengeMethod string
-	// Resource is the RFC 8707 identifier of the API the access token is for (optional).
-	Resource string
+	// Resources are the RFC 8707 resources the sign-in is for; none means the client's default.
+	Resources []string
 	// Prompt and MaxAge are recorded verbatim, not interpreted here. sessionShortCircuit
 	// applies them to OUR session; the federation leg forwards them to the upstream. Both
 	// need them and they are read at different moments, so the flow record is where they live.
@@ -81,12 +81,10 @@ func (s *OAuthUserAuthService) StartAuthFlow(ctx context.Context, req AuthorizeR
 	if !client.AllowsScopes(req.Scope) {
 		return "", nil, ErrInvalidScope
 	}
-	// Checked here, before the flow is written and long before the user is sent to a
-	// provider. Deferring it to the code exchange would make someone complete an entire
-	// login -- redirect, password, MFA -- only to be told the request was never valid.
-	// Absent allowed_resources means none, never any.
-	if req.Resource != "" && !client.AllowsResource(req.Resource) {
-		return "", nil, ErrInvalidTarget
+	// Settled before the flow is written, so nobody completes a whole login for a request that was never valid.
+	resources, err := authorizedResources(client, req.Resources)
+	if err != nil {
+		return "", nil, err
 	}
 
 	flowID, err = otputil.GenerateFlowID()
@@ -101,7 +99,7 @@ func (s *OAuthUserAuthService) StartAuthFlow(ctx context.Context, req AuthorizeR
 		State:               req.State,
 		CodeChallenge:       req.CodeChallenge,
 		CodeChallengeMethod: req.CodeChallengeMethod,
-		Resource:            req.Resource,
+		Resources:           resources,
 		Prompt:              req.Prompt,
 		MaxAge:              req.MaxAge,
 		ExpiresOn:           time.Now().Add(FlowTTL).Unix(),
@@ -141,13 +139,15 @@ func (s *OAuthUserAuthService) CompleteStartedAuthFlow(ctx context.Context, flow
 // this server, so there is no upstream context to inherit. Origin decides whether a browser is
 // present to hold a cookie, and therefore whether the login can have single sign-on.
 type FirstPartyLogin struct {
-	Provider      string
-	AMR           []string
-	Origin        string // session.OriginBrowser or session.OriginApp
-	UserAgent     string
-	IPAddress     string
-	UserAgentName string
-	PriorCookie   string
+	// AllAllowedResources makes the login cover every resource the client may request, for a surface that takes no resource parameter (the legacy password API); otherwise it covers the client's default.
+	AllAllowedResources bool
+	Provider            string
+	AMR                 []string
+	Origin              string // session.OriginBrowser or session.OriginApp
+	UserAgent           string
+	IPAddress           string
+	UserAgentName       string
+	PriorCookie         string
 }
 
 // CompleteAuthFlowForFirstPartyLogin is the FRONT-channel first-party seam (a hosted login
@@ -172,8 +172,24 @@ func (s *OAuthUserAuthService) CompleteAuthFlowForFirstPartyLogin(ctx context.Co
 // is returned; a login that establishes no user agent (a failed write) still mints, with sid == "".
 func (s *OAuthUserAuthService) MintTokenSetForFirstPartyLogin(ctx context.Context, userID, clientID, scope string, login FirstPartyLogin) (*UserTokens, error) {
 	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, nil)
+	client, err := clients.NewService(rmngCtx).Get(clientID)
+	if err != nil {
+		return nil, err
+	}
+	var requested []string
+	if login.AllAllowedResources {
+		requested = client.AllowedResources
+	}
+	resources, err := authorizedResources(client, requested)
+	if err != nil {
+		return nil, err
+	}
+	audience, err := SetTokenAudienceFromResource(client, resources, "")
+	if err != nil {
+		return nil, err
+	}
 	sid, _ := establishFirstPartyUserAgent(rmngCtx, userID, login)
-	return s.mintTokenSet(rmngCtx, userID, clientID, scope, "", sid, time.Now().Unix())
+	return s.mintTokenSet(rmngCtx, userID, clientID, scope, resources, audience, sid, time.Now().Unix())
 }
 
 // establishFirstPartyUserAgent records the user agent for a first-party login and returns its sid and,
@@ -203,8 +219,8 @@ func establishFirstPartyUserAgent(rmngCtx *rmngctx.RmngContext, userID string, l
 	return sid, setCookie
 }
 
-// ExchangeAuthCode redeems a code for tokens: verify client/redirect/PKCE, consume (single-use), mint. Every failure is ErrInvalidGrant (no oracle).
-func (s *OAuthUserAuthService) ExchangeAuthCode(ctx context.Context, code, verifier, clientID, redirectURI string) (*UserTokens, error) {
+// ExchangeAuthCode redeems a code: verify client/redirect/PKCE, pick the access token's resource, consume (single-use), mint. Every failure but the resource's is ErrInvalidGrant (no oracle).
+func (s *OAuthUserAuthService) ExchangeAuthCode(ctx context.Context, client *clients.ClientResponse, code, verifier, redirectURI, resource string) (*UserTokens, error) {
 	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, nil)
 	flowsDB := auth_flows_db.NewAuthFlowsDB(rmngCtx)
 
@@ -213,7 +229,7 @@ func (s *OAuthUserAuthService) ExchangeAuthCode(ctx context.Context, code, verif
 		return nil, ErrInvalidGrant
 	}
 	// The redeeming client and redirect must match those that started the flow (RFC 6749 §4.1.3).
-	if flow.ClientID != clientID || flow.RedirectURI != redirectURI {
+	if flow.ClientID != client.ClientID || flow.RedirectURI != redirectURI {
 		return nil, ErrInvalidGrant
 	}
 	// PKCE downgrade protection (RFC 9700 §2.1.1): a challenge iff a verifier. When the code was
@@ -225,11 +241,16 @@ func (s *OAuthUserAuthService) ExchangeAuthCode(ctx context.Context, code, verif
 	} else if verifier != "" {
 		return nil, ErrInvalidGrant
 	}
+	// Before the consume, so a client that named a wrong resource can retry with the same code.
+	audience, err := SetTokenAudienceFromResource(client, flow.Resources, resource)
+	if err != nil {
+		return nil, err
+	}
 	// Single-use: a lost race or a replay fails the conditional consume — reuse is theft.
 	if err := flowsDB.ConsumeCode(flow.FlowID); err != nil {
 		return nil, ErrInvalidGrant
 	}
-	return s.mintTokenSet(rmngCtx, flow.Subject, flow.ClientID, strings.Join(flow.GrantedScope, " "), flow.Resource, flow.SID, flow.AuthTime)
+	return s.mintTokenSet(rmngCtx, flow.Subject, flow.ClientID, strings.Join(flow.GrantedScope, " "), flow.Resources, audience, flow.SID, flow.AuthTime)
 }
 
 // appendCodeToRedirect adds code+state as query params, preserving any query the client already set (RFC 6749 §4.1.2).

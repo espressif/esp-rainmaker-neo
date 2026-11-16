@@ -86,12 +86,13 @@ class McpOAuthConstruct(Construct):
                 max_age=Duration.days(1),
             ),
         )
-        self.custom_domain, self.api_url, self.api_endpoint = discover_api_custom_domain(
+        self.mcp_api = discover_api_custom_domain(
             self, "McpCustomDomainDiscovery",
             name="mcp-custom-domain-discovery",
             api_id=self.http_api.api_id,
             api_type="HTTP",
             default_url=self.http_api.api_endpoint,
+            resource_path="/v1/mcp",
         )
 
         # --- OAuth Proxy Lambda ---
@@ -128,7 +129,7 @@ class McpOAuthConstruct(Construct):
             # MCP_BASE_URL drives the OAuth callback/metadata URLs clients are given, so
             # pointing it at the raw execute-api host while clients connect via the custom
             # domain would hand out redirect URIs on the wrong hostname.
-            "MCP_BASE_URL": self.api_endpoint,
+            "MCP_BASE_URL": self.mcp_api.url,
             "OAUTH_STATE_SECRET": state_secret.secret_value.unsafe_unwrap(),
         }
         if config.user_issuer:
@@ -202,13 +203,12 @@ class McpOAuthConstruct(Construct):
         for stmt in config.mcp_extra_policies:
             mcp_role.add_to_policy(stmt)
 
-        # The MCP verifier resolves the issuer + JWKS from these, and requires end-user
-        # tokens to carry aud == the OIDC client id (MCP_CLIENT_ID).
+        # The MCP verifier resolves the issuer + JWKS from these, and accepts only tokens addressed to this server's own names.
         mcp_env = {
             "AWS_ACCOUNT_ID": account_id,
             "USER_ISSUER": config.user_issuer or "",
             "USER_JWKS_PARA_NAME": config.user_jwks_parameter or "",
-            "MCP_CLIENT_ID": config.mcp_oidc_client_id or "",
+            "ACCEPTED_AUDIENCES": self.mcp_api.audiences,
         }
         mcp_env.update(config.mcp_extra_env)
 

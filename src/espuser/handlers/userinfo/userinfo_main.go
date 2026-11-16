@@ -38,13 +38,13 @@ func handleUserinfo(ctx context.Context, request events.APIGatewayProxyRequest) 
 		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Internal server error")), nil
 	}
 
-	claims, err := svc.ParseUserInfoFromToken(ctx, accessToken)
+	claims, err := svc.VerifyUserTokenForAnyAPI(accessToken)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Msg("Userinfo token rejected")
 		return oidc.OAuthUnauthorizedResp(), nil
 	}
 
-	return utils.APIGwRespJSON(http.StatusOK, claims), nil
+	return utils.APIGwRespJSON(http.StatusOK, claims.UserInfo()), nil
 }
 
 // accessTokenFromForm reads access_token from a form-encoded POST body (RFC 6750 §2.2).

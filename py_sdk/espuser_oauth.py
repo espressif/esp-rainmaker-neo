@@ -287,12 +287,12 @@ class WebClient:
         assert resp.status_code == 200, f"token exchange: {resp.status_code} {resp.text[:300]}"
         return resp.json()
 
-    def refresh(self, refresh_token):
-        return requests.post(f"{API_BASE}/oauth2/token", data={
-            "grant_type": "refresh_token",
-            "refresh_token": refresh_token,
-            "client_id": self.client_id,
-        }, timeout=30)
+    def refresh(self, refresh_token, resource=None):
+        """Renew the access token; resource narrows it to one of the sign-in's APIs (RFC 8707 s2.2)."""
+        data = {"grant_type": "refresh_token", "refresh_token": refresh_token, "client_id": self.client_id}
+        if resource:
+            data["resource"] = resource
+        return requests.post(f"{API_BASE}/oauth2/token", data=data, timeout=30)
 
     def still_signed_in(self, refresh_token):
         """Whether this product can still get a new access token. The only honest test of

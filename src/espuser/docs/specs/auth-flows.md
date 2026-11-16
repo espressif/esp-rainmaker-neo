@@ -104,7 +104,7 @@ Authorization: Bearer <access_token>
 **Process**:
 
 1. Extract the bearer access token — from the `Authorization` header, or the `access_token` form field on a `POST`. A missing/blank one is `401` (`WWW-Authenticate: Bearer`).
-2. Verify it against the published JWKS (RS256, our issuer) exactly as any resource server would. An invalid/expired/wrong-signature token is `401 invalid_token`.
+2. Verify it against the published JWKS (RS256, our issuer) as any resource server would, except that any of our APIs may be its `aud`: userinfo describes the sign-in, not an API (OIDC Core §5.3). An invalid/expired/wrong-signature token is `401 invalid_token`.
 3. `sub` is the `user_id`. Look the user up in `espuser-user-details`.
 4. Return the claims the token's `scope` authorizes — `sub` always; `email` only if `email` (or `profile`) is in scope; `phone_number` only if `phone` is in scope. We hold no other profile attributes in v1.
 
