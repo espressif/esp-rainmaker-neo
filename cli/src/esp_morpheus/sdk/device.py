@@ -622,7 +622,7 @@ class Device:
     def _remove_leaked_keychain_cert(self):
         """Remove the client cert that awscrt imports into the macOS login keychain on mtls connect.
 
-        aws-c-io's Secure Transport backend imports the mTLS client identity into the login keychain on every connect and never removes it, so long-lived test machines accumulate thousands of certs. Left unchecked, any process that walks the keychain per TLS handshake (e.g. Cursor/VS Code's @vscode/proxy-agent) ends up pinning a CPU core. The keychain label equals this device's thing_name. Deletion is by SHA-1 hash matched on the label, because delete-certificate -c matches the cert common name (not the label) and does not match these certs. No-op off macOS.
+        aws-c-io's Secure Transport backend imports the mTLS client identity (cert + private key) into the login keychain on every connect and never removes it, so long-lived test machines accumulate thousands of certs and keys. Left unchecked, any process that walks the keychain per TLS handshake (e.g. Cursor/VS Code's @vscode/proxy-agent) ends up pinning a CPU core. The keychain label equals this device's thing_name. Deletion is by SHA-1 hash matched on the label, because delete-certificate -c matches the cert common name (not the label) and does not match these certs. delete-identity is used instead of delete-certificate so the private key is removed with the cert; delete-certificate leaves the key behind. No-op off macOS.
         """
         if sys.platform != "darwin" or not self.node_thing_name:
             return
@@ -649,7 +649,7 @@ class Device:
 
         for cert_hash in hashes_to_delete:
             subprocess.run(
-                ["security", "delete-certificate", "-Z", cert_hash, keychain],
+                ["security", "delete-identity", "-Z", cert_hash, keychain],
                 capture_output=True, timeout=30,
             )
 
@@ -758,13 +758,13 @@ class Device:
             iot_client.delete_thing(thingName=node_thing_name)
             device_log(f"Deleted thing '{node_thing_name}'")
 
-            # Now that the device is fully gone (real IoT cert + thing deleted), remove the local keychain copy awscrt left behind on connect.
-            self._remove_leaked_keychain_cert()
-
             return True
         except ClientError as e:
             device_log(f"An error occurred: {e}")
             return False
+        finally:
+            # Remove the local keychain copy awscrt left behind on connect, even when the IoT cleanup above failed partway.
+            self._remove_leaked_keychain_cert()
 
     def get_shadow(self, shadow_name):
         if not self.iot_data_client:
