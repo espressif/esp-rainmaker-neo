@@ -5,7 +5,6 @@
  */
 
 import type { RuntimeConfig } from '@/lib/config'
-import { collectExtraCapabilities } from '@/lib/extra-capabilities'
 
 /**
  * Runtime config is fetched from a published `rmng-client-outputs.json` document.
@@ -51,6 +50,34 @@ function alexaSkillArns(outputs: ClientOutputs, region: string | undefined): Rec
   return arns
 }
 
+/** Output an add-on stack publishes to hand this deployment its enterprise dashboard plugins. */
+const PLUGINS_BUCKET_OUTPUT = 'DashboardPluginsBucket'
+
+/** Output a stack publishes to say which release it was deployed from. */
+const RELEASE_VERSION_OUTPUT = 'ReleaseVersion'
+
+/** Add-on stacks are private, so the plugins bucket is found by output key on any stack, never by stack name. */
+function enterprisePluginsBucket(outputs: ClientOutputs): string | undefined {
+  for (const stackOutputs of Object.values(outputs)) {
+    const bucket = stackOutputs?.[PLUGINS_BUCKET_OUTPUT]
+    if (typeof bucket === 'string' && bucket.length > 0) {
+      return bucket
+    }
+  }
+  return undefined
+}
+
+function stackReleaseVersions(outputs: ClientOutputs): Record<string, string> {
+  const versions: Record<string, string> = {}
+  for (const [stackName, stackOutputs] of Object.entries(outputs)) {
+    const version = stackOutputs?.[RELEASE_VERSION_OUTPUT]
+    if (typeof version === 'string' && version.length > 0) {
+      versions[stackName] = version
+    }
+  }
+  return versions
+}
+
 /**
  * Flatten the stack-keyed client-outputs JSON (the same file `morpheus.py
  * --client-outputs` reads) into the flat `RuntimeConfig` the app consumes.
@@ -83,7 +110,8 @@ function mapClientOutputs(outputs: ClientOutputs): RuntimeConfig {
     BRIDGE_ENABLED: Boolean(outputs['rmng-bridge-core']),
     CONTROLLER_ENABLED: Boolean(outputs['rmng-controller-base']),
     DEPLOYED_STACKS: Object.keys(outputs),
-    EXTRA_CAPABILITIES: collectExtraCapabilities(outputs),
+    STACK_RELEASE_VERSIONS: stackReleaseVersions(outputs),
+    ENTERPRISE_PLUGINS_BUCKET: enterprisePluginsBucket(outputs),
   }
 }
 

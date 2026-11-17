@@ -15,7 +15,6 @@
  */
 
 import { useConfigStore } from '@/stores/config.store'
-import type { ExtraCapability } from '@/lib/extra-capabilities'
 
 export interface RuntimeConfig {
   API_GATEWAY_URL?: string
@@ -52,8 +51,10 @@ export interface RuntimeConfig {
   CONTROLLER_ENABLED?: boolean
   /** Stack keys present in the client-outputs document; enterprise features gate on their backends' presence. */
   DEPLOYED_STACKS?: string[]
-  /** Capability cards contributed by deployed optional modules via `DashboardCapability*` stack outputs. */
-  EXTRA_CAPABILITIES?: ExtraCapability[]
+  /** `ReleaseVersion` output per stack that publishes one; enterprise features must match their backend's release. */
+  STACK_RELEASE_VERSIONS?: Record<string, string>
+  /** Bucket holding this deployment's enterprise dashboard plugins; absent on community deployments. */
+  ENTERPRISE_PLUGINS_BUCKET?: string
   /** URL of the published client-outputs document this config was fetched from. */
   SERVER_URL?: string
 }
@@ -132,10 +133,14 @@ export function getDeployedStacks(): string[] {
   return Array.isArray(value) ? value : []
 }
 
-/** Capability cards contributed by deployed optional modules (absent from stale persisted configs). */
-export function getExtraCapabilities(): ExtraCapability[] {
-  const value = useConfigStore.getState().config?.EXTRA_CAPABILITIES
-  return Array.isArray(value) ? value : []
+/** Release version each deployed stack reports, for the stacks that report one. */
+export function getStackReleaseVersions(): Record<string, string> {
+  return useConfigStore.getState().config?.STACK_RELEASE_VERSIONS ?? {}
+}
+
+/** Bucket holding this deployment's enterprise dashboard plugins, or '' on a community deployment. */
+export function getEnterprisePluginsBucket(): string {
+  return fromConfig('ENTERPRISE_PLUGINS_BUCKET') ?? ''
 }
 
 /** Get ESP User API base URL. */

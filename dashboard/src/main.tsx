@@ -11,7 +11,7 @@ import { migrateLegacyAuthStorage } from './lib/auth'
 import { applyCachedEnterpriseTheme } from './enterprise/theme-cache'
 import './styles/globals.css'
 
-// Before first paint, so an entitled deployment's cached theming (e.g. accent color) does not
+// Before first paint, so an enterprise deployment's cached theming (e.g. accent color) does not
 // flash the default theme while the enterprise loader is still fetching post-login.
 applyCachedEnterpriseTheme()
 

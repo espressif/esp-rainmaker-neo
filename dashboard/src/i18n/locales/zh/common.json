@@ -258,6 +258,24 @@
     "notFound": "此部署中不提供该页面。",
     "unavailable": "该企业功能暂时无法加载。",
     "incompatible": "该企业功能需要更新版本的管理面板，未能加载。",
-    "badge": "企业功能"
+    "versionMismatch": "该企业功能与其后端来自不同的发布版本。请将两者更新到同一版本后再使用。",
+    "loadFailed": "此部署的企业功能未能加载。请刷新页面重试。",
+    "needsAttention": "该企业功能需要处理",
+    "badge": "企业功能",
+    "lockedGroup": "企业版",
+    "lockedBadge": "此部署未包含该功能",
+    "lockedPage": {
+      "howToGet": "该功能属于 ESP RainMaker Neo 企业版方案，当前部署尚未安装。请联系 ESP RainMaker 团队以添加该功能。"
+    },
+    "catalog": {
+      "advancedControls": {
+        "label": "高级控制",
+        "description": "管理影响较大的部署控制项和特权操作，例如转移超级管理员权限、授予日志只读访问权限。"
+      },
+      "servicesConfiguration": {
+        "label": "服务配置",
+        "description": "启用并配置可选的部署服务，例如基于角色的访问控制和 HTTP 节点 API。"
+      }
+    }
   }
 }

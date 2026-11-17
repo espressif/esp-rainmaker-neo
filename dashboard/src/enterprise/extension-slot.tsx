@@ -8,18 +8,19 @@ import { useMemo } from 'react'
 import { ErrorBoundary } from 'react-error-boundary'
 import { findExtensionContributions, useEnterpriseStore } from './enterprise.store'
 import type { EnterpriseComponentProps } from './enterprise.types'
+import type { ExtensionSlotId } from './slots'
 
 /**
  * Named mount point for enterprise plugin components inside an open-source screen.
  *
- * Loaded features contribute via `contributes.extensions` in their signed manifest;
+ * Loaded features contribute via `contributes.extensions` in the plugin index;
  * this slot renders every contribution targeting its id, sorted, each inside its own
  * error boundary so one broken plugin cannot take the screen down. With no
- * contributions (community mode, still loading, not entitled) it renders nothing —
- * zero visual footprint. Slot ids and their `context` shapes are a versioned public
- * contract, published in the plugin SDK.
+ * contributions (community mode, still loading) it renders nothing —
+ * zero visual footprint. Slot ids are listed in `slots.ts`; ids and their `context` shapes
+ * are a versioned public contract, published in the plugin SDK.
  */
-export function ExtensionSlot({ id, context }: { id: string } & EnterpriseComponentProps) {
+export function ExtensionSlot({ id, context }: { id: ExtensionSlotId } & EnterpriseComponentProps) {
   const features = useEnterpriseStore((s) => s.features)
   const matches = useMemo(() => findExtensionContributions(features, id), [features, id])
 

@@ -368,7 +368,7 @@ export const routesConfig: RouteConfig[] = [
         subroutes: accountSettingsSubroutes,
       },
       {
-        // Enterprise catch-all: everything under /home/ent/* is contributed at runtime by entitled plugins (spec: dashboard_modules/docs/enterprise-features-runtime-loading.md in the enterprise superproject). No breadcrumb here — the outlet appends one from the plugin manifest.
+        // Enterprise catch-all: everything under /home/ent/* is contributed at runtime by enterprise plugins (spec: dashboard_modules/docs/enterprise-features-runtime-loading.md in the enterprise superproject). No breadcrumb here — the outlet appends one from the plugin manifest.
         path: "/ent/$",
       },
     ],

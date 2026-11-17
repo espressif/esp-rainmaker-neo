@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Crown, Network, Puzzle, ServerCog, SlidersHorizontal } from 'lucide-react'
+import { Crown, Lock, Network, Puzzle, ServerCog, SlidersHorizontal, TriangleAlert } from 'lucide-react'
 import type { SidebarIcon } from '@/config/sidebar/sidebar-icons.config'
 
 /**
@@ -26,3 +26,28 @@ export function resolveEnterpriseIcon(name: string): SidebarIcon {
 export function EnterpriseCrownIcon({ className }: { className?: string }) {
   return <Crown className={className} style={{ color: '#9c7c00' }} aria-hidden />
 }
+
+/** Marks a sidebar item whose enterprise feature belongs to this deployment but could not run. Inline color for the same reason as the crown. */
+export function EnterpriseWarningIcon({ className }: { className?: string }) {
+  return <TriangleAlert className={className} style={{ color: '#b45309' }} aria-hidden />
+}
+
+const lockIcons = new Map<string, SidebarIcon>()
+
+/**
+ * Lock badge for a locked sidebar item, named for screen readers: the sidebar renders the badge as a link around this icon, and the badge is the only thing marking the item as locked. Cached per label so the component identity stays stable across renders. Deliberately uncoloured: it should read as information, not as a call to action.
+ */
+export function lockIconLabelled(label: string): SidebarIcon {
+  const cached = lockIcons.get(label)
+  if (cached) {
+    return cached
+  }
+  function EnterpriseLockIcon({ className }: { className?: string }) {
+    return <Lock className={className} role="img" aria-label={label} />
+  }
+  lockIcons.set(label, EnterpriseLockIcon)
+  return EnterpriseLockIcon
+}
+
+/** Icon of the sidebar group that collects the locked items. */
+export const EnterpriseGroupIcon: SidebarIcon = Crown

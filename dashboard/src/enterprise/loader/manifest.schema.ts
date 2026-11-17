@@ -7,11 +7,7 @@
 import { z } from 'zod'
 
 /**
- * Schema of a per-feature signed manifest, one per feature directory in the central
- * enterprise assets bucket (spec: dashboard_modules/docs/enterprise-features-runtime-loading.md
- * in the enterprise superproject).
- * Parsed only after the manifest's signature has been verified. There is no user/entitlement
- * map: entitlement is the bucket policy — a deployment either can read the bucket or cannot.
+ * Schema of the plugin index (`index.json`) in the deployment's own plugins bucket, written by the plugin build (spec: dashboard_modules/docs/enterprise-features-runtime-loading.md in the enterprise superproject). There is no entitlement data: a deployment has the plugins it was deployed with.
  */
 
 const sidebarItemSchema = z.object({
@@ -55,13 +51,11 @@ const extensionContributionSchema = z.object({
 })
 
 export const featureManifestSchema = z.object({
-  schemaVersion: z.literal(1),
-  issuedAt: z.string().optional(),
   id: z.string(),
   version: z.string(),
   /** Host-SDK semver range this bundle was built against. */
   sdk: z.string(),
-  /** Bundle key *relative to the feature's own directory* — a manifest can only reference its own files. */
+  /** Bundle key in the plugins bucket; content-addressed, so a key's bytes never change. */
   bundle: z.string(),
   /** `sha384-<base64>` of the bundle bytes; checked before the code runs. */
   integrity: z.string(),
@@ -76,6 +70,14 @@ export const featureManifestSchema = z.object({
   requiresBackend: z.array(z.string()).optional(),
 })
 
+export const pluginIndexSchema = z.object({
+  schemaVersion: z.literal(2),
+  /** Release the bundles were built from; compared with each required backend stack's `ReleaseVersion`. */
+  releaseVersion: z.string().optional(),
+  features: z.array(featureManifestSchema),
+})
+
+export type PluginIndex = z.infer<typeof pluginIndexSchema>
 export type ManifestFeature = z.infer<typeof featureManifestSchema>
 export type SidebarContribution = z.infer<typeof sidebarContributionSchema>
 export type RouteContribution = z.infer<typeof routeContributionSchema>

@@ -4,37 +4,31 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { GetObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3'
+import { GetObjectCommand } from '@aws-sdk/client-s3'
 import i18n from '@/i18n/config'
 import { getS3Client } from '@/aws/services/s3-client'
-import { getDeployedStacks } from '@/lib/config'
+import {
+  getDeployedStacks,
+  getEnterprisePluginsBucket,
+  getStackReleaseVersions,
+} from '@/lib/config'
 import { useEnterpriseStore } from '../enterprise.store'
-import { clearCachedEnterpriseTheme } from '../theme-cache'
+import type { EnterpriseFeature, FeatureStatus } from '../enterprise.store'
 import { enterpriseNamespace } from '../enterprise.types'
+import { isKnownExtensionSlot } from '../slots'
 import type { RegisteredPlugin } from '../enterprise.types'
-import { featureManifestSchema } from './manifest.schema'
-import type { ManifestFeature } from './manifest.schema'
+import { pluginIndexSchema } from './manifest.schema'
+import type { ManifestFeature, PluginIndex } from './manifest.schema'
+import { findReleaseMismatch } from './release-version'
 import { sdkRangeSatisfied } from './sdk-range'
 import { HOST_SDK_VERSION, SHARED_MODULE_KEYS, installSharedScope } from './shared-scope'
-import { MANIFEST_PUBLIC_KEY_SPKI_B64 } from './manifest-public-key'
-import {
-  ENTERPRISE_ASSETS_BUCKET,
-  ENTERPRISE_ASSETS_REGION,
-  ENTERPRISE_FEATURES_PREFIX,
-} from './enterprise-bucket'
-import { sha384Integrity, verifyDetachedJws } from './verify'
+import { sha384Integrity } from './verify'
 
 /**
- * The enterprise plugin loader (spec: dashboard_modules/docs/enterprise-features-runtime-loading.md
- * in the enterprise superproject).
- * Runs once per session, after the credentials gate in home.tsx. It never blocks the app: the
- * community UI renders regardless, and features appear as they finish loading.
- *
- * Features live in an Espressif-owned central bucket, one directory per feature, discovered by
- * listing. Entitlement is the bucket policy itself: no read grant → AccessDenied → silent
- * community mode. The three community signals are deliberately distinct from per-feature
- * failures — a listed feature that fails verification is skipped *loudly*, never silently.
+ * The enterprise plugin loader (spec: dashboard_modules/docs/enterprise-features-runtime-loading.md in the enterprise superproject). Imported only when the deployment names a plugins bucket, so a failure here is always loud: this deployment was deployed with plugins and something is wrong with them.
  */
+
+const INDEX_KEY = 'index.json'
 
 let started = false
 
@@ -54,140 +48,101 @@ export async function ensureEnterpriseLoaded(): Promise<void> {
     }
   }
 
-  if (!MANIFEST_PUBLIC_KEY_SPKI_B64) {
-    setCommunityStatus()
-    return
-  }
-
   store.setStatus('loading')
+  const bucket = getEnterprisePluginsBucket()
   try {
-    const featureIds = await listFeatureIds()
-    if (featureIds.length === 0) {
-      // Entitled account but nothing published yet — indistinguishable from community on purpose.
-      setCommunityStatus()
-      return
+    const index = await fetchIndex(bucket)
+    await Promise.all(index.features.map((entry) => loadFeature(bucket, entry, index.releaseVersion)))
+    if (isCurrentBucket(bucket)) {
+      store.setStatus('ready')
     }
-    await Promise.all(featureIds.map((id) => loadFeature(id)))
-    store.setStatus('ready')
   } catch (error) {
-    if (isCommunitySignal(error)) {
-      setCommunityStatus()
-    } else {
-      // Includes ExpiredToken*: the session keeper refreshes creds, and a reload retries. Never downgrade to community on a transient failure — that would hide entitled features silently.
+    if (isCurrentBucket(bucket)) {
       console.error('[enterprise] loading failed:', error)
       store.setStatus('error')
     }
   }
 }
 
-/**
- * Community mode also drops any cached pre-paint theming (see `theme-cache.ts`), so a
- * deployment whose entitlement was revoked stops re-applying a stale theme on its next load.
- * Deliberately not called on 'error': transient failures never demote to community.
- */
-function setCommunityStatus(): void {
-  clearCachedEnterpriseTheme()
-  useEnterpriseStore.getState().setStatus('community')
+/** False once a config refresh has replaced or removed the bucket this load started from; its results must then be dropped, not shown. */
+function isCurrentBucket(bucket: string): boolean {
+  return getEnterprisePluginsBucket() === bucket
 }
 
-/** Discover feature directories: `admin-dashboard/features/<id>/` common prefixes. */
-async function listFeatureIds(): Promise<string[]> {
-  const client = getS3Client(ENTERPRISE_ASSETS_REGION)
-  const response = await client.send(new ListObjectsV2Command({
-    Bucket: ENTERPRISE_ASSETS_BUCKET,
-    Prefix: ENTERPRISE_FEATURES_PREFIX,
-    Delimiter: '/',
-  }))
-  return (response.CommonPrefixes ?? [])
-    .map((p) => p.Prefix?.slice(ENTERPRISE_FEATURES_PREFIX.length).replace(/\/$/, '') ?? '')
-    .filter(Boolean)
+function recordFeature(bucket: string, feature: EnterpriseFeature): void {
+  if (isCurrentBucket(bucket)) {
+    useEnterpriseStore.getState().upsertFeature(feature)
+  }
 }
 
-/**
- * Fetch and verify one feature directory's signed manifest. Any failure here means *this
- * feature* is skipped with a console error; it never demotes the whole session to community —
- * silence is reserved for "no access at all".
- */
-async function fetchVerifiedManifest(featureId: string): Promise<ManifestFeature | null> {
-  const prefix = `${ENTERPRISE_FEATURES_PREFIX}${featureId}/`
-  const [manifestBytes, jws] = await Promise.all([
-    getObjectBytes(`${prefix}manifest.json`),
-    getObjectBytes(`${prefix}manifest.json.jws`).then((bytes) =>
-      new TextDecoder().decode(bytes),
-    ),
-  ])
-  const valid = await verifyDetachedJws(manifestBytes, jws, MANIFEST_PUBLIC_KEY_SPKI_B64)
-  if (!valid) {
-    console.error(`[enterprise] "${featureId}" manifest signature verification failed — refusing to load it`)
-    return null
-  }
-  const parsed = featureManifestSchema.safeParse(
-    JSON.parse(new TextDecoder().decode(manifestBytes)),
-  )
-  if (!parsed.success) {
-    console.error(`[enterprise] "${featureId}" manifest schema mismatch:`, parsed.error)
-    return null
-  }
-  if (parsed.data.id !== featureId) {
-    // A signed manifest is only valid in its own directory; a copy elsewhere is a replay.
-    console.error(`[enterprise] manifest id "${parsed.data.id}" does not match its directory "${featureId}" — refusing to load it`)
-    return null
-  }
-  return parsed.data
+async function fetchIndex(bucket: string): Promise<PluginIndex> {
+  const bytes = await getObjectBytes(bucket, INDEX_KEY)
+  return pluginIndexSchema.parse(JSON.parse(new TextDecoder().decode(bytes)))
 }
 
-async function loadFeature(featureId: string): Promise<void> {
-  const { upsertFeature } = useEnterpriseStore.getState()
+/** Why a feature must not run on this deployment, or null when nothing rules it out. */
+function precheckFeature(entry: ManifestFeature, releaseVersion: string | undefined): FeatureStatus | null {
+  if (!sdkRangeSatisfied(entry.sdk, HOST_SDK_VERSION)) {
+    return 'incompatible'
+  }
+  const missingModule = (entry.sharedModules ?? []).find((key) => !SHARED_MODULE_KEYS.includes(key))
+  if (missingModule) {
+    console.error(`[enterprise] "${entry.id}" needs shared module "${missingModule}" this host does not provide`)
+    return 'incompatible'
+  }
+  const requiredStacks = entry.requiresBackend ?? []
+  const deployedStacks = getDeployedStacks()
+  if (requiredStacks.some((stack) => !deployedStacks.includes(stack))) {
+    return 'not-deployed'
+  }
+  const mismatch = findReleaseMismatch(requiredStacks, getStackReleaseVersions(), releaseVersion)
+  if (mismatch) {
+    console.error(`[enterprise] "${entry.id}" is from release ${releaseVersion} but its backend stack "${mismatch.stack}" is on ${mismatch.stackVersion}`)
+    return 'version-mismatch'
+  }
+  return null
+}
 
+/** A slot this dashboard lacks (an older or modified dashboard) renders nothing, so say so instead of failing silently. */
+function reportUnknownSlots(entry: ManifestFeature): void {
+  for (const extension of entry.contributes.extensions ?? []) {
+    if (!isKnownExtensionSlot(extension.slotId)) {
+      console.error(`[enterprise] "${entry.id}" places "${extension.componentId}" in slot "${extension.slotId}", which this dashboard does not have; that part of the feature will not appear`)
+    }
+  }
+}
+
+/** A failure here costs only this feature; the others still load. */
+async function loadFeature(
+  bucket: string,
+  entry: ManifestFeature,
+  releaseVersion: string | undefined,
+): Promise<void> {
+  const blocked = precheckFeature(entry, releaseVersion)
+  if (blocked) {
+    recordFeature(bucket, { entry, status: blocked, components: {} })
+    return
+  }
   try {
-    const entry = await fetchVerifiedManifest(featureId)
-    if (!entry) {
-      return
-    }
-
-    if (!sdkRangeSatisfied(entry.sdk, HOST_SDK_VERSION)) {
-      upsertFeature({ entry, status: 'incompatible', components: {} })
-      return
-    }
-    const missingModule = (entry.sharedModules ?? []).find(
-      (key) => !SHARED_MODULE_KEYS.includes(key),
-    )
-    if (missingModule) {
-      console.error(`[enterprise] "${entry.id}" needs shared module "${missingModule}" this host does not provide`)
-      upsertFeature({ entry, status: 'incompatible', components: {} })
-      return
-    }
-    const deployedStacks = getDeployedStacks()
-    if ((entry.requiresBackend ?? []).some((stack) => !deployedStacks.includes(stack))) {
-      upsertFeature({ entry, status: 'unavailable', components: {} })
-      return
-    }
-
-    const bytes = await getObjectBytes(
-      `${ENTERPRISE_FEATURES_PREFIX}${featureId}/${entry.bundle}`,
-    )
+    const bytes = await getObjectBytes(bucket, entry.bundle)
     if ((await sha384Integrity(bytes)) !== entry.integrity) {
-      console.error(`[enterprise] "${entry.id}" bundle hash mismatch — refusing to run it`)
-      upsertFeature({ entry, status: 'unavailable', components: {} })
-      return
+      throw new Error('bundle hash mismatch, refusing to run it')
     }
     const plugin = await importBundle(bytes)
     if (!plugin) {
-      console.error(`[enterprise] "${entry.id}" bundle never called __RMNG_ENTERPRISE_REGISTER__`)
-      upsertFeature({ entry, status: 'unavailable', components: {} })
-      return
+      throw new Error('bundle never called __RMNG_ENTERPRISE_REGISTER__')
     }
     registerPluginI18n(entry.id, plugin)
-    upsertFeature({ entry, status: 'loaded', components: plugin.components })
+    reportUnknownSlots(entry)
+    recordFeature(bucket, { entry, status: 'loaded', components: plugin.components })
   } catch (error) {
-    console.error(`[enterprise] loading "${featureId}" failed:`, error)
+    console.error(`[enterprise] loading "${entry.id}" failed:`, error)
+    recordFeature(bucket, { entry, status: 'failed', components: {} })
   }
 }
 
 /**
- * DEV-only escape hatch (`?enterpriseDevUrl=`): treat the URL as an unsigned single-feature
- * release, taking the contributions from the plugin's own registration. Signature and hash
- * checks are deliberately skipped — this path does not exist in production builds.
+ * DEV-only escape hatch (`?enterpriseDevUrl=`): treat the URL as a single feature and take its contributions from the plugin's own registration. The hash check is skipped; this path does not exist in production builds.
  */
 async function loadDevPlugin(devUrl: string): Promise<void> {
   const store = useEnterpriseStore.getState()
@@ -202,7 +157,6 @@ async function loadDevPlugin(devUrl: string): Promise<void> {
       throw new Error('dev plugin never called __RMNG_ENTERPRISE_REGISTER__')
     }
     const entry: ManifestFeature = {
-      schemaVersion: 1,
       id: plugin.id,
       version: plugin.version ?? '0.0.0-dev',
       sdk: plugin.sdk ?? `^${HOST_SDK_VERSION}`,
@@ -219,12 +173,7 @@ async function loadDevPlugin(devUrl: string): Promise<void> {
   }
 }
 
-/**
- * Bundles register through the single `__RMNG_ENTERPRISE_REGISTER__` global, so two imports
- * must never be in flight at once: a concurrent load would overwrite the callback and its
- * `finally` would clear the global while the other module is still evaluating. Features load
- * concurrently (fetch + verify), but this queue serializes the import/registration step.
- */
+// Bundles register through one global, so imports are serialized: a concurrent import would overwrite the callback, and its `finally` would clear it while the other module is still evaluating.
 let importQueue: Promise<unknown> = Promise.resolve()
 
 function importBundle(bytes: Uint8Array): Promise<RegisteredPlugin | null> {
@@ -260,20 +209,10 @@ function registerPluginI18n(featureId: string, plugin: RegisteredPlugin): void {
   }
 }
 
-async function getObjectBytes(key: string): Promise<Uint8Array> {
-  const client = getS3Client(ENTERPRISE_ASSETS_REGION)
-  const response = await client.send(new GetObjectCommand({
-    Bucket: ENTERPRISE_ASSETS_BUCKET,
-    Key: key,
-  }))
+async function getObjectBytes(bucket: string, key: string): Promise<Uint8Array> {
+  const response = await getS3Client().send(new GetObjectCommand({ Bucket: bucket, Key: key }))
   if (!response.Body) {
     throw new Error(`empty S3 body for ${key}`)
   }
   return response.Body.transformToByteArray()
-}
-
-/** AccessDenied / missing objects mean "not an enterprise-entitled deployment" — silent community mode, not an error. */
-function isCommunitySignal(error: unknown): boolean {
-  const name = error instanceof Error ? error.name : ''
-  return ['AccessDenied', 'NoSuchKey', 'NoSuchBucket', 'Forbidden', 'NotFound', '403'].includes(name)
 }

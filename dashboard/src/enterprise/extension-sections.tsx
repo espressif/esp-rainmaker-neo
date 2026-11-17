@@ -10,6 +10,7 @@ import { ErrorBoundary } from 'react-error-boundary'
 import { findExtensionContributions, type EnterpriseFeature } from './enterprise.store'
 import { enterpriseNamespace, type EnterpriseComponentProps } from './enterprise.types'
 import { resolveEnterpriseIcon } from './enterprise-icons'
+import type { ExtensionSlotId } from './slots'
 
 /**
  * Section-shaped extension slots: a contribution becomes a whole section of a
@@ -33,7 +34,7 @@ export interface EnterpriseSection {
  */
 export function collectEnterpriseSections(
   features: Record<string, EnterpriseFeature>,
-  slotId: string,
+  slotId: ExtensionSlotId,
   t: TFunction,
   context?: EnterpriseComponentProps['context'],
 ): EnterpriseSection[] {

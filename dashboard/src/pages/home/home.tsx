@@ -28,6 +28,9 @@ import { logout, loginHrefWithRedirect } from "@/lib/auth";
 import { useSessionKeeper } from "@/hooks/use-session-keeper";
 import { buildBreadcrumbs } from "@/lib/breadcrumbs/build-breadcrumbs";
 import { useEnterpriseStore } from "@/enterprise/enterprise.store";
+import { useConfigStore } from "@/stores/config.store";
+import { startEnterprise } from "@/enterprise/start-enterprise";
+import EnterpriseLoadAlert from "@/enterprise/enterprise-load-alert";
 import { mergeEnterpriseSidebar } from "@/enterprise/enterprise-sidebar";
 import { withEnterpriseBreadcrumb } from "@/enterprise/enterprise-breadcrumbs";
 import { assertSidebarGroupRedirects } from "@/lib/navigation/assert-sidebar-group-redirects";
@@ -67,23 +70,16 @@ export default function Home() {
   // before they lapse, for users who asked to stay signed in.
   useSessionKeeper();
 
-  // Enterprise plugins load only after S3-capable credentials exist. The loader lives in a lazy chunk so community users never download it, and it never blocks the community UI.
+  // The enterprise loader reads the plugins bucket with these credentials, so it waits for them.
   const credsReady = !needsCreds || Boolean(credsQuery.data);
+  const pluginsBucket = useConfigStore((s) => s.config?.ENTERPRISE_PLUGINS_BUCKET);
   useEffect(() => {
     if (credsReady) {
-      // The catch covers the chunk fetch itself failing (e.g. a stale cached index.html
-      // referencing pruned chunk hashes). Without it the rejection is silent and an entitled
-      // deployment is indistinguishable from community mode — silence is reserved for
-      // "no access at all", never for breakage.
-      import("@/enterprise/loader")
-        .then((m) => m.ensureEnterpriseLoaded())
-        .catch((error: unknown) => {
-          console.error("[enterprise] loader chunk failed to load:", error);
-          useEnterpriseStore.getState().setStatus("error");
-        });
+      startEnterprise();
     }
-  }, [credsReady]);
+  }, [credsReady, pluginsBucket]);
   const enterpriseFeatures = useEnterpriseStore((s) => s.features);
+  const enterpriseStatus = useEnterpriseStore((s) => s.status);
 
   const goToAccountSettings = useCallback(() => {
     void navigate({ to: ACCOUNT_SETTINGS_BASE_PATH });
@@ -115,8 +111,8 @@ export default function Home() {
   );
 
   const sidebarEntries = useMemo(
-    () => mergeEnterpriseSidebar(getSidebarConfig(t), enterpriseFeatures, t),
-    [t, enterpriseFeatures],
+    () => mergeEnterpriseSidebar(getSidebarConfig(t), enterpriseFeatures, enterpriseStatus, t),
+    [t, enterpriseFeatures, enterpriseStatus],
   );
 
   const breadcrumbs = useMemo(
@@ -124,10 +120,11 @@ export default function Home() {
       withEnterpriseBreadcrumb(
         buildBreadcrumbs(routesConfig, location.pathname, t),
         enterpriseFeatures,
+        enterpriseStatus,
         location.pathname,
         t,
       ),
-    [location.pathname, t, enterpriseFeatures],
+    [location.pathname, t, enterpriseFeatures, enterpriseStatus],
   );
 
   if (import.meta.env.DEV) {
@@ -197,6 +194,7 @@ export default function Home() {
       }}
       accountMenuItems={accountMenuItems}
     >
+      <EnterpriseLoadAlert />
       <Outlet />
     </WorkspaceLayout>
   );

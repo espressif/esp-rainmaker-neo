@@ -7,7 +7,7 @@
 /**
  * Pre-paint re-apply of cached enterprise theming.
  *
- * An entitled plugin that themes the app (e.g. an accent-color feature) caches its
+ * A plugin that themes the app (e.g. an accent-color feature) caches its
  * document-level CSS and `data-*` attributes under one localStorage key so the *next* load can
  * re-apply them synchronously from `main.tsx`, before first paint — the plugin itself only
  * loads well after login, which would otherwise flash the default theme on every refresh.
@@ -15,8 +15,8 @@
  * The host side is generic and knows nothing about what the theming is: it injects whatever
  * CSS the cache holds (size-capped) and sets only `data-`-prefixed attributes on the root
  * element. The cache carries the same trust as any other same-origin localStorage value and is
- * cosmetic only. The loader clears it whenever a session resolves to community mode, so
- * revoked deployments self-heal on their next load.
+ * cosmetic only. `startEnterprise` clears it whenever a session resolves to community mode, so
+ * a deployment whose plugins were removed self-heals on its next load.
  */
 
 const THEME_CACHE_STORAGE_KEY = 'rmng-enterprise-theme-cache'

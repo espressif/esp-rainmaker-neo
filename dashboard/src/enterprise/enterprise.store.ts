@@ -17,7 +17,13 @@ import type { ExtensionContribution, ManifestFeature, RouteContribution } from '
 
 export type EnterpriseStatus = 'idle' | 'loading' | 'ready' | 'community' | 'error'
 
-export type FeatureStatus = 'loaded' | 'unavailable' | 'incompatible'
+/**
+ * `not-deployed`: a backend stack the feature needs is absent, so the feature is simply not part of this deployment. `failed`: it should have loaded and did not.
+ */
+export type FeatureStatus = 'loaded' | 'not-deployed' | 'incompatible' | 'version-mismatch' | 'failed'
+
+/** Features that belong to this deployment but cannot run: worth showing, so the admin learns something is wrong. */
+export const BROKEN_FEATURE_STATUSES: readonly FeatureStatus[] = ['incompatible', 'version-mismatch', 'failed']
 
 export interface EnterpriseFeature {
   entry: ManifestFeature
@@ -30,6 +36,7 @@ interface EnterpriseState {
   features: Record<string, EnterpriseFeature>
   setStatus: (status: EnterpriseStatus) => void
   upsertFeature: (feature: EnterpriseFeature) => void
+  clearFeatures: () => void
 }
 
 export const useEnterpriseStore = create<EnterpriseState>()((set) => ({
@@ -38,6 +45,7 @@ export const useEnterpriseStore = create<EnterpriseState>()((set) => ({
   setStatus: (status) => set({ status }),
   upsertFeature: (feature) =>
     set((s) => ({ features: { ...s.features, [feature.entry.id]: feature } })),
+  clearFeatures: () => set({ features: {} }),
 }))
 
 export interface EnterpriseRouteMatch {

@@ -1,0 +1,20 @@
+[
+  {
+    "id": "advanced-controls",
+    "labelKey": "common:enterprise.catalog.advancedControls.label",
+    "labelFallback": "Advanced Controls",
+    "descriptionKey": "common:enterprise.catalog.advancedControls.description",
+    "descriptionFallback": "Manage high-impact deployment controls and privileged operations, such as transferring super admin rights and granting read-only access to logs.",
+    "icon": "sliders-horizontal",
+    "path": "/home/ent/advanced-controls"
+  },
+  {
+    "id": "services-configuration",
+    "labelKey": "common:enterprise.catalog.servicesConfiguration.label",
+    "labelFallback": "Services Configuration",
+    "descriptionKey": "common:enterprise.catalog.servicesConfiguration.description",
+    "descriptionFallback": "Enable and configure optional deployment services, such as role-based access control and HTTP node APIs.",
+    "icon": "server-cog",
+    "path": "/home/ent/services-configuration"
+  }
+]

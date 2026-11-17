@@ -205,11 +205,9 @@ waves_for = $(if $(filter all,$1),$(or $(strip $(foreach w,$(CDK_STACK_WAVES),$(
 reverse = $(strip $(call reverse_,$1))
 reverse_ = $(if $1,$(call reverse_,$(wordlist 2,$(words $1),$1)) $(firstword $1))
 
-# Deploying `claim` stands up a billable KMS CA key, and deploying `ent` flips enterprise
-# mode on (cross-account read grant), so the all-groups deploy sweep skips both.
-# `make deploy-claim` / `make deploy-ent` still deploy them on request, and `make publish`
-# still ships their templates.
-DEPLOY_SKIP_GROUPS := claim ent
+# Deploying `claim` stands up a billable KMS CA key, so the all-groups deploy sweep skips it.
+# `make deploy-claim` still deploys it on request, and `make publish` still ships its template.
+DEPLOY_SKIP_GROUPS := claim
 
 # Only cdk/apps/rmng.py synthesises AdminDashboardStack (s3deploy.Source.asset -> $(DASHBOARD_DIST)),
 # so only rmng-group verbs depend on the dashboard. Every other group deploys without waiting on npm,

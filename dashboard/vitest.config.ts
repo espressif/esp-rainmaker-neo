@@ -26,6 +26,7 @@ export default defineConfig({
       'src/pages/**/*.test.ts',
       'src/stores/**/*.test.ts',
       'src/aws/**/*.test.ts',
+      'src/enterprise/**/*.test.ts',
     ],
   },
 })

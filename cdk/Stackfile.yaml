@@ -40,9 +40,9 @@ packages:
     groups:
       - support
       - espuser-pro
+      - dashboard-plugins
       - insights
       - private-agents
-      - ent
 
 groups:
   espuser:
@@ -69,16 +69,6 @@ groups:
     stacks:
       - rmng-claim-base
       - rmng-claim-core
-
-  ent:
-    friendly_name: "Enterprise Dashboard Assets"
-    description:
-      "Runtime-loaded enterprise dashboard features: grants the admin browser
-      role read access to Espressif's central bucket of signed feature
-      manifests and plugin bundles."
-    mandatory: false
-    stacks:
-      - rmng-ent-base
 
   alexa:
     friendly_name: "Amazon Alexa"
@@ -118,6 +108,15 @@ groups:
     mandatory: false
     stacks:
       - rmng-controller-base
+
+  dashboard-plugins:
+    friendly_name: "Enterprise Dashboard Features"
+    description:
+      "Enterprise features for the admin dashboard, loaded from a bucket in
+      this deployment"
+    mandatory: false
+    stacks:
+      - rmng-dashboard-plugins
 
   bridge:
     friendly_name: "ESP Bridge"
@@ -195,6 +194,17 @@ stacks:
     template: espuser-pro-base.template.json
     depends_on:
       - espuser-base
+    regions:
+      mode: all
+      explicit: []
+    parameters: {}
+
+  rmng-dashboard-plugins:
+    friendly_name: "RainMaker Dashboard Plugins"
+    stack_name: rmng-dashboard-plugins
+    template: rmng-dashboard-plugins.template.json
+    depends_on:
+      - rmng-base
     regions:
       mode: all
       explicit: []
@@ -336,17 +346,6 @@ stacks:
     friendly_name: "RainMaker Claim Base"
     stack_name: rmng-claim-base
     template: rmng-claim-base.template.json
-    depends_on:
-      - rmng-base
-    regions:
-      mode: all
-      explicit: []
-    parameters: {}
-
-  rmng-ent-base:
-    friendly_name: "RainMaker Enterprise Base"
-    stack_name: rmng-ent-base
-    template: rmng-ent-base.template.json
     depends_on:
       - rmng-base
     regions:

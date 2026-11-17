@@ -29,7 +29,7 @@ export type EnterpriseComponent = ComponentType<EnterpriseComponentProps>
 /**
  * What a plugin bundle hands to `globalThis.__RMNG_ENTERPRISE_REGISTER__` when imported.
  * `contributes` is honoured only by the DEV `?enterpriseDevUrl=` escape hatch — in production
- * contributions come exclusively from the signed manifest.
+ * contributions come exclusively from the plugin index.
  */
 export interface RegisteredPlugin {
   id: string

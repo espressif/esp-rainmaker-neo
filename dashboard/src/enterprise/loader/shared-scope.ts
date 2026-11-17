@@ -20,6 +20,7 @@ import * as reactErrorBoundary from 'react-error-boundary'
 import * as espdComponents from '@espressif/dashboard-ui-components/components'
 import * as espdLayouts from '@espressif/dashboard-ui-components/layouts'
 import * as espdCommon from '@espressif/dashboard-ui-components/common'
+import { hostServices } from './host-services'
 
 /**
  * The host half of the plugin dependency contract: plugin bundles are built with these packages
@@ -49,10 +50,11 @@ const sharedScope: Record<string, unknown> = {
   espdComponents,
   espdLayouts,
   espdCommon,
+  host: hostServices,
 }
 
 /** Shared-package contract version; plugins declare a semver range against it. */
-export const HOST_SDK_VERSION = '1.0.0'
+export const HOST_SDK_VERSION = '1.1.0'
 
 export const SHARED_MODULE_KEYS: readonly string[] = Object.keys(sharedScope)
 
