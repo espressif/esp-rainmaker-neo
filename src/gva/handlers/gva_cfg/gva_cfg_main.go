@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 
@@ -62,15 +63,6 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	return response, nil
 }
 
-// updateVAClientRedirectURIs registers redirectURIs on the OIDC va-client registry row, shared by Alexa and GVA (union semantics; other fields preserved).
-func updateVAClientRedirectURIs(ctx context.Context, clientID string, redirectURIs []string) error {
-	svc := clients.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil))
-	if _, err := svc.AddRedirectURIs(clientID, redirectURIs); err != nil {
-		return rmerror.NewRMError(err, "failed to add OIDC va-client redirect URIs")
-	}
-	return nil
-}
-
 func handleStoreConfig(ctx context.Context, request events.APIGatewayProxyRequest) events.APIGatewayProxyResponse {
 	var configRequest gva.ServiceAccount
 	if err := rmngrequest.ExtractRequestStruct(request, &configRequest); err != nil {
@@ -82,16 +74,18 @@ func handleStoreConfig(ctx context.Context, request events.APIGatewayProxyReques
 	redirectURI := "https://oauth-redirect.googleusercontent.com/r/" + configRequest.ProjectID
 	redirectURIs := []string{redirectURI}
 
-	// Register GVA's redirect URI against the OIDC va-client registry row.
-	vaClientID := os.Getenv("OIDC_VA_CLIENT_ID")
+	vaClientID := os.Getenv("OIDC_LINK_CLIENT_ID")
 	if vaClientID == "" {
-		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("OIDC_VA_CLIENT_ID not configured"))
+		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("OIDC_LINK_CLIENT_ID not configured"))
 	}
-
-	err := updateVAClientRedirectURIs(ctx, vaClientID, redirectURIs)
-	if err != nil {
-		rlog.Error(ctx).Err(err).Msg("failed to update OIDC va-client")
-		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("failed to update OIDC va-client"))
+	svc := clients.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil))
+	_, err := svc.AddRedirectURIs(vaClientID, redirectURIs)
+	switch {
+	case errors.Is(err, clients.ErrInvalidRedirectURI):
+		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(rmerror.TopMessage(err)))
+	case err != nil:
+		rlog.Error(ctx).Err(err).Msg("failed to update the OIDC client")
+		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("failed to update the OIDC client"))
 	}
 
 	// Store the entire service account JSON as a single SSM parameter

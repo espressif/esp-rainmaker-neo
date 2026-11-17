@@ -284,6 +284,15 @@ var _ = Describe("clients.Service", func() {
 			_, err := svc.AddRedirectURIs("nope", []string{"com.example://x"})
 			Expect(err).To(HaveOccurred())
 		})
+
+		It("refuses a URI registration would refuse, and adds none of the batch (negative)", func() {
+			_, _ = svc.Create(publicClient("rm_v"))
+			_, err := svc.AddRedirectURIs("rm_v", []string{"https://ok.example.com/cb", "javascript:alert(1)"})
+			Expect(err).To(MatchError(clients.ErrInvalidRedirectURI))
+			got, err := svc.Get("rm_v")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got.RedirectURIs).To(ConsistOf("com.example://cb"))
+		})
 	})
 
 	Describe("Get", func() {

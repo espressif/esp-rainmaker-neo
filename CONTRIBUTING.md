@@ -34,6 +34,8 @@ See [BUILD.md](BUILD.md) for the rest of the setup.
 - **Go**: [Ginkgo](https://onsi.github.io/ginkgo/) v2 + Gomega, in `*_test.go`
   alongside the code. New behaviour needs both the happy path and the negative
   cases — error paths, permission denials, malformed input.
+- **Python unit tests**: pytest, under `test/unittest/`; `make test` runs them
+  (`make py-test` on its own), and they need no AWS account or deployed stack.
 - **Python integration tests**: pytest, under `test/itest/`.
 - **Dashboard**: Vitest, `*.test.ts(x)` alongside the component.
 

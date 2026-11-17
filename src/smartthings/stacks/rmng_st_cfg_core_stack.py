@@ -4,13 +4,25 @@
 
 
 from aws_cdk import (
+    CfnOutput,
     Stack,
     aws_ssm as ssm,
 )
 from constructs import Construct
 
-from app_common import CommonResources, create_api_deployment
-from src.rmneo.stacks.base_res_constants import SSM_PARAMETERS
+from app_common import (
+    CommonResources,
+    DiscoveredApi,
+    create_api_deployment,
+    create_oauth_client,
+)
+from src.espuser.stacks.base_res_constants import USER_TABLE_NAMES
+from src.rmneo.stacks.base_res_constants import (
+    SMART_THINGS_CLIENT_ID,
+    SMART_THINGS_OAUTH_CLIENT,
+    SSM_PARAMETERS,
+    VOICE_ASSISTANT_CLIENT_SECRET_PARAMS,
+)
 from src.smartthings.handlers.st_cfg.stack import STCfgAPI
 
 
@@ -67,13 +79,23 @@ class RMNGSTCfgCoreStack(Stack):
             self, SSM_PARAMETERS['ESP_ADMIN_USER_POOL_CLIENT_ID'])
         common_resources.esp_admin_user_pool_jwks = ssm.StringParameter.value_for_string_parameter(
             self, SSM_PARAMETERS['ESP_ADMIN_USER_POOL_JWKS'])
-        # The config API registers the SmartThings callback URLs on the shared
-        # voice-assistant OIDC client, so it needs that client's id.
-        common_resources.esp_user_va_client_id = ssm.StringParameter.value_for_string_parameter(
-            self, SSM_PARAMETERS['ESP_USER_VA_CLIENT_ID'])
 
         self.st_cfg = STCfgAPI(self, "STCfgAPI", common_resources,
                                admin_integrations_resource_id=admin_integrations_resource_id)
+
+        neo_api = DiscoveredApi(
+            ssm.StringParameter.value_for_string_parameter(self, SSM_PARAMETERS['API_GATEWAY_URL']),
+            ssm.StringParameter.value_for_string_parameter(self, SSM_PARAMETERS['RMNG_API_RESOURCE']),
+            ssm.StringParameter.value_for_string_parameter(self, SSM_PARAMETERS['RMNG_API_AUDIENCES']))
+        create_oauth_client(
+            self, "STOAuthClient",
+            name="smartthings-oauth-client",
+            table_name=USER_TABLE_NAMES['OAUTH_CLIENTS'],
+            client=SMART_THINGS_OAUTH_CLIENT,
+            secret_param=VOICE_ASSISTANT_CLIENT_SECRET_PARAMS[SMART_THINGS_CLIENT_ID],
+            api=neo_api,
+        )
+        CfnOutput(self, "EspSmartThingsClientId", value=SMART_THINGS_CLIENT_ID, description="ESP User Samsung SmartThings Client ID")
 
         # Publish the routes to the shared API's prod stage — rmng-base owns that stage
         # and snapshotted it before these methods existed. See create_api_deployment.

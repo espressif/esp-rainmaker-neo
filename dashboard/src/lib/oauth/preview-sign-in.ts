@@ -13,13 +13,13 @@
  * request — `response_type=code`, a registered client, a registered `redirect_uri`, a scope and
  * an S256 PKCE challenge, which the endpoint requires.
  *
- * The client used is the voice-assistant client, the one already registered for this deployment.
+ * The client used is the active assistant's own, the one already registered for this deployment.
  * It is *confidential*, so the returned code is never redeemed — see `oauth-preview`.
  */
 
 import { oauthClientsApi, type OAuthClient } from '@/api/oauth-clients'
 import { generatePkceParams } from '@/lib/auth'
-import { getAuthorizeUrl, getVaClientId } from '@/lib/config'
+import { getAuthorizeUrl } from '@/lib/config'
 import { safeLocalStorage } from '@/lib/safe-storage'
 
 /** Dashboard route that receives the authorization response. */
@@ -193,9 +193,8 @@ function buildAuthorizeRequestUrl(params: {
  * Registers this origin's callback if needed, then opens the sign-in page in a new tab.
  * Rejects with a message worth showing when the client cannot be prepared.
  */
-export async function openPreviewSignIn(): Promise<void> {
+export async function openPreviewSignIn(clientId: string): Promise<void> {
   const authorizeUrl = getAuthorizeUrl()
-  const clientId = getVaClientId()
   if (!authorizeUrl || !clientId) {
     throw new Error('This deployment has not published an authorization endpoint yet.')
   }

@@ -309,12 +309,21 @@ func (s *Service) Update(clientID string, in UpdateInput) (*ClientResponse, erro
 // AddRedirectURIs unions redirectURIs onto the client's redirect_uris set in one conditional
 // write (DynamoDB set-union dedups; no read-modify-write). Returns the client with the merged set.
 func (s *Service) AddRedirectURIs(clientID string, redirectURIs []string) (*ClientResponse, error) {
+	// The same rules as registration, checked before the write so one bad URI adds none of the batch.
+	for _, uri := range redirectURIs {
+		if err := validateRedirectURI("redirect_uris", uri); err != nil {
+			return nil, rmerror.NewRMError(ErrInvalidRedirectURI, err.Error())
+		}
+	}
 	merged, err := s.db.AddRedirectURIs(clientID, redirectURIs, time.Now().Unix())
 	if err != nil {
 		return nil, err
 	}
 	return &ClientResponse{ClientID: clientID, RedirectURIs: merged}, nil
 }
+
+// ErrInvalidRedirectURI is a redirect URI registration would refuse, so a caller can answer it as bad input.
+var ErrInvalidRedirectURI = errors.New("invalid redirect URI")
 
 // Delete permanently removes the client from the registry.
 func (s *Service) Delete(clientID string) error {

@@ -14,7 +14,7 @@ Runs the whole procedure in one command:
      Identity Token Creator role on the project        -> Step 4 (role assignment)
   4. create a JSON key, held in memory                 -> Step 4 (Generate a JSON key)
   5. POST the key to the backend config API            -> Store Configuration (persists to
-     SSM /rmng/gva/service_account_json and updates the Cognito va-client redirect URIs)
+     SSM /rmng/gva/service_account_json and registers the Google redirect URI on rainmaker-neo-gva-client)
 
 It does NOT touch the Google Home Developer Console: creating the Home project
 and the cloud-to-cloud integration (OAuth client, auth/token/fulfillment URLs,

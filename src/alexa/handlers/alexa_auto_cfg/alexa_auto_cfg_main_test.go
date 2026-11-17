@@ -37,11 +37,11 @@ func TestAlexaAutoCfg(t *testing.T) {
 }
 
 const (
-	vaClientID    = "va-client"
+	vaClientID    = "rainmaker-neo-alexa-client"
 	testRegion    = "us-east-1"
 	testSkillID   = "amzn1.ask.skill.test"
 	adminUserID   = "51bbf520-70a1-70ac-627f-07d1af2a930c"
-	vaSecretParam = "/rmng/base/esp-user-va-client-secret"
+	vaSecretParam = "/rmng/alexa/esp-user-client-secret"
 	skillFn       = "rmng-alexa-skill-" + testRegion
 	dummyUserID   = "test-dummy-user-id"
 )
@@ -61,7 +61,7 @@ func (c liveGrantFailsIn) AddPermission(ctx context.Context, params *lambda.AddP
 	return c.LambdaMock.AddPermission(ctx, params, optFns...)
 }
 
-// seedVAClient adds the espuser-oauth-clients table and seeds the va-client row the
+// seedVAClient adds the espuser-oauth-clients table and seeds Alexa's own client row the
 // worker registers Alexa's account-linking redirect URIs on.
 func seedVAClient(ctx context.Context) {
 	awscommon.GetDynamoDBClient().(*mock.DynamoDBMock).AddTable("espuser-oauth-clients", "client_id", "")
@@ -76,7 +76,7 @@ func seedVAClient(ctx context.Context) {
 	Expect(err).To(BeNil())
 }
 
-// vaClientURIs reads the seeded va-client row's currently registered redirect URIs.
+// vaClientURIs reads the seeded Alexa client row's currently registered redirect URIs.
 func vaClientURIs(ctx context.Context) []string {
 	c, err := clients.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil)).Get(vaClientID)
 	Expect(err).To(BeNil())
@@ -86,8 +86,8 @@ func vaClientURIs(ctx context.Context) []string {
 var _ = BeforeSuite(func() {
 	os.Setenv("RMNG_REGION", testRegion)
 	os.Setenv("ESP_USER_API_URL", "https://user.example.com/prod")
-	os.Setenv("OIDC_VA_CLIENT_ID", vaClientID)
-	os.Setenv("OIDC_VA_CLIENT_SECRET_PARAM", vaSecretParam)
+	os.Setenv("OIDC_LINK_CLIENT_ID", vaClientID)
+	os.Setenv("OIDC_LINK_CLIENT_SECRET_PARAM", vaSecretParam)
 	os.Setenv("AWS_LAMBDA_FUNCTION_NAME", "rmng-alexa-auto-cfg")
 	// Shrink build waits so the worker's WaitForBuild returns fast in tests.
 	buildTimeout = 50 * time.Millisecond
@@ -183,12 +183,12 @@ var _ = Describe("Alexa Auto Cfg", func() {
 		_, _ = test_utils.SetupTestAdminUser(ctx, adminUserID, "admin-email")
 		_, _ = test_utils.SetupTestNonAdminUser(ctx, dummyUserID, "dummy-email")
 
-		// Account linking needs the va-client row to register redirect URIs on, and the
+		// Account linking needs Alexa's client row to register redirect URIs on, and the
 		// client secret it authenticates with — both read at runtime, not from the env.
 		seedVAClient(ctx)
 		_, err := awscommon.GetSSMClient().PutParameter(ctx, &ssm.PutParameterInput{
 			Name:  aws.String(vaSecretParam),
-			Value: aws.String("va-client-secret"),
+			Value: aws.String("alexa-client-secret"),
 			Type:  ssmtypes.ParameterTypeSecureString,
 		})
 		Expect(err).To(BeNil())
@@ -320,9 +320,9 @@ var _ = Describe("Alexa Auto Cfg", func() {
 			Entry("profile has no vendor", 200, `{"vendors":[]}`, http.StatusBadRequest),
 		)
 
-		It("refuses before creating a skill when the va-client secret parameter is not configured", func() {
-			os.Unsetenv("OIDC_VA_CLIENT_SECRET_PARAM")
-			DeferCleanup(os.Setenv, "OIDC_VA_CLIENT_SECRET_PARAM", vaSecretParam)
+		It("refuses before creating a skill when the linking client's secret parameter is not configured", func() {
+			os.Unsetenv("OIDC_LINK_CLIENT_SECRET_PARAM")
+			DeferCleanup(os.Setenv, "OIDC_LINK_CLIENT_SECRET_PARAM", vaSecretParam)
 			before := createSkillCalls()
 			resp, _ := handleRequest(ctx, adminRequest(validBody()))
 			Expect(resp.StatusCode).To(Equal(http.StatusInternalServerError))
@@ -536,7 +536,7 @@ var _ = Describe("Alexa Auto Cfg", func() {
 			Expect(*perm.Principal).To(Equal("alexa-connectedhome.amazon.com"))
 			Expect(lambdaMock.Permissions).NotTo(HaveKey(mock.PermissionKey(skillFn, alexa_skill.AlexaSetupStatementID(testSkillID))))
 
-			// Redirect URLs reached the OIDC va-client row.
+			// Redirect URLs reached Alexa's own OIDC client row.
 			Expect(vaClientURIs(ctx)).To(
 				ContainElement("https://pitangui.amazon.com/api/skill/link/M1ABC"))
 
@@ -727,8 +727,8 @@ var _ = Describe("Alexa Auto Cfg", func() {
 				_ = httpM.RegisterResponse(smapi.LWATokenURL, "POST", 400, `{"error":"invalid_grant"}`)
 			}, "authenticate", "connect it again"),
 			Entry("account-linking config missing", func() {
-				os.Unsetenv("OIDC_VA_CLIENT_SECRET_PARAM")
-				DeferCleanup(os.Setenv, "OIDC_VA_CLIENT_SECRET_PARAM", vaSecretParam)
+				os.Unsetenv("OIDC_LINK_CLIENT_SECRET_PARAM")
+				DeferCleanup(os.Setenv, "OIDC_LINK_CLIENT_SECRET_PARAM", vaSecretParam)
 			}, "set account linking", "account-linking config not set"),
 			Entry("Alexa has minted no credentials", func() {
 				_ = httpM.RegisterResponse(smapi.BaseURL+"/v1/skills/"+testSkillID+"/credentials", "GET", 200, `{}`)

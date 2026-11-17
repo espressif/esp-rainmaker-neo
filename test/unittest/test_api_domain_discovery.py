@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for the API custom-domain discovery handler. Run with `pytest test/scripts/`; no AWS needed."""
+"""Unit tests for the API custom-domain discovery handler. Run with `pytest test/unittest/`; no AWS needed."""
 import os
 import sys
 import types

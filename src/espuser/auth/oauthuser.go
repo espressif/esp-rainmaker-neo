@@ -540,7 +540,7 @@ func (c TokenClaims) IsMachine() bool {
 	return c.GrantType == oidc.GrantClientCredentials
 }
 
-// FirstPartyClientIDs is the set of OAuth clients that ARE this account -- the web dashboard, the mobile app, any surface we ship -- as opposed to third parties that authenticate our users but are not us. Comma-separated in USER_CLIENT_ID so a new first-party app is added by config, not code: one id today, "web,mobile" tomorrow.
+// FirstPartyClientIDs lists the OAuth clients that are our own apps rather than third parties that authenticate our users, from the comma-separated USER_CLIENT_ID that CDK builds with first_party_client_ids() in base_res_constants.py.
 func FirstPartyClientIDs() []string {
 	clientIDs := make([]string, 0)
 	for _, id := range strings.Split(os.Getenv("USER_CLIENT_ID"), ",") {

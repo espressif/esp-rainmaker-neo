@@ -75,7 +75,7 @@ These OAuth 2.1 client invariants are enforced at create/patch so the admin UI f
    **`default_resource` is at most one of them**: the resource an access token is for when a request names none (RFC 9068 §3). A value outside `allowed_resources` is refused at write time. Absent means a request that names no resource is refused with `invalid_target`; no token is ever addressed to the client id.
 
 9. **`first_party` marks an app we ship ourselves** — the RainMaker app, a mobile client — as opposed to a
-   delegated partner registered in the same table (the voice assistant `va-client`, the MCP proxy
+   delegated partner registered in the same table (the voice-assistant clients such as `rainmaker-neo-alexa-client`, the MCP proxy
    `mcp-oauth-client`). It is what account-management endpoints gate on: `GET`/`DELETE /v1/user/sessions`
    admit only a first-party client's user token, so a partner delegated *device* control cannot list or end
    a person's sign-ins. **Absent means `false`** — first-party is opt-in, set deliberately at registration
@@ -138,20 +138,29 @@ Returns every client. By default the `secret` is omitted; pass **`?get_secret=tr
 
 ## Seeding the current clients (deploy-time)
 
-The clients that exist today are created by a **deploy-time custom resource** in the **base stack** (not the clients-API/core stack). Each create is a conditional `PutItem` on `attribute_not_exists(client_id)`, so **a client that already exists is left untouched** — re-deploys never clobber a client an admin has since edited.
+The clients that exist today are created by a **deploy-time custom resource** in the **base stack** (not the clients-API/core stack). A missing client is created with a conditional `PutItem` on `attribute_not_exists(client_id)`. An existing one only gains the declared fields it lacks (`SET field = if_not_exists(field, value)`), so **a value already on the row, an admin's edit included, is never replaced**, and a row that lacks a declared field gets it (e.g. `first_party` on a hand-made `rainmaker-neo-home-app-client`). A client the seed does not declare is never touched: a deployment that has `user-pool-client` or `va-client` rows keeps them exactly as they are, no deploy grants them a resource, and an operator removes them through this API. The secret and resources are never touched by the seed, and `redirect_uris` is only added to (a set `ADD`), so an app that registers its own callback through this API keeps it and the seeded one alongside. A row written outside this API can hold its redirects as a DynamoDB list, which `ADD` cannot extend; the seed writes that row's redirects back as the set union, only if no registry write moved its `updated_at` since the seed read it.
+
+Each voice assistant's client is created the same way by that assistant's own stack (`rmng-alexa-cfg-core`, `rmng-gva-core`, `rmng-st-cfg-core`), so a deployment without the assistant carries no client. That seed also writes the client's secret to a SecureString SSM parameter, `/rmng/<assistant>/esp-user-client-secret`, which is how an operator gets it into the assistant's console without reading this API. It is rewritten whenever the seed runs (a deploy that changes the client's definition or `SeedVersion`), so a secret changed through this API is not copied until then. It is never a stack output.
 
 Seed set = ESP-User OIDC clients for the current first-party apps, with `client_id` fixed so the apps and tests keep a stable id. Each is an OAuth 2.1 `authorization_code`/`refresh_token` client:
 
-| client_id | client_type | notable config |
-| --- | --- | --- |
-| `user-pool-client` | public | `authorization_code`+`refresh_token`, `require_pkce=true`, `first_party=true` |
-| `va-client` | confidential | `authorization_code`; a plaintext `secret` is generated |
+| client_id | client_type | notable config | resources (default first) |
+| --- | --- | --- | --- |
+| `rainmaker-neo-home-app-client` | public | `require_pkce=true`, `first_party=true`; redirect and post-logout redirect `rainmaker://com.espressif.novahome/success` (the Espressif RainMaker Home app); the password API's client, published as espuser-base `EspUserClientId` | neo, ESP User |
+| `rainmaker-neo-alexa-client` | confidential | created by `rmng-alexa-cfg-core`; a plaintext `secret` is generated; redirects added by Alexa's config API | neo |
+| `rainmaker-neo-gva-client` | confidential | created by `rmng-gva-core`; a plaintext `secret` is generated; redirects added by Google Home's config API | neo |
+| `rainmaker-neo-smartthings-client` | confidential | created by `rmng-st-cfg-core`; a plaintext `secret` is generated; redirects added by SmartThings' config API | neo |
+| `mcp-oauth-client` | confidential | a plaintext `secret` is generated; its callback is added by rmng-core | MCP server |
 
 > The registry accepts only `authorization_code`/`refresh_token` grants.
 
+### Resources
+
+An API's names are known only once its stack has deployed it (neo and MCP after ESP User), so each stack grants its own: espuser-base adds every name in `EspUserApiAudiences`, rmng-base `RmngApiAudiences`, rmng-core `McpAudiences` (the execute-api URL and, when a custom domain is mapped, the domain's), to the clients `SEEDED_CLIENT_APIS` (`base_res_constants.py`) names for that API; each voice assistant's stack grants neo's names to its own client when it creates it. Each grant adds the names missing from `allowed_resources` and sets `default_resource` to the API's `…Resource` only on a client that has none; it never removes anything, skips a client an admin deleted, and runs again whenever the names change (a custom domain mapped later). The write is conditioned on the row's `updated_at`, so an admin edit made at the same moment is reread rather than lost.
+
 ## Consumers of the registry
 
-- **OTP direct-token** ([auth-flows.md](auth-flows.md)): `POST /v1/auth/otp/initiate` looks the client up in the registry and rejects an **unknown** client with `invalid_client`. **Any registered client may use direct-token OTP** — there is no per-client gate. This is safe because client registration is admin-only (there is no dynamic/third-party registration — RFC 7591 is deferred), so every registered client is one an admin vetted and placed here. (This is broader than the `first_party` flag: a delegated partner such as `va-client` is registered-and-trusted for the paths it is granted, yet is *not* first-party, so it is still refused at account-management endpoints. Two different questions — "did we put this client here?" versus "is it our own app?") If third-party or dynamic registration is ever added, a per-client gate must be reintroduced before then.
+- **OTP direct-token** ([auth-flows.md](auth-flows.md)): `POST /v1/auth/otp/initiate` looks the client up in the registry and rejects an **unknown** client with `invalid_client`. **Any registered client may use direct-token OTP** — there is no per-client gate. This is safe because client registration is admin-only (there is no dynamic/third-party registration — RFC 7591 is deferred), so every registered client is one an admin vetted and placed here. (This is broader than the `first_party` flag: a delegated partner such as `rainmaker-neo-alexa-client` is registered-and-trusted for the paths it is granted, yet is *not* first-party, so it is still refused at account-management endpoints. Two different questions — "did we put this client here?" versus "is it our own app?") If third-party or dynamic registration is ever added, a per-client gate must be reintroduced before then.
 - **Token / authorize** (later slices): confidential-client auth against the stored `secret`, `redirect_uris`/`require_pkce` enforcement.
 
 ## Storage

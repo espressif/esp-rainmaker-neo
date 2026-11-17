@@ -381,14 +381,14 @@ func AccountLinkingRedirectURLs(vendorID string) []string {
 }
 
 // AccountLinkingScopes are the scopes Alexa requests when linking. They must all be in the
-// va-client's allowed set: espuser's authorize endpoint rejects the whole request with
+// Alexa client's allowed set: espuser's authorize endpoint rejects the whole request with
 // invalid_scope if any one of them is not (see clients.AllowsScopes), which surfaces in the
 // Alexa app as "Unable to link the skill at this time". This is the same set the manual
 // setup instructions and the SmartThings/GVA connectors use.
 var AccountLinkingScopes = []string{"openid", "email", "phone", "profile"}
 
 // AccountLinkingPayload builds the accountLinkingRequest body pointing Alexa at the ESP User
-// OIDC provider's va-client (authURL/tokenURL come from its discovery document).
+// OIDC provider's Alexa client (authURL/tokenURL come from its discovery document).
 func AccountLinkingPayload(authURL, tokenURL, clientID, clientSecret string) map[string]interface{} {
 	return map[string]interface{}{
 		"type":              "AUTH_CODE",

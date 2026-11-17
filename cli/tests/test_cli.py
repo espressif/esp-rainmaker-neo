@@ -12,6 +12,7 @@ import json
 import os
 import sys
 import tomllib
+import types
 from pathlib import Path
 
 import click
@@ -2068,3 +2069,20 @@ def test_a_live_user_api_token_is_reused():
     cached = user.user_api_access_token
     assert user.user_api_token() == cached
     assert sent == []
+
+
+# --- voice-assistant account linking -------------------------------------------
+
+@pytest.mark.parametrize('printer, client_id, secret_param', [
+    ('print_alexa_instructions', 'rainmaker-neo-alexa-client', '/rmng/alexa/esp-user-client-secret'),
+    ('print_gva_instructions', 'rainmaker-neo-gva-client', '/rmng/gva/esp-user-client-secret'),
+    ('print_smartthings_instructions', 'rainmaker-neo-smartthings-client', '/rmng/smartthings/esp-user-client-secret'),
+])
+def test_each_assistant_guide_names_its_own_client(capsys, printer, client_id, secret_param):
+    from esp_morpheus.cli import guide
+    settings = types.SimpleNamespace(raw={}, source='rmng-outputs.json', alexa_region_arns={},
+                                     default_alexa_arn=None, st_region_arns={}, gva_fulfillment_url=None)
+    getattr(guide, printer)(settings)
+    printed = capsys.readouterr().out
+    assert f'Client Id: {client_id}' in printed or f'Client ID: {client_id}' in printed
+    assert secret_param in printed

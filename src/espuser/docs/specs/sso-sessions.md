@@ -445,7 +445,7 @@ server_error`: it is ours, not the caller's.
 **"First-party" is a property of the client, read at the edge.** Which app counts as first-party is not a
 hardcoded id but the `first_party` flag on the caller's `espuser-oauth-clients` row
 ([admin-clients.md](admin-clients.md)): the gate loads the client the token names and admits it only when
-that flag is set. `user-pool-client`, and any app we ship such as a mobile client, carries it; `va-client`
+that flag is set. `rainmaker-neo-home-app-client`, and any app we ship such as a mobile client, carries it; the voice-assistant clients
 and `mcp-oauth-client` — partners delegated device control — do not. It is read here rather than stamped
 into the token so that revoking a client's first-party standing takes effect on its next call, not an hour
 later at token expiry. The flag is admin-only, so a client can never mark itself first-party.

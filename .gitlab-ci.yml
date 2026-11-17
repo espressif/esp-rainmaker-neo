@@ -349,6 +349,23 @@ cli_test:
     - twine check --strict dist/*
 
 # -------------------------
+# Python unit tests under test/unittest: the CDK helpers, the OAuth client seed and the deploy scripts.
+# They need neither AWS credentials nor a deployment, so they run on every MR that touches Python.
+# -------------------------
+py_unittest:
+  stage: unittest
+  image: $CI_REGISTRY_IMAGE/rmng:go1.26.11_node24
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "**/*.py"
+        - requirements.txt
+        - pytest.ini
+        - Makefile
+  script:
+    - make py-test
+
+# -------------------------
 # Template for AWS deploy
 # -------------------------
 .deploy_template:

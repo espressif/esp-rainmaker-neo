@@ -2,8 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import hashlib
-import json
 import os
 import sys
 
@@ -35,16 +33,21 @@ from app_common import (
     discover_api_custom_domain,
     discover_cognito_custom_domain,
     discover_cognito_email_configuration,
+    grant_client_resources,
+    seed_oauth_clients,
 )
 from gsi_infra import GsiInfraCore, GsiReadinessGate, ManagedTable
 
 from ..handlers.publish_discovery.stack import PublishDiscovery
 from .base_res_constants import (
+    HOME_APP_CLIENT_ID,
+    SEEDED_CLIENT_SECRET_ATTRIBUTES,
     SEEDED_OAUTH_CLIENTS,
     USER_COGNITO_DOMAIN_PREFIXES,
     USER_INDEX_NAMES,
     USER_SSM_PARAMETERS,
     USER_TABLE_NAMES,
+    seeded_client_grants,
 )
 
 
@@ -212,86 +215,14 @@ class CreateUserTables(Construct):
 
     def _seed_oauth_clients(self) -> None:
         """Seed the ESP-User OIDC client registry (espuser-oauth-clients) for the current
-        first-party apps. Inline custom-resource, idempotent conditional PutItem per client
-        (an existing client is left untouched), so a re-deploy never clobbers admin edits."""
-
-        seeded_clients_json = json.dumps(SEEDED_OAUTH_CLIENTS, sort_keys=True)
-        seeded_clients_hash = hashlib.sha256(seeded_clients_json.encode()).hexdigest()
-
-        stack = Stack.of(self)
-        table_name = USER_TABLE_NAMES['OAUTH_CLIENTS']
-        table_arn = f"arn:aws:dynamodb:{stack.region}:{stack.account}:table/{table_name}"
-        seed_fn = lambda_.Function(
-            self, "SeedOAuthClientsFunction",
-            runtime=lambda_.Runtime.PYTHON_3_12,
-            handler="index.handler",
-            timeout=Duration.seconds(120),
-            environment={"SEEDED_CLIENTS": seeded_clients_json},
-            code=lambda_.Code.from_inline("""
-import json, os, time, secrets, boto3, urllib3
-from botocore.exceptions import ClientError
-
-http = urllib3.PoolManager()
-# First-party OIDC clients, injected from SEEDED_OAUTH_CLIENTS (base_res_constants.py).
-CLIENTS = json.loads(os.environ["SEEDED_CLIENTS"])
-
-def send(event, context, status, data=None):
-    body = json.dumps({
-        "Status": status, "Reason": "See CloudWatch " + context.log_stream_name,
-        "PhysicalResourceId": "seed-oauth-clients", "StackId": event["StackId"],
-        "RequestId": event["RequestId"], "LogicalResourceId": event["LogicalResourceId"],
-        "Data": data or {},
-    }).encode("utf-8")
-    http.request("PUT", event["ResponseURL"], body=body, headers={"content-type": ""})
-
-def handler(event, context):
-    try:
-        data = {}
-        if event["RequestType"] != "Delete":
-            # The Lambda runs in the target region, so boto3 resolves it from AWS_REGION.
-            table = boto3.resource("dynamodb").Table("%s")
-            now = int(time.time())
-            for c in CLIENTS:
-                item = dict(c)
-                item.setdefault("scopes", ["openid", "email", "phone", "profile"])
-                item.update({"created_at": now, "updated_at": now})
-                # Confidential clients get a generated plaintext secret (retrievable via list get_secret).
-                if item["client_type"] == "confidential":
-                    item["secret"] = secrets.token_urlsafe(32)
-                # Conditional create: a client that already exists is left untouched (no-op).
-                try:
-                    table.put_item(Item=item, ConditionExpression="attribute_not_exists(client_id)")
-                except ClientError as e:
-                    if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
-                        raise
-            # Return the current confidential-client secrets (minted above or from a prior deploy)
-            # so the stack can surface them; read them back rather than trust the local values. A
-            # confidential client with no secret means a stale row predating its confidential config
-            # (conditional PutItem never overwrites it) — fail loudly rather than emit an empty secret,
-            # which SSM rejects with an opaque PutParameter error.
-            for cid in ("va-client", "mcp-oauth-client"):
-                row = table.get_item(Key={"client_id": cid}).get("Item", {})
-                secret = row.get("secret", "")
-                if not secret:
-                    raise Exception(cid + " has no secret; delete the stale row so it is re-seeded as confidential")
-                data["VaClientSecret" if cid == "va-client" else "McpClientSecret"] = secret
-        send(event, context, "SUCCESS", data)
-    except Exception as e:
-        print("seed error:", e)
-        send(event, context, "FAILED")
-""" % (table_name,)),  # noqa: UP031 - the handler source is full of braces, so .format would need every one escaped
-        )
-        seed_fn.add_to_role_policy(iam.PolicyStatement(
-            actions=["dynamodb:PutItem", "dynamodb:GetItem"],
-            resources=[table_arn],
-        ))
-
-        self.seed_oauth_clients_cr = CustomResource(
-            self, "SeedOAuthClients", service_token=seed_fn.function_arn,
-            properties={
-                "ClientsHash": seeded_clients_hash,
-                "SeedVersion": 1,
-            },
+        first-party apps. A missing client is created; an existing one only gains the declared
+        fields it lacks, so a re-deploy never clobbers admin edits."""
+        self.seed_oauth_clients_cr = seed_oauth_clients(
+            self, "SeedOAuthClients",
+            name="espuser-oauth-clients-seed",
+            table_name=USER_TABLE_NAMES['OAUTH_CLIENTS'],
+            clients=SEEDED_OAUTH_CLIENTS,
+            secret_attributes=SEEDED_CLIENT_SECRET_ATTRIBUTES,
         )
         self.seed_oauth_clients_cr.node.add_dependency(self.oauth_clients_table)
 
@@ -576,6 +507,15 @@ class EspUserBaseStack(Stack):
             description="RFC 8707 resource a client requests to get an access token for the ESP User API"
         )
 
+        espuser_client_resources = grant_client_resources(
+            self, "EspUserApiClientResources",
+            name="espuser-api-client-resources",
+            table_name=USER_TABLE_NAMES['OAUTH_CLIENTS'],
+            grants=[(client_id, esp_user_api, is_default)
+                    for client_id, is_default in seeded_client_grants('espuser')],
+        )
+        espuser_client_resources.node.add_dependency(self.common_base_resources.user_tables.seed_oauth_clients_cr)
+
         CfnOutput(self, "EspUserApiAudiences",
             value=esp_user_api.audiences,
             description="Comma-separated audiences the ESP User API accepts in an access token"
@@ -609,8 +549,8 @@ class EspUserBaseStack(Stack):
         )
 
         CfnOutput(self, "EspUserClientId",
-            value="user-pool-client",
-            description="ESP User Client ID"
+            value=HOME_APP_CLIENT_ID,
+            description="ESP User Client ID: the RainMaker Home app's, which its browser sign-in uses and the password API issues to"
         )
 
         CfnOutput(self, "EspMcpClientId",
@@ -621,16 +561,6 @@ class EspUserBaseStack(Stack):
         CfnOutput(self, "EspMcpClientSecret",
             value=self.common_base_resources.user_tables.seed_oauth_clients_cr.get_att_string("McpClientSecret"),
             description="ESP User MCP OAuth Client Secret [visibility:private]"
-        )
-
-        CfnOutput(self, "EspVaClientId",
-            value="va-client",
-            description="ESP User Voice Assistant Client ID"
-        )
-
-        CfnOutput(self, "EspVaClientSecret",
-            value=self.common_base_resources.user_tables.seed_oauth_clients_cr.get_att_string("VaClientSecret"),
-            description="ESP User Voice Assistant Client Secret [visibility:private]"
         )
 
         CfnOutput(self, "EspAdminCognitoAuthorizerId",
@@ -732,7 +662,7 @@ class EspUserBaseStack(Stack):
         create_ssm_string_parameter(
             self, "EspUserClientIdParameter",
             parameter_name=USER_SSM_PARAMETERS['ESP_USER_CLIENT_ID'],
-            string_value="user-pool-client",
+            string_value=HOME_APP_CLIENT_ID,
             description="ESP User Client ID"
         )
 
@@ -748,20 +678,6 @@ class EspUserBaseStack(Stack):
             parameter_name=USER_SSM_PARAMETERS['ESP_MCP_CLIENT_SECRET'],
             string_value=self.common_base_resources.user_tables.seed_oauth_clients_cr.get_att_string("McpClientSecret"),
             description="ESP User MCP OAuth Client Secret"
-        )
-
-        create_ssm_string_parameter(
-            self, "EspVaClientIdParameter",
-            parameter_name=USER_SSM_PARAMETERS['ESP_VA_CLIENT_ID'],
-            string_value="va-client",
-            description="ESP VA Client ID"
-        )
-
-        create_ssm_string_parameter(
-            self, "EspVaClientSecretParameter",
-            parameter_name=USER_SSM_PARAMETERS['ESP_VA_CLIENT_SECRET'],
-            string_value=self.common_base_resources.user_tables.seed_oauth_clients_cr.get_att_string("VaClientSecret"),
-            description="ESP VA Client Secret"
         )
 
         create_ssm_string_parameter(

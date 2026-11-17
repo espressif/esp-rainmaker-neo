@@ -22,15 +22,15 @@ Two Lambda functions serve the GVA integration:
 
 ## Configuration
 
-### OIDC VA Client
+### OIDC client
 
-Account linking runs against the ESP User OIDC identity provider, not Cognito. A confidential OAuth 2.1 client (`va-client`) is seeded into the ESP User client registry (`espuser-oauth-clients`) for voice-assistant account linking:
+Account linking runs against the ESP User OIDC identity provider, not Cognito. A confidential OAuth 2.1 client of its own, `rainmaker-neo-gva-client`, is created in the ESP User client registry (`espuser-oauth-clients`) by the `rmng-gva-core` stack for Google Home account linking, so a deployment without Google Home carries none and a leaked or rotated secret touches Google Home alone:
 - **OAuth flow**: Authorization Code Grant (`grant_types`: `authorization_code`, `refresh_token`)
 - **Scopes**: `openid`, `email`, `phone`, `profile`
-- **Redirect URIs**: registered dynamically by the config API (there are no hardcoded initial values); each POST unions its URIs onto the client's existing set, so the Google and Alexa redirect URIs coexist on the shared `va-client` row
-- **Client ID**: `va-client` — the registry client id (also available in SSM `/espuser/base/va-client-id`)
-- **Client Secret**: the generated secret for `va-client`, retrievable via the admin clients API (`GET /v1/admin/clients?get_secret=true`) or SSM `/espuser/base/va-client-secret`
-- **Resources**: `allowed_resources` and `default_resource` must both name the neo API's resource (`RmngApiResource`). The assistant sends no `resource`, so its tokens are for the default, and the skill accepts only tokens addressed to neo (`RmngApiAudiences`)
+- **Redirect URIs**: registered by the config API on `rainmaker-neo-gva-client`. Each POST adds its URIs to the client's set, and each URI must pass the same checks as a registration.
+- **Client ID**: `rainmaker-neo-gva-client` — the registry client id (`rmng-gva-core` output `EspGvaClientId`)
+- **Client Secret**: the generated secret for `rainmaker-neo-gva-client`, retrievable via the admin clients API (`GET /v1/admin/clients?get_secret=true`) or the SecureString SSM `/rmng/gva/esp-user-client-secret`; it is never a stack output
+- **Resources**: every `rmng-gva-core` deploy adds the neo API's resource (`RmngApiResource`) to `allowed_resources` and makes it `default_resource` unless one is already set. The assistant sends no `resource`, so its tokens are for the default, and the skill accepts only tokens addressed to neo (`RmngApiAudiences`)
 - **OIDC endpoints**: the `authorization_endpoint` and `token_endpoint` published in the discovery document (`/.well-known/openid-configuration`). Both are served on the ESP User API Gateway base (`EspUserApiUrl`): `<api-url>/oauth2/authorize` and `<api-url>/oauth2/token`.
 
 ### Google Console Setup
@@ -49,8 +49,8 @@ This must be done before calling the Store Configuration API.
 2. Create a new project, link it to the Google Cloud project from Step 1
 3. Add a **Cloud-to-cloud** integration
 4. Under **Develop > Setup**:
-   - **OAuth Client ID**: `va-client` (the OIDC client id; SSM `/espuser/base/va-client-id`)
-   - **OAuth Client Secret**: the `va-client` secret from the admin clients API (`GET /v1/admin/clients?get_secret=true`) or SSM `/espuser/base/va-client-secret`
+   - **OAuth Client ID**: `rainmaker-neo-gva-client` (the OIDC client id)
+   - **OAuth Client Secret**: the `rainmaker-neo-gva-client` secret from the admin clients API (`GET /v1/admin/clients?get_secret=true`) or the SecureString SSM `/rmng/gva/esp-user-client-secret`
    - **Authorization URL**: the discovery document's `authorization_endpoint` (`<api-url>/oauth2/authorize`)
    - **Token URL**: the discovery document's `token_endpoint` (`<api-url>/oauth2/token`)
    - **Fulfillment URL**: `https://<api_gateway_url>/v1/integrations/gva` where api_gateway_url is from rmng-outputs.json (ApiGatewayUrl)
@@ -88,7 +88,7 @@ This JSON is uploaded via the Store Configuration API (see below). The notificat
 
 ### Store Configuration
 
-The configuration is stored by calling the admin configuration API with the service account JSON key file downloaded from the Google Cloud Console (see Step 4 above) as the request body. The API validates the payload, registers the Google redirect URI on the OIDC `va-client` registry row (unioning it onto the client's existing set), and persists the JSON to SSM (`/rmng/gva/service_account_json`).
+The configuration is stored by calling the admin configuration API with the service account JSON key file downloaded from the Google Cloud Console (see Step 4 above) as the request body. The API validates the payload, registers the Google redirect URI on `rainmaker-neo-gva-client`, and persists the JSON to SSM (`/rmng/gva/service_account_json`).
 
 **API**: `POST /v1/admin/integrations/gva/configuration`
 
@@ -114,7 +114,7 @@ The configuration is stored by calling the admin configuration API with the serv
 **Process**:
 1. Validate required fields (`project_id`, `client_email`, `private_key`)
 2. Calculate redirect URI: `https://oauth-redirect.googleusercontent.com/r/<project_id>`
-3. Register the redirect URI on the OIDC `va-client` registry row, unioning it onto its existing set (env var: `OIDC_VA_CLIENT_ID`, value `va-client`)
+3. Register the redirect URI on Google Home's own client (env var `OIDC_LINK_CLIENT_ID`, value `rainmaker-neo-gva-client`); a URI a registration would refuse gets `400`
 4. Store the entire service account JSON as a single SSM parameter (`/rmng/gva/service_account_json`)
 
 **Response**:

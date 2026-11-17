@@ -17,29 +17,28 @@ import {
   getAuthorizeUrl,
   getGvaFulfillmentUrl,
   getTokenUrl,
-  getVaClientId,
+  getVoiceAssistantClientId,
 } from "@/lib/config";
 import { ConfigurationValuesList } from "./_components/configuration-values-list";
 import type { ConfigurationValuesProps } from "./configuration-values.props";
 import { usePreviewSignIn } from "./use-preview-sign-in";
 
 /**
- * Every value an admin copies from our platform into the Alexa / Google developer console.
+ * Every value an admin copies from our platform into the active assistant's developer console.
  * They are shown to be copied, not followed: the authorization endpoint answers a signed
  * request carrying a client and redirect URI, so opening it on its own is refused — which is
- * what the preview action exists for, since it assembles that request. The endpoints, client
- * id and secret hold whether or not either assistant is configured yet; only the fulfillment
- * URL is specific to one assistant.
+ * what the preview action exists for, since it assembles that request. The endpoints hold
+ * whether or not the assistant is configured yet; the client, its secret and the fulfillment
+ * URL are each assistant's own.
  */
 export default function ConfigurationValues({
   title,
   activeTab,
 }: ConfigurationValuesProps) {
   const { t } = useTranslation("voice-assistants");
-  const preview = usePreviewSignIn();
-
   const authorizeUrl = getAuthorizeUrl();
-  const clientId = getVaClientId();
+  const clientId = getVoiceAssistantClientId(activeTab);
+  const preview = usePreviewSignIn(clientId);
   const { client } = useOAuthClient(clientId);
 
   return (

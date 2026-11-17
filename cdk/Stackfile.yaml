@@ -233,14 +233,6 @@ stacks:
         configurable: false
         description:
           "ESP User MCP OAuth Client Secret (leave empty to read from SSM)"
-      EspUserVaClientId:
-        value: ${espuser-base.outputs.EspVaClientId}
-        prompt: false
-        description: "ESP User VA Client ID (leave empty to read from SSM)"
-      EspUserVaClientSecret:
-        value: ${espuser-base.outputs.EspVaClientSecret}
-        prompt: false
-        description: "ESP User VA Client Secret (leave empty to read from SSM)"
       EspAdminUserPoolId:
         value: ${espuser-base.outputs.EspAdminUserPoolId}
         prompt: false

@@ -53,11 +53,13 @@ function alexaSkillArns(outputs: ClientOutputs, region: string | undefined): Rec
 /**
  * Flatten the stack-keyed client-outputs JSON (the same file `morpheus.py
  * --client-outputs` reads) into the flat `RuntimeConfig` the app consumes.
- * Only `rmng-base`, `rmng-core` and `espuser-base` are consumed today.
+ * Only `rmng-base`, `espuser-base` and the assistant stacks are consumed today.
  */
 function mapClientOutputs(outputs: ClientOutputs): RuntimeConfig {
   const base = (outputs['rmng-base'] ?? {}) as StringOutputs
   const gva = (outputs['rmng-gva-core'] ?? {}) as StringOutputs
+  const alexaCfg = (outputs['rmng-alexa-cfg-core'] ?? {}) as StringOutputs
+  const stCfg = (outputs['rmng-st-cfg-core'] ?? {}) as StringOutputs
   const espUser = (outputs['espuser-base'] ?? {}) as StringOutputs
   return {
     API_GATEWAY_URL: base.ApiGatewayUrl,
@@ -73,7 +75,9 @@ function mapClientOutputs(outputs: ClientOutputs): RuntimeConfig {
     AUTHORIZE_URL: espUser.EspUserAuthorizeUrl,
     TOKEN_URL: espUser.EspUserTokenUrl,
     OIDC_CLIENT_ID: espUser.EspAdminUserPoolClientId,
-    VA_CLIENT_ID: espUser.EspVaClientId,
+    ALEXA_CLIENT_ID: alexaCfg.EspAlexaClientId,
+    GVA_CLIENT_ID: gva.EspGvaClientId,
+    SMARTTHINGS_CLIENT_ID: stCfg.EspSmartThingsClientId,
     GVA_FULFILLMENT_URL: gva.GVAFulfillmentUrl,
     GVA_ENABLED: Boolean(outputs['rmng-gva-core']),
     ALEXA_SKILL_ARNS: alexaSkillArns(outputs, base.StackRegion),

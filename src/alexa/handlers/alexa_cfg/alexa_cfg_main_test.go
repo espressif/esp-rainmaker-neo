@@ -34,11 +34,11 @@ func TestAlexaCfg(t *testing.T) {
 	RunSpecs(t, "Alexa Config Suite")
 }
 
-const vaClientID = "va-client"
+const vaClientID = "rainmaker-neo-alexa-client"
 
 var region = "us-east-1"
 
-// seedVAClient adds the espuser-oauth-clients table and seeds the confidential va-client row Alexa/GVA update.
+// seedVAClient adds the espuser-oauth-clients table and seeds Alexa's confidential client row the handler updates.
 func seedVAClient(ctx context.Context) {
 	awscommon.GetDynamoDBClient().(*mock.DynamoDBMock).AddTable("espuser-oauth-clients", "client_id", "")
 	svc := clients.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil))
@@ -52,7 +52,7 @@ func seedVAClient(ctx context.Context) {
 	Expect(err).To(BeNil())
 }
 
-// vaClientURIs reads the seeded va-client row's currently registered redirect URIs.
+// vaClientURIs reads the seeded client row's currently registered redirect URIs.
 func vaClientURIs(ctx context.Context) []string {
 	c, err := clients.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil)).Get(vaClientID)
 	Expect(err).To(BeNil())
@@ -62,7 +62,7 @@ func vaClientURIs(ctx context.Context) []string {
 var _ = BeforeSuite(func() {
 	fmt.Printf("Setting environment variables for testing\n")
 	os.Setenv("RMNG_REGION", region)
-	os.Setenv("OIDC_VA_CLIENT_ID", vaClientID)
+	os.Setenv("OIDC_LINK_CLIENT_ID", vaClientID)
 	// Route regional AddPermission to the global mock (production uses a client per Alexa region).
 	alexa_skill.NewRegionalLambdaClient = func(ctx context.Context, region string) (awscommon.LambdaClientInterface, error) {
 		return awscommon.GetLambdaClient(), nil
@@ -134,7 +134,7 @@ var _ = Describe("Alexa Config", func() {
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusOK))
 
-			// Validate that the redirect URIs are registered on the OIDC va-client row
+			// Validate that the redirect URIs are registered on Alexa's OIDC client row
 			Expect(vaClientURIs(ctx)).To(Equal([]string{
 				"https://pitangui.amazon.com/api/skill/link/ABCD1234",
 				"https://layla.amazon.com/api/skill/link/ABCD1234",
@@ -151,6 +151,16 @@ var _ = Describe("Alexa Config", func() {
 			Expect(*lambdaPermission.Action).To(Equal("lambda:InvokeFunction"))
 			Expect(*lambdaPermission.Principal).To(Equal("alexa-connectedhome.amazon.com"))
 			Expect(*lambdaPermission.EventSourceToken).To(Equal(req.SkillID))
+		})
+
+		It("refuses a redirect URI registration would refuse (negative)", func() {
+			req.RedirectURIs = []string{"javascript:alert(1)"}
+			requestBody, _ := json.Marshal(req)
+			request.Body = string(requestBody)
+
+			response, err := handleRequest(ctx, request)
+			Expect(err).To(BeNil())
+			Expect(response.StatusCode).To(Equal(http.StatusBadRequest))
 		})
 
 		It("should be idempotent when called twice with same config", func() {
@@ -197,7 +207,7 @@ var _ = Describe("Alexa Config", func() {
 			Expect(ssmMock.Parameters["/rmng/alexa/client_secret"].Value).To(Equal(&updatedReq.ClientSecret))
 			Expect(ssmMock.Parameters["/rmng/alexa/skill_id"].Value).To(Equal(&updatedReq.SkillID))
 
-			// Verify the OIDC va-client redirect URIs contain the new URI (unioned onto existing)
+			// Verify the client's redirect URIs contain the new URI (unioned onto existing)
 			Expect(vaClientURIs(ctx)).To(ContainElement("https://new-redirect.example.com/callback"))
 
 			// Verify Lambda trigger was updated to new skill ID
@@ -319,8 +329,8 @@ var _ = Describe("Alexa Config", func() {
 			Expect(response.Body).To(ContainSubstring("RMNG_REGION not configured"))
 		})
 
-		It("should fail when the OIDC va-client cannot be resolved", func() {
-			// Remove the seeded va-client row so the registry read fails.
+		It("should fail when Alexa's OIDC client cannot be resolved", func() {
+			// Remove the seeded client row so the registry write fails.
 			Expect(clients.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil)).Delete(vaClientID)).To(BeNil())
 			requestBody, _ := json.Marshal(req)
 			request.Body = string(requestBody)
@@ -328,7 +338,7 @@ var _ = Describe("Alexa Config", func() {
 			response, err := handleRequest(ctx, request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusInternalServerError))
-			Expect(response.Body).To(ContainSubstring("Failed to update OIDC va-client"))
+			Expect(response.Body).To(ContainSubstring("Failed to update the OIDC client"))
 		})
 
 		It("should fail when SSM parameter store fails", func() {

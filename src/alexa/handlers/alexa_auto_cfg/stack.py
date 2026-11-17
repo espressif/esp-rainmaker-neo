@@ -16,7 +16,10 @@ from app_common import (
 )
 from arn_utils import get_ssm_parameter_arn, get_ssm_parameter_prefix_arn, get_table_arn
 from src.espuser.stacks.base_res_constants import USER_TABLE_NAMES
-from src.rmneo.stacks.base_res_constants import SSM_PARAMETERS
+from src.rmneo.stacks.base_res_constants import (
+    ALEXA_CLIENT_ID,
+    VOICE_ASSISTANT_CLIENT_SECRET_PARAMS,
+)
 
 
 class AlexaAutoCfgAPI(Construct):
@@ -41,16 +44,16 @@ class AlexaAutoCfgAPI(Construct):
             resources=[get_table_arn(USER_TABLE_NAMES['USER_DETAILS'], region)],
         ))
 
-        # The worker (runConfigWorker) registers the account-linking redirect URIs on the OIDC va-client row, the same row alexa_cfg updates in manual mode.
+        # The worker (runConfigWorker) registers the account-linking redirect URIs on Alexa's own OIDC client row, the same row alexa_cfg updates in manual mode.
         lambda_role.add_to_policy(iam.PolicyStatement(
             actions=["dynamodb:GetItem", "dynamodb:UpdateItem"],
             resources=[get_table_arn(USER_TABLE_NAMES['OAUTH_CLIENTS'], region)],
         ))
 
-        # Account linking hands va-client's secret to Alexa. Read from the rmng base mirror, like OIDC_VA_CLIENT_ID, so the EspUserVaClientSecret override applies and id and secret always belong to one client.
+        # Account linking hands Alexa its own client's secret, from the SecureString the Alexa stack creates with that client.
         lambda_role.add_to_policy(iam.PolicyStatement(
             actions=["ssm:GetParameter"],
-            resources=[get_ssm_parameter_arn(SSM_PARAMETERS['ESP_USER_VA_CLIENT_SECRET'], region)],
+            resources=[get_ssm_parameter_arn(VOICE_ASSISTANT_CLIENT_SECRET_PARAMS[ALEXA_CLIENT_ID], region)],
         ))
 
         # testmock reads where the itest's LWA profile is answered; absent outside test accounts.
@@ -95,11 +98,11 @@ class AlexaAutoCfgAPI(Construct):
                 "RMNG_REGION": region,
                 "AWS_ACCOUNT_ID": Aws.ACCOUNT_ID,
                 # Account linking points at the ESP User OIDC provider: its authorize and
-                # token endpoints hang off the API base, and va-client is the shared
-                # voice-assistant client the redirect URIs are registered on.
+                # token endpoints hang off the API base, and Alexa's own client is the one
+                # the redirect URIs are registered on.
                 "ESP_USER_API_URL": common_resources.esp_user_api_url,
-                "OIDC_VA_CLIENT_ID": common_resources.esp_user_va_client_id,
-                "OIDC_VA_CLIENT_SECRET_PARAM": SSM_PARAMETERS['ESP_USER_VA_CLIENT_SECRET'],
+                "OIDC_LINK_CLIENT_ID": ALEXA_CLIENT_ID,
+                "OIDC_LINK_CLIENT_SECRET_PARAM": VOICE_ASSISTANT_CLIENT_SECRET_PARAMS[ALEXA_CLIENT_ID],
             },
         )
 

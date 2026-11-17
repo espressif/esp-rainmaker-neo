@@ -19,21 +19,21 @@ To enable Samsung SmartThings app control for RainMaker devices. Users link thei
 Two Lambda functions serve the SmartThings integration:
 
 1. **`st_action`** — Schema App Lambda handling all SmartThings Schema interactions (discovery, state refresh, commands, callback token management). Invoked **directly** by the SmartThings cloud (not via API Gateway) via a resource-based policy granting the SmartThings platform account (`148790070172`) invoke permission.
-2. **`st_cfg`** — Configuration API for managing SmartThings credentials (Client ID/Secret in SSM) and registering the SmartThings OAuth callback URLs on the voice-assistant OIDC client. Invoked via API Gateway (deployed with the core `rmng` stacks).
+2. **`st_cfg`** — Configuration API for managing SmartThings credentials (Client ID/Secret in SSM) and registering the SmartThings OAuth callback URLs on its OIDC client. Invoked via API Gateway (deployed with the core `rmng` stacks).
 
 The Schema App is deployed multi-region by the standalone CDK app `cdk/apps/smartthings.py` (Stackfile group `smartthings`, `make deploy-smartthings`): one `rmng-st-core-<region>` stack in each SmartThings geo — `us-east-1` (North America), `eu-west-1` (Europe) and `ap-northeast-1` (Asia Pacific) — each deploying the Lambda `rmng-st-action-<rmng_region>` and exporting its ARN as `STSchemaAppFunctionArn`.
 
 ## Configuration
 
-### OIDC VA Client
+### OIDC client
 
-Account linking runs against the ESP User OIDC identity provider, not Cognito. A confidential OAuth 2.1 client (`va-client`) is seeded into the ESP User client registry (`espuser-oauth-clients`) for voice-assistant account linking:
+Account linking runs against the ESP User OIDC identity provider, not Cognito. A confidential OAuth 2.1 client of its own, `rainmaker-neo-smartthings-client`, is created in the ESP User client registry (`espuser-oauth-clients`) by the `rmng-st-cfg-core` stack for SmartThings account linking, so a deployment without SmartThings carries none and a leaked or rotated secret touches SmartThings alone:
 - **OAuth flow**: Authorization Code Grant (`grant_types`: `authorization_code`, `refresh_token`)
 - **Scopes**: `openid`, `email`, `phone`, `profile`
-- **Redirect URIs**: registered dynamically by the config API (there are no hardcoded initial values); each POST unions its URIs onto the client's existing set, so the SmartThings, Alexa and Google Voice redirect URIs coexist on the shared `va-client` row. The SmartThings config API registers the three fixed SmartThings callback URLs (`https://c2c-us.smartthings.com/oauth/callback`, `https://c2c-eu.smartthings.com/oauth/callback`, `https://c2c-ap.smartthings.com/oauth/callback`) — they are not part of the request body.
-- **Client ID**: `va-client` — the registry client id (also available in SSM `/espuser/base/va-client-id`)
-- **Client Secret**: the generated secret for `va-client`, retrievable via the admin clients API (`GET /v1/admin/clients?get_secret=true`) or SSM `/espuser/base/va-client-secret`
-- **Resources**: `allowed_resources` and `default_resource` must both name the neo API's resource (`RmngApiResource`). The assistant sends no `resource`, so its tokens are for the default, and the skill accepts only tokens addressed to neo (`RmngApiAudiences`)
+- **Redirect URIs**: registered by the config API on `rainmaker-neo-smartthings-client`. Each POST adds its URIs to the client's set, and each URI must pass the same checks as a registration. The SmartThings config API registers the three fixed SmartThings callback URLs (`https://c2c-us.smartthings.com/oauth/callback`, `https://c2c-eu.smartthings.com/oauth/callback`, `https://c2c-ap.smartthings.com/oauth/callback`) — they are not part of the request body.
+- **Client ID**: `rainmaker-neo-smartthings-client` — the registry client id (`rmng-st-cfg-core` output `EspSmartThingsClientId`)
+- **Client Secret**: the generated secret for `rainmaker-neo-smartthings-client`, retrievable via the admin clients API (`GET /v1/admin/clients?get_secret=true`) or the SecureString SSM `/rmng/smartthings/esp-user-client-secret`; it is never a stack output
+- **Resources**: every `rmng-st-cfg-core` deploy adds the neo API's resource (`RmngApiResource`) to `allowed_resources` and makes it `default_resource` unless one is already set. The assistant sends no `resource`, so its tokens are for the default, and the skill accepts only tokens addressed to neo (`RmngApiAudiences`)
 - **OIDC endpoints**: the `authorization_endpoint` and `token_endpoint` published in the discovery document (`/.well-known/openid-configuration`). Both are served on the ESP User API Gateway base (`EspUserApiUrl`): `<api-url>/oauth2/authorize` and `<api-url>/oauth2/token`.
 
 ### SmartThings Developer Center Setup
@@ -69,8 +69,8 @@ At least one region is required.
 
 | Field | Value | Source |
 |---|---|---|
-| Client ID | `va-client` | The OIDC client id (SSM `/espuser/base/va-client-id`) |
-| Client Secret | The `va-client` secret | Admin clients API (`GET /v1/admin/clients?get_secret=true`) or SSM `/espuser/base/va-client-secret` |
+| Client ID | `rainmaker-neo-smartthings-client` | The OIDC client id |
+| Client Secret | The `rainmaker-neo-smartthings-client` secret | Admin clients API (`GET /v1/admin/clients?get_secret=true`) or the SecureString SSM `/rmng/smartthings/esp-user-client-secret` |
 | OAuth URL | `<api-url>/oauth2/authorize` | The discovery document's `authorization_endpoint` |
 | OAuth Scope | `openid email phone profile` | — |
 | Token URL | `<api-url>/oauth2/token` | The discovery document's `token_endpoint` |
@@ -163,7 +163,7 @@ For production catalog listing:
 **Process**:
 1. Validate admin authorization
 2. Validate input fields
-3. Register the three SmartThings callback URLs on the OIDC `va-client` registry row, unioning them onto its existing set (env var: `OIDC_VA_CLIENT_ID`, value `va-client`)
+3. Register the three SmartThings callback URLs on SmartThings' own client (env var `OIDC_LINK_CLIENT_ID`, value `rainmaker-neo-smartthings-client`)
 4. Store Client ID at SSM `/rmng/smartthings/client_id` (String)
 5. Store Client Secret at SSM `/rmng/smartthings/client_secret` (SecureString)
 
@@ -458,9 +458,9 @@ Ordered checklist for a developer verifying the whole pipeline on a fresh deploy
 
 2. **Create the connector** in the SmartThings Developer Center ([Developer Center Setup](#smartthings-developer-center-setup), steps 1–3): register the three Lambda ARNs from step 1 as target ARNs and copy the OAuth URLs from the deployment's OIDC discovery document.
 
-3. **Store the SmartThings credentials** via the [Config API](#smartthings-config-api) with a admin account. This also registers the three `c2c-*.smartthings.com` callback URLs on the OIDC `va-client` row.
+3. **Store the SmartThings credentials** via the [Config API](#smartthings-config-api) with a admin account. This also registers the three `c2c-*.smartthings.com` callback URLs on `rainmaker-neo-smartthings-client`.
 
-   *Checkpoint*: `GET /v1/admin/integrations/smartthings/configuration` returns the `client_id`; the `espuser-oauth-clients` row for `va-client` lists the three redirect URIs.
+   *Checkpoint*: `GET /v1/admin/integrations/smartthings/configuration` returns the `client_id`; the `espuser-oauth-clients` row for `rainmaker-neo-smartthings-client` lists the three redirect URIs.
 
 4. **Bring up a test user and device.** Use `esp-morpheus` to create a user and register a node (see `cli/README.md`), then run the device simulator:
 

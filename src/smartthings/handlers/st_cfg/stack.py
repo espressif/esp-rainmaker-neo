@@ -15,6 +15,7 @@ from app_common import (
 )
 from arn_utils import get_ssm_parameter_prefix_arn, get_table_arn
 from src.espuser.stacks.base_res_constants import USER_TABLE_NAMES
+from src.rmneo.stacks.base_res_constants import SMART_THINGS_CLIENT_ID
 
 
 class STCfgAPI(Construct):
@@ -40,7 +41,7 @@ class STCfgAPI(Construct):
             ]
         ))
 
-        # Read + update the OIDC va-client registry row to (re)register the SmartThings callback URLs.
+        # Read + update SmartThings' own client row to (re)register its callback URLs.
         st_cfg_lambda_role.add_to_policy(iam.PolicyStatement(
             actions=[
                 "dynamodb:GetItem",
@@ -58,7 +59,7 @@ class STCfgAPI(Construct):
             common_resources,
             lambda_role=st_cfg_lambda_role,
             environment={
-                "OIDC_VA_CLIENT_ID": common_resources.esp_user_va_client_id
+                "OIDC_LINK_CLIENT_ID": SMART_THINGS_CLIENT_ID,
             }
         )
 

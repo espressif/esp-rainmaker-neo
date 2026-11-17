@@ -2072,7 +2072,7 @@ class User:
     def st_post_configuration(self, client_id, client_secret):
         """POST /v1/admin/integrations/smartthings/configuration to store the credentials
         SmartThings issued for the Schema App. Also registers the SmartThings OAuth callback
-        URLs on the shared va-client OIDC row."""
+        URLs on rainmaker-neo-smartthings-client."""
         payload = json.dumps({'client_id': client_id, 'client_secret': client_secret})
         response = self.make_api_request('POST', '/v1/admin/integrations/smartthings/configuration', data=payload)
         return response
@@ -3329,7 +3329,7 @@ class User:
         url = f"{self.user_api_gateway_url}/oauth2/userinfo"
         return self.session.get(url, headers={"Authorization": f"Bearer {access_token}"})
 
-    def oauth_revoke(self, token, client_id="user-pool-client", client_secret="", token_type_hint=None):
+    def oauth_revoke(self, token, client_id=ESP_USER_CLIENT_ID, client_secret="", token_type_hint=None):
         """Revoke one refresh token (POST /oauth2/revoke, RFC 7009). Client auth is HTTP Basic: a public client passes an empty secret. Always 200 (no token-validity oracle)."""
         url = f"{self.user_api_gateway_url}/oauth2/revoke"
         payload = {"token": token}
@@ -3353,6 +3353,15 @@ class User:
         """GET /v1/admin/clients — list all clients; get_secret=True includes plaintext secrets."""
         params = {"get_secret": "true"} if get_secret else None
         return self.make_user_api_request('GET', '/v1/admin/clients', params=params)
+
+    def oauth_client_secret(self, client_id):
+        """One registered client's secret, through the admin clients API (no AWS credentials needed)."""
+        listed = self.list_oauth_clients(get_secret=True)
+        listed.raise_for_status()
+        client = next((c for c in listed.json()["clients"] if c["client_id"] == client_id), None)
+        if not client or not client.get("client_secret"):
+            raise ValueError(f"no secret registered for {client_id}")
+        return client["client_secret"]
 
     def put_oauth_client(self, client_id, body):
         """PUT /v1/admin/clients/{client_id} — full replace (client_name required)."""

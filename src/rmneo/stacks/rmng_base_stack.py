@@ -28,6 +28,7 @@ from app_common import (
     create_ssm_string_parameter,
     discover_api_custom_domain,
     discover_iot_custom_domain,
+    grant_client_resources,
     stable_logical_id,
 )
 from arn_utils import (
@@ -38,7 +39,12 @@ from arn_utils import (
     get_s3_object_arn,
 )
 from gsi_infra import GsiInfraCore, GsiReadinessGate
-from src.espuser.stacks.base_res_constants import USER_SSM_PARAMETERS
+from src.espuser.stacks.base_res_constants import (
+    USER_SSM_PARAMETERS,
+    USER_TABLE_NAMES,
+    first_party_client_ids,
+    seeded_client_grants,
+)
 from src.rmneo.handlers.admin.admin_config.base import AdminConfigBase
 from src.rmneo.handlers.file.base import FileBase
 from src.rmneo.handlers.group.base import GroupBase
@@ -294,9 +300,7 @@ class CreateIdentityPool(Construct):
         esp_user_oidc_provider = iam.CfnOIDCProvider(
             self, "EspUserOidcProvider",
             url=common_resources.esp_user_issuer,
-            client_id_list=[
-                common_resources.esp_user_client_id,
-            ],
+            client_id_list=first_party_client_ids(common_resources.esp_user_client_id),
             thumbprint_list=["9e99a48a9960b14926bb7f3b02e22da2b0ab7280"],
         )
         esp_user_oidc_provider.override_logical_id(
@@ -403,19 +407,6 @@ class RMNGBaseStack(Stack):
             default="",
             no_echo=True
         )
-        esp_user_va_client_id_param = CfnParameter(
-            self, "EspUserVaClientId",
-            type="String",
-            description="ESP User VA Client ID (leave empty to read from SSM /espuser/base/va-client-id)",
-            default=""
-        )
-        esp_user_va_client_secret_param = CfnParameter(
-            self, "EspUserVaClientSecret",
-            type="String",
-            description="ESP User VA Client Secret (leave empty to read from SSM /espuser/base/va-client-secret)",
-            default="",
-            no_echo=True
-        )
         esp_admin_user_pool_id_param = CfnParameter(
             self, "EspAdminUserPoolId",
             type="String",
@@ -448,8 +439,6 @@ class RMNGBaseStack(Stack):
             ("HasEspUserClientId", esp_user_client_id_param, USER_SSM_PARAMETERS['ESP_USER_CLIENT_ID'], "esp_user_client_id"),
             ("HasEspMcpClientId", esp_mcp_client_id_param, USER_SSM_PARAMETERS['ESP_MCP_CLIENT_ID'], "esp_mcp_client_id"),
             ("HasEspMcpClientSecret", esp_mcp_client_secret_param, USER_SSM_PARAMETERS['ESP_MCP_CLIENT_SECRET'], "esp_mcp_client_secret"),
-            ("HasEspUserVaClientId", esp_user_va_client_id_param, USER_SSM_PARAMETERS['ESP_VA_CLIENT_ID'], "esp_user_va_client_id"),
-            ("HasEspUserVaClientSecret", esp_user_va_client_secret_param, USER_SSM_PARAMETERS['ESP_VA_CLIENT_SECRET'], "esp_user_va_client_secret"),
             ("HasEspAdminUserPoolId", esp_admin_user_pool_id_param, USER_SSM_PARAMETERS['ESP_ADMIN_USER_POOL_ID'], "esp_admin_user_pool_id"),
             ("HasEspAdminUserPoolClientId", esp_admin_user_pool_client_id_param, USER_SSM_PARAMETERS['ESP_ADMIN_USER_POOL_CLIENT_ID'], "esp_admin_user_pool_client_id"),
         ]
@@ -847,18 +836,6 @@ class RMNGBaseStack(Stack):
             description="ESP User Client ID"
         )
         create_ssm_string_parameter(
-            self, "EspUserVaClientIdParameter",
-            parameter_name=SSM_PARAMETERS['ESP_USER_VA_CLIENT_ID'],
-            string_value=common_resources.esp_user_va_client_id,
-            description="ESP User VA Client ID"
-        )
-        create_ssm_string_parameter(
-            self, "EspUserVaClientSecretParameter",
-            parameter_name=SSM_PARAMETERS['ESP_USER_VA_CLIENT_SECRET'],
-            string_value=common_resources.esp_user_va_client_secret,
-            description="ESP User VA Client Secret"
-        )
-        create_ssm_string_parameter(
             self, "EspMcpClientIdParameter",
             parameter_name=SSM_PARAMETERS['ESP_MCP_CLIENT_ID'],
             string_value=common_resources.esp_mcp_client_id,
@@ -1007,6 +984,28 @@ class RMNGBaseStack(Stack):
             value=neo_api.resource
         )
 
+        create_ssm_string_parameter(
+            self, "RmngApiResourceParameter",
+            parameter_name=SSM_PARAMETERS['RMNG_API_RESOURCE'],
+            string_value=neo_api.resource,
+            description="RFC 8707 resource a client requests to get an access token for this REST API.",
+        )
+
+        create_ssm_string_parameter(
+            self, "RmngApiAudiencesParameter",
+            parameter_name=SSM_PARAMETERS['RMNG_API_AUDIENCES'],
+            string_value=neo_api.audiences,
+            description="Comma-separated names of this REST API, which the assistant stacks grant to their clients.",
+        )
+
+        grant_client_resources(
+            self, "RmngApiClientResources",
+            name="rmng-api-client-resources",
+            table_name=USER_TABLE_NAMES['OAUTH_CLIENTS'],
+            grants=[(client_id, neo_api, is_default)
+                    for client_id, is_default in seeded_client_grants('neo')],
+        )
+
         CfnOutput(
             self, "RmngApiAudiences",
             description="Comma-separated audiences this REST API accepts in an access token",
@@ -1045,8 +1044,6 @@ class RMNGBaseStack(Stack):
         )
 
         # Add outputs
-        CfnOutput(self, "VA_ClientId", value=common_resources.esp_user_va_client_id)
-        CfnOutput(self, "VA_ClientSecret", value=common_resources.esp_user_va_client_secret, description="ESP User Voice Assistant Client Secret [visibility:private]")
         CfnOutput(self, "AdminUserPoolId", value=common_resources.esp_admin_user_pool_id)
         CfnOutput(self, "AdminUserPoolClientId", value=common_resources.esp_admin_user_pool_client_id)
 

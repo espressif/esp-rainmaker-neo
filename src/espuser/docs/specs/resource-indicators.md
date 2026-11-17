@@ -209,11 +209,19 @@ What each endpoint accepts instead of an `aud` match:
 **Why first-party.** Without an `aud` match, a token handed to a third party (Alexa, Google Home,
 SmartThings, an MCP client) would otherwise open the account: read the email and phone at
 `/v1/users/me`, list the person's devices, sign them out of other devices. First-party clients are
-the apps we ship, registered with `first_party = true` (espuser-base seeds `user-pool-client` that
+the apps we ship, registered with `first_party = true` (espuser-base seeds `rainmaker-neo-home-app-client` that
 way; an admin sets it on the others through the clients API); the flag lives on the client's registry row rather than in a token claim or an env var, so taking a client's
 standing away applies to its next call, not when its tokens expire. Scopes will replace this gate:
 an account scope per endpoint, granted at consent, will let a third party in only where the person
 allowed it.
+
+The stack that creates each API also adds every name in its `…Audiences` to the seeded clients that
+call it, right after discovering it, with its `…Resource` as the default: `rainmaker-neo-home-app-client` gets neo's (its default) and
+ESP User's; `mcp-oauth-client` gets the MCP server's. Each voice assistant's stack gives its own client
+(`rainmaker-neo-alexa-client`, `rainmaker-neo-gva-client`, `rainmaker-neo-smartthings-client`) neo's names when it creates it. A name is
+only ever added, and a default is set only on a client that has none, so an operator's own entries
+survive every deploy. See
+[admin-clients.md](admin-clients.md#seeding-the-current-clients-deploy-time).
 
 ## Security analysis
 

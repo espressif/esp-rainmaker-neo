@@ -121,12 +121,12 @@ SSM_PARAMETERS = {
     'IOT_DATA_ATS_ENDPOINT': '/rmng/base/iot-data-ats-endpoint',
     'FILES_BUCKET_NAME': '/rmng/base/files-bucket-name',
     'OTA_SERVICE_ROLE_ARN': '/rmng/base/ota-service-role-arn',
+    'RMNG_API_AUDIENCES': '/rmng/base/api-audiences',
+    'RMNG_API_RESOURCE': '/rmng/base/api-resource',
     'ESP_USER_ISSUER': '/rmng/base/esp-user-issuer',
     'ESP_USER_CLIENT_ID': '/rmng/base/esp-user-client-id',
     'ESP_MCP_CLIENT_ID': '/rmng/base/esp-mcp-client-id',
     'ESP_MCP_CLIENT_SECRET': '/rmng/base/esp-mcp-client-secret',
-    'ESP_USER_VA_CLIENT_ID': '/rmng/base/esp-user-va-client-id',
-    'ESP_USER_VA_CLIENT_SECRET': '/rmng/base/esp-user-va-client-secret',
     'ESP_ADMIN_USER_POOL_ID': '/rmng/base/esp-admin-user-pool-id',
     'ESP_ADMIN_USER_POOL_CLIENT_ID': '/rmng/base/esp-admin-user-pool-client-id',
     'ESP_USER_JWKS': '/rmng/base/esp-user-jwks',
@@ -154,4 +154,19 @@ S3_BUCKETS = {
 # cross-lambda async invokes without a CFN cross-stack dependency.
 FUNCTION_NAMES = {
     'NOTIFICATIONS': 'rmng-notifications',
+}
+
+
+# One OAuth client per voice assistant, created by that assistant's stack so a deployment without it carries none; its secret is handed over in the SecureString named here.
+ALEXA_CLIENT_ID = 'rainmaker-neo-alexa-client'
+GVA_CLIENT_ID = 'rainmaker-neo-gva-client'
+SMART_THINGS_CLIENT_ID = 'rainmaker-neo-smartthings-client'
+_VOICE_ASSISTANT_CLIENT = {'client_type': 'confidential', 'grant_types': ['authorization_code', 'refresh_token']}
+ALEXA_OAUTH_CLIENT = {'client_id': ALEXA_CLIENT_ID, 'client_name': 'Amazon Alexa', **_VOICE_ASSISTANT_CLIENT}
+GVA_OAUTH_CLIENT = {'client_id': GVA_CLIENT_ID, 'client_name': 'Google Home', **_VOICE_ASSISTANT_CLIENT}
+SMART_THINGS_OAUTH_CLIENT = {'client_id': SMART_THINGS_CLIENT_ID, 'client_name': 'Samsung SmartThings', **_VOICE_ASSISTANT_CLIENT}
+VOICE_ASSISTANT_CLIENT_SECRET_PARAMS = {
+    ALEXA_CLIENT_ID: '/rmng/alexa/esp-user-client-secret',
+    GVA_CLIENT_ID: '/rmng/gva/esp-user-client-secret',
+    SMART_THINGS_CLIENT_ID: '/rmng/smartthings/esp-user-client-secret',
 }

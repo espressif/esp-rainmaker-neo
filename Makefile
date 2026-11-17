@@ -399,7 +399,7 @@ TEST_ARGS ?=
 # Scope ginkgo to rmng's own module. Submodules with their own go.mod (src/esp-cloud-common, src/mcp/proxy) are unreachable here — see TEST_SUBMODULES at the top.
 TEST_PACKAGES := ./src/... ./test/infra/...
 
-test: $(TEST_SUBMODULES:%=%-test)  ## Run ginkgo unit tests with coverage
+test: $(TEST_SUBMODULES:%=%-test) py-test  ## Run the Go unit tests (ginkgo, with coverage) and the Python unit tests
 	@mkdir -p build/tests
 	@rm -f build/tests/*.txt
 	@go clean -testcache && TEST_OUTPUT_DIR=$(CURDIR)/build/tests ginkgo --tags "$(GO_BUILD_TAGS)" $(TEST_ARGS) --cover --output-dir=$(CURDIR)/build/coverage --coverprofile=coverage.out $(TEST_PACKAGES)
@@ -409,6 +409,9 @@ ifneq ($(OPTIONAL_MODULES),)
 	@echo "--- optional-module tests ---"
 	@GOWORK=$(SUPERPROJECT_GOWORK) TEST_OUTPUT_DIR=$(CURDIR)/build/tests ginkgo --tags "$(GO_BUILD_TAGS)" $(TEST_ARGS) $(OPTIONAL_MODULES_DIR)/...
 endif
+
+py-test:  ## Run the Python unit tests (no AWS or deployed stack needed)
+	pytest test/unittest -q
 
 # Generate one <name>-test target per TEST_SUBMODULES entry, each forwarding to that submodule's own `make test`.
 $(TEST_SUBMODULES:%=%-test): %-test: ; $(MAKE) -C $* test
@@ -465,6 +468,6 @@ githooks:  ## Point git at .githooks so the pre-commit secret scan runs
 # `deploy-%` there did nothing. They are phony in practice because no such file is produced.
 .PHONY: all help go_build optional-build admin-dashboard-build \
 	deploy setup diff destroy synth publish outputs \
-	lint go-lint go-fmt py-lint vulncheck test itest itest-setup test-infra-destroy plantuml clean githooks \
+	lint go-lint go-fmt py-lint vulncheck test py-test itest itest-setup test-infra-destroy plantuml clean githooks \
 	update-mcp-schema \
 	$(TEST_SUBMODULES:%=%-test)

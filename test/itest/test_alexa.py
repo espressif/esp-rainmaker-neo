@@ -422,7 +422,7 @@ def _restore_lwa_connection(value):
 
 
 def _remove_mock_redirect_uris(admin):
-    """Drop the mock vendor's account-linking URIs from every OAuth client. The configuration API only ever adds redirect URIs (Alexa, GVA and SmartThings share va-client), so a restore cannot take back what a mock run added."""
+    """Drop the mock vendor's account-linking URIs from every OAuth client. The configuration API only ever adds redirect URIs to a client, so a restore cannot take back what a mock run added."""
     listed = admin.list_oauth_clients()
     assert listed.status_code == 200, listed.text
     for client in listed.json()['clients']:

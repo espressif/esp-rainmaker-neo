@@ -7,6 +7,7 @@ import os
 from aws_cdk import (
     CfnOutput,
     Duration,
+    Fn,
     Stack,
     aws_iam as iam,
     aws_ssm as ssm,
@@ -19,10 +20,16 @@ from app_common import (
     create_api_deployment,
     create_ssm_string_parameter,
     get_or_create_api_resource,
+    grant_client_resources,
     stable_logical_id,
 )
 from arn_utils import get_index_arn, get_ssm_parameter_arn, get_table_arn
-from src.espuser.stacks.base_res_constants import USER_SSM_PARAMETERS, USER_TABLE_NAMES
+from src.espuser.stacks.base_res_constants import (
+    USER_SSM_PARAMETERS,
+    USER_TABLE_NAMES,
+    first_party_client_ids,
+    seeded_client_grants,
+)
 from src.mcp.handlers.core import McpOAuthConfig, McpOAuthConstruct
 from src.rmneo.handlers.admin.core import IotEventModeCore
 from src.rmneo.handlers.admin.rmng_admin_creds.stack import AdminCredsCore
@@ -61,14 +68,12 @@ class RMNGCoreStack(Stack):
         common_resources.esp_user_client_id = ssm.StringParameter.value_for_string_parameter(
             self, SSM_PARAMETERS['ESP_USER_CLIENT_ID']
         )
+        common_resources.first_party_client_ids = Fn.join(",", first_party_client_ids(common_resources.esp_user_client_id))
         common_resources.esp_mcp_client_id = ssm.StringParameter.value_for_string_parameter(
             self, SSM_PARAMETERS['ESP_MCP_CLIENT_ID']
         )
         common_resources.esp_mcp_client_secret = ssm.StringParameter.value_for_string_parameter(
             self, SSM_PARAMETERS['ESP_MCP_CLIENT_SECRET']
-        )
-        common_resources.esp_user_va_client_id = ssm.StringParameter.value_for_string_parameter(
-            self, SSM_PARAMETERS['ESP_USER_VA_CLIENT_ID']
         )
         common_resources.esp_admin_user_pool_id = ssm.StringParameter.value_for_string_parameter(
             self, SSM_PARAMETERS['ESP_ADMIN_USER_POOL_ID']
@@ -264,6 +269,14 @@ class RMNGCoreStack(Stack):
         )
         mcp_callback_registration.node.default_child.node.default_child.override_logical_id(
             stable_logical_id("CustomAwsSdk", "mcp-callback-registration"))
+
+        grant_client_resources(
+            self, "McpClientResources",
+            name="mcp-client-resources",
+            table_name=USER_TABLE_NAMES['OAUTH_CLIENTS'],
+            grants=[(client_id, self.mcp_oauth.mcp_api, is_default)
+                    for client_id, is_default in seeded_client_grants('mcp')],
+        )
 
         # Hello World service (simple example)
         self.hello_world_core = HelloWorldCore(self, "HelloWorldCore", common_resources)

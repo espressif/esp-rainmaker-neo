@@ -113,7 +113,8 @@ For end users, the Identity Pool selects the OIDC provider by matching the
 federated **id token's** `iss` (the ESP User issuer) against the registered
 provider and its **`aud`** against the provider's configured client id(s); a
 token from any other issuer, or with a non-matching audience, is not honored
-(the configured client id is the ESP User client). This works
+(the configured client ids are the ESP User client and the RainMaker Home app's
+`rainmaker-neo-home-app-client`). This works
 because the ESP User id token is minted with `aud` = the client id (the
 same audience the OIDC provider is configured with); federation depends on that,
 so a future change to the token's audience must keep it in the provider's

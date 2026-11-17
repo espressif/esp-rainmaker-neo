@@ -33,8 +33,10 @@ export interface RuntimeConfig {
   AUTHORIZE_URL?: string
   /** OAuth token endpoint; espuser-base `EspUserTokenUrl`. */
   TOKEN_URL?: string
-  /** OAuth client id the voice assistants link as; espuser-base `EspVaClientId`. */
-  VA_CLIENT_ID?: string
+  /** Each assistant's own OAuth client; `EspAlexaClientId`, `EspGvaClientId`, `EspSmartThingsClientId` of its stack. */
+  ALEXA_CLIENT_ID?: string
+  GVA_CLIENT_ID?: string
+  SMARTTHINGS_CLIENT_ID?: string
   /** Google voice assistant fulfillment endpoint; rmng-gva-core `GVAFulfillmentUrl`. */
   GVA_FULFILLMENT_URL?: string
   /** Whether the optional `rmng-gva-core` stack is deployed. */
@@ -72,13 +74,19 @@ export function getTokenUrl(): string {
   return fromConfig('TOKEN_URL') ?? ''
 }
 
+const VOICE_ASSISTANT_CLIENT_KEYS = {
+  alexa: 'ALEXA_CLIENT_ID',
+  gva: 'GVA_CLIENT_ID',
+  smartthings: 'SMARTTHINGS_CLIENT_ID',
+} as const satisfies Record<string, keyof RuntimeConfig>
+
 /**
- * The OAuth client a voice assistant authenticates as. It is a confidential client, but only
- * its id lives here — the client-outputs document is served anonymously readable, so the
- * matching secret is fetched from the authenticated admin API instead.
+ * The OAuth client an assistant authenticates as. It is a confidential client, but only its id
+ * lives here — the client-outputs document is served anonymously readable, so the matching
+ * secret is fetched from the authenticated admin API instead.
  */
-export function getVaClientId(): string {
-  return fromConfig('VA_CLIENT_ID') ?? ''
+export function getVoiceAssistantClientId(assistant: keyof typeof VOICE_ASSISTANT_CLIENT_KEYS): string {
+  return fromConfig(VOICE_ASSISTANT_CLIENT_KEYS[assistant]) ?? ''
 }
 
 /** The endpoint Google's Home Graph delivers voice intents to. */

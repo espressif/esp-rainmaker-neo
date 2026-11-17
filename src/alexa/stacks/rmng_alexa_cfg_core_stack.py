@@ -4,16 +4,27 @@
 
 
 from aws_cdk import (
+    CfnOutput,
     Stack,
     aws_ssm as ssm,
 )
 from constructs import Construct
 
-from app_common import CommonResources, create_api_deployment
+from app_common import (
+    CommonResources,
+    DiscoveredApi,
+    create_api_deployment,
+    create_oauth_client,
+)
 from src.alexa.handlers.alexa_auto_cfg.stack import AlexaAutoCfgAPI
 from src.alexa.handlers.alexa_cfg.stack import AlexaCfgAPI
-from src.espuser.stacks.base_res_constants import USER_SSM_PARAMETERS
-from src.rmneo.stacks.base_res_constants import SSM_PARAMETERS
+from src.espuser.stacks.base_res_constants import USER_SSM_PARAMETERS, USER_TABLE_NAMES
+from src.rmneo.stacks.base_res_constants import (
+    ALEXA_CLIENT_ID,
+    ALEXA_OAUTH_CLIENT,
+    SSM_PARAMETERS,
+    VOICE_ASSISTANT_CLIENT_SECRET_PARAMS,
+)
 
 
 class RMNGAlexaCfgCoreStack(Stack):
@@ -69,10 +80,6 @@ class RMNGAlexaCfgCoreStack(Stack):
             self, SSM_PARAMETERS['ESP_ADMIN_USER_POOL_CLIENT_ID'])
         common_resources.esp_admin_user_pool_jwks = ssm.StringParameter.value_for_string_parameter(
             self, SSM_PARAMETERS['ESP_ADMIN_USER_POOL_JWKS'])
-        # The config API registers Alexa's account-linking redirect URIs on the
-        # shared voice-assistant OIDC client, so it needs that client's id.
-        common_resources.esp_user_va_client_id = ssm.StringParameter.value_for_string_parameter(
-            self, SSM_PARAMETERS['ESP_USER_VA_CLIENT_ID'])
         # Automatic mode configures account linking itself, so it needs the OIDC provider's
         # API base to derive the authorize and token endpoints.
         common_resources.esp_user_api_url = ssm.StringParameter.value_for_string_parameter(
@@ -80,6 +87,20 @@ class RMNGAlexaCfgCoreStack(Stack):
 
         self.alexa_cfg = AlexaCfgAPI(self, "AlexaCfgAPI", common_resources,
                                      admin_integrations_resource_id=admin_integrations_resource_id)
+
+        neo_api = DiscoveredApi(
+            ssm.StringParameter.value_for_string_parameter(self, SSM_PARAMETERS['API_GATEWAY_URL']),
+            ssm.StringParameter.value_for_string_parameter(self, SSM_PARAMETERS['RMNG_API_RESOURCE']),
+            ssm.StringParameter.value_for_string_parameter(self, SSM_PARAMETERS['RMNG_API_AUDIENCES']))
+        create_oauth_client(
+            self, "AlexaOAuthClient",
+            name="alexa-oauth-client",
+            table_name=USER_TABLE_NAMES['OAUTH_CLIENTS'],
+            client=ALEXA_OAUTH_CLIENT,
+            secret_param=VOICE_ASSISTANT_CLIENT_SECRET_PARAMS[ALEXA_CLIENT_ID],
+            api=neo_api,
+        )
+        CfnOutput(self, "EspAlexaClientId", value=ALEXA_CLIENT_ID, description="ESP User Amazon Alexa Client ID")
 
         # Automatic mode: one POST that creates and fully configures the skill over SMAPI,
         # hung off the /v1/admin/integrations/alexa resource alexa_cfg just created.

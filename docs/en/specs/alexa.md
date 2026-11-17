@@ -18,19 +18,19 @@ To enable voice control and Alexa app integration for RainMaker devices. Users l
 Two Lambda functions serve the Alexa integration:
 
 1. **`alexa_skill`** — Handles Smart Home directives (Discovery, ReportState, PowerController, BrightnessController, Authorization). Invoked directly by the Alexa service (not via API Gateway).
-2. **`alexa_cfg`** — Handles Alexa configuration management (store credentials, register redirect URIs on the voice-assistant OIDC client, add Lambda trigger). Invoked via API Gateway.
+2. **`alexa_cfg`** — Handles Alexa configuration management (store credentials, register redirect URIs on Alexa's OIDC client, add Lambda trigger). Invoked via API Gateway.
 
 ## Configuration
 
-### OIDC VA Client
+### OIDC client
 
-Account linking runs against the ESP User OIDC identity provider, not Cognito. A confidential OAuth 2.1 client (`va-client`) is seeded into the ESP User client registry (`espuser-oauth-clients`) for voice-assistant account linking:
+Account linking runs against the ESP User OIDC identity provider, not Cognito. A confidential OAuth 2.1 client of its own, `rainmaker-neo-alexa-client`, is created in the ESP User client registry (`espuser-oauth-clients`) by the `rmng-alexa-cfg-core` stack for Alexa account linking, so a deployment without Alexa carries none and a leaked or rotated secret touches Alexa alone:
 - **OAuth flow**: Authorization Code Grant (`grant_types`: `authorization_code`, `refresh_token`)
 - **Scopes**: `openid`, `email`, `phone`, `profile`
-- **Redirect URIs**: registered dynamically by the config API (there are no hardcoded initial values); each POST unions its URIs onto the client's existing set, so the Alexa and Google Voice redirect URIs coexist on the shared `va-client` row
-- **Client ID**: `va-client` — the registry client id (also available in SSM `/espuser/base/va-client-id`)
-- **Client Secret**: the generated secret for `va-client`, retrievable via the admin clients API (`GET /v1/admin/clients?get_secret=true`) or SSM `/espuser/base/va-client-secret`
-- **Resources**: `allowed_resources` and `default_resource` must both name the neo API's resource (`RmngApiResource`). The assistant sends no `resource`, so its tokens are for the default, and the skill accepts only tokens addressed to neo (`RmngApiAudiences`)
+- **Redirect URIs**: registered by the config API on `rainmaker-neo-alexa-client`. Each POST adds its URIs to the client's set, and each URI must pass the same checks as a registration.
+- **Client ID**: `rainmaker-neo-alexa-client` — the registry client id (`rmng-alexa-cfg-core` output `EspAlexaClientId`)
+- **Client Secret**: the generated secret for `rainmaker-neo-alexa-client`, retrievable via the admin clients API (`GET /v1/admin/clients?get_secret=true`) or the SecureString SSM `/rmng/alexa/esp-user-client-secret`; it is never a stack output
+- **Resources**: every `rmng-alexa-cfg-core` deploy adds the neo API's resource (`RmngApiResource`) to `allowed_resources` and makes it `default_resource` unless one is already set. The assistant sends no `resource`, so its tokens are for the default, and the skill accepts only tokens addressed to neo (`RmngApiAudiences`)
 - **OIDC endpoints**: the `authorization_endpoint` and `token_endpoint` published in the discovery document (`/.well-known/openid-configuration`). Both are served on the ESP User API Gateway base (`EspUserApiUrl`): `<api-url>/oauth2/authorize` and `<api-url>/oauth2/token`.
 
 ### Automated Setup (recommended)
@@ -89,7 +89,7 @@ Configs written before the rename, with `smapi_client_id`, `smapi_client_secret`
 | — | `lwa_refresh_token` | no | optional with the client ID and secret, see [Connecting from the CLI](#connecting-from-the-cli). Without it, `setup-auto` opens Amazon's consent page |
 | `manufacturer_name` | `manufacturer_name` | no | brand advertised in Alexa discovery, set once the run succeeds; absent keeps the stored brand, empty restores the default (as in manual setup). The dashboard sends it only when filled in |
 
-Each run creates or replaces the deployment's skill configuration. The target is the deployment's live skill when the connected account can reach it; otherwise a new skill, created under the LWA profile's first vendor (developer organisation), whose account-linking redirect URLs (`…/api/skill/link/<vendorId>`) are registered on the va-client. A reused skill keeps the redirect URLs registered when it went live. Reconfiguring runs the same pipeline against the existing skill without creating one, so repeated runs (dashboard or CLI) never pile skills up at Amazon, and a repair is just a re-run. A live skill the connected account cannot reach (set up manually from another Amazon account, or deleted at Amazon) leads to a new skill, and the status says so. Other values (va-client creds, issuer endpoints, endpoint ARNs) are resolved by the backend from the deployment itself.
+Each run creates or replaces the deployment's skill configuration. The target is the deployment's live skill when the connected account can reach it; otherwise a new skill, created under the LWA profile's first vendor (developer organisation), whose account-linking redirect URLs (`…/api/skill/link/<vendorId>`) are registered on `rainmaker-neo-alexa-client`. A reused skill keeps the redirect URLs registered when it went live. Reconfiguring runs the same pipeline against the existing skill without creating one, so repeated runs (dashboard or CLI) never pile skills up at Amazon, and a repair is just a re-run. A live skill the connected account cannot reach (set up manually from another Amazon account, or deleted at Amazon) leads to a new skill, and the status says so. Other values (`rainmaker-neo-alexa-client` and its secret, issuer endpoints, endpoint ARNs) are resolved by the backend from the deployment itself.
 
 #### Run
 
@@ -135,7 +135,7 @@ The brand advertised in discovery is the optional `manufacturer_name` above; man
 
 #### Account-linking scopes
 
-The skill requests `openid email phone profile`, and every one of them must be in the `va-client` row's allowed scopes: the ESP User authorize endpoint rejects the whole request with `invalid_scope` if a single requested scope is outside that set, which the Alexa app reports only as "Unable to link the skill at this time".
+The skill requests `openid email phone profile`, and every one of them must be in `rainmaker-neo-alexa-client`'s allowed scopes: the ESP User authorize endpoint rejects the whole request with `invalid_scope` if a single requested scope is outside that set, which the Alexa app reports only as "Unable to link the skill at this time".
 
 The scopes are written onto the skill when it is configured, so changing them in the backend affects **new** skills only. A skill created by an earlier build keeps its original list until its Account Linking is edited in the Alexa console or the skill is recreated.
 
@@ -155,8 +155,8 @@ done before calling the Store Configuration API.
 5. Under **Account Linking**:
    - **Authorization URI**: the discovery document's `authorization_endpoint` (`<api-url>/oauth2/authorize`)
    - **Access Token URI**: the discovery document's `token_endpoint` (`<api-url>/oauth2/token`)
-   - **Client ID**: `va-client` (the OIDC client id; SSM `/espuser/base/va-client-id`)
-   - **Client Secret**: the `va-client` secret from the admin clients API (`GET /v1/admin/clients?get_secret=true`) or SSM `/espuser/base/va-client-secret`
+   - **Client ID**: `rainmaker-neo-alexa-client` (the OIDC client id)
+   - **Client Secret**: the `rainmaker-neo-alexa-client` secret from the admin clients API (`GET /v1/admin/clients?get_secret=true`) or the SecureString SSM `/rmng/alexa/esp-user-client-secret`
    - **Scope**: `openid`, `email`, `phone`, `profile`
    - **Alexa Redirect URLs**: Copy the redirect URLs shown by Amazon (e.g., `https://pitangui.amazon.com/api/skill/link/...`, `https://layla.amazon.com/api/skill/link/...`, `https://alexa.amazon.co.jp/api/skill/link/...`)
 
@@ -168,7 +168,7 @@ done before calling the Store Configuration API.
 
 #### Step 3: Store Configuration via API
 
-Store the configuration by calling the admin configuration API below. It persists the Alexa credentials to SSM, updates the Cognito VA client callback URLs, and grants the Alexa service permission to invoke the skill Lambda.
+Store the configuration by calling the admin configuration API below. It persists the Alexa credentials to SSM, registers Alexa's redirect URLs on its OIDC client, and grants the Alexa service permission to invoke the skill Lambda.
 
 From the CLI, fill in a copy of `cli/src/esp_morpheus/data/examples/alexa_skills_manual_config.example.json` (keep it as the gitignored `alexa_skills_manual_config.json`) and run:
 
@@ -197,7 +197,7 @@ esp-morpheus admin <admin-email> integrations alexa setup alexa_skills_manual_co
 
 **Process**:
 1. Validate all four fields are present (`redirect_uris`, `client_id`, `client_secret`, `skill_id`)
-2. Register the redirect URIs on the OIDC `va-client` registry row, unioning them onto its existing set (env var: `OIDC_VA_CLIENT_ID`, value `va-client`)
+2. Register the redirect URIs on Alexa's own client (env var `OIDC_LINK_CLIENT_ID`, value `rainmaker-neo-alexa-client`); a URI a registration would refuse gets `400`
 3. Store Alexa client ID in SSM `/rmng/alexa/client_id` and client secret in SSM `/rmng/alexa/client_secret`
 4. Add Lambda invoke permission for `alexa-connectedhome.amazon.com` with the skill ID as event source token (env var: `ALEXA_SKILL_FUNCTION_NAME`)
 5. If `manufacturer_name` is present, store it in SSM `/rmng/alexa/manufacturer_name` — see [Manufacturer name](#manufacturer-name)
@@ -842,7 +842,7 @@ Per-user Alexa credentials live in the same `rmng-user-endpoints` DynamoDB table
 The OAuth bundle is the nested `integration_token` map, and the `region` inside
 it selects the event gateway.
 
-This row is created by the AcceptGrant handler at account-link time (see [AcceptGrant (Account Linking)](#acceptgrant-account-linking)), which also records the user's region (the handling Lambda's `AWS_REGION`) for gateway routing, and is refreshed in place whenever the cached access token is past its `access_expires_at`. The refresh path POSTs `grant_type=refresh_token&refresh_token=...&client_id=...&client_secret=...` form-encoded to `https://api.amazon.com/auth/o2/token` using the client credentials stored via the [OIDC VA Client config](#oidc-va-client). A failed refresh for one user is logged and skipped; the broadcast continues to other users.
+This row is created by the AcceptGrant handler at account-link time (see [AcceptGrant (Account Linking)](#acceptgrant-account-linking)), which also records the user's region (the handling Lambda's `AWS_REGION`) for gateway routing, and is refreshed in place whenever the cached access token is past its `access_expires_at`. The refresh path POSTs `grant_type=refresh_token&refresh_token=...&client_id=...&client_secret=...` form-encoded to `https://api.amazon.com/auth/o2/token` using the client credentials stored via the [OIDC client config](#oidc-client). A failed refresh for one user is logged and skipped; the broadcast continues to other users.
 
 > **Known limitation.** The Alexa client ID and secret are read from SSM on
 > every use — response caching is deliberately off, because invalidating the

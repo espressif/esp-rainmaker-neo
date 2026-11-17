@@ -29,8 +29,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// Reuses the seeded first-party client so legacy tokens are not a distinct audience.
-const legacyClientID = "user-pool-client"
+// The RainMaker Home app's seeded client (HOME_APP_CLIENT_ID in base_res_constants.py), so the app's password sign-ins keep renewing once it signs in through the browser with the same client.
+const legacyClientID = "rainmaker-neo-home-app-client"
 
 const legacyScope = "openid email phone"
 

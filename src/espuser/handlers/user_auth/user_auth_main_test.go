@@ -13,6 +13,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/identity_providers_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/oauth_clients_db"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/session"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
@@ -40,6 +41,7 @@ var _ = Describe("legacy token responses (RFC 6749 s5.1)", func() {
 		password        = "Password1!"
 		neoResource     = "https://api.example.com"
 		accountResource = "https://account.example.com"
+		homeAppClientID = "rainmaker-neo-home-app-client"
 	)
 
 	BeforeEach(func() {
@@ -58,9 +60,9 @@ var _ = Describe("legacy token responses (RFC 6749 s5.1)", func() {
 			ProviderName: "cognito", Type: identity_providers_db.TypeOIDC, Enabled: &yes,
 			ClientID: clientID, ClientSecret: "provider-client-secret", PasswordGrant: &yes,
 		})).To(Succeed())
-		// The password API signs in as the legacy client, covering every resource it is granted.
+		// The password API signs in as the Home app client, covering every resource it is granted.
 		Expect(oauth_clients_db.NewOAuthClientsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).CreateClient(&oauth_clients_db.OAuthClientEntry{
-			ClientID: "user-pool-client", ClientType: oauth_clients_db.ClientTypePublic,
+			ClientID: homeAppClientID, ClientType: oauth_clients_db.ClientTypePublic,
 			RedirectURIs: []string{"com.example://cb"}, RequirePKCE: utils.Ptr(true),
 			AllowedResources: []string{neoResource, accountResource}, DefaultResource: neoResource,
 		})).To(Succeed())
@@ -81,12 +83,48 @@ var _ = Describe("legacy token responses (RFC 6749 s5.1)", func() {
 		return tokens
 	}
 
-	audience := func(tokens map[string]any) any {
+	claimsOf := func(token any) jwt.MapClaims {
 		claims := jwt.MapClaims{}
-		_, _, err := jwt.NewParser().ParseUnverified(tokens["access_token"].(string), claims)
+		_, _, err := jwt.NewParser().ParseUnverified(token.(string), claims)
 		Expect(err).NotTo(HaveOccurred())
-		return claims["aud"]
+		return claims
 	}
+
+	audience := func(tokens map[string]any) any {
+		return claimsOf(tokens["access_token"])["aud"]
+	}
+
+	It("issues an old app's sign-in, which names no client, to the Home app client and renews it", func() {
+		signin := tokenSet(post(pathToken, map[string]any{"username": email, "password": password}))
+		idAudience, err := claimsOf(signin["id_token"]).GetAudience()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(idAudience).To(ConsistOf(homeAppClientID))
+		Expect(claimsOf(signin["access_token"])["client_id"]).To(Equal(homeAppClientID))
+
+		refresh := tokenSet(post(pathRefresh, map[string]any{"refresh_token": signin["refresh_token"]}))
+		Expect(refresh["refresh_token"]).NotTo(Equal(signin["refresh_token"]), "the refresh token rotates")
+		Expect(claimsOf(refresh["access_token"])["client_id"]).To(Equal(homeAppClientID))
+	})
+
+	It("refuses a refresh token issued to user-pool-client, since a refresh token renews only with its own client (negative)", func() {
+		ctx := context.Background()
+		Expect(oauth_clients_db.NewOAuthClientsDB(rmngctx.NewRmngContextWithCtx(ctx, nil)).CreateClient(&oauth_clients_db.OAuthClientEntry{
+			ClientID: "user-pool-client", ClientType: oauth_clients_db.ClientTypePublic,
+			RedirectURIs: []string{"com.example://cb"}, RequirePKCE: utils.Ptr(true),
+			AllowedResources: []string{neoResource, accountResource}, DefaultResource: neoResource,
+		})).To(Succeed())
+		signin := tokenSet(post(pathToken, map[string]any{"username": email, "password": password}))
+		svc, err := auth.NewOAuthUserAuthService(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		earlier, err := svc.MintTokenSetForFirstPartyLogin(ctx, claimsOf(signin["access_token"])["sub"].(string), "user-pool-client", "openid email phone", auth.FirstPartyLogin{
+			AllAllowedResources: true, Origin: session.OriginApp,
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		refresh := post(pathRefresh, map[string]any{"refresh_token": earlier.RefreshToken})
+		Expect(refresh.StatusCode).To(Equal(http.StatusUnauthorized), refresh.Body)
+		Expect(refresh.Body).To(ContainSubstring("Invalid refresh token"))
+	})
 
 	It("marks the signin and refresh token sets uncacheable", func() {
 		signin := post(pathToken, map[string]any{"username": email, "password": password})

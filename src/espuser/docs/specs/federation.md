@@ -236,7 +236,7 @@ recovered from the HMAC state.
   from the pre-OIDC `main`; helpers in `app_common.py`).
 - **One** confidential broker client `espuser-idp-broker` (auth-code grant,
   scopes `openid email phone`, callback = our `/oauth2/federation/callback`,
-  `generate_secret`). No `va-client`/`user-pool-client` on the pool — those ids
+  `generate_secret`). No app or assistant client on the pool — those
   live in our own client registry.
 - Fetch the pool JWKS into SSM (reuse the admin-pool `jwks_fetcher_lambda`
   pattern) for the `id_token` signature check.

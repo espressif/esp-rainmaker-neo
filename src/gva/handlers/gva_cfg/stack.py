@@ -15,7 +15,7 @@ from app_common import (
 )
 from arn_utils import get_ssm_parameter_prefix_arn, get_table_arn
 from src.espuser.stacks.base_res_constants import USER_TABLE_NAMES
-from src.rmneo.stacks.base_res_constants import TABLE_NAMES
+from src.rmneo.stacks.base_res_constants import GVA_CLIENT_ID, TABLE_NAMES
 
 
 class GVACfgAPI(Construct):
@@ -40,7 +40,7 @@ class GVACfgAPI(Construct):
             ]
         ))
 
-        # Read + update the OIDC va-client registry row to (re)register GVA's redirect URI.
+        # Read + update GVA's own client row to (re)register its redirect URI.
         gva_cfg_lambda_role.add_to_policy(iam.PolicyStatement(
             actions=[
                 "dynamodb:GetItem",
@@ -73,7 +73,7 @@ class GVACfgAPI(Construct):
             environment={
                 "IDENTITY_POOL_ID": common_resources.identity_pool_id,
                 "USER_ISSUER": common_resources.esp_user_issuer,
-                "OIDC_VA_CLIENT_ID": common_resources.esp_user_va_client_id,
+                "OIDC_LINK_CLIENT_ID": GVA_CLIENT_ID,
             }
         )
 

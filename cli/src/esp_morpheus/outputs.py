@@ -31,8 +31,8 @@ REPO_ROOT = str(paths.repo_root()) if paths.repo_root() else None
 DEFAULT_OUTPUTS_FILE = 'rmng-outputs.json'
 
 
-# Seeded end-user OIDC client id, used when the outputs predate the EspUserClientId output.
-DEFAULT_ESP_USER_CLIENT_ID = 'user-pool-client'
+# The RainMaker Home app's client, which the password API issues to; used when the outputs lack EspUserClientId.
+DEFAULT_ESP_USER_CLIENT_ID = 'rainmaker-neo-home-app-client'
 
 # Alexa smart-home region codes keyed by the AWS region the endpoint lives in. Alexa accepts
 # endpoints only in these three regions, wherever RMNG itself is deployed.

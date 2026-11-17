@@ -895,7 +895,7 @@ paths:
                     last_seen_at: 1725300000
                     expires_at: 1759860000
                     clients:
-                      - { client_id: user-pool-client, created_at: 1725000000, last_used: 1725300000 }
+                      - { client_id: rainmaker-neo-home-app-client, created_at: 1725000000, last_used: 1725300000 }
         "401":
           description: Missing, malformed, expired, or not an access token.
           content:
@@ -1810,7 +1810,7 @@ components:
         client_id:
           type: string
           description: Must equal the client that started the flow. Required unless the client authenticates with HTTP Basic.
-          example: "user-pool-client"
+          example: "rainmaker-neo-home-app-client"
         client_secret:
           type: string
           format: password
@@ -1904,7 +1904,7 @@ components:
           description:
             Public client identifier (RFC 6749 §3.2.1) when not using the Basic
             header. A confidential client authenticates via Basic instead.
-          example: "user-pool-client"
+          example: "rainmaker-neo-home-app-client"
 
     GetUserResponse:
       type: object
