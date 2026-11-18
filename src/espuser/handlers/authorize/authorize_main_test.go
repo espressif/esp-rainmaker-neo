@@ -913,6 +913,91 @@ var _ = Describe("GET /oauth2/federation/callback establishes the session", func
 		Entry("a flow cookie naming a different flow", auth.FlowCookieName+"=fl_someone_else"),
 	)
 
+	Context("a person who backed out at the provider", func() {
+		addProvider := func(name, providerType, passwordVerifier string) {
+			Expect(identity_providers_db.NewIdentityProvidersDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).
+				CreateProvider(&identity_providers_db.ProviderEntry{
+					ProviderName: name, Type: providerType, PasswordVerifier: passwordVerifier, Enabled: utils.Ptr(true), ClientID: name + "-client",
+				})).To(Succeed())
+		}
+		addClient := func(allowed []string) {
+			Expect(oauth_clients_db.NewOAuthClientsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).CreateClient(&oauth_clients_db.OAuthClientEntry{
+				ClientID: testClientID, ClientType: oauth_clients_db.ClientTypePublic, RedirectURIs: []string{redirectURI},
+				Scopes: []string{"openid"}, AllowedProviders: allowed, RequirePKCE: utils.Ptr(true),
+				AllowedResources: []string{testResource}, DefaultResource: testResource,
+			})).To(Succeed())
+		}
+		cancel := func(upstreamErr string) events.APIGatewayProxyResponse {
+			state := startLeg(true)
+			return callback(auth.FlowCookieName+"=fl_sso", map[string]string{"error": upstreamErr, "state": state})
+		}
+		flowLive := func() bool {
+			_, err := auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).GetFlow("fl_sso")
+			return err == nil
+		}
+
+		DescribeTable("goes back to our page, on the same sign-in, when it offers another way in",
+			func(prepare func()) {
+				prepare()
+				resp := cancel(oidc.OAuthErrAccessDenied)
+				Expect(resp.StatusCode).To(Equal(http.StatusFound))
+				Expect(resp.Headers["Location"]).To(Equal(pathLogin))
+				Expect(flowLive()).To(BeTrue(), "the page continues this sign-in")
+			},
+			Entry("a password row the client allows", func() {
+				addProvider("up", identity_providers_db.TypeOIDC, "")
+				addProvider("cognito", identity_providers_db.TypeOIDC, identity_providers_db.PasswordVerifierCognito)
+				addClient(nil)
+			}),
+			Entry("an otp row the client allows", func() {
+				addProvider("up", identity_providers_db.TypeOIDC, "")
+				addProvider("otp", identity_providers_db.TypeOTP, "")
+				addClient(nil)
+			}),
+			Entry("a second provider the client allows", func() {
+				addProvider("up", identity_providers_db.TypeOIDC, "")
+				addProvider("other", identity_providers_db.TypeOIDC, "")
+				addClient(nil)
+			}),
+		)
+
+		DescribeTable("returns to the client with access_denied and ends the sign-in when the provider was the only way in, since authorize would send them straight back to it",
+			func(upstreamErr string, prepare func()) {
+				prepare()
+				resp := cancel(upstreamErr)
+				Expect(resp.StatusCode).To(Equal(http.StatusFound))
+				Expect(resp.Headers["Location"]).To(Equal(redirectURI + "?error=access_denied&state=xyz"))
+				Expect(flowLive()).To(BeFalse())
+			},
+			Entry("the only enabled provider", oidc.OAuthErrAccessDenied, func() { addProvider("up", identity_providers_db.TypeOIDC, ""); addClient(nil) }),
+			Entry("Apple's cancel", "user_cancelled_authorize", func() { addProvider("up", identity_providers_db.TypeOIDC, ""); addClient(nil) }),
+			Entry("the only provider this client allows, though others are enabled", oidc.OAuthErrAccessDenied, func() {
+				addProvider("up", identity_providers_db.TypeOIDC, "")
+				addProvider("cognito", identity_providers_db.TypeOIDC, identity_providers_db.PasswordVerifierCognito)
+				addProvider("otp", identity_providers_db.TypeOTP, "")
+				addClient([]string{"up"})
+			}),
+		)
+	})
+
+	It("keeps the error page for another provider failure, with a way to start again", func() {
+		state := startLeg(true)
+		resp := callback(auth.FlowCookieName+"=fl_sso", map[string]string{"error": "server_error", "state": state})
+		Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
+		Expect(pageDataFrom(resp.Body).RestartURL).To(Equal(pathRestart))
+	})
+
+	DescribeTable("leads nowhere from a provider error it cannot tie to this browser's sign-in (negative)",
+		func(cookie string, state func() string) {
+			resp := callback(cookie, map[string]string{"error": "access_denied", "state": state()})
+			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
+			Expect(resp.Headers).NotTo(HaveKey("Location"))
+			Expect(pageDataFrom(resp.Body).RestartURL).To(BeEmpty())
+		},
+		Entry("another browser's sign-in", auth.FlowCookieName+"=fl_someone_else", func() string { return startLeg(true) }),
+		Entry("no state at all", auth.FlowCookieName+"=fl_sso", func() string { return "" }),
+	)
+
 	It("sets the __Host- session cookie and records the upstream's auth_time on the federation callback", func() {
 		// Old enough to prove inheritance: auth_time is the upstream's, never the row's write time.
 		upstreamAuthTime := time.Now().Add(-30 * time.Minute).Unix()
@@ -1000,6 +1085,36 @@ var _ = Describe("GET /oauth2/federation/callback establishes the session", func
 		Expect(err).NotTo(HaveOccurred())
 		Expect([]any{flow.Subject, flow.SID, flow.AuthTime}).To(Equal([]any{userID, prior.SID, upstreamAuthTime}))
 	})
+
+	DescribeTable("refuses an account the upstream vouched for that we cannot use, with one answer that names nobody (negative)",
+		func(prepare func()) {
+			prepare()
+			setupUpstream(time.Now().Unix(), flowNonce)
+			resp := runCallback(auth.FlowCookieName+"=fl_sso", true)
+			Expect(resp.StatusCode).To(Equal(http.StatusForbidden))
+			Expect(pageDataFrom(resp.Body).Error).To(Equal(&errorData{Code: oidc.OAuthErrAccessDenied, Message: "This account cannot be signed in. Please contact support."}))
+			Expect(resp.Headers).NotTo(HaveKey("Set-Cookie"))
+		},
+		Entry("an upstream id another account already holds, with no contact tying this login to it", func() {
+			rowMapping = map[string]string{idp.SubAttribute: "sub"}
+			Expect(user_details_db.NewUserDetailsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).CreateUserDetails(&user_details_db.UserDetailsEntry{
+				UserID: "up-sub-1", Email: "someone-else@example.com", UserType: user_details_db.UserTypeUser,
+			})).To(Succeed())
+		}),
+		Entry("no verified email or phone", func() {
+			tokenClaims = jwtgo.MapClaims{"email_verified": false}
+		}),
+		Entry("an email and a phone held by two different accounts", func() {
+			oauth, err := auth.NewOAuthUserAuthService(context.Background())
+			Expect(err).NotTo(HaveOccurred())
+			rmngCtx := rmngctx.NewRmngContextWithCtx(context.Background(), nil)
+			_, err = oauth.ResolveOrCreateUserByContacts(rmngCtx, "sso@example.com", "", nil)
+			Expect(err).NotTo(HaveOccurred())
+			_, err = oauth.ResolveOrCreateUserByContacts(rmngCtx, "", "+15550100", nil)
+			Expect(err).NotTo(HaveOccurred())
+			tokenClaims = jwtgo.MapClaims{"phone_number": "+15550100", "phone_number_verified": true}
+		}),
+	)
 
 	It("answers a flow finished meanwhile as an expired sign-in, and still hands over the session it established so the browser is never left with a retired cookie", func() {
 		setupUpstream(time.Now().Unix(), flowNonce)
@@ -1108,6 +1223,21 @@ var _ = Describe("allowed_providers is enforced, not decorative", func() {
 			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
 			Expect(pageDataFrom(resp.Body).Error.Message).To(Equal("Unknown or unavailable provider."),
 				"and it must read like an unknown provider: whether a client restricts one is not the caller's business")
+		})
+
+		It("refuses when the flow's client can no longer be read, rather than admit every provider (negative)", func() {
+			flowID := flowIDFor(openClientID)
+			Expect(oauth_clients_db.NewOAuthClientsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).DeleteClient(openClientID)).To(Succeed())
+
+			resp := startFederation(flowID, "acme")
+			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
+			Expect(pageDataFrom(resp.Body).Error.Message).To(Equal("Unknown or unavailable provider."))
+		})
+
+		It("tells a browser whose flow is gone that the sign-in expired (negative)", func() {
+			resp := startFederation("fl_missing", "acme")
+			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
+			Expect(pageDataFrom(resp.Body).Error.Message).To(Equal("Login session expired. Please try again."))
 		})
 
 		It("refuses a link drawn for another sign-in, after a newer one in this browser took the cookie, and leaves for no provider (negative)", func() {

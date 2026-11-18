@@ -19,7 +19,8 @@ own end-session hop -- is test_user_login_ui.py. This file is the fast requests-
 Spec: espuser/docs/specs/sso-sessions.md, authorize-code-flow.md.
 """
 import time
-from urllib.parse import urljoin
+import uuid
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import pytest
 import requests
@@ -166,6 +167,57 @@ def test_sso_prompt_login_and_max_age_reach_the_provider(apps, espuser_person, h
         f"prompt=login did not reach the provider, so it means only 'skip our session': {upstream}"
     assert "max_age=120" in upstream, f"max_age did not reach the provider: {upstream}"
 
+
+
+def _cancel_at_the_provider(browser, client, provider):
+    """Start a sign-in, leave for the provider, and come back as a provider does when the person
+    presses Cancel: our own callback with error=access_denied and the state we sent."""
+    started = client.authorize(browser, state="cancel-state")
+    assert started.needs_login, started
+    fed = client.start_federation(browser, provider)
+    assert fed.status_code == 302, f"{fed.status_code} {fed.text[:200]}"
+    state = parse_qs(urlparse(fed.headers["Location"]).query)["state"][0]
+    return state, lambda b: b.session.get(f"{USER_API_GATEWAY_URL}/oauth2/federation/callback",
+                                          params={"error": "access_denied", "state": state}, allow_redirects=False)
+
+
+def test_sso_a_cancel_at_the_provider_returns_to_our_page_when_another_way_in_exists(
+        apps, hosted_cognito_provider):
+    """The built-in pool still takes a password on our page, so backing out of the provider lands
+    back on our sign-in page to choose again, with no code and no session."""
+    first, _ = apps
+    browser = Browser()
+    _, come_back = _cancel_at_the_provider(browser, first, hosted_cognito_provider)
+    back = come_back(browser)
+    assert back.status_code == 302, f"{back.status_code} {back.text[:200]}"
+    assert urlparse(back.headers["Location"]).path.endswith("/user/login"), back.headers["Location"]
+    assert browser.session_cookie is None, "a cancelled sign-in must not leave a session"
+
+
+def test_sso_a_cancel_at_the_only_provider_tells_the_app_access_denied(
+        register_espuser_client, hosted_cognito_provider):
+    """A client that allows only that provider has nothing else to offer, so the app is told the
+    person declined (RFC 6749 s4.1.2.1), with its own state."""
+    uri = CALLBACK.format(uuid.uuid4().hex[:8])
+    client = register_espuser_client(redirect_uris=[uri], allowed_providers=[hosted_cognito_provider])
+    app = WebClient(client.client_id, uri)
+    browser = Browser()
+    _, come_back = _cancel_at_the_provider(browser, app, hosted_cognito_provider)
+    back = come_back(browser)
+    assert back.status_code == 302, f"{back.status_code} {back.text[:200]}"
+    returned = urlparse(back.headers["Location"])
+    assert back.headers["Location"].startswith(uri), back.headers["Location"]
+    assert parse_qs(returned.query) == {"error": ["access_denied"], "state": ["cancel-state"]}, returned.query
+
+
+def test_sso_a_cancel_from_another_browser_ends_nobody_s_sign_in(apps, hosted_cognito_provider):
+    """The same cancel without the flow cookie is refused on our own page: a stranger holding a
+    leaked state cannot end someone else's sign-in or send their app access_denied."""
+    first, _ = apps
+    _, come_back = _cancel_at_the_provider(Browser(), first, hosted_cognito_provider)
+    stranger = come_back(Browser("another browser"))
+    assert stranger.status_code == 400, f"{stranger.status_code} {stranger.text[:200]}"
+    assert "Location" not in stranger.headers, stranger.headers
 
 # ── session fixation: a value the attacker chose ──────────────────────────────────
 

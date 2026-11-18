@@ -579,6 +579,7 @@ def test_contacts_owned_by_different_accounts_are_refused(fed_identity, provisio
     location = callback.headers.get("Location", "")
     assert "code=" not in location, \
         f"a conflicting identity must not yield a code: {callback.status_code} {location}"
+    assert callback.status_code == 403, f"one answer for an account we cannot use: {callback.status_code}"
 
 
 

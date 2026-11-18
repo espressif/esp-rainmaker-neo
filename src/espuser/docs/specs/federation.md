@@ -103,7 +103,7 @@ Begins the upstream leg for an in-flight authorization flow.
   `400 flow_replaced` and nothing is sent upstream: a newer sign-in in another tab took the cookie, and following it
   would finish that tab's app.
 - **Process:** resolve a live `LOGIN` flow by the cookie; load the provider from
-  [`espuser-identity-providers`](#provider-registry) (must be `enabled`);
+  [`espuser-identity-providers`](#provider-registry) (must be `enabled`, and the client must allow it in `allowed_providers`);
   generate a fresh upstream `state`, `nonce`, and PKCE `code_verifier`/S256
   `code_challenge`; persist them on the flow record; build the upstream authorize
   URL (our broker `client_id`, provider scopes, our callback `redirect_uri`,
@@ -133,6 +133,7 @@ Completes the upstream leg and issues **our** code.
   5. Identity resolution against every verified contact, described below. The upstream
      refresh token is discarded — never persisted.
   6. Bind the resolved subject onto the flow (conditional on `subject` empty), then issue our authorization code, or, when the flow's `skip_consent` is not set, hold the sign-in and send the browser to `/user/login/consent` ([authorize-code-flow.md](authorize-code-flow.md#consent--clients-we-do-not-ship)).
+- **A provider `error` instead of `code`** (the person cancelled, or the provider failed): the same step-1 checks run first, so only an error tied to this browser's own sign-in leads anywhere. A cancel (`access_denied`, or Apple's `user_cancelled_authorize`) goes back to `/user/login` on the same sign-in when the page offers the client another way in (a row whose password our page takes or an `otp` row it allows, or a second allowed provider); otherwise the sign-in ends and the browser returns to the client's `redirect_uri` with `error=access_denied` and `state`, because `/oauth2/authorize` would send it straight back to the same provider. Any other error is a `400` page offering to start again. An error tied to no sign-in of this browser's is a `400` page with no way on.
 - **Output:** `302` to the client `redirect_uri?code=…&state=…`. The client then
   redeems the code at `/oauth2/token` for **our** tokens, exactly as any login.
 

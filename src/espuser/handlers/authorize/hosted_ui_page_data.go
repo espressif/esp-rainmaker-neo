@@ -135,6 +135,14 @@ func buildPageData(entries []identity_providers_db.ProviderEntry, allows func(st
 	return data
 }
 
+// offersAnotherWay is whether the page has more than a single redirect provider: a password form, a code, or a second button.
+func (d pageData) offersAnotherWay() bool {
+	if d.OTPEnabled || len(d.Providers) > 1 {
+		return true
+	}
+	return len(d.Providers) == 1 && d.Providers[0].Method == methodPassword
+}
+
 // buttonLogo is the row's logo when the page may draw it: never on a brand's own button, and "" for anything but a valid inline raster image, such as a raw-SVG logo written before logos were checked.
 func buttonLogo(p identity_providers_db.ProviderEntry) string {
 	if p.Logo == "" || p.ButtonBrand() != "" || clients.ValidateLogoURI(p.Logo) != nil {

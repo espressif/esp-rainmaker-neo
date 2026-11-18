@@ -418,14 +418,22 @@ paths:
       summary: Upstream provider callback
       description: |
         The provider returns here after sign-in. Finishes the sign-in and redirects to `redirect_uri` with a `code`, or to the consent page; upstream tokens are discarded.
+
+        A cancel at the provider goes back to the sign-in page when the client offers another way in, else to `redirect_uri` with `error=access_denied`. Any other error is a `400` page.
       tags:
         - Federated Login
       security: []
       parameters:
         - name: code
           in: query
-          required: true
-          description: Upstream authorization code.
+          required: false
+          description: Upstream authorization code; absent when the provider answers `error`.
+          schema:
+            type: string
+        - name: error
+          in: query
+          required: false
+          description: The provider's refusal, sent instead of `code`.
           schema:
             type: string
         - name: state
@@ -461,7 +469,21 @@ paths:
         "400":
           description:
             State/flow mismatch, a missing or different `__Host-esp_flow_id` cookie,
-            or upstream validation failure (HTML error page; no cookie is set).
+            upstream validation failure, or a provider `error` other than a cancel (HTML error page).
+          content:
+            text/html:
+              schema:
+                type: string
+        "403":
+          description:
+            "`access_denied`: no account of ours can take this person, such as one with no verified email or phone (HTML error page)."
+          content:
+            text/html:
+              schema:
+                type: string
+        "500":
+          description:
+            "`server_error`: the provider registry, the flow or the account could not be read or written, or the code could not be issued (HTML error page)."
           content:
             text/html:
               schema:
