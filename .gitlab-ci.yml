@@ -310,6 +310,7 @@ unittest:
         - Makefile
         - src/esp-cloud-common
         - deployment/docker/Dockerfile
+        - src/espuser/hosted-ui/**/*
   script:
     - make test
   artifacts:

@@ -80,7 +80,18 @@ make setup
 make deploy
 ```
 
-`make deploy` builds the Go Lambdas **and** the dashboard, then deploys both.
+`make deploy` builds the Go Lambdas, the dashboard **and** the sign-in page, then deploys them.
+
+The sign-in page ([`src/espuser/hosted-ui/`](src/espuser/hosted-ui/)) is a Preact + TypeScript app
+built by Vite and compiled into the authorize Lambda with `go:embed`. `go_build` depends on that
+bundle, so it is always rebuilt first — without that ordering a stale UI would be compiled into
+fresh handlers and nothing would say so. It needs no bucket, no distribution and no cache
+invalidation: the UI and the backend that serves it are one artifact.
+
+```shell
+make hosted-ui-build    # just the bundle
+make hosted-ui-test     # its unit tests, also run by make test
+```
 
 Both the build and the deploy run in parallel by default: the lambda binaries build across
 all cores, and stack groups that do not depend on each other (alexa, smartthings, gva, ...)
