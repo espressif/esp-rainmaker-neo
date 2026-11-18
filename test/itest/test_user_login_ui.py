@@ -26,7 +26,6 @@ from test.itest.conftest import (
     ESPUSER_RESOURCE,
     FLOW_COOKIE,
     SESSION_COOKIE,
-    UPSTREAM_PROVIDER,
     USER_API_GATEWAY_URL,
     decode_jwt_claims,
     pkce_pair,
@@ -51,14 +50,15 @@ def _authorize_url(client_id, redirect_uri, challenge, state,
     })
 
 
-def _sign_in_through_the_hosted_ui(page, authorize_url, email, password, redirect_uri):
+def _sign_in_through_the_hosted_ui(page, authorize_url, email, password, redirect_uri, provider):
     """Drive a real sign-in through the provider's hosted UI, returning the URL the browser lands on
-    (bearing code and state). Navigate the federation leg directly rather than picking a provider:
-    with more than one enabled, authorize serves our own login page and there is no chooser on it yet.
-    The hosted page renders the form twice (desktop and mobile) with duplicate ids, so pick the
+    (bearing code and state). Navigate the federation leg directly rather than clicking through our
+    own sign-in page: this test is about the upstream leg and the cookies it depends on, and our page
+    has tests of its own below. The hosted page renders the form twice (desktop and mobile) with duplicate ids, so pick the
     visible one rather than the first match."""
     page.goto(authorize_url, wait_until="domcontentloaded")
-    page.goto(f"{USER_API_GATEWAY_URL}/oauth2/federation/start?provider={UPSTREAM_PROVIDER}",
+    flow_id = next(c["value"] for c in page.context.cookies() if c["name"] == FLOW_COOKIE)
+    page.goto(f"{USER_API_GATEWAY_URL}/user/login/federation/start?provider={provider}&flow_id={flow_id}",
               wait_until="domcontentloaded")
     assert "amazoncognito.com" in page.url, f"expected the upstream hosted UI, on {page.url}"
     page.locator("#signInFormUsername").locator("visible=true").first.fill(email)
@@ -79,7 +79,8 @@ def login_ui_clients(register_espuser_client):
             WebClient(b.client_id, REDIRECT_B))
 
 
-def test_login_sso_sessions_and_signout_end_to_end(login_ui_clients, espuser_person, chromium_browser):
+def test_login_sso_sessions_and_signout_end_to_end(login_ui_clients, espuser_person, chromium_browser,
+                                                   hosted_cognito_provider):
     """One person, two browsers, the whole journey -- each act commented for what only a real browser
     can prove."""
     app_a, app_b = login_ui_clients
@@ -103,7 +104,7 @@ def test_login_sso_sessions_and_signout_end_to_end(login_ui_clients, espuser_per
         assert flow[0]["sameSite"] in ("Lax", "None"), \
             f"{FLOW_COOKIE} SameSite={flow[0]['sameSite']} would be dropped on the return from upstream"
 
-        page1.goto(f"{USER_API_GATEWAY_URL}/oauth2/federation/start?provider={UPSTREAM_PROVIDER}",
+        page1.goto(f"{USER_API_GATEWAY_URL}/user/login/federation/start?provider={hosted_cognito_provider}&flow_id={flow[0]['value']}",
                    wait_until="domcontentloaded")
         assert "amazoncognito.com" in page1.url, f"expected the upstream hosted UI, on {page1.url}"
         page1.locator("#signInFormUsername").locator("visible=true").first.fill(email)
@@ -162,7 +163,7 @@ def test_login_sso_sessions_and_signout_end_to_end(login_ui_clients, espuser_per
         verifier_a2, challenge_a2 = pkce_pair()
         landed2 = _sign_in_through_the_hosted_ui(
             page2, _authorize_url(app_a.client_id, REDIRECT_A, challenge_a2, "state-a2"),
-            email, password, REDIRECT_A)
+            email, password, REDIRECT_A, hosted_cognito_provider)
         code2 = parse_qs(urlparse(landed2).query).get("code")
         assert code2, landed2
         exchanged2 = app_a.exchange_code(code2[0], verifier_a2)

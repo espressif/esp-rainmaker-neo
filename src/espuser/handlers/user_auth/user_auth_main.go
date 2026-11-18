@@ -41,13 +41,6 @@ const (
 	rainmakerSignupMessage = "Code sent. Existing RainMaker users must signin or reset password."
 	neutralSignupMessage   = "Code sent. Existing users must signin or reset password."
 
-	unconfirmedAccountMessage = "Signin failed. Account not verified — reset your password."
-
-	providerNotAllowedMessage = "This application does not allow signing in with that provider."
-
-	// An admin reset the account; forgot password sets the new one.
-	passwordResetRequiredMessage = "Signin failed. Password reset required — reset your password."
-
 	// One answer for every /signup/verify failure; the wording carries the sign-in hint.
 	rainmakerVerifyFailedMessage = "Invalid code or RainMaker account already exists. Try signin or reset password."
 	neutralVerifyFailedMessage   = "Invalid code or account already exists. Try signin or reset password."
@@ -173,16 +166,19 @@ func handleSignin(ctx context.Context, request events.APIGatewayProxyRequest, sv
 		rlog.Error(ctx).Err(err).Msg("legacy signin failed")
 		// Refused before the password was checked, so it says nothing about the account.
 		if errors.Is(err, auth.ErrProviderNotAllowed) {
-			return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus(providerNotAllowedMessage)), nil
+			return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus(legacyauth.ProviderNotAllowedMessage)), nil
 		}
 		// An unconfirmed account is named explicitly: the caller proved the password, so nothing
 		// is disclosed that they did not already know, and a generic refusal would leave them
 		// with no way to recover the account.
 		if errors.Is(err, legacyauth.ErrUserNotConfirmed) {
-			return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus(unconfirmedAccountMessage)), nil
+			return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus(legacyauth.UnconfirmedAccountMessage)), nil
 		}
 		if errors.Is(err, legacyauth.ErrPasswordResetRequired) {
-			return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus(passwordResetRequiredMessage)), nil
+			return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus(legacyauth.PasswordResetRequiredMessage)), nil
+		}
+		if errors.Is(err, legacyauth.ErrNewPasswordRequired) {
+			return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus(legacyauth.NewPasswordRequiredMessage)), nil
 		}
 		// Uniform 401 so the response is no oracle; operators get the real cause from the log.
 		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Authentication failed")), nil

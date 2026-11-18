@@ -18,11 +18,15 @@ info:
 
     Login methods (all end in OUR tokens; upstream credentials never reach clients):
 
-    - **Federated login (default)**: `GET /oauth2/authorize` starts a browser
-      authorization-code + PKCE flow. With a single enabled identity provider the
-      user is auto-redirected to it; the
-      broker exchanges the upstream code server-side and issues OUR authorization
-      code at the client's `redirect_uri`.
+    - **Sign-in page (default)**: `GET /oauth2/authorize` starts a browser
+      authorization-code + PKCE flow and sends the browser to `GET /user/login`,
+      which draws the providers the client allows: a password form checked by the
+      pool of an enabled `oidc` row whose `password_verifier` is `cognito` (`POST /user/login/password`),
+      a one-time code, or a button that redirects to the own page of an `oidc` provider naming no `password_verifier`.
+    - **Federated login**: an `oidc` provider's button, or `GET /oauth2/authorize`
+      itself when that provider is the only enabled one, sends the browser to the
+      provider; the broker exchanges the upstream code server-side and issues OUR
+      authorization code at the client's `redirect_uri`.
     - **Native password APIs** (`/v1/user/auth/*`): the main-era
       native surface. Credentials are verified against the bundled Cognito pool server-side and converted to our tokens.
 
@@ -854,6 +858,93 @@ paths:
               schema:
                 type: string
 
+  /user/login/password:
+    post:
+      summary: Sign in with a password on the page
+      description: |
+        Checks the password with a provider that has a supported `password_verifier` and finishes the sign-in, answering where to send the browser. Never returns a token.
+      tags:
+        - Sign-in Pages
+      security: []
+      parameters:
+        - in: cookie
+          name: __Host-esp_flow_id
+          required: true
+          schema:
+            type: string
+          description: The login in progress.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [flow_id, username, password]
+              properties:
+                flow_id:
+                  type: string
+                  description: The `flow_id` the sign-in page was served with; it must be the flow cookie's.
+                provider:
+                  $ref: "#/components/schemas/PasswordProvider"
+                username:
+                  type: string
+                  description: The account email or phone number.
+                password:
+                  type: string
+                  format: password
+      responses:
+        "200":
+          description: |
+            Signed in: `redirect_to` is `redirect_uri` with `code` and `state`, or the consent page.
+          headers:
+            Set-Cookie:
+              description: The `__Host-esp_session` cookie (`Path=/; HttpOnly; Secure; SameSite=Lax`).
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+              description: Always `no-store`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RedirectResponse"
+              example:
+                redirect_to: https://app.example.com/cb?code=abc&state=xyz
+        "400":
+          description: "`expired_flow`: the sign-in must start again; `flow_replaced`: another sign-in replaced it; `invalid_request`: an unreadable body or unknown provider."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: flow_replaced
+                error_description: Another sign-in was started in this browser.
+        "401":
+          description: "`invalid_credentials`: a wrong password and an unknown account get the same answer, so the form is no account-existence oracle."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: invalid_credentials
+                error_description: Signin failed. Check your email and password, or reset your password.
+        "403":
+          description: "`unconfirmed_account`, `new_password_required`, `password_reset_required`: the account needs that step first; `provider_not_allowed`; `access_denied`: the account cannot sign in here."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: provider_not_allowed
+                error_description: This application does not allow signing in with that provider.
+        "500":
+          description: "`server_error`: something on our side failed, never a wrong password."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+
   /user/login/restart:
     get:
       summary: Start the same sign-in again after it expired
@@ -1183,6 +1274,7 @@ paths:
             `Authentication failed` — wrong password, or no such account.
             `Signin failed. Account not verified — reset your password.` — correct password, account never verified.
             `Signin failed. Password reset required — reset your password.` — correct password, account an administrator reset.
+            `Signin failed. This account needs a new password — contact support.` — correct temporary password, account an administrator created.
           content:
             application/json:
               schema:
@@ -1932,7 +2024,15 @@ components:
             - invalid_scope
             - invalid_target
             - invalid_token
+            - access_denied
             - server_error
+            - expired_flow
+            - flow_replaced
+            - unconfirmed_account
+            - new_password_required
+            - password_reset_required
+            - invalid_credentials
+            - provider_not_allowed
           example: "invalid_grant"
         error_description:
           type: string

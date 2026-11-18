@@ -6,7 +6,6 @@ import base64
 import json
 import time
 import uuid
-from urllib.parse import parse_qs, urlparse
 
 import boto3
 import pytest
@@ -418,7 +417,7 @@ def federated_identity(fed_identity, provision_end_user):
 
 
 @pytest.mark.xdist_group("env_mut")
-def test_federated_login_carries_contacts_and_claims(federated_identity, fed_client):
+def test_federated_login_carries_contacts_and_claims(federated_identity, fed_client, hosted_cognito_provider):
     """One brokered login, asserted end to end: both verified contacts are stored, the upstream
     profile reaches both tokens, userinfo agrees with them, a refresh preserves them and the
     original auth_time, and a second login reuses the account rather than creating another.
@@ -438,7 +437,7 @@ def test_federated_login_carries_contacts_and_claims(federated_identity, fed_cli
 
     started = time.time()
     tokens = _login(fed_client, email, password, "openid email phone profile",
-                    before_callback=from_another_browser)
+                    provider=hosted_cognito_provider, before_callback=from_another_browser)
 
     id_claims = decode_jwt_claims(tokens["id_token"])
     assert abs(id_claims["auth_time"] - started) < 300 and id_claims["auth_time"] <= id_claims["iat"], \
@@ -474,7 +473,7 @@ def test_federated_login_carries_contacts_and_claims(federated_identity, fed_cli
         "a refresh is not an authentication: its ID token must still name the original sign-in"
 
     # A second login is the only way to observe that resolution reused the account.
-    again = decode_jwt_claims(_login(fed_client, email, password)["access_token"])
+    again = decode_jwt_claims(_login(fed_client, email, password, provider=hosted_cognito_provider)["access_token"])
     assert again["sub"] == decode_jwt_claims(tokens["access_token"])["sub"], \
         "a repeat login must not create a second account"
 
@@ -520,8 +519,7 @@ def test_confidential_client_authenticates_via_basic_and_body(federated_identity
             f"{via}: refresh failed: {refreshed.status_code} {refreshed.text[:300]}"
 
     # A wrong body secret must still be rejected — body placement must not weaken client auth.
-    cb = _login(client_id, email, password, follow_final=True)
-    code = parse_qs(urlparse(cb.headers["Location"]).query)["code"][0]
+    code = _login(client_id, email, password, code_only=True)
     denied = requests.post(f"{USER_API_GATEWAY_URL}/oauth2/token", data={
         "grant_type": "authorization_code", "code": code, "redirect_uri": _FED_REDIRECT_URI,
         "client_id": client_id, "client_secret": "wrong",
@@ -557,7 +555,7 @@ def test_email_verified_later_keeps_the_same_account(fed_identity, provision_end
 
 
 @pytest.mark.xdist_group("env_mut")
-def test_contacts_owned_by_different_accounts_are_refused(fed_identity, provision_end_user, fed_client):
+def test_contacts_owned_by_different_accounts_are_refused(fed_identity, provision_end_user, fed_client, hosted_cognito_provider):
     """When each contact already belongs to a different account, the login is refused, not guessed.
 
     Silently picking one would strand the other account's data or attach the login to the wrong user.
@@ -577,7 +575,7 @@ def test_contacts_owned_by_different_accounts_are_refused(fed_identity, provisio
                         {"Name": "phone_number_verified", "Value": "true"}],
     )
 
-    callback = _login(fed_client, email, password, follow_final=True)
+    callback = _login(fed_client, email, password, provider=hosted_cognito_provider, follow_final=True)
     location = callback.headers.get("Location", "")
     assert "code=" not in location, \
         f"a conflicting identity must not yield a code: {callback.status_code} {location}"

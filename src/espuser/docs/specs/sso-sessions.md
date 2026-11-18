@@ -9,8 +9,8 @@
 >
 > **Status.** Built. The session cookie, the `/oauth2/authorize` shortcut, `prompt`/`max_age`/
 > `id_token_hint`, the session API and `GET /oauth2/logout`; the **two clocks** (`expires_at` +
-> `cookie_expires_at`); a **user agent row for every first-party login** — federation, in-flow and
-> direct-token OTP, and the legacy password surface; and the **grant clamp** that keeps a refresh
+> `cookie_expires_at`); a **user agent row for every first-party login** — federation, the sign-in page's password form, browser and
+> native OTP, and the legacy password surface; and the **grant clamp** that keeps a refresh
 > family from outliving the user agent it belongs to. The one-time data backfill for a deployment that
 > already has rows under the old schema is in [Migration](#migration).
 
@@ -68,8 +68,8 @@ came from; a cookie is only how a *browser* re-presents it. Two kinds of row, on
 
 | Kind | `session_hash` | Cookie | SSO possible | Created by |
 |---|---|---|---|---|
-| Cookie-bearing | `SHA-256(cookie value)` | issued | yes | federation callback · in-flow OTP verify |
-| Cookie-less | `SHA-256(a random value that is then discarded)` | none | **no, by construction** | direct-token OTP verify · legacy password sign-in |
+| Cookie-bearing | `SHA-256(cookie value)` | issued | yes | federation callback · password sign-in on the page · browser OTP verify |
+| Cookie-less | `SHA-256(a random value that is then discarded)` | none | **no, by construction** | native OTP verify · legacy password sign-in |
 
 A cookie-less row is keyed by the hash of a secret **nobody holds** — generated, hashed, dropped.
 Nothing can present it, so the shortcut can never take it, with no extra branch in the authorize
@@ -122,11 +122,11 @@ full login leg regardless of what user agent exists. A shortcut that could be ta
 ## Pre-requisites
 
 - The `espuser-sessions` table and its `espuser-sessions-by-user` index.
-- At least one login path that establishes a user agent: a federated provider, the enterprise OTP addon,
+- At least one login path that establishes a user agent: a federated provider, the password form of a row whose `password_verifier` is `cognito`, the enterprise OTP addon,
   or the legacy password surface. A deployment with none of them keeps no sessions and loses only
   single sign-on.
-- For a first-party user agent, the `identity_providers` row the login authenticated against (`otp`, or
-  the row whose `password_grant` is set) — it is where `session_max_ttl_seconds` lives.
+- For a first-party user agent, the `identity_providers` row the login authenticated against (its `provider_name`, such as `otp` or `cognito`)
+  — it is where `session_max_ttl_seconds` lives.
 
 ## Architecture
 
@@ -225,7 +225,8 @@ same-origin `fetch`. The **back channel** is an app's HTTP client: `POST /oauth2
 | Event | Channel | `expires_at` | `cookie_expires_at` | Cookie re-issued |
 |---|---|---|---|---|
 | First login — federation callback | front | set | set | yes |
-| First login — in-flow OTP verify | front | set | set | yes |
+| First login — password sign-in on the page | front | set | set | yes |
+| First login — browser OTP verify | front | set | set | yes |
 | SSO shortcut / new-app login — `/oauth2/authorize` | front | **bumped** | **bumped** | **yes** |
 | App token refresh — `/oauth2/token` (`refresh_token`) | back | **bumped** | untouched | no |
 | App first exchange — `/oauth2/token` (`authorization_code`) | back | **bumped** | untouched | no |
@@ -243,14 +244,15 @@ whole reason the second clock exists.
 | Surface | Channel | User agent row | Cookie | `sid` in tokens | SSO afterwards |
 |---|---|---|---|---|---|
 | Federation callback | front | yes | issued | yes | yes |
-| In-flow OTP verify (hosted login page) | front | yes | issued | yes | yes |
-| Direct-token OTP verify (`flow_type: native`) | back | yes, cookie-less | none | yes | no |
+| Password sign-in on the page (`POST /user/login/password`) | front | yes | issued | yes | yes |
+| Browser OTP verify (sign-in page) | front | yes | issued | yes | yes |
+| Native OTP verify (`flow_type: native`) | back | yes, cookie-less | none | yes | no |
 | Legacy `POST /v1/user/auth/token` | back | yes, cookie-less | none | yes | no |
 | `authorization_code` exchange | back | none — inherits the flow's `sid` | no | yes | — |
 | `refresh_token` rotation | back | none — bumps `expires_at` | no | inherits | — |
 | `client_credentials` | back | **never** — there is no human, and a machine token must carry no `sid` | none | no | — |
 
-`Set-Cookie` on the in-flow OTP verify works because that request is **same-origin**: the login page
+`Set-Cookie` on the page's password sign-in and OTP verify works because those requests are **same-origin**: the sign-in page
 is served by this issuer and posts to a relative path on the same API, so `fetch`'s default
 `credentials: "same-origin"` sends the existing cookie and the response's `Set-Cookie` is stored. It
 is a property of the deployment, not of the page. A login page hosted on **another** origin gets a

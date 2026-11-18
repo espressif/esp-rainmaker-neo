@@ -80,6 +80,13 @@ class AuthorizeAPI(Construct):
             resources=[get_table_arn(USER_TABLE_NAMES['SESSIONS'], region)],
         ))
 
+        # POST /user/login/password checks the password against the provider row's pool.
+        authorize_lambda_role.add_to_policy(iam.PolicyStatement(
+            actions=["cognito-idp:InitiateAuth"],
+            # Unscoped because the provider's pool may be in another account, so there is no ARN of ours to name; InitiateAuth is unauthenticated, so the grant confers no privilege.
+            resources=["*"],
+        ))
+
         authorize_lambda_role.add_to_policy(iam.PolicyStatement(
             actions=["ssm:GetParameter"],
             resources=[
@@ -102,7 +109,7 @@ class AuthorizeAPI(Construct):
             },
         )
 
-        # API Gateway resources via CFn to avoid cyclic dependencies. All are GET (consent also POSTs) and unauthenticated: the authorize endpoint and the pages under /user/ are browser entry points.
+        # API Gateway resources via CFn to avoid cyclic dependencies. All are GET (consent and the password form also POST) and unauthenticated: the authorize endpoint and the pages under /user/ are browser entry points.
         api_id = common_resources.esp_user_api_id
         oauth2_parent_id = get_or_create_api_resource(
             self, "OAuth2Resource", common_resources,
@@ -164,6 +171,19 @@ class AuthorizeAPI(Construct):
                 authorization_type="NONE",
                 api_id=api_id
             )
+
+        # The page's password form; the flow cookie, not a bearer, names the sign-in.
+        create_cfn_api_method(
+            self, "UserLoginPasswordPostMethod", common_resources,
+            get_or_create_api_resource(
+                self, "UserLoginPasswordResource", common_resources,
+                login_parent_id, "password",
+                api_id=api_id
+            ),
+            "POST", self.authorize_function,
+            authorization_type="NONE",
+            api_id=api_id
+        )
 
         # Unauthenticated: the start link is a button on the login page, and the HMAC-signed upstream state is the credential on the callback.
         for verb_id, parent_id, parent_label in (

@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 import pytest
 import requests
 
+from py_sdk.espuser_oauth import pkce_pair
 from test.itest.conftest import (
     SESSIONS_SCOPE,
     USER_API_GATEWAY_URL,
@@ -46,6 +47,21 @@ STALE_DOC_HINT = (
 
 def _get(path):
     return requests.get(f"{ISSUER}{path}", timeout=15)
+
+
+LOGIN_PAGE_REDIRECT = "https://example.com/itest-login-page/callback"
+
+
+def _login_page(base, register_espuser_client):
+    """The sign-in page as a browser reaches it: through /oauth2/authorize, because /user/login describes
+    only a sign-in in progress and answers a bare request with the restart screen."""
+    client = register_espuser_client(client_name="itest login page", redirect_uris=[LOGIN_PAGE_REDIRECT])
+    _, challenge = pkce_pair()
+    return requests.Session().get(f"{base}/oauth2/authorize", params={
+        "response_type": "code", "client_id": client.client_id, "redirect_uri": LOGIN_PAGE_REDIRECT,
+        "scope": "openid email", "state": "itest-state",
+        "code_challenge": challenge, "code_challenge_method": "S256",
+    }, timeout=15)
 
 
 def test_openid_configuration():
@@ -169,13 +185,13 @@ def test_the_documents_are_readable_from_a_browser():
 
 
 @pytest.mark.skipif(".execute-api." in urlparse(ISSUER).netloc, reason="the issuer is the API's own URL; no custom domain is mapped")
-def test_an_issuer_on_its_custom_domain_hosts_the_sign_in_it_advertises():
+def test_an_issuer_on_its_custom_domain_hosts_the_sign_in_it_advertises(register_espuser_client):
     """On the ESP User API's custom domain, the issuer, the endpoints and the sign-in page share one host,
     which is the one a person sees in the address bar."""
     doc = _get(OIDC_DOC).json()
     for field in ("authorization_endpoint", "token_endpoint", "end_session_endpoint"):
         assert urlparse(doc[field]).netloc == urlparse(ISSUER).netloc, f"{field} {doc[field]} is not on {ISSUER}"
-    login = requests.get(f"{ISSUER}/oauth2/login", timeout=15)
+    login = _login_page(ISSUER, register_espuser_client)
     assert login.status_code == 200 and "text/html" in login.headers.get("Content-Type", ""), login.text[:200]
 
 
@@ -186,8 +202,8 @@ def test_an_issuer_on_its_custom_domain_hosts_the_sign_in_it_advertises():
 
 
 @pytest.mark.skipif(not USER_API_GATEWAY_URL, reason="EspUserApiUrl not configured")
-def test_the_login_page_keeps_its_security_headers_through_the_gateway():
-    resp = requests.get(f"{USER_API_GATEWAY_URL}/oauth2/login", timeout=15)
+def test_the_login_page_keeps_its_security_headers_through_the_gateway(register_espuser_client):
+    resp = _login_page(USER_API_GATEWAY_URL, register_espuser_client)
     assert resp.status_code == 200, f"{resp.status_code} {resp.text[:200]}"
     headers = {k.lower(): v for k, v in resp.headers.items()}
 

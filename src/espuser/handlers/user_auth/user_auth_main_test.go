@@ -13,6 +13,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/identity_providers_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/oauth_clients_db"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/legacyauth"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/session"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
@@ -165,6 +166,13 @@ var _ = Describe("legacy token responses (RFC 6749 s5.1)", func() {
 		Expect(audience(refresh)).To(Equal(accountResource))
 	})
 
+	It("tells an account an admin created to get a new password, which only its right temporary password reveals", func() {
+		awscommon.GetCognitoProviderClient().(*mock.CognitoProviderMock).ChallengeOnAuth = "NEW_PASSWORD_REQUIRED"
+		resp := post(pathToken, map[string]any{"username": email, "password": password})
+		Expect(resp.StatusCode).To(Equal(http.StatusUnauthorized))
+		Expect(resp.Body).To(MatchJSON(`{"message":"` + legacyauth.NewPasswordRequiredMessage + `"}`))
+	})
+
 	It("refuses a pool the Home app client does not allow before the password reaches it, and still signs in with one it does (negative)", func() {
 		clientsDB := oauth_clients_db.NewOAuthClientsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
 		Expect(clientsDB.DeleteClient(homeAppClientID)).To(Succeed())
@@ -274,14 +282,14 @@ var _ = Describe("provider-specific wording", func() {
 	})
 
 	It("tells an account an admin reset to reset its password, apart from the uniform refusal", func() {
-		Expect(passwordResetRequiredMessage).To(ContainSubstring("reset your password"))
-		Expect(passwordResetRequiredMessage).NotTo(Equal(unconfirmedAccountMessage))
+		Expect(legacyauth.PasswordResetRequiredMessage).To(ContainSubstring("reset your password"))
+		Expect(legacyauth.PasswordResetRequiredMessage).NotTo(Equal(legacyauth.UnconfirmedAccountMessage))
 	})
 
 	It("advises a password reset only for an unconfirmed sign-in", func() {
-		Expect(unconfirmedAccountMessage).To(ContainSubstring("reset your password"))
+		Expect(legacyauth.UnconfirmedAccountMessage).To(ContainSubstring("reset your password"))
 		// Distinct from the uniform refusal, which is what makes the branch observable at all.
-		Expect(unconfirmedAccountMessage).NotTo(Equal("Authentication failed"))
+		Expect(legacyauth.UnconfirmedAccountMessage).NotTo(Equal("Authentication failed"))
 	})
 })
 
@@ -325,6 +333,21 @@ var _ = Describe("against a pool with no such account", func() {
 		Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
 		Expect(resp.Body).To(MatchJSON(`{"message":"Invalid verification code"}`))
 	})
+
+	// The sign-in page signs in through POST /user/login/password, so these routes keep the app's shape whatever a browser sends; refresh and signout reach no pool, so they ignore a provider too.
+	DescribeTable("answers the native routes as the app API, reading no flow cookie",
+		func(path string, body map[string]any, status int, message string) {
+			resp := post(path, body, map[string]string{"Cookie": auth.FlowCookieName + "=fl_browser"})
+			Expect(resp.StatusCode).To(Equal(status))
+			Expect(resp.Body).To(MatchJSON(`{"message":"` + message + `"}`))
+		},
+		Entry("token", pathToken, map[string]any{"username": "legacy@example.com", "password": "Password1!", "flow_id": "fl_browser"},
+			http.StatusUnauthorized, "Authentication failed"),
+		Entry("refresh", pathRefresh, map[string]any{"refresh_token": "not-a-token", "provider": "nope"}, http.StatusUnauthorized, "Invalid refresh token"),
+		Entry("signout", pathSignout, map[string]any{"provider": "nope"}, http.StatusBadRequest, "Refresh token is required"),
+		Entry("password", pathPassword, map[string]any{"access_token": "not-a-token", "old_password": "a", "new_password": "b"},
+			http.StatusUnauthorized, "Password change failed"),
+	)
 
 	DescribeTable("refuses an account route naming a provider that is not a password pool, rather than using another pool (negative)",
 		func(path, provider string) {

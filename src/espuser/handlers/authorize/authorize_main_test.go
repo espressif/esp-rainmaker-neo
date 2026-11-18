@@ -1143,6 +1143,17 @@ var _ = Describe("allowed_providers is enforced, not decorative", func() {
 			}
 		})
 
+		It("refuses a row whose password our page takes, so its pool's own page is never reached by this URL (negative)", func() {
+			Expect(identity_providers_db.NewIdentityProvidersDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).CreateProvider(&identity_providers_db.ProviderEntry{
+				ProviderName: "pool", Type: identity_providers_db.TypeOIDC, PasswordVerifier: identity_providers_db.PasswordVerifierCognito,
+				Enabled: utils.Ptr(true), Issuer: "https://idp.example.com", ClientID: "broker-client",
+				AuthorizeURL: "https://idp.example.com/authorize", TokenURL: "https://idp.example.com/token", JWKSURL: "https://idp.example.com/jwks",
+			})).To(Succeed())
+
+			resp := startFederation(flowIDFor(openClientID), "pool")
+			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
+			Expect(pageDataFrom(resp.Body).Error.Message).To(Equal("Unknown or unavailable provider."))
+		})
 	})
 
 	Describe("on the login page — presentation, so it only has to agree with the gate", func() {
@@ -1606,6 +1617,33 @@ var _ = Describe("the consent link the sign-in page follows", func() {
 			ref, err := url.Parse(auth.ConsentPath)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(base.ResolveReference(ref).Path).To(Equal(prefix + pathConsent))
+		}
+	})
+})
+
+// The sign-in app matches these exact strings, so a rename here is a break there; they are an extension block, never a code of RFC 6749, RFC 6750 or OIDC Core.
+var _ = Describe("the sign-in page's error codes", func() {
+	pageCodes := []string{
+		oidc.RMErrUnconfirmedAccount, oidc.RMErrNewPasswordRequired, oidc.RMErrExpiredFlow,
+		oidc.RMErrFlowReplaced, oidc.RMErrInvalidCredentials, oidc.RMErrProviderNotAllowed,
+	}
+
+	It("keeps the wire value the page matches for each", func() {
+		Expect(pageCodes).To(Equal([]string{
+			"unconfirmed_account", "new_password_required", "expired_flow",
+			"flow_replaced", "invalid_credentials", "provider_not_allowed",
+		}))
+	})
+
+	It("never reuses a code of the standards (negative)", func() {
+		standards := []string{
+			oidc.OAuthErrInvalidRequest, oidc.OAuthErrInvalidClient, oidc.OAuthErrInvalidGrant, oidc.OAuthErrUnauthorizedClient,
+			oidc.OAuthErrUnsupportedGrantType, oidc.OAuthErrInvalidTarget, oidc.OAuthErrInvalidScope, oidc.OAuthErrServerError,
+			oidc.OAuthErrUnsupportedResponseType, oidc.OAuthErrAccessDenied, oidc.OAuthErrTemporarilyUnavailable,
+			oidc.OAuthErrLoginRequired, oidc.OAuthErrConsentRequired, oidc.OAuthErrInvalidToken, oidc.OAuthErrInsufficientScope,
+		}
+		for _, code := range pageCodes {
+			Expect(standards).NotTo(ContainElement(code))
 		}
 	})
 })

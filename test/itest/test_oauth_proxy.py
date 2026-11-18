@@ -18,9 +18,9 @@ from test.itest.conftest import (
     MCP_API_URL,
     REGION,
     USER_API_GATEWAY_URL,
-    cognito_hosted_login,
     esp_user_base_outputs,
     flow_id_from_cookie,
+    sign_in_on_our_page,
 )
 from test.itest.email_utils import generate_random_email, generate_test_password
 from test.itest.mcp_oauth import (
@@ -264,25 +264,19 @@ def test_authorize_with_real_cimd_wrong_redirect_uri(enable_test_cimd):
 
 def _complete_federation_at_authorize(session, authorize_url, email, password):
     """Drive the CORE login leg of the brokered authorize: follow the proxy's redirect to
-    /oauth2/authorize (which sets the __Host-esp_flow_id cookie), take the Cognito federation leg
-    (hosted-UI password login), and return the /oauth2/callback URL the federation callback
-    redirects the browser back to (carrying the authorization code + proxy state). Uses
-    federation — not OTP — so this end-to-end proxy test runs on OSS deployments too."""
+    /oauth2/authorize (which sets the __Host-esp_flow_id cookie), type the password on our sign-in
+    page, and return the /oauth2/callback URL the browser is sent back to (carrying the authorization
+    code + proxy state). Uses the password -- not OTP -- so this end-to-end proxy test runs on OSS
+    deployments too."""
     authz = session.get(authorize_url, allow_redirects=False)
     assert authz.status_code == 302, f"espuser authorize should redirect to login: {authz.status_code} {authz.text}"
     flow_id = flow_id_from_cookie(authz)
     assert flow_id, "espuser authorize must set the __Host-esp_flow_id cookie"
 
-    fed = session.get(f"{USER_API_GATEWAY_URL}/oauth2/federation/start",
-                      params={"provider": "cognito"}, allow_redirects=False)
-    assert fed.status_code == 302, f"federation start failed: {fed.status_code} {fed.text[:200]}"
-
-    our_callback = cognito_hosted_login(session, fed.headers["Location"], email, password)
-    cb = session.get(our_callback, allow_redirects=False)
-    assert cb.status_code == 302, f"federation callback failed: {cb.status_code} {cb.text[:200]}"
-    callback_url = cb.headers["Location"]
+    # The proxy's client is not one we ship, so the person is asked first; Allow is what they would answer.
+    callback_url = sign_in_on_our_page(session, email, password)
     assert "/oauth2/callback" in callback_url, \
-        f"federation callback should redirect to the proxy callback, got: {callback_url}"
+        f"the sign-in should send the browser to the proxy callback, got: {callback_url}"
     return callback_url
 
 

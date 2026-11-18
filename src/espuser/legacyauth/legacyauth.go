@@ -71,6 +71,15 @@ var ErrPasswordResetRequired = errors.New("legacyauth: the account must reset it
 // ErrSecondStepRequired means the password was right but the pool asks for a step this surface cannot take, such as an MFA code.
 var ErrSecondStepRequired = errors.New("legacyauth: the pool asks for a second step")
 
+// What a refused password sign-in tells the person, shared by the native API and the sign-in page so both say what to do next.
+const (
+	UnconfirmedAccountMessage    = "Signin failed. Account not verified — reset your password."
+	NewPasswordRequiredMessage   = "Signin failed. This account needs a new password — contact support."
+	PasswordResetRequiredMessage = "Signin failed. Password reset required — reset your password."
+	InvalidCredentialsMessage    = "Signin failed. Check your email and password, or reset your password."
+	ProviderNotAllowedMessage    = "This application does not allow signing in with that provider."
+)
+
 // ErrAuthenticationFailed is the credential being refused, deliberately without saying why, so the form cannot test whether an address is registered.
 var ErrAuthenticationFailed = errors.New("legacyauth: authentication failed")
 
@@ -156,6 +165,21 @@ func (s *Service) SigninWithPassword(ctx context.Context, username, password str
 		AMR:                 []string{"pwd"},
 		Origin:              session.OriginApp,
 	})
+}
+
+// SigninToFlow is SigninWithPassword for our sign-in page: it finishes the browser's flow with a code or a consent hold, never tokens, and checks the flow's client allows this provider before the password reaches the pool.
+func (s *Service) SigninToFlow(ctx context.Context, flowID, username, password string, login auth.FirstPartyLogin) (redirectTo, setCookie string, err error) {
+	flow, err := s.oauth.FlowAllowingProvider(ctx, flowID, s.providerName)
+	if err != nil {
+		return "", "", err
+	}
+	userID, err := s.Authenticate(ctx, username, password)
+	if err != nil {
+		return "", "", err
+	}
+	login.Provider = s.providerName
+	login.AMR = []string{"pwd"}
+	return s.oauth.CompleteSignIn(ctx, flow, userID, login)
 }
 
 // Authenticate checks the credential and resolves the person, the part the native API and the sign-in page share.

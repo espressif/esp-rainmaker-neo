@@ -53,6 +53,45 @@ sequenceDiagram
     Note over API,Pool: Refresh never reaches Cognito — /v1/user/auth/token/refresh rotates OUR refresh token.
 ```
 
+## The same credentials, on the sign-in page
+
+A browser on the sign-in page is one leg of somebody else's authorization flow. It gets an
+authorization code and a session, never a token set: tokens in the page would step over the
+client's PKCE binding, and the login would leave no device row for the session list or sign-out to
+reach. So the page's password form does not call `/v1/user/auth/token`; it posts to
+`POST /user/login/password`, which verifies the password against the same Cognito pool and finishes the browser's flow.
+
+The `__Host-esp_flow_id` cookie names the flow, and the body's `flow_id` must name the same one, so a tab drawn for an older sign-in cannot finish a newer one.
+
+```mermaid
+sequenceDiagram
+    title Password sign-in on the page — code, not tokens
+    participant Page as "Sign-in page"
+    participant API as "POST /user/login/password"
+    participant Pool as "Cognito pool (named by provider)"
+    participant Flow as "espuser-auth-flows"
+    participant RP as "Relying party"
+
+    Note over Page,API: __Host-esp_flow_id cookie present
+    Page->>API: {username, password, flow_id, provider?}
+    API->>Flow: read the flow and its client — the client must allow the provider
+    API->>Pool: InitiateAuth USER_PASSWORD_AUTH
+    Pool-->>API: Cognito tokens, or a challenge
+    API->>API: resolve the person from the VERIFIED contact
+    API->>Flow: establish device session + IssueCode (expiry now the code clock), or hold for consent
+    API-->>Page: {redirect_to} + Set-Cookie __Host-esp_session
+    Page->>RP: follow redirect_to — ?code=…&state=…
+    RP->>API: POST /oauth2/token with code + PKCE verifier
+    Note over API,Flow: Code is single-use and consumed here.
+```
+
+## How long a sign-in has
+
+A sign-in must reach a code within **15 minutes** of `/oauth2/authorize`; the flow holds the
+client's request, never a credential. Once a code is issued it has its own **10 minutes**, single-use
+(RFC 6749 §4.1.2). An expired sign-in offers "start again": `GET /user/login/restart` re-runs the
+original `/oauth2/authorize` request, so the relying party never notices.
+
 ## Choosing a provider
 
 `provider` names the registry row to authenticate against, and it must be an enabled `oidc` row whose
@@ -64,9 +103,27 @@ A named provider that is not such a row is **refused** (`400`, `Unknown provider
 does not fall back: the caller asked for a specific pool, and quietly using another would resolve
 the person to a different account.
 
-`/v1/user/auth/token` checks the Home app client's `allowed_providers` before the password reaches
-the pool, and answers `403` otherwise, since it mints that client's tokens; the account routes do not,
-because the sign-in page also uses them for other clients' sign-ins.
+On the password form the client's own `allowed_providers` is checked as well, before the password
+reaches the pool, and a client that cannot be read refuses. `/v1/user/auth/token` checks the Home app
+client's the same way (`403`), since it mints that client's tokens; the account routes do not, because
+the sign-in page also uses them for other clients' sign-ins.
+
+## How a sign-in on the page fails
+
+Cognito answers some correct passwords with a challenge rather than tokens; those are their own outcome, because "authentication failed" would be both wrong and unactionable. Our page answers no challenge, so a pool that requires MFA or another Cognito challenge must be registered as an `oidc` row, whose own hosted UI runs it. Every failure is an OAuth error code the page acts on:
+
+| Condition | Error | Status |
+| --- | --- | --- |
+| Wrong password **or** no such account, one answer for both so the form is no account-existence oracle | `invalid_credentials` | 401 |
+| Account never verified | `unconfirmed_account` | 403 |
+| Created by an administrator, has never chosen a password; forgot password cannot clear this | `new_password_required` | 403 |
+| Reset by an administrator; forgot password sets the new one | `password_reset_required` | 403 |
+| The client does not allow the provider | `provider_not_allowed` | 403 |
+| A login no account of ours can take (no verified contact, contacts held by two accounts, an upstream id another account holds) | `access_denied` | 403 |
+| The sign-in expired or no longer exists, or there is no flow cookie | `expired_flow` | 400 |
+| `flow_id` is not the flow cookie's | `flow_replaced` | 400 |
+| A `provider` that is not an enabled row whose `password_verifier` is `cognito` and that has a `client_id`, or a body that is not JSON | `invalid_request` | 400 |
+| The pool failed rather than refused (throttling, a missing app client, a wrong client secret, a network error), or the password was accepted but a step of ours failed | `server_error` | 500 |
 
 ## Token conversion
 
@@ -137,9 +194,13 @@ raised only for an unconfirmed account, and only after the password matched. So 
 re-sent exclusively on that signal; everything else — confirmed account, wrong password, MFA
 challenge — gets the same 201 and no mail.
 
-Sign-in keeps one deliberate exception: an unconfirmed account presenting the **correct**
-password gets `Signin failed. Account not verified — reset your password.` Since Cognito checks
-the password first, this is reachable only by someone already holding the credential.
+Sign-in names the account's state only after the **correct** password: an unconfirmed account gets
+`Signin failed. Account not verified — reset your password.`, one an administrator reset gets
+`Signin failed. Password reset required — reset your password.`, and one an administrator created
+gets `Signin failed. This account needs a new password — contact support.` Since Cognito checks the
+password first, each is reachable only by someone already holding the credential. The sign-in page's
+`POST /user/login/password` sends the same sentences as `error_description` (they live in
+`legacyauth`).
 
 `/signup/verify` is fully uniform — every failure, unknown user included, answers the same 400,
 and the message itself carries the sign-in/reset hint so a user who signed up twice is not

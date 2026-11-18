@@ -7,9 +7,9 @@
 
 ## What this is
 
-The standard OAuth 2.1 / OIDC browser login: a client (e.g. the Alexa or Google Voice Assistant account-linking web view) redirects the user to `GET /oauth2/authorize`, the user logs in passwordlessly via OTP on a **service-served login UI**, and we hand the client back a single-use **authorization code** at its `redirect_uri`. The client then exchanges that code (with its PKCE verifier) at `POST /oauth2/token` for the token set.
+The standard OAuth 2.1 / OIDC browser login: a client (e.g. the Alexa or Google Voice Assistant account-linking web view) redirects the user to `GET /oauth2/authorize`, the user signs in on a **service-served sign-in page** (a password, a one-time code, or a button to a provider's own page), and we hand the client back a single-use **authorization code** at its `redirect_uri`. The client then exchanges that code (with its PKCE verifier) at `POST /oauth2/token` for the token set.
 
-This is the interactive counterpart to [direct-token OTP](auth-flows.md): same OTP first factor, but the browser only ever carries an opaque flow id and the final code — never tokens or claims.
+This is the interactive counterpart to [direct-token OTP](auth-flows.md) and the [native password APIs](legacy-user-auth.md): the person signs in with a password, a one-time code or a provider's own page, and the browser only ever carries an opaque flow id and the final code — never tokens or claims.
 
 > Alexa account-linking runs here: the voice platform is a browser authorization-code + PKCE client of this surface. The access token issued here is what an end user later exchanges for AWS/IoT credentials — see [user_auth.md](../user_auth.md).
 
@@ -20,7 +20,7 @@ This is the interactive counterpart to [direct-token OTP](auth-flows.md): same O
 
 ## Scope of this slice
 
-**In:** `GET /oauth2/authorize`, a minimal service-served login UI, OTP as the first factor, single-use code issuance, and the `authorization_code` grant at `POST /oauth2/token`. First-party clients only.
+**In:** `GET /oauth2/authorize`, the service-served sign-in page (a password checked by the pool of a row whose `password_verifier` is `cognito`, a one-time code from an `otp` row, or a button to the own page of an `oidc` provider naming no `password_verifier`), single-use code issuance, and the `authorization_code` grant at `POST /oauth2/token`.
 
 **In:** SSO sessions and silent re-auth — see [Single sign-on](#single-sign-on--the-session) below.
 
@@ -29,7 +29,7 @@ This is the interactive counterpart to [direct-token OTP](auth-flows.md): same O
 ## Pre-requisites
 
 - A registered client ([admin-clients.md](admin-clients.md)) with exact-match `redirect_uris`, `grant_types` including `authorization_code`, and `require_pkce=true` (forced for public clients).
-- OTP delivery configured (SES/SNS) and the OTP endpoints deployed ([auth-flows.md](auth-flows.md)).
+- For a one-time code on the page, OTP delivery configured (SES/SNS) and the OTP endpoints deployed ([auth-flows.md](auth-flows.md)).
 - The RS256 signing key and discovery/JWKS documents exist ([oidc-oauth2.md](oidc-oauth2.md)).
 
 ## Key Rules
@@ -48,11 +48,12 @@ This is the interactive counterpart to [direct-token OTP](auth-flows.md): same O
 
 ```mermaid
 sequenceDiagram
-    title Authorization code + PKCE (browser OTP login)
+    title Authorization code + PKCE (browser login on the sign-in page)
     participant Client as "Client (Alexa/GVA web view)"
     participant Browser
     participant Authz as "/oauth2/authorize"
-    participant UI as "Login UI (service-served)"
+    participant UI as "Sign-in page (service-served)"
+    participant Pwd as "/user/login/password"
     participant OTP as "/v1/auth/otp/*"
     participant Token as "/oauth2/token"
     participant Flows as "espuser-auth-flows"
@@ -64,14 +65,20 @@ sequenceDiagram
         Authz-->>Browser: 302 redirect_uri?code=...&state=...
     else no session, or prompt=login / max_age exceeded
         Authz->>Flows: Put LOGIN record (flow_id, client_id, scopes, PKCE, redirect_uri, state)
-        Authz-->>Browser: 302 to login UI (Set-Cookie: flow_id — HttpOnly)
-        Browser->>UI: GET /login (cookie: flow_id)
-        UI-->>Browser: Render email/phone form (reads flow record for client)
-        Browser->>OTP: POST /v1/auth/otp/initiate (username, flow_id)
-        OTP-->>Browser: code sent
-        Browser->>OTP: POST /v1/auth/otp/verify (flow_id, code)
-        OTP->>Flows: Resolve subject, stamp CODE on the flow record (Set-Cookie: __Host-esp_session)
-        OTP-->>Browser: { redirect_to: redirect_uri?code=...&state=... }
+        Authz-->>Browser: 302 to /user/login (Set-Cookie: __Host-esp_flow_id — HttpOnly)
+        Browser->>UI: GET /user/login (cookie: __Host-esp_flow_id)
+        UI-->>Browser: Render the providers the flow's client allows (reads the flow, then its client)
+        alt password on a row whose password_verifier is cognito
+            Browser->>Pwd: POST /user/login/password (flow_id, username, password)
+            Pwd->>Flows: Resolve subject, stamp CODE on the flow record (Set-Cookie: __Host-esp_session)
+            Pwd-->>Browser: { redirect_to: redirect_uri?code=...&state=... }
+        else one-time code (otp provider)
+            Browser->>OTP: POST /v1/auth/otp/initiate (username, flow_id)
+            OTP-->>Browser: code sent
+            Browser->>OTP: POST /v1/auth/otp/verify (flow_id, code)
+            OTP->>Flows: Resolve subject, stamp CODE on the flow record (Set-Cookie: __Host-esp_session)
+            OTP-->>Browser: { redirect_to: redirect_uri?code=...&state=... }
+        end
     end
     Browser->>Client: 302 redirect_uri?code=...&state=...
     Client->>Token: POST /oauth2/token (grant_type=authorization_code, code, code_verifier, client_id, redirect_uri)
@@ -118,7 +125,7 @@ The authorization server keeps its own browser session (`__Host-esp_session`), s
 What this flow relies on:
 
 - **Consulted** at `/oauth2/authorize`, after request validation: a live session that satisfies `prompt`/`max_age`/`id_token_hint` issues the code immediately. `prompt=none` with no usable session redirects with `error=login_required`; `prompt=login` is always honoured.
-- **Established** on every first-party login (federation, OTP, the legacy password API); the flow's `sid` is stamped at code issuance and carried onto the refresh family.
+- **Established** on every first-party login (the sign-in page's password form, OTP, federation, the native password API); the flow's `sid` is stamped at code issuance and carried onto the refresh family.
 - **`auth_time` is the session's**, stamped on the flow at code issuance and on the refresh family, so an ID token from the shortcut or a refresh names the original authentication, never the mint time.
 
 ## Consent — clients we do not ship
@@ -139,17 +146,29 @@ A client whose row has `first_party` is one we ship (the RainMaker app, the ESP 
 - An absent `first_party` means third-party, so a client registered without thought is asked rather than trusted.
 - Nothing is remembered: there is no consents table, so a third-party client is asked on every sign-in.
 
-## Login UI (service-served)
+## Sign-in page (service-served)
 
-A minimal page (or small SPA) served by the identity service from its own origin — **no** custom domain, **no** per-client branding, **no** CloudFront in this slice. It:
-1. Reads the `flow_id` cookie and loads the flow record to learn the client (display only; no secrets).
-2. Renders an **email/phone** field (passwordless — no password field anywhere).
-3. On submit, calls `POST /v1/auth/otp/initiate` with the username and the flow id, then renders the **OTP entry** field.
-4. On code submit, calls `POST /v1/auth/otp/verify` with `{ flow_id, code }`. In-flow verify returns `{ redirect_to }`; the UI navigates the browser there, landing back at the client's `redirect_uri` with the `code`.
+A small app served by the identity service from its own origin ([federation.md](federation.md#the-sign-in-app)) — **no** custom domain, **no** per-client branding, **no** CloudFront. `GET /user/login`:
+1. Reads the flow from the `__Host-esp_flow_id` cookie, then the flow's client. A flow that expired draws the "Start again" error screen and no form; a flow whose row is gone, or no cookie at all, leaves nothing to restart, so its error screen has no "Start again".
+2. Draws only the providers that client allows, under the client's registered name. Each provider's `method` is `password` (a form on this page, for an `oidc` row whose `password_verifier` is `cognito`) or `redirect` (a button to the provider's own page, for an `oidc` row naming none); a row naming a `password_verifier` it cannot call, or with no `client_id`, is left out; a one-time code is offered when an `otp` row is allowed.
+3. A password goes to `POST /user/login/password` with `{ flow_id, provider?, username, password }`; a code goes to `POST /v1/auth/otp/verify` with `{ flow_id, code }`. Either returns `{ redirect_to }` with the session cookie, and the page navigates there: back to the client's `redirect_uri` with the `code`, or to the consent screen.
 
-The UI never mints a token, never sees signing keys, and never puts claims in the URL. Responses are `Cache-Control: no-store`.
+`POST /user/login/password` runs in this order, so nothing is spent on a request that cannot finish:
+1. The flow cookie must be present and equal the body's `flow_id`, else `400 flow_replaced` (no cookie: `400 expired_flow`).
+2. The pool is the named `provider`, which must be an enabled row whose `password_verifier` is `cognito` and that has a `client_id` (else `400 invalid_request`, `Unknown provider.`), or with none named the first such row by `provider_name`.
+3. The flow is read (expired or missing: `400 expired_flow`), and then its client.
+4. The client must allow that provider (`403 provider_not_allowed`); a client that cannot be read refuses. This is checked before the password reaches the pool.
+5. Cognito `InitiateAuth`: `401 invalid_credentials` for a wrong password and an unknown account alike, `403 unconfirmed_account`, `403 new_password_required`, `403 password_reset_required`; a pool that fails rather than refuses (throttling, a missing app client, a wrong client secret, a network error) is `500 server_error`.
+6. The account is found or created.
+7. The sign-in is completed.
 
-> The OTP `initiate`/`verify`/`resend` contracts and the in-flow vs direct-token split are owned by [auth-flows.md](auth-flows.md); this spec does not redefine them. In-flow `verify` stamps the flow's `subject`, transitions the `LOGIN` record to `CODE` (mints the `code`), and returns `{ redirect_to }`.
+Every sign-in that establishes a session ends in one completion step: the password form, OTP (through the enterprise add-on's browser verify) and the federation callback. It establishes the session with the browser's user agent, IP address and prior session cookie, then issues the code or holds the sign-in for consent. `allowed_providers` is enforced before the credential is checked on the password and OTP paths, fails closed when the client cannot be read, and answers `provider_not_allowed`; the federation path keeps its gate at `/user/login/federation/start`, and the session shortcut its own check.
+
+A failure of ours after the password was accepted is `500 server_error`, never an `invalid_credentials`. Success is `200 { "redirect_to" }`, where `redirect_to` is the client's `redirect_uri` with `code` and `state`, or `login/consent`, relative to `/user/login`; the response sets `__Host-esp_session`, carries `Cache-Control: no-store`, and never contains a token, which would step over the client's PKCE binding. Every response carrying `redirect_to` is `no-store`. Errors are `{ "error", "error_description" }`.
+
+The page never mints a token, never sees signing keys, and never puts claims in the URL. Responses are `Cache-Control: no-store`.
+
+> The OTP `initiate`/`verify`/`resend` contracts and the browser-vs-direct-token split are owned by [auth-flows.md](auth-flows.md); this spec does not redefine them. A browser `verify` stamps the flow's `subject`, transitions the `LOGIN` record to `CODE` (mints the `code`), and returns `{ redirect_to }`.
 
 ## `POST /oauth2/token` — `authorization_code` grant
 
@@ -217,7 +236,7 @@ The flow record threading a request from `/oauth2/authorize` through OTP login t
 | `expires_on` | Number | **TTL** (epoch seconds); code lifetime ≤ 60s recommended. |
 
 - Authorize writes the `LOGIN` record by `flow_id`.
-- In-flow OTP verify (linked by `flow_id`) stamps `subject`/`granted_scope`, mints `code`, sets `sk=CODE`.
+- The browser's OTP verify (linked by `flow_id`), and the password form, stamp `subject`/`granted_scope`, mint `code` and set `sk=CODE`.
 - Token exchange finds the record by `code` (a `by-code` GSI), verifies, and consumes.
 
 > This slice keeps the OTP challenge in [espuser-otp](auth-flows.md) linked by `flow_id`. Audiences (RFC 8707) and folding the OTP challenge onto this table — see Open items.

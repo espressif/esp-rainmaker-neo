@@ -22,12 +22,10 @@ Two ideas, and they are the whole module:
 
 `pkce_pair` and `cognito_hosted_login` live here, and the API base URL is injected by the
 harness (`API_BASE`, set by conftest from the deployment outputs), so this is a py_sdk client
-that imports nothing from the test dir. `upstream_login` below is the only function here that
-knows which identity provider is upstream; a deployment federating to something other than
-Cognito replaces that one function and nothing else.
+that imports nothing from the test dir. A login types the password on our own sign-in page,
+which checks it against the deployment's Cognito pool.
 """
-import os
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import requests
 
@@ -35,8 +33,6 @@ import requests
 #: deployment config, so the client library that speaks to these endpoints owns them.
 SESSION_COOKIE = "__Host-esp_session"
 FLOW_COOKIE = "__Host-esp_flow_id"
-#: The upstream identity provider a login federates to; overridable per deployment.
-UPSTREAM_PROVIDER = os.getenv("ESPUSER_ITEST_PROVIDER", "cognito")
 
 #: The ESP-User API base URL. Injected by the harness (conftest sets it from the deployment
 #: outputs) rather than imported, so this module is a py_sdk client with no dependency on the
@@ -68,11 +64,17 @@ def cognito_hosted_login(session, hosted_authorize_url, email, password):
     return login.headers["Location"]
 
 
-DEFAULT_SCOPE = "openid email account:sessions"
+def submit_password(session, username, password, provider=None):
+    """POST /user/login/password as our sign-in page sends it, for the sign-in the session's flow cookie holds; provider names a row whose password_verifier is cognito, none the first such row by name, and the result is the answer with the absolute URL it sends the browser to."""
+    signed_in = session.post(f"{API_BASE}/user/login/password", json={
+        "flow_id": session.cookies.get(FLOW_COOKIE), "provider": provider,
+        "username": username, "password": password,
+    }, allow_redirects=False, timeout=30)
+    assert signed_in.status_code == 200, f"password sign-in: {signed_in.status_code} {signed_in.text[:300]}"
+    return signed_in, urljoin(f"{API_BASE}/user/login", signed_in.json()["redirect_to"])
 
-#: Where the upstream returns the browser to us. Used to tell "the provider is showing a
-#: login form" apart from "the provider answered without one".
-FEDERATION_CALLBACK_PATH = "/oauth2/federation/callback"
+
+DEFAULT_SCOPE = "openid email account:sessions"
 
 
 def sign_out_destination(browser, response, limit=6):
@@ -100,30 +102,6 @@ def sign_out_destination(browser, response, limit=6):
             return url
         url = nxt
     return url
-
-
-def upstream_login(session, hosted_url, username, password):
-    """Get the browser through the upstream leg and return the callback URL it lands on.
-
-    Usually that means filling in the provider's hosted password form. But a provider that
-    still holds a session of its own may answer the authorize request outright, with no form
-    to fill -- and that is legitimate: ending our session ends OUR session, and a provider's
-    cookie is its own business. It is also what happens on any second login in one browser,
-    since the provider's cookie survives our sign-out unless the provider row configures an
-    end_session_url.
-
-    So the redirect is inspected before assuming there is a form. Without this, a silent
-    upstream re-authentication surfaces as a 404 from whatever host the authorization code
-    was finally delivered to, several frames away from the cause.
-
-    The only provider-specific step in this module. Everything above it is protocol.
-    """
-    probe = session.get(hosted_url, allow_redirects=False)
-    if probe.is_redirect:
-        location = probe.headers.get("Location", "")
-        if FEDERATION_CALLBACK_PATH in location:
-            return location
-    return cognito_hosted_login(session, hosted_url, username, password)
 
 
 class Browser:
@@ -166,9 +144,10 @@ class Browser:
 class Authorization:
     """What /oauth2/authorize answered: a code, an error, or "you must log in"."""
 
-    def __init__(self, client, response, verifier, state):
+    def __init__(self, client, response, verifier, state, location=None):
+        """location is where the browser goes next; a JSON answer names it in redirect_to rather than a Location header."""
         self.client, self.response, self.verifier, self.state = client, response, verifier, state
-        self.location = response.headers.get("Location", "")
+        self.location = location if location is not None else response.headers.get("Location", "")
         self._query = parse_qs(urlparse(self.location).query) if self.location else {}
 
     @property
@@ -232,18 +211,20 @@ class WebClient:
         browser._remember_session_cookie(resp)
         return Authorization(self, resp, verifier, state)
 
-    def start_federation(self, browser, provider=UPSTREAM_PROVIDER):
-        """GET /oauth2/federation/start -- the hop that hands the browser to the provider.
+    def start_federation(self, browser, provider):
+        """GET /user/login/federation/start -- the hop that hands the browser to the provider.
         Returned unfollowed so a test can read what we asked the provider for."""
-        return browser.session.get(f"{API_BASE}/oauth2/federation/start",
-                                   params={"provider": provider}, allow_redirects=False)
+        return browser.session.get(f"{API_BASE}/user/login/federation/start",
+                                   params={"provider": provider, "flow_id": browser.session.cookies.get(FLOW_COOKIE)},
+                                   allow_redirects=False)
 
-    def sign_in(self, browser, person, *, provider=UPSTREAM_PROVIDER, **extra):
+    def sign_in(self, browser, person, *, provider=None, **extra):
         """The whole browser login, ending at a code.
 
-        Returns the Authorization. When a live session already answers, no upstream round
-        trip happens at all -- which is single sign-on, and `used_upstream` says which
-        happened.
+        Returns the Authorization. When a live session already answers, nobody types a
+        password at all -- which is single sign-on, and `used_upstream` says which happened.
+        Otherwise the password goes to POST /user/login/password, as our sign-in page sends
+        it; provider names the row whose pool checks it, none the first such row by name.
         """
         authz = self.authorize(browser, **extra)
         if authz.code:
@@ -251,15 +232,9 @@ class WebClient:
             return authz
         assert authz.needs_login, f"expected a login page or a code, got {authz!r}"
 
-        fed = self.start_federation(browser, provider)
-        assert fed.status_code == 302, f"federation start: {fed.status_code} {fed.text[:200]}"
-        callback_url = upstream_login(browser.session, fed.headers["Location"],
-                                      person.email, person.password)
-        cb = browser.session.get(callback_url, allow_redirects=False)
-        browser._remember_session_cookie(cb)
-        assert cb.status_code == 302, f"federation callback: {cb.status_code} {cb.text[:300]}"
-
-        done = Authorization(self, cb, authz.verifier, authz.state)
+        signed_in, location = submit_password(browser.session, person.email, person.password, provider)
+        browser._remember_session_cookie(signed_in)
+        done = Authorization(self, signed_in, authz.verifier, authz.state, location)
         done.used_upstream = True
         return done
 

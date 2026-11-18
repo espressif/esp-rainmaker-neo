@@ -31,7 +31,6 @@ from test.itest.conftest import (
     NEO_RESOURCE,
     SESSION_COOKIE,
     SESSIONS_SCOPE,
-    UPSTREAM_PROVIDER,
     USER_API_GATEWAY_URL,
     decode_jwt_claims,
     requires_espuser,
@@ -149,7 +148,7 @@ def test_sso_max_age_bounds_the_authentication_age(apps, espuser_person):
         "a session minutes old must satisfy max_age=86400"
 
 
-def test_sso_prompt_login_and_max_age_reach_the_provider(apps, espuser_person):
+def test_sso_prompt_login_and_max_age_reach_the_provider(apps, espuser_person, hosted_cognito_provider):
     """The half of prompt=login that is easy to get wrong and invisible when it is: the demand must
     reach the PROVIDER. If it does not, the provider re-authenticates silently from its own cookie
     and the person is waved through without typing anything -- it looks like a fresh login and is
@@ -160,7 +159,7 @@ def test_sso_prompt_login_and_max_age_reach_the_provider(apps, espuser_person):
 
     started = first.authorize(browser, prompt="login", max_age="120")
     assert started.needs_login, started
-    fed = first.start_federation(browser, UPSTREAM_PROVIDER)
+    fed = first.start_federation(browser, hosted_cognito_provider)
     assert fed.status_code == 302, f"{fed.status_code} {fed.text[:200]}"
     upstream = fed.headers["Location"]
     assert "prompt=login" in upstream, \

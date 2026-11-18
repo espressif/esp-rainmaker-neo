@@ -10,12 +10,12 @@ the same way. Cognito is one such row.
 | Field | Meaning |
 | --- | --- |
 | `provider_name` | Key; the value `/user/login/federation/start?provider=` takes. Providers are listed, and a default among them is picked, in `provider_name` order |
-| `type` | `oidc` for a brokered upstream, `otp` for a hosted login page |
+| `type` | `oidc` or `otp`. An `otp` row is a one-time code on our page; an `oidc` row signs in as its `password_verifier` says. A Cognito pool can be either: an `oidc` row with `password_verifier` `cognito` takes the password on our page, one without it is a button to the pool's own hosted UI |
 | `enabled` | Whether `/oauth2/authorize` offers it. Unset counts as disabled |
 | `display_name` | The label on this provider's button. Names the credential or the brand, never the vendor: nobody signing in knows what Cognito is |
 | `logo` | The image on this provider's button: a `data:image/png`, `jpeg` or `webp` base64 URI of at most 4 KiB, the same rule as a client's `logo_uri`, drawn as `<img>`. A row named `google`, `apple` or `github` gets that brand's own button instead and ignores it; any other value is ignored and the button shows a plain shield |
 | `issuer` | The provider's OIDC issuer; endpoints and keys are discovered from it |
-| `authorize_url` | Where a login begins: the upstream authorize endpoint, or the hosted page for an `otp` row |
+| `authorize_url` | Where a login begins: the upstream authorize endpoint of an `oidc` row naming no `password_verifier`. Neither a row naming one nor an `otp` row reads it |
 | `password_verifier` | Who checks a password typed on our page for this `oidc` row: `cognito` (Cognito `InitiateAuth` against the row's pool). Unset, the row is a button to the provider's own page. Any other value, or the field on an `otp` row, offers neither |
 | `client_id` | The one app client we hold for this provider. A row whose `password_verifier` is `cognito` takes no password without one |
 | `client_secret` | That client's secret |
@@ -77,8 +77,9 @@ a password. If it does not, one of the three is missing.
 
 ## One confidential client per provider
 
-A provider is reached through exactly one app client, and it is confidential. The brokered
-authorization-code flow and the legacy password grant share it.
+A provider is reached through exactly one app client, and it is confidential. On a row whose `password_verifier` is
+`cognito` it serves the password sign-in on our page and the native `/v1/user/auth/*` surface; on an `oidc`
+row naming none, the brokered authorization-code flow.
 
 It is confidential because a public client can be driven by anyone who learns its id — client ids are
 not secret — which would expose sign-up, password reset and password sign-in on the provider's pool to
@@ -103,7 +104,7 @@ URL, which a provider that publishes no discovery document needs and nothing els
 
 ## The password surface
 
-The legacy `/v1/user/auth/*` surface needs six things from a provider: password sign-in, sign-up,
+Our page's password form (`POST /user/login/password`) and the native `/v1/user/auth/*` surface need six things from a provider: password sign-in, sign-up,
 resend of a sign-up code, sign-up confirmation, password-reset start, and password-reset confirmation.
 All six are unauthenticated provider operations — they take the app client id and no AWS credential —
 which is what lets the surface work against a provider in any account.

@@ -19,6 +19,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/auth_flows_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/identity_providers_db"
 	hostedui "github.com/espressif/esp-rainmaker-neo/src/espuser/hosted-ui"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/idp"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngrequest"
@@ -32,6 +33,7 @@ const (
 	pathLogin     = "/user/login"
 	pathRestart   = pathLogin + "/restart"
 	pathConsent   = "/user/" + auth.ConsentPath
+	pathPassword  = pathLogin + "/password"
 )
 
 // expiredFlowMessage is what every expired or lost sign-in says, page or JSON.
@@ -276,9 +278,20 @@ func errorPage(request events.APIGatewayProxyRequest, status int, code, descript
 	return resp
 }
 
+// unusableAccount is the one 403 answer, page or JSON, for a person a provider vouched for whom no account of ours can take; one sentence for every reason, so it names no account.
+var unusableAccount = errorData{Code: oidc.OAuthErrAccessDenied, Message: "This account cannot be signed in. Please contact support."}
+
+// isUnusableAccount is a login with no verified email or phone, with contacts held by two accounts, or with an upstream id another account holds.
+func isUnusableAccount(err error) bool {
+	return errors.Is(err, idp.ErrNoVerifiedContact) || errors.Is(err, auth.ErrContactsOnDifferentUsers) || errors.Is(err, auth.ErrUpstreamUserIDUnusable)
+}
+
 func handleAuthorizeRequest(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	if request.Path == pathConsent && request.HTTPMethod == http.MethodPost {
 		return handleConsentAnswer(ctx, request), nil
+	}
+	if request.Path == pathPassword && request.HTTPMethod == http.MethodPost {
+		return handlePasswordSignIn(ctx, request), nil
 	}
 	if request.HTTPMethod != http.MethodGet {
 		return oidc.OAuthErrorResp(http.StatusMethodNotAllowed, oidc.OAuthErrInvalidRequest, "Method not allowed."), nil

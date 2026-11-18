@@ -34,8 +34,8 @@ from py_sdk.test_mcp import Mcp, assert_matches_catalogue
 from test.itest.conftest import (
     MCP_API_URL,
     USER_API_GATEWAY_URL,
-    cognito_hosted_login,
     pkce_pair,
+    sign_in_on_our_page,
 )
 from test.itest.mcp_oauth import get_mcp_access_token
 
@@ -57,7 +57,7 @@ def _get_mcp_client_secret(admin):
 
 def _mint_mcp_token(user, admin):
     """Mint OUR access token addressed to the MCP server for `user`'s subject via the real flows
-    (authorize → federation → hosted-UI login → code exchange), sending `resource` as the proxy does."""
+    (authorize → the password on our sign-in page → code exchange), sending `resource` as the proxy does."""
     verifier, challenge = pkce_pair()
     proxy_callback = f"{MCP_API_URL}/oauth2/callback"
     mcp_resource = f"{MCP_API_URL}/v1/mcp"
@@ -73,16 +73,7 @@ def _mint_mcp_token(user, admin):
     assert "error=" not in authz.headers.get("Location", ""), \
         f"authorize refused ({authz.headers['Location']}): {MCP_CLIENT_ID} must list {mcp_resource} in allowed_resources"
 
-    # Deep-link the federation leg, so this works whether or not the deployment shows a chooser.
-    fed = session.get(f"{base}/oauth2/federation/start", params={"provider": "cognito"},
-                      allow_redirects=False)
-    assert fed.status_code == 302, f"federation start failed: {fed.status_code} {fed.text[:300]}"
-
-    # The callback's final redirect must not be followed: its Location carries our code.
-    our_callback = cognito_hosted_login(session, fed.headers["Location"], user.username, user.password)
-    cb = session.get(our_callback, allow_redirects=False)
-    assert cb.status_code == 302, f"federation callback failed: {cb.status_code} {cb.text[:300]}"
-    loc = cb.headers["Location"]
+    loc = sign_in_on_our_page(session, user.username, user.password)
     assert loc.startswith(proxy_callback), f"unexpected post-login redirect: {loc}"
     code = parse_qs(urlparse(loc).query)["code"][0]
 

@@ -202,13 +202,14 @@ DynamoDB table **`espuser-identity-providers`**, PK `provider_name`. Each row is
 **self-describing**: everything the broker needs lives on the row, with anything
 omitted resolved from the issuer's OIDC discovery document
 (`{issuer}/.well-known/openid-configuration`, RFC 8414, cached per container).
-Seeded at deploy with the Cognito provider (refreshing put — the pool id/client
+Seeded at deploy with the built-in `cognito` row (refreshing put — the pool id/client
 can change on pool replacement). Fields:
 
 | field | meaning |
 | --- | --- |
 | `provider_name` | stable id, e.g. `cognito` |
-| `type` | `oidc` (Cognito) / `otp` (enterprise addon) / … |
+| `type` | `oidc` (a redirect to the provider's own page, or a password on our page when `password_verifier` is set) / `otp` (one-time code on our page, enterprise addon) |
+| `password_verifier` | on an `oidc` row, who checks a password typed on our page: `cognito` (the row's pool, via `InitiateAuth`; needs a `client_id`). Unset means a redirect; an unknown value offers nothing |
 | `enabled` | drives selection above |
 | `display_name` | the label on this provider's button |
 | `issuer` | upstream OIDC issuer (discovery base + id_token `iss` check) |
@@ -217,7 +218,7 @@ can change on pool replacement). Fields:
 | `scopes` | space-separated upstream scopes (default `openid email phone`) |
 | `token_endpoint_auth` | `client_secret_basic` (default) or `client_secret_post` |
 | `attribute_mapping` | OUR claim name → upstream claim name; see [Attribute mapping](#attribute-mapping) |
-| `authorize_url` | where a login begins: the upstream authorize endpoint, or the hosted page for an `otp` row |
+| `authorize_url` | where a login begins: the upstream authorize endpoint of an `oidc` row; rows with a `password_verifier`, and `otp` rows, do not read it |
 | `token_url` / `userinfo_url` | optional pins; absent → OIDC discovery |
 | `jwks_url` | optional URL pin for the upstream JWKS; absent → fetched from discovery `jwks_uri` |
 

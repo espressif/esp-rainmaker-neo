@@ -147,10 +147,6 @@ FLOW_COOKIE = "__Host-esp_flow_id"             # binds an authorize request to i
 # The scope that gates reading and ending one's own browser sessions.
 SESSIONS_SCOPE = "account:sessions"
 
-# The identity provider this deployment federates to; overridable so a different upstream needs no
-# change to the tests.
-UPSTREAM_PROVIDER = os.getenv("ESPUSER_ITEST_PROVIDER", "cognito")
-
 # The identity-provider registry. A row that sorts after `cognito` and takes no password, or a uniquely named `itest-` row, changes nothing another test relies on; a row that changes the default pool or disables `cognito` changes every concurrent login, so its test must carry @pytest.mark.xdist_group("env_mut").
 PROVIDER_TABLE = "espuser-identity-providers"
 
@@ -162,6 +158,33 @@ PROVIDER_SETTLE = 2.0
 def providers_table():
     """The identity-provider registry table, shared by the suites that add to or flip rows in it."""
     return boto3.resource("dynamodb", region_name=REGION).Table(PROVIDER_TABLE)
+
+
+# The built-in pool's row names password_verifier cognito, so its password is typed on our page and federation start refuses it.
+INBUILT_PROVIDER = "cognito"
+
+@pytest.fixture
+def hosted_cognito_provider():
+    """The built-in pool as a button to its own hosted page, for the tests that are about the redirect to a
+    provider's own page and back; yields the row's name.
+
+    A copy of the built-in row without its password_verifier: the pool's app client already registers our federation
+    callback, so its hosted UI returns to us. A row naming no password_verifier never answers a password and the built-in row
+    stays first by name, so other logins on the deployment resolve as before. Each use gets its own row,
+    because its users run in different xdist groups and one teardown must not delete another's row.
+    """
+    name = f"itest-cognito-hosted-{uuid.uuid4().hex[:8]}"
+    table = providers_table()
+    inbuilt = table.get_item(Key={"provider_name": INBUILT_PROVIDER}, ConsistentRead=True).get("Item")
+    assert inbuilt, f"the deployment has no {INBUILT_PROVIDER!r} provider row to copy"
+    redirecting = {k: v for k, v in inbuilt.items() if k != "password_verifier"}
+    table.put_item(Item={**redirecting, "provider_name": name, "type": "oidc",
+                         "display_name": "itest hosted page", "enabled": True})
+    time.sleep(PROVIDER_SETTLE)
+    try:
+        yield name
+    finally:
+        table.delete_item(Key={"provider_name": name})
 
 
 # Skips the ESP User suites when no stack is deployed, so a checkout with no espuser outputs still
@@ -2028,14 +2051,35 @@ def chromium_browser():
         browser.close()
 
 
-def complete_federation_login(client_id, redirect_uri, username, password, scope,
-                              provider="cognito", follow_final=False,
-                              client_secret=None, secret_via="basic", before_callback=None):
-    """Drive a full brokered login and return the token response JSON.
+def allow_if_asked(session, location):
+    """Where a sign-in lands for the client: a client without first_party is held for consent, so answer Allow as the person would."""
+    from urllib.parse import urlparse
+    if not urlparse(location).path.endswith("/user/login/consent"):
+        return location
+    # The page answers for the sign-in it was drawn for, which is the one the flow cookie names.
+    allowed = session.post(f"{USER_API_GATEWAY_URL}/user/login/consent",
+                           json={"decision": "allow", "flow_id": session.cookies.get(FLOW_COOKIE)})
+    assert allowed.status_code == 200, f"consent: {allowed.status_code} {allowed.text[:300]}"
+    return allowed.json()["redirect_to"]
 
-    authorize -> federation start -> the provider's hosted UI -> our callback -> code exchange.
+
+def sign_in_on_our_page(session, username, password, provider=None):
+    """Type the password on our sign-in page for the sign-in the session's flow cookie holds, and return where the browser goes next, past any consent screen."""
+    _, location = espuser_oauth.submit_password(session, username, password, provider)
+    return allow_if_asked(session, location)
+
+
+def complete_federation_login(client_id, redirect_uri, username, password, scope,
+                              provider=None, follow_final=False,
+                              client_secret=None, secret_via="basic", before_callback=None,
+                              code_only=False):
+    """Drive a full login and return the token response JSON.
+
+    authorize -> the password on our sign-in page -> code exchange. provider names an oidc row to sign
+    in through instead: federation start -> the provider's hosted UI -> our callback.
     Raises AssertionError with the failing step's status, so a caller sees where it broke. Set
-    follow_final to get the callback response instead of exchanging, for tests that expect no code.
+    follow_final to get the callback response instead of exchanging, for tests that expect no code, or
+    code_only to get the issued code, past any consent screen, without exchanging it.
     A confidential client passes client_secret; secret_via picks how it authenticates at the token
     endpoint — "basic" (HTTP Basic, what Alexa sends) or "post" (form-body credentials, what Google
     account linking sends). before_callback(callback_url) runs between the provider's login and our
@@ -2060,20 +2104,27 @@ def complete_federation_login(client_id, redirect_uri, username, password, scope
     assert authz.status_code == 302, f"authorize: {authz.status_code} {authz.text[:200]}"
     assert flow_id_from_cookie(authz), "authorize must set the __Host-esp_flow_id cookie"
 
-    fed = session.get(f"{USER_API_GATEWAY_URL}/oauth2/federation/start",
-                      params={"provider": provider}, allow_redirects=False)
-    assert fed.status_code == 302, f"federation start: {fed.status_code} {fed.text[:200]}"
+    if provider is None:
+        assert not (follow_final or before_callback), "follow_final and before_callback are about our callback, so they need provider"
+        landed = sign_in_on_our_page(session, username, password)
+    else:
+        fed = session.get(f"{USER_API_GATEWAY_URL}/user/login/federation/start",
+                          params={"provider": provider, "flow_id": flow_id_from_cookie(authz)}, allow_redirects=False)
+        assert fed.status_code == 302, f"federation start: {fed.status_code} {fed.text[:200]}"
 
-    our_callback = cognito_hosted_login(session, fed.headers["Location"], username, password)
-    if before_callback:
-        before_callback(our_callback)
-    cb = session.get(our_callback, allow_redirects=False)
-    if follow_final:
-        return cb
+        our_callback = cognito_hosted_login(session, fed.headers["Location"], username, password)
+        if before_callback:
+            before_callback(our_callback)
+        cb = session.get(our_callback, allow_redirects=False)
+        if follow_final:
+            return cb
 
-    assert cb.status_code == 302, f"federation callback: {cb.status_code} {cb.text[:300]}"
-    code = _parse_qs(_urlparse(cb.headers["Location"]).query).get("code", [None])[0]
-    assert code, f"callback carried no code: {cb.headers['Location']}"
+        assert cb.status_code == 302, f"federation callback: {cb.status_code} {cb.text[:300]}"
+        landed = allow_if_asked(session, cb.headers["Location"])
+    code = _parse_qs(_urlparse(landed).query).get("code", [None])[0]
+    assert code, f"callback carried no code: {landed}"
+    if code_only:
+        return code
 
     data = {
         "grant_type": "authorization_code",
