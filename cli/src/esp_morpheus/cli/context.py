@@ -322,16 +322,9 @@ class Session:
         if not password:
             output.fail(f"{'Admin' if is_admin else 'End user'} {username} is missing 'password'")
 
-        settings = self.settings
-        common = (username, password, settings.region, settings.identity_pool_id,
-                  settings.api_gateway_url, settings.user_api_gateway_url, settings.iot_endpoint)
-        if is_admin:
-            # Admins authenticate against the admin Cognito pool (USER_PASSWORD_AUTH).
-            return User(*common, admin_user_pool_id=settings.admin_user_pool_id,
-                        admin_client_id=settings.admin_client_id, is_admin=True)
-        if '@' not in username:
+        if not is_admin and '@' not in username:
             output.fail(f"End user {username} must have an email address as its name")
-        return User(*common, end_user_pool_id=settings.end_user_pool_id)
+        return User.from_settings(self.settings, username, password, is_admin=is_admin)
 
     def get_node(self, identity):
         """A Device from test_config.json by index or thing name.

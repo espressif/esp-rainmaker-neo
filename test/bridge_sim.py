@@ -80,7 +80,7 @@ from queue import Empty, Queue
 from awscrt import io, mqtt
 from awsiot import mqtt_connection_builder
 
-DEFAULT_CONFIG = Path(".bridges/bridges_config.json")
+DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / ".bridges" / "bridges_config.json"
 
 
 # ---------------------------------------------------------------------------
@@ -694,7 +694,7 @@ def main() -> int:
     parser.add_argument(
         "--bridge",
         help="Bridge thing name; cert paths resolved from --config "
-             "(default .bridges/bridges_config.json)",
+             "(default .bridges/bridges_config.json at the repo root)",
     )
     parser.add_argument(
         "--config",

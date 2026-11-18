@@ -6,85 +6,51 @@
 
 Usage:
     source .venv/bin/activate
-    python3 test_admin_list_things.py
+    python3 test/helpers/test_admin_list_things.py
 """
 import json
 import sys
+from pathlib import Path
 
-import boto3
-import requests
+# Run as a script, so only test/helpers/ is on sys.path; adding the repo root makes py_sdk and scripts importable from any directory.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.rmng_outputs import RmngSettings
-from test.test_user import _admin_cognito_auth
-
-_settings = RmngSettings.from_source()
-
-IOT_ENDPOINT = _settings.iot_endpoint
-REGION = _settings.region
-API_GATEWAY_URL = _settings.api_gateway_url
-IDENTITY_POOL_ID = _settings.identity_pool_id
-ADMIN_USER_POOL_ID = _settings.admin_user_pool_id
-ADMIN_USER_POOL_CLIENT_ID = _settings.admin_client_id
-USER_API_GATEWAY_URL = _settings.user_api_gateway_url
-
-# Read test config
-with open('test_config.json') as f:
-    config = json.load(f)
-
-# Find admin user
-admin_user = None
-for user in config.get('users', []):
-    if user.get('admin', False):
-        admin_user = user
-        break
-
-if not admin_user:
-    print("ERROR: No admin user found in test_config.json")
-    sys.exit(1)
-
-USERNAME = admin_user['name']
-PASSWORD = admin_user['password']
+from py_sdk.test_user import User  # noqa: E402
+from scripts.rmng_outputs import TEST_CONFIG_PATH, RmngSettings  # noqa: E402
 
 
-def signin_admin():
-    print(f"Signing in as admin: {USERNAME}")
-    resp = _admin_cognito_auth(
-        REGION, ADMIN_USER_POOL_CLIENT_ID, "USER_PASSWORD_AUTH",
-        {"USERNAME": USERNAME, "PASSWORD": PASSWORD},
-    )
-    if not resp.ok:
-        print(f"ERROR: Signin failed: {resp.text}")
-        sys.exit(1)
-    return resp.json().get("id_token")
+def load_admin_user():
+    """The first admin: true entry in test_config.json."""
+    try:
+        with open(TEST_CONFIG_PATH) as f:
+            config = json.load(f)
+    except FileNotFoundError:
+        sys.exit(f"ERROR: {TEST_CONFIG_PATH} not found. Run `esp-morpheus admin test-data setup` first.")
+
+    admin_user = next((u for u in config.get('users', []) if u.get('admin', False)), None)
+    if not admin_user:
+        sys.exit(f"ERROR: No admin user found in {TEST_CONFIG_PATH}")
+    return admin_user
 
 
-def get_credentials(id_token):
-    """Get AWS credentials via /user/creds endpoint."""
-    url = f"{API_GATEWAY_URL}/v1/user/credentials"
-    headers = {"Authorization": f"Bearer {id_token}"}
-    print(f"Getting credentials from: {url}")
-    response = requests.get(url, headers=headers)
-    if response.status_code != 200:
-        print(f"ERROR: Failed to get credentials: {response.status_code} {response.text}")
-        sys.exit(1)
-    creds = response.json()
-    print(f"Got AWS credentials (AccessKeyId: {creds['access_key_id'][:10]}...)")
-    return creds
+def signin_admin(settings, admin_user):
+    """An admin User holding AWS credentials from POST /v1/user/credentials."""
+    print(f"Signing in as admin: {admin_user['name']}")
+    user = User.from_settings(settings, admin_user['name'], admin_user['password'], is_admin=True)
+    if not user.get_aws_credentials():
+        sys.exit("ERROR: Admin sign-in failed (see preceding log lines)")
+    print(f"Got AWS credentials (AccessKeyId: {user.credentials['AccessKeyId'][:10]}...)")
+    return user
 
 
-def call_list_things(creds):
+def call_list_things(user):
     """Call AWS IoT ListThings using the IoT control plane API."""
     print("\nAttempting ListThings via IoT control plane API...")
 
-    session = boto3.Session(
-        aws_access_key_id=creds['access_key_id'],
-        aws_secret_access_key=creds['secret_access_key'],
-        aws_session_token=creds['session_token'],
-        region_name=REGION
-    )
-
     try:
-        iot_client = session.client('iot')
+        iot_client = user.boto3_session.client('iot')
         response = iot_client.list_things()
         things = response.get('things', [])
         print(f"SUCCESS: ListThings returned {len(things)} things")
@@ -101,9 +67,12 @@ def main():
     print("Admin User ListThings Test")
     print("=" * 60)
 
-    id_token = signin_admin()
-    creds = get_credentials(id_token)
-    success = call_list_things(creds)
+    try:
+        settings = RmngSettings.from_source()
+    except FileNotFoundError as e:
+        sys.exit(f"ERROR: {e.filename} not found. Run `make deploy` first.")
+    user = signin_admin(settings, load_admin_user())
+    success = call_list_things(user)
 
     print("\n" + "=" * 60)
     if success:
