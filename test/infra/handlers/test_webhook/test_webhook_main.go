@@ -6,6 +6,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -378,7 +380,56 @@ func handleCommand(ctx context.Context, request events.APIGatewayProxyRequest) (
 	return utils.APIGwRespJSON(http.StatusMethodNotAllowed, utils.NewAPIStatus("Method not allowed")), nil
 }
 
+// --- LWA + SMAPI (Alexa auto-configuration) --------------------------------
+// Stateless stand-ins for the calls the alexa_auto_cfg Lambda makes with the itest's LWA profile (ITEST_LWA_CLIENT_ID), so its end-to-end itest never creates or changes anything at Amazon. Every build succeeds and every skill gets the same fixed messaging credentials.
+
+const mockVendorID = "MOCKVENDOR"
+
+func newMockSkillID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	h := hex.EncodeToString(b)
+	return fmt.Sprintf("amzn1.ask.skill.%s-%s-%s-%s-%s", h[0:8], h[8:12], h[12:16], h[16:20], h[20:32])
+}
+
+func handleSMAPI(request events.APIGatewayProxyRequest) events.APIGatewayProxyResponse {
+	json200 := func(body interface{}) events.APIGatewayProxyResponse { return utils.APIGwRespJSON(http.StatusOK, body) }
+	switch request.Resource {
+	case "/v1/lwa/token":
+		return json200(map[string]interface{}{"access_token": "Atza|itest-mock", "refresh_token": "Atzr|itest-mock", "token_type": "bearer", "expires_in": 3600})
+	case "/v1/smapi/v1/vendors":
+		return json200(map[string]interface{}{"vendors": []map[string]string{{"id": mockVendorID, "name": "itest mock vendor"}}})
+	case "/v1/smapi/v1/skills":
+		return json200(map[string]string{"skillId": newMockSkillID()})
+	case "/v1/smapi/v1/skills/{skillId}/status":
+		return json200(map[string]interface{}{"manifest": map[string]interface{}{"lastUpdateRequest": map[string]string{"status": "SUCCEEDED"}}})
+	case "/v1/smapi/v1/skills/{skillId}/credentials":
+		return json200(map[string]interface{}{"skillMessagingCredentials": map[string]string{
+			"clientId": "amzn1.application-oa2-client.itest-mock", "clientSecret": "itest-mock-secret"}})
+	case "/v1/smapi/v1/skills/{skillId}/stages/{stage}/manifest", "/v1/smapi/v1/skills/{skillId}/stages/{stage}/accountLinkingClient":
+		return events.APIGatewayProxyResponse{StatusCode: http.StatusNoContent}
+	}
+	return utils.APIGwRespJSON(http.StatusNotFound, utils.NewAPIStatus("Not found"))
+}
+
+// smapiRoutes maps each mocked LWA/SMAPI resource to the one method SMAPI serves it with.
+var smapiRoutes = map[string]string{
+	"/v1/lwa/token":                                                     "POST",
+	"/v1/smapi/v1/vendors":                                              "GET",
+	"/v1/smapi/v1/skills":                                               "POST",
+	"/v1/smapi/v1/skills/{skillId}/status":                              "GET",
+	"/v1/smapi/v1/skills/{skillId}/credentials":                         "GET",
+	"/v1/smapi/v1/skills/{skillId}/stages/{stage}/manifest":             "PUT",
+	"/v1/smapi/v1/skills/{skillId}/stages/{stage}/accountLinkingClient": "PUT",
+}
+
 func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+	if method, ok := smapiRoutes[request.Resource]; ok {
+		if request.HTTPMethod != method {
+			return utils.APIGwRespJSON(http.StatusMethodNotAllowed, utils.NewAPIStatus("Method not allowed")), nil
+		}
+		return handleSMAPI(request), nil
+	}
 	switch request.Resource {
 	case "/v1/token", "/v1/alexa/token":
 		if request.HTTPMethod == "POST" {

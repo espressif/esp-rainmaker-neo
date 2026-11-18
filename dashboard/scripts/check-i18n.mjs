@@ -38,6 +38,7 @@ const NAMESPACE_OWNERS = {
   "forgot-password": "/forgot-password",
   "set-password": "/set-password",
   "oauth-preview": "/oauth-preview",
+  "alexa-lwa-callback": "/alexa-lwa-callback",
   static: "/static",
   nodes: "/home/node-management/nodes",
   "node-groups": "/home/node-management/node-groups",

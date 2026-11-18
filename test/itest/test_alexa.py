@@ -3,11 +3,26 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import time
 
 import boto3
 import pytest
 
-from test.itest.conftest import mark_itest_endpoints
+from test.infra.stacks.test_constants import ITEST_LWA_CLIENT_ID
+from test.itest.conftest import ALEXA_REGION_ARNS, REGION, mark_itest_endpoints
+
+AUTO_CONFIGURATION_PATH = '/v1/admin/integrations/alexa/auto-configuration'
+# Well-formed but made up: real LWA refuses them, and the webhook mock accepts anything.
+PLACEHOLDER_LWA = {
+    'lwa_client_id': ITEST_LWA_CLIENT_ID,
+    'lwa_client_secret': 'itest-placeholder',
+    'lwa_refresh_token': 'Atzr|itest-placeholder',
+}
+
+
+def _post_auto_configuration(user, body):
+    user.get_aws_credentials()
+    return user.make_api_request('POST', AUTO_CONFIGURATION_PATH, data=json.dumps(body))
 
 
 def test_alexa_configuration_is_readable(admin_user, alexa_region_arn):
@@ -28,6 +43,10 @@ def test_alexa_configuration_is_readable(admin_user, alexa_region_arn):
     assert response.status_code == 200, f"GET failed: {response.text}"
 
     body = response.json()
+    # Skip only for an automatic setup that has not reached DONE; a deployment configured any other way must report everything below.
+    setup_status = body['config_status']['status'] if body.get('config_status') else 'DONE'
+    if setup_status != 'DONE':
+        pytest.skip(f"Alexa automatic setup is {setup_status} on this deployment: {body['config_status']}")
     assert body.get('client_id'), f"configured deployment must report a client_id: {body}"
     assert 'client_secret' not in body, f"client_secret must be omitted from GET: {body}"
     assert body.get('redirect_uris'), f"configured deployment must report redirect_uris: {body}"
@@ -309,3 +328,139 @@ def test_alexa_rename_emits_add_or_update_report(user_with_1_dev_each_in_2_group
             last_error = e
             time.sleep(5)
     raise last_error
+
+
+def test_alexa_auto_configuration_is_admin_only(test_user2):
+    response = _post_auto_configuration(test_user2, {'skill_name': 'ESP RainMaker'})
+    assert response.status_code == 403, f"expected 403, got {response.status_code}: {response.text}"
+    # Disconnecting is the destructive one: a non-admin must not be able to drop the deployment's Amazon account.
+    response = test_user2.alexa_delete_lwa_connection()
+    assert response.status_code == 403, f"expected 403, got {response.status_code}: {response.text}"
+
+
+def _wait_for_auto_configuration(admin, skill_id, timeout_s=960):
+    """Poll config_status until the run for skill_id ends; 960s outlasts the worker's 900s Lambda cap."""
+    deadline = time.monotonic() + timeout_s
+    status = {}
+    while time.monotonic() < deadline:
+        response = admin.alexa_get_configuration()
+        if response.status_code == 200 and response.json().get('config_status'):
+            status = response.json()['config_status']
+            if status.get('ref_id') == skill_id and status.get('status') in ('DONE', 'FAILED'):
+                return status
+        time.sleep(5)
+    pytest.fail(f"auto-configuration of {skill_id} did not finish in {timeout_s}s; last status: {status}")
+
+
+ALEXA_SSM_CREDENTIALS = ('/rmng/alexa/client_id', '/rmng/alexa/client_secret', '/rmng/alexa/skill_id')
+ALEXA_SSM_STATUS = '/rmng/alexa/auto-configuration-status'
+ALEXA_SSM_LWA_CONNECTION = '/rmng/alexa/lwa-connection'
+# The mock answers SMAPI's vendor lookup with this id, so every redirect URI a mock run registers ends with it.
+MOCK_VENDOR_LINK_SUFFIX = '/link/MOCKVENDOR'
+
+
+def _snapshot_alexa_config(admin):
+    """The deployment's live manual-setup inputs, or None when Alexa is not configured. The secret is never returned by the API, so it is read from SSM."""
+    response = admin.alexa_get_configuration()
+    body = response.json() if response.status_code == 200 else {}
+    if not body.get('client_id'):
+        return None
+    secret = boto3.client('ssm', region_name=REGION).get_parameter(
+        Name='/rmng/alexa/client_secret', WithDecryption=True)['Parameter']['Value']
+    return {'redirect_uris': body.get('redirect_uris') or [], 'client_id': body['client_id'],
+            'client_secret': secret, 'skill_id': body['skill_id']}
+
+
+def _restore_alexa_config(admin, snapshot):
+    """Put back what the run replaced. A manual POST re-grants and re-stores the old skill and clears the status; with nothing to restore, remove what the run added."""
+    if snapshot:
+        response = admin.alexa_post_configuration(**snapshot)
+        assert response.status_code == 200, f"restore failed: {response.status_code} {response.text}"
+        return
+    for region, arn in ALEXA_REGION_ARNS:
+        lambda_client = boto3.client('lambda', region_name=region)
+        try:
+            lambda_client.remove_permission(FunctionName=arn, StatementId='AlexaSkillInvoke')
+        except lambda_client.exceptions.ResourceNotFoundException:
+            pass
+    boto3.client('ssm', region_name=REGION).delete_parameters(Names=[*ALEXA_SSM_CREDENTIALS, ALEXA_SSM_STATUS])
+
+
+def _snapshot_lwa_connection():
+    ssm = boto3.client('ssm', region_name=REGION)
+    try:
+        return ssm.get_parameter(Name=ALEXA_SSM_LWA_CONNECTION, WithDecryption=True)['Parameter']['Value']
+    except ssm.exceptions.ParameterNotFound:
+        return None
+
+
+def _restore_lwa_connection(value):
+    ssm = boto3.client('ssm', region_name=REGION)
+    if value is None:
+        try:
+            ssm.delete_parameter(Name=ALEXA_SSM_LWA_CONNECTION)
+        except ssm.exceptions.ParameterNotFound:
+            pass
+        return
+    ssm.put_parameter(Name=ALEXA_SSM_LWA_CONNECTION, Value=value, Type='SecureString', Overwrite=True)
+
+
+def _remove_mock_redirect_uris(admin):
+    """Drop the mock vendor's account-linking URIs from every OAuth client. The configuration API only ever adds redirect URIs (Alexa, GVA and SmartThings share va-client), so a restore cannot take back what a mock run added."""
+    listed = admin.list_oauth_clients()
+    assert listed.status_code == 200, listed.text
+    for client in listed.json()['clients']:
+        uris = client.get('redirect_uris') or []
+        kept = [uri for uri in uris if not uri.endswith(MOCK_VENDOR_LINK_SUFFIX)]
+        if kept == uris:
+            continue
+        # PUT replaces every mutable field, so the rest of the client is sent back as read.
+        body = {k: client.get(k) for k in ('client_name', 'post_logout_redirect_uris', 'grant_types', 'scopes',
+                                           'allowed_resources', 'allowed_providers', 'require_pkce', 'first_party')}
+        response = admin.put_oauth_client(client['client_id'], {**body, 'redirect_uris': kept})
+        assert response.status_code == 200, f"{client['client_id']}: {response.status_code} {response.text}"
+
+
+@pytest.mark.xdist_group("env_mut")
+def test_alexa_auto_configuration_end_to_end(admin_user, webhook_mock):
+    """Creates and configures a skill through the deployed endpoint and worker, with LWA and SMAPI answered by the itest webhook mock, so nothing at Amazon is created or changed. The deployment's previous Alexa configuration is restored afterwards."""
+    if not ALEXA_REGION_ARNS:
+        pytest.skip("No rmng-alexa-core regions in rmng-outputs.json")
+    snapshot = _snapshot_alexa_config(admin_user)
+    lwa_snapshot = _snapshot_lwa_connection()
+    try:
+        # Connect the way the dashboard does: the code consent returned, redeemed by the backend (here, by the mock).
+        response = admin_user.alexa_put_lwa_connection(
+            PLACEHOLDER_LWA['lwa_client_id'], PLACEHOLDER_LWA['lwa_client_secret'],
+            lwa_authorization_code='itest-code', lwa_redirect_uri='https://dashboard.example.com/alexa-lwa-callback')
+        assert response.status_code == 200, f"connect failed: {response.status_code} {response.text}"
+        assert admin_user.alexa_get_configuration().json().get('lwa_client_id') == PLACEHOLDER_LWA['lwa_client_id']
+
+        response = _post_auto_configuration(admin_user, {'skill_name': 'ESP RainMaker itest'})
+        assert response.status_code == 200, f"POST failed: {response.status_code} {response.text}"
+        skill_id = response.json()['skill_id']
+        assert skill_id.startswith('amzn1.ask.skill.'), response.text
+        assert response.json()['status'] == 'IN_PROGRESS'
+
+        status = _wait_for_auto_configuration(admin_user, skill_id)
+        assert status['status'] == 'DONE', f"auto-configuration failed: {status}"
+        body = admin_user.alexa_get_configuration().json()
+        assert body.get('skill_id') == skill_id
+        assert body.get('client_id') == 'amzn1.application-oa2-client.itest-mock'
+
+        # Activation must leave exactly the live grant for this skill, and no setup-only grant behind.
+        for region, arn in ALEXA_REGION_ARNS:
+            policy = json.loads(boto3.client('lambda', region_name=region).get_policy(FunctionName=arn)['Policy'])
+            live = next((st for st in policy['Statement'] if st.get('Sid') == 'AlexaSkillInvoke'), None)
+            assert live is not None, f"{region}: AlexaSkillInvoke missing"
+            assert live['Condition']['StringEquals']['lambda:EventSourceToken'] == skill_id, f"{region}: live grant is not {skill_id}"
+            leftovers = [st['Sid'] for st in policy['Statement'] if st.get('Sid', '').startswith('AlexaSkillSetup-')]
+            assert not leftovers, f"{region}: setup grants left behind: {leftovers}"
+
+        response = admin_user.alexa_delete_lwa_connection()
+        assert response.status_code == 200, f"disconnect failed: {response.status_code} {response.text}"
+        assert 'lwa_client_id' not in admin_user.alexa_get_configuration().json()
+    finally:
+        _restore_alexa_config(admin_user, snapshot)
+        _restore_lwa_connection(lwa_snapshot)
+        _remove_mock_redirect_uris(admin_user)

@@ -8,6 +8,8 @@ import { getApiGatewayUrl } from '@/lib/config'
 import { sigv4Request } from '@/api/sigv4-client'
 import type {
   AlexaConfigGetResponse, AlexaConfigRequest, AlexaConfigResponse,
+  AlexaAutoConfigurationRequest, AlexaAutoConfigurationResponse,
+  AlexaLwaConnectionRequest, AlexaLwaConnectionResponse,
   GvaConfigGetResponse, GvaConfigRequest, GvaConfigResponse, GvaConfigDeleteResponse,
   SmartThingsConfigGetResponse, SmartThingsConfigRequest, SmartThingsConfigResponse,
   SmartThingsConfigDeleteResponse,
@@ -17,6 +19,8 @@ import type {
 
 const ENDPOINTS = {
   alexaConfig: '/v1/admin/integrations/alexa/configuration',
+  alexaAutoConfiguration: '/v1/admin/integrations/alexa/auto-configuration',
+  alexaLwaConnection: '/v1/admin/integrations/alexa/lwa-connection',
   gvaConfig: '/v1/admin/integrations/gva/configuration',
   smartthingsConfig: '/v1/admin/integrations/smartthings/configuration',
 } as const
@@ -44,6 +48,36 @@ export const integrationsApi = {
 
     const url = `${baseUrl.replace(/\/$/, '')}${ENDPOINTS.alexaConfig}`
     return sigv4Request<AlexaConfigResponse>({ method: 'POST', url, body: data })
+  },
+
+  createAlexaAutoConfiguration: async (data: AlexaAutoConfigurationRequest): Promise<AlexaAutoConfigurationResponse> => {
+    const baseUrl = getApiGatewayUrl()
+    if (!baseUrl) {
+      throw new Error('API Gateway URL is not configured')
+    }
+
+    const url = `${baseUrl.replace(/\/$/, '')}${ENDPOINTS.alexaAutoConfiguration}`
+    return sigv4Request<AlexaAutoConfigurationResponse>({ method: 'POST', url, body: data })
+  },
+
+  connectAlexaLwa: async (data: AlexaLwaConnectionRequest): Promise<AlexaLwaConnectionResponse> => {
+    const baseUrl = getApiGatewayUrl()
+    if (!baseUrl) {
+      throw new Error('API Gateway URL is not configured')
+    }
+
+    const url = `${baseUrl.replace(/\/$/, '')}${ENDPOINTS.alexaLwaConnection}`
+    return sigv4Request<AlexaLwaConnectionResponse>({ method: 'PUT', url, body: data })
+  },
+
+  disconnectAlexaLwa: async (): Promise<void> => {
+    const baseUrl = getApiGatewayUrl()
+    if (!baseUrl) {
+      throw new Error('API Gateway URL is not configured')
+    }
+
+    const url = `${baseUrl.replace(/\/$/, '')}${ENDPOINTS.alexaLwaConnection}`
+    await sigv4Request<unknown>({ method: 'DELETE', url })
   },
 
   getGvaConfig: async (): Promise<GvaConfigGetResponse> => {

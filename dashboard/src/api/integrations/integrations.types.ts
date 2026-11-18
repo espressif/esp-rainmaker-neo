@@ -11,6 +11,21 @@ export interface AlexaConfigGetResponse {
   redirect_uris?: string[]
 
   manufacturer_name?: string
+  /** The last automatic setup's status; absent when none has run. */
+  config_status?: AlexaSetupStatus
+  /** Security profile of the connected Amazon developer account; absent when none is connected. */
+  lwa_client_id?: string
+}
+
+export type AlexaSetupState = 'IN_PROGRESS' | 'DONE' | 'FAILED'
+
+/** Progress of an automatic setup. ref_id is the skill id, carried on a failure too so the orphaned skill can be found. */
+export interface AlexaSetupStatus {
+  status: AlexaSetupState
+  ref_id?: string
+  stage?: string
+  error?: string
+  updated_at: string
 }
 
 export interface AlexaConfigRequest {
@@ -23,6 +38,36 @@ export interface AlexaConfigRequest {
 }
 
 export interface AlexaConfigResponse {
+  status: string
+}
+
+/**
+ * Automatic mode: the backend creates the skill, configures it at Amazon and configures Neo to use it, signed in as the Amazon account connected through {@link AlexaLwaConnectionRequest}. manufacturer_name absent keeps the stored brand.
+ */
+export interface AlexaAutoConfigurationRequest {
+  skill_name: string
+  manufacturer_name?: string
+}
+
+/** Connects an Amazon developer account: the backend redeems the one-time code from Amazon's consent popup and stores the resulting refresh token. */
+export interface AlexaLwaConnectionRequest {
+  lwa_client_id: string
+  lwa_client_secret: string
+  lwa_authorization_code: string
+  /** Must equal the redirect_uri the code was issued for, or Amazon refuses the exchange. */
+  lwa_redirect_uri: string
+}
+
+export interface AlexaLwaConnectionResponse {
+  message: string
+}
+
+/**
+ * Returned as soon as the skill exists. Configuration (builds, account linking, stored
+ * credentials) continues in the background, so status is IN_PROGRESS rather than done.
+ */
+export interface AlexaAutoConfigurationResponse {
+  skill_id: string
   status: string
 }
 

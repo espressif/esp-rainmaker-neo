@@ -10,32 +10,21 @@ import (
 	"os"
 	"strings"
 
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-
 	alexa_skill "github.com/espressif/esp-rainmaker-neo/src/alexa"
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/ssmutil"
-	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/principal"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngrequest"
 
 	"github.com/aws/aws-lambda-go/events"
 	awslambda "github.com/aws/aws-lambda-go/lambda"
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/lambda"
 )
 
 /* Ideally this REST API should only be available to an administrative user. We do not have a concept of an administrative user yet.
    TODO: So currently this functionality is available to all users :-D, will be updated soon
 */
-
-// alexaSkillRegions are the AWS regions where the Alexa skill Lambda is deployed (AWS requires skill to be deployed in 3 fixed regions).
-const alexaSkillRegions = "us-east-1,eu-west-1,us-west-2"
 
 type AlexaCfgResponse struct {
 	Message string `json:"message"`
@@ -51,63 +40,6 @@ type AlexaCfgRequest struct {
 	// alone: callers that only rotate credentials must not silently reset an OEM's branding.
 	// Sending it empty clears the override and restores the default brand.
 	ManufacturerName *string `json:"manufacturer_name,omitempty"`
-}
-
-// updateVAClientRedirectURIs registers redirectURIs on the OIDC va-client registry row, shared by Alexa and GVA (union semantics; other fields preserved).
-func updateVAClientRedirectURIs(ctx context.Context, clientID string, redirectURIs []string) error {
-	svc := clients.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil))
-	if _, err := svc.AddRedirectURIs(clientID, redirectURIs); err != nil {
-		return rmerror.NewRMError(err, "failed to add OIDC va-client redirect URIs")
-	}
-	return nil
-}
-
-// vaClientRedirectURIs returns the OIDC va-client registry row's currently registered redirect URIs.
-func vaClientRedirectURIs(ctx context.Context, clientID string) ([]string, error) {
-	svc := clients.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil))
-	current, err := svc.Get(clientID)
-	if err != nil {
-		return nil, rmerror.NewRMError(err, "failed to get OIDC va-client")
-	}
-	return current.RedirectURIs, nil
-}
-
-// newRegionalLambdaClient creates a Lambda API client for the given AWS region (Alexa skill Lambdas are regional).
-// Tests replace this with a stub that returns awscommon.GetLambdaClient() so AddPermission hits the mock.
-var newRegionalLambdaClient = defaultRegionalLambdaClient
-
-func defaultRegionalLambdaClient(ctx context.Context, region string) (awscommon.LambdaClientInterface, error) {
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
-	if err != nil {
-		return nil, err
-	}
-	return lambda.NewFromConfig(cfg), nil
-}
-
-// addAlexaTriggerInRegion adds the Alexa invoke permission to the alexa_skill_<rmng_region> function in the given region.
-func addAlexaTriggerInRegion(ctx context.Context, region, functionName, skillID string) error {
-	lambdaClient, err := newRegionalLambdaClient(ctx, region)
-	if err != nil {
-		return err
-	}
-
-	// Remove existing permission first to allow updating the skill ID
-	_, _ = lambdaClient.RemovePermission(ctx, &lambda.RemovePermissionInput{
-		FunctionName: aws.String(functionName),
-		StatementId:  aws.String("AlexaSkillInvoke"),
-	})
-
-	_, err = lambdaClient.AddPermission(ctx, &lambda.AddPermissionInput{
-		Action:           aws.String("lambda:InvokeFunction"),
-		FunctionName:     aws.String(functionName),
-		Principal:        aws.String("alexa-connectedhome.amazon.com"),
-		StatementId:      aws.String("AlexaSkillInvoke"),
-		EventSourceToken: aws.String(skillID),
-	})
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 func handleAlexaCfg(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
@@ -137,7 +69,7 @@ func handleAlexaCfg(ctx context.Context, request events.APIGatewayProxyRequest) 
 		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("OIDC_VA_CLIENT_ID not configured")), nil
 	}
 
-	err = updateVAClientRedirectURIs(ctx, vaClientID, req.RedirectURIs)
+	err = alexa_skill.UpdateVAClientRedirectURIs(ctx, vaClientID, req.RedirectURIs)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Send()
 		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Failed to update OIDC va-client")), nil
@@ -165,24 +97,12 @@ func handleAlexaCfg(ctx context.Context, request events.APIGatewayProxyRequest) 
 	if rmngRegion == "" {
 		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("RMNG_REGION not configured")), nil
 	}
-	// Must match the Lambda name created by alexa_skill_stack.py
-	// (function_name = f"rmng-alexa-skill-{rmng_region}").
-	alexaSkillFunction := "rmng-alexa-skill-" + rmngRegion
-	regions := strings.Split(alexaSkillRegions, ",")
-	for i := range regions {
-		regions[i] = strings.TrimSpace(regions[i])
-	}
-	for _, region := range regions {
-		if region == "" {
-			continue
-		}
-		err = addAlexaTriggerInRegion(ctx, region, alexaSkillFunction, req.SkillID)
-		if err != nil {
-			rlog.Error(ctx).Err(err).Str("region", region).Send()
-			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Failed to add Alexa trigger: "+err.Error())), nil
-		}
+	if err := alexa_skill.AddAlexaTriggerAllRegions(ctx, rmngRegion, req.SkillID); err != nil {
+		rlog.Error(ctx).Err(err).Send()
+		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Failed to add Alexa trigger: "+err.Error())), nil
 	}
 
+	alexa_skill.ClearSetupStatus(ctx)
 	return utils.APIGwRespJSON(http.StatusOK, AlexaCfgResponse{Message: "success"}), nil
 }
 
@@ -193,12 +113,27 @@ type AlexaCfgGetResponse struct {
 	// ManufacturerName is the brand currently advertised in discovery — the configured value, or
 	// the default brand when a deployment has set none. Never empty.
 	ManufacturerName string `json:"manufacturer_name"`
+	// ConfigStatus is the last automatic setup's status, absent when none has run.
+	ConfigStatus *alexa_skill.SetupStatus `json:"config_status,omitempty"`
+	// LWAClientID is the connected Amazon developer account's security profile, absent when none is connected. Its secret and refresh token are never returned.
+	LWAClientID string `json:"lwa_client_id,omitempty"`
 }
 
 func handleGetAlexaCfg(ctx context.Context) (events.APIGatewayProxyResponse, error) {
+	configStatus := alexa_skill.GetSetupStatus(ctx)
+	lwaClientID := alexa_skill.ConnectedLWAClientID(ctx)
+
 	// Get Alexa client details (only return client ID for security)
 	clientID, _, err := alexa_skill.GetAlexaClientDetails(ctx)
 	if err != nil {
+		// A setup still running, or an account connected for the first one, has written no credentials yet, so answering 404 would hide exactly what the caller is waiting on.
+		if configStatus != nil || lwaClientID != "" {
+			return utils.APIGwRespJSON(http.StatusOK, AlexaCfgGetResponse{
+				ManufacturerName: alexa_skill.GetAlexaManufacturerName(ctx),
+				ConfigStatus:     configStatus,
+				LWAClientID:      lwaClientID,
+			}), nil
+		}
 		rlog.Error(ctx).Err(err).Send()
 		return utils.APIGwRespJSON(http.StatusNotFound, utils.NewAPIStatus("Alexa configuration not found")), nil
 	}
@@ -206,6 +141,8 @@ func handleGetAlexaCfg(ctx context.Context) (events.APIGatewayProxyResponse, err
 	response := AlexaCfgGetResponse{
 		ClientID:         clientID,
 		ManufacturerName: alexa_skill.GetAlexaManufacturerName(ctx),
+		ConfigStatus:     configStatus,
+		LWAClientID:      lwaClientID,
 	}
 
 	// Get skill ID
@@ -220,7 +157,7 @@ func handleGetAlexaCfg(ctx context.Context) (events.APIGatewayProxyResponse, err
 	// Get redirect URIs from the OIDC va-client registry row.
 	vaClientID := os.Getenv("OIDC_VA_CLIENT_ID")
 	if vaClientID != "" {
-		callbackURLs, err := vaClientRedirectURIs(ctx, vaClientID)
+		callbackURLs, err := alexa_skill.VAClientRedirectURIs(ctx, vaClientID)
 		if err != nil {
 			rlog.Error(ctx).Err(err).Send()
 			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Failed to get OIDC va-client redirect URIs")), nil
@@ -233,10 +170,14 @@ func handleGetAlexaCfg(ctx context.Context) (events.APIGatewayProxyResponse, err
 
 func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	rctx := principal.FromAPIRequest(ctx, request)
+	if rctx == nil {
+		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Unauthorized")), nil
+	}
 
-	isAuthorized := rctx.GetAccessor().(*user.User).IsAdmin(rctx)
-	if !isAuthorized {
-		rlog.Error(rctx).Bool("isAuthorized", isAuthorized).Msg("User is not authorized")
+	// A caller the admin pool does not know leaves the accessor nil; a bare assertion would panic and API Gateway would answer 502 instead of 403.
+	caller, ok := rctx.GetAccessor().(*user.User)
+	if !ok || caller == nil || !caller.IsAdmin(rctx) {
+		rlog.Error(rctx).Msg("User is not authorized")
 		return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("Forbidden")), nil
 	}
 

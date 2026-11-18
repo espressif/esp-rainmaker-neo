@@ -22,6 +22,9 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
 	"github.com/aws/aws-lambda-go/events"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -61,13 +64,13 @@ var _ = BeforeSuite(func() {
 	os.Setenv("RMNG_REGION", region)
 	os.Setenv("OIDC_VA_CLIENT_ID", vaClientID)
 	// Route regional AddPermission to the global mock (production uses a client per Alexa region).
-	newRegionalLambdaClient = func(ctx context.Context, region string) (awscommon.LambdaClientInterface, error) {
+	alexa_skill.NewRegionalLambdaClient = func(ctx context.Context, region string) (awscommon.LambdaClientInterface, error) {
 		return awscommon.GetLambdaClient(), nil
 	}
 })
 
 var _ = AfterSuite(func() {
-	newRegionalLambdaClient = defaultRegionalLambdaClient
+	alexa_skill.NewRegionalLambdaClient = alexa_skill.DefaultRegionalLambdaClient
 })
 
 var _ = Describe("Alexa Config", func() {
@@ -80,6 +83,8 @@ var _ = Describe("Alexa Config", func() {
 	BeforeEach(func() {
 		ctx = context.Background()
 		test_utils.TestSetup()
+		// Real SSM returns ciphertext for an undecrypted SecureString read; the mock does so only when asked.
+		awscommon.GetSSMClient().(*mock.MockSSM).StrictDecryptionPrefix = "/rmng/alexa/"
 		seedVAClient(ctx)
 		userID := "51bbf520-70a1-70ac-627f-07d1af2a930c"
 
@@ -109,6 +114,18 @@ var _ = Describe("Alexa Config", func() {
 	})
 
 	Describe("handleAlexaCfg", func() {
+		// Left in place, a failed automatic run would keep showing as the deployment's state, and the itest would skip.
+		It("should clear an earlier automatic setup's status", func() {
+			alexa_skill.PublishSetupStatus(ctx, alexa_skill.SetupStatusFailed, "amzn1.ask.skill.old", "set account linking", "boom")
+			requestBody, _ := json.Marshal(req)
+			request.Body = string(requestBody)
+
+			response, err := handleRequest(ctx, request)
+			Expect(err).To(BeNil())
+			Expect(response.StatusCode).To(Equal(http.StatusOK))
+			Expect(alexa_skill.GetSetupStatus(ctx)).To(BeNil())
+		})
+
 		It("should successfully configure Alexa settings", func() {
 			requestBody, _ := json.Marshal(req)
 			request.Body = string(requestBody)
@@ -130,7 +147,7 @@ var _ = Describe("Alexa Config", func() {
 
 			// Validate that the Lambda trigger is set correctly
 			lambdaMock := awscommon.GetLambdaClient().(*mock.LambdaMock)
-			lambdaPermission := lambdaMock.Permissions["rmng-alexa-skill-"+region]
+			lambdaPermission := lambdaMock.Permissions[mock.PermissionKey("rmng-alexa-skill-"+region, alexa_skill.AlexaInvokeStatementID)]
 			Expect(*lambdaPermission.Action).To(Equal("lambda:InvokeFunction"))
 			Expect(*lambdaPermission.Principal).To(Equal("alexa-connectedhome.amazon.com"))
 			Expect(*lambdaPermission.EventSourceToken).To(Equal(req.SkillID))
@@ -185,7 +202,7 @@ var _ = Describe("Alexa Config", func() {
 
 			// Verify Lambda trigger was updated to new skill ID
 			lambdaMock := awscommon.GetLambdaClient().(*mock.LambdaMock)
-			lambdaPermission := lambdaMock.Permissions["rmng-alexa-skill-"+region]
+			lambdaPermission := lambdaMock.Permissions[mock.PermissionKey("rmng-alexa-skill-"+region, alexa_skill.AlexaInvokeStatementID)]
 			Expect(*lambdaPermission.EventSourceToken).To(Equal(updatedReq.SkillID))
 		})
 
@@ -365,6 +382,22 @@ var _ = Describe("Alexa Config", func() {
 			Expect(response.StatusCode).To(Equal(http.StatusForbidden))
 			Expect(response.Body).To(ContainSubstring("Forbidden"))
 		})
+
+		// Both used to panic in a bare type assertion, which API Gateway reports as 502.
+		It("should answer 401 when the caller cannot be resolved", func() {
+			request.RequestContext.Identity = events.APIGatewayRequestIdentity{}
+			response, err := handleRequest(ctx, request)
+			Expect(err).To(BeNil())
+			Expect(response.StatusCode).To(Equal(http.StatusUnauthorized))
+		})
+
+		It("should answer 401 for a Cognito caller the admin pool does not know", func() {
+			request.RequestContext.Identity.CognitoIdentityID = "unknown-admin-id"
+			request.RequestContext.Identity.CognitoAuthenticationProvider = ":CognitoSignIn:unknown-admin-id"
+			response, err := handleRequest(ctx, request)
+			Expect(err).To(BeNil())
+			Expect(response.StatusCode).To(Equal(http.StatusUnauthorized))
+		})
 	})
 
 	Describe("GET /v1/admin/integrations/alexa/configuration", func() {
@@ -382,6 +415,8 @@ var _ = Describe("Alexa Config", func() {
 			response, err := handleRequest(ctx, request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusOK))
+			// A deployment configured only by hand has no automatic-setup status, and the field is omitted rather than sent empty.
+			Expect(response.Body).NotTo(ContainSubstring("config_status"))
 
 			var respBody AlexaCfgGetResponse
 			err = json.Unmarshal([]byte(response.Body), &respBody)
@@ -450,6 +485,49 @@ var _ = Describe("Alexa Config", func() {
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusNotFound))
 			Expect(response.Body).To(ContainSubstring("Alexa configuration not found"))
+		})
+
+		// A setup still running has stored no credentials, and a 404 here would hide its progress from both pollers.
+		It("should return the setup status when an automatic setup has written no credentials yet", func() {
+			const status = `{"status":"IN_PROGRESS","ref_id":"amzn1.ask.skill.pending","stage":"initial build","updated_at":"2026-10-26T00:00:00Z"}`
+			_, err := awscommon.GetSSMClient().PutParameter(ctx, &ssm.PutParameterInput{
+				Name:  aws.String(alexa_skill.AlexaSSMConfigStatusParam),
+				Value: aws.String(status),
+				Type:  ssmtypes.ParameterTypeString,
+			})
+			Expect(err).To(BeNil())
+			request.HTTPMethod = "GET"
+			request.Body = ""
+
+			response, err := handleRequest(ctx, request)
+			Expect(err).To(BeNil())
+			Expect(response.StatusCode).To(Equal(http.StatusOK))
+			var body AlexaCfgGetResponse
+			Expect(json.Unmarshal([]byte(response.Body), &body)).To(Succeed())
+			Expect(body).To(Equal(AlexaCfgGetResponse{
+				ManufacturerName: alexa_skill.DefaultManufacturerName,
+				ConfigStatus: &alexa_skill.SetupStatus{
+					Status: alexa_skill.SetupStatusInProgress, RefID: "amzn1.ask.skill.pending", Stage: "initial build", UpdatedAt: "2026-10-26T00:00:00Z",
+				},
+			}))
+		})
+
+		// An account connected for the first automatic setup is all there is before that setup runs, and the dashboard needs it to skip the consent step.
+		It("should report the connected Amazon account, never its secrets, before Alexa is configured", func() {
+			Expect(alexa_skill.StoreLWAConnection(ctx, alexa_skill.LWAConnection{ClientID: "lwa-id", ClientSecret: "lwa-secret", RefreshToken: "Atzr|secret"})).To(Succeed())
+			request.HTTPMethod = "GET"
+			request.Body = ""
+
+			response, err := handleRequest(ctx, request)
+			Expect(err).To(BeNil())
+			Expect(response.StatusCode).To(Equal(http.StatusOK))
+			Expect(response.Body).NotTo(Or(ContainSubstring("lwa-secret"), ContainSubstring("Atzr|secret")))
+			var body AlexaCfgGetResponse
+			Expect(json.Unmarshal([]byte(response.Body), &body)).To(Succeed())
+			Expect(body).To(Equal(AlexaCfgGetResponse{
+				ManufacturerName: alexa_skill.DefaultManufacturerName,
+				LWAClientID:      "lwa-id",
+			}))
 		})
 
 		It("should fail when SSM parameter retrieval fails", func() {

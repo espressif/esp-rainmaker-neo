@@ -1931,6 +1931,40 @@ class User:
         response = self.make_api_request('POST', '/v1/admin/integrations/alexa/configuration', data=json.dumps(cfg_data))
         return response
 
+    def alexa_create_auto_configuration(self, skill_name, manufacturer_name=None):
+        """POST /v1/admin/integrations/alexa/auto-configuration: reuse the deployment's live skill (or create one), configure it at Amazon, and configure Neo to use it.
+
+        The backend owns the SMAPI pipeline so the dashboard can run it too: a browser cannot
+        call SMAPI, which answers a CORS preflight with 405. It signs in as the Amazon account
+        connected with alexa_put_lwa_connection. Returns as soon as the skill exists; poll
+        alexa_get_configuration and read config_status for the rest.
+        """
+        if not skill_name:
+            raise ValueError("Missing required fields: skill_name")
+        params = {'skill_name': skill_name}
+        # None leaves the stored brand alone; "" restores the default, so only None is skipped.
+        if manufacturer_name is not None:
+            params['manufacturer_name'] = manufacturer_name
+        return self.make_api_request('POST', '/v1/admin/integrations/alexa/auto-configuration',
+                                     data=json.dumps(params))
+
+    def alexa_put_lwa_connection(self, lwa_client_id, lwa_client_secret, lwa_authorization_code=None,
+                                 lwa_redirect_uri=None, lwa_refresh_token=None):
+        """PUT /v1/admin/integrations/alexa/lwa-connection: connect the Amazon developer account automatic setup runs as.
+
+        Pass the code LWA returned after consent with the redirect_uri that consent used, or a
+        refresh token minted elsewhere. The backend verifies it with LWA before storing it.
+        """
+        params = {'lwa_client_id': lwa_client_id, 'lwa_client_secret': lwa_client_secret,
+                  'lwa_authorization_code': lwa_authorization_code, 'lwa_redirect_uri': lwa_redirect_uri,
+                  'lwa_refresh_token': lwa_refresh_token}
+        return self.make_api_request('PUT', '/v1/admin/integrations/alexa/lwa-connection',
+                                     data=json.dumps({k: v for k, v in params.items() if v}))
+
+    def alexa_delete_lwa_connection(self):
+        """DELETE /v1/admin/integrations/alexa/lwa-connection: forget the connected Amazon developer account."""
+        return self.make_api_request('DELETE', '/v1/admin/integrations/alexa/lwa-connection')
+
     def alexa_get_configuration(self):
         """GET /v1/admin/integrations/alexa/configuration to retrieve Alexa config."""
         response = self.make_api_request('GET', '/v1/admin/integrations/alexa/configuration')

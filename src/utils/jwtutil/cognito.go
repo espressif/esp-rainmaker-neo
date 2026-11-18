@@ -44,8 +44,8 @@ type CognitoClaims struct {
 //
 // The pool's region, not the runtime's. Reading AWS_REGION here would be wrong for any
 // Lambda that runs outside the pool's region, and RMNG has those: the Alexa smart-home
-// skill is deployed to us-east-1, eu-west-1 and us-west-2 (see AWS_REGION_TO_ALEXA in
-// tools/alexa_setup.py) while authenticating against the single ESP user pool. An
+// skill is deployed to us-east-1, eu-west-1 and us-west-2 (see AlexaSkillRegions in
+// src/alexa/config.go) while authenticating against the single ESP user pool. An
 // EU or FE user's token is issued by the pool's home region and would never match an
 // issuer built from the Lambda's own region.
 func userPoolRegion(userPoolID string) (string, error) {

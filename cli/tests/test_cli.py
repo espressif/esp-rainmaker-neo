@@ -1860,3 +1860,150 @@ def test_changelog_has_an_entry_for_the_current_version():
     import esp_morpheus
     changelog = (pathlib.Path(__file__).parent.parent / 'CHANGELOG.md').read_text()
     assert f'## {esp_morpheus.__version__}' in changelog
+
+
+class StatusResponse:
+    ok = True
+
+    def __init__(self, ref_id, status, stage=''):
+        self._body = {'config_status': {'ref_id': ref_id, 'status': status, 'stage': stage}}
+
+    def json(self):
+        return self._body
+
+
+def test_setup_wait_skips_a_previous_runs_status(monkeypatch):
+    from types import SimpleNamespace
+
+    from esp_morpheus.cli.admin import integrations
+    polls = iter([StatusResponse('amzn1.ask.skill.old', 'DONE'),
+                  StatusResponse('amzn1.ask.skill.new', 'IN_PROGRESS', 'created'),
+                  StatusResponse('amzn1.ask.skill.new', 'DONE')])
+    session = SimpleNamespace(user=SimpleNamespace(alexa_get_configuration=lambda: next(polls)))
+    monkeypatch.setattr(integrations.time, 'sleep', lambda _: None)
+
+    final = integrations._wait_for_setup(session, 'alexa', 'amzn1.ask.skill.new')
+
+    assert final['ref_id'] == 'amzn1.ask.skill.new'
+    assert next(polls, None) is None
+
+
+class _HttpResponse:
+    def __init__(self, status_code, body):
+        self.status_code, self._body, self.text = status_code, body, json.dumps(body)
+        self.ok, self.reason = 200 <= status_code < 300, ''
+
+    def json(self):
+        return self._body
+
+
+AUTO_CONFIGURATION = '/v1/admin/integrations/alexa/auto-configuration'
+ALEXA_CONFIGURATION = '/v1/admin/integrations/alexa/configuration'
+LWA_CONNECTION = '/v1/admin/integrations/alexa/lwa-connection'
+
+
+@pytest.fixture
+def setup_auto(run, tmp_path, monkeypatch):
+    """Run `setup-auto` against a User whose API calls are scripted: post is the POST reply, polls the GET replies in order, and a PUT connects."""
+    from esp_morpheus.cli.admin import integrations
+    from esp_morpheus.sdk.user import User
+
+    monkeypatch.setattr(integrations.time, 'sleep', lambda _: None)
+
+    def invoke(config, post, polls=()):
+        calls, replies = [], iter(polls)
+        user = User.__new__(User)
+
+        def make_api_request(method, path, data=None, **kwargs):
+            calls.append((method, path, json.loads(data) if data else None))
+            if method == 'PUT':
+                return _HttpResponse(200, {'status': 'success', 'description': 'Amazon account connected'})
+            return post if method == 'POST' else next(replies)
+        user.make_api_request = make_api_request
+        monkeypatch.setattr(Session, 'user', property(lambda self: user))
+
+        config_file = tmp_path / 'alexa_skills_config.json'
+        config_file.write_text(json.dumps(config))
+        result = run('admin', 'admin@example.com', 'integrations', 'alexa', 'setup-auto', '--config', str(config_file))
+        return result, calls
+    return invoke
+
+
+LWA_CONFIG = {'lwa_client_id': 'amzn1.application-oa2-client.x', 'lwa_client_secret': 's',
+              'lwa_refresh_token': 'Atzr|r', 'skill_name': 'ESP RainMaker'}
+
+
+def _status(ref_id, status, **extra):
+    return _HttpResponse(200, {'config_status': {'ref_id': ref_id, 'status': status, **extra}})
+
+
+def test_setup_auto_fails_on_a_rejected_post_without_polling(setup_auto):
+    result, calls = setup_auto(LWA_CONFIG, _HttpResponse(400, {'status': 'failure', 'description': 'SMAPI rejected the skill'}))
+    assert result.exit_code != 0, result.output
+    assert 'SMAPI rejected the skill' in result.output
+    assert [c[0] for c in calls] == ['PUT', 'POST']
+
+
+def test_setup_auto_fails_when_the_run_fails(setup_auto):
+    post = _HttpResponse(200, {'skill_id': 'amzn1.ask.skill.new', 'status': 'IN_PROGRESS'})
+    failed = _status('amzn1.ask.skill.new', 'FAILED', stage='manifest build', error='Endpoint is not invokable')
+    result, _ = setup_auto(LWA_CONFIG, post, [failed])
+    assert result.exit_code != 0, result.output
+    assert 'Endpoint is not invokable' in result.output
+
+
+def test_setup_auto_sends_the_config_and_finishes_on_done(setup_auto):
+    config = {**LWA_CONFIG, 'manufacturer_name': 'Acme'}
+    post = _HttpResponse(200, {'skill_id': 'amzn1.ask.skill.live', 'status': 'IN_PROGRESS'})
+    polls = [_status('amzn1.ask.skill.live', 'IN_PROGRESS', stage='manifest build'), _status('amzn1.ask.skill.live', 'DONE')]
+    result, calls = setup_auto(config, post, polls)
+
+    assert result.exit_code == 0, result.output
+    assert 'manifest build' in result.output
+    assert calls[:2] == [
+        ('PUT', LWA_CONNECTION, {'lwa_client_id': 'amzn1.application-oa2-client.x', 'lwa_client_secret': 's', 'lwa_refresh_token': 'Atzr|r'}),
+        ('POST', AUTO_CONFIGURATION, {'skill_name': 'ESP RainMaker', 'manufacturer_name': 'Acme'}),
+    ]
+    assert all(c[:2] == ('GET', ALEXA_CONFIGURATION) for c in calls[2:])
+
+
+def test_setup_auto_without_lwa_credentials_uses_the_connected_account(setup_auto):
+    post = _HttpResponse(200, {'skill_id': 'amzn1.ask.skill.live', 'status': 'IN_PROGRESS'})
+    result, calls = setup_auto({'skill_name': 'ESP RainMaker'}, post, [_status('amzn1.ask.skill.live', 'DONE')])
+
+    assert result.exit_code == 0, result.output
+    assert calls[0] == ('POST', AUTO_CONFIGURATION, {'skill_name': 'ESP RainMaker'})
+
+
+def test_setup_auto_without_a_refresh_token_gets_one_from_consent(setup_auto, monkeypatch):
+    from esp_morpheus.cli.admin import integrations
+
+    consents = []
+    monkeypatch.setattr(integrations.alexa_smapi, 'get_refresh_token',
+                        lambda client_id, secret, port: consents.append((client_id, port)) or 'Atzr|consented')
+    config = {k: v for k, v in LWA_CONFIG.items() if k != 'lwa_refresh_token'}
+    post = _HttpResponse(200, {'skill_id': 'amzn1.ask.skill.live', 'status': 'IN_PROGRESS'})
+    result, calls = setup_auto(config, post, [_status('amzn1.ask.skill.live', 'DONE')])
+
+    assert result.exit_code == 0, result.output
+    assert consents == [('amzn1.application-oa2-client.x', 9090)]
+    assert calls[0][:2] == ('PUT', LWA_CONNECTION)
+    assert calls[0][2]['lwa_refresh_token'] == 'Atzr|consented'
+
+
+def test_setup_auto_rejects_partial_lwa_credentials_without_calling_the_api(setup_auto):
+    result, calls = setup_auto({'skill_name': 'ESP RainMaker', 'lwa_client_id': 'amzn1.application-oa2-client.x'},
+                               _HttpResponse(200, {}))
+
+    assert result.exit_code != 0, result.output
+    assert 'lwa_client_secret' in result.output
+    assert not calls
+
+
+def test_setup_auto_still_reads_the_old_smapi_keys(setup_auto):
+    old = {k.replace('lwa_', 'smapi_'): v for k, v in LWA_CONFIG.items()}
+    post = _HttpResponse(200, {'skill_id': 'amzn1.ask.skill.live', 'status': 'IN_PROGRESS'})
+    result, calls = setup_auto(old, post, [_status('amzn1.ask.skill.live', 'DONE')])
+
+    assert result.exit_code == 0, result.output
+    assert calls[0] == ('PUT', LWA_CONNECTION, {'lwa_client_id': 'amzn1.application-oa2-client.x', 'lwa_client_secret': 's', 'lwa_refresh_token': 'Atzr|r'})

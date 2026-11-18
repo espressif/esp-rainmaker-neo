@@ -27,6 +27,8 @@ const CACHE_TTL = 5 * time.Minute
 type Config struct {
 	BaseURL string `json:"base_url"`
 	APIKey  string `json:"api_key"`
+	// LWAClientID is the made-up LWA profile the Alexa auto-configuration itest connects with. Only SMAPI calls made with it go to the mock.
+	LWAClientID string `json:"lwa_client_id"`
 }
 
 var (

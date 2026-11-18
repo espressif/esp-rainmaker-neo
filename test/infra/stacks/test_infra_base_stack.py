@@ -13,7 +13,7 @@ from constructs import Construct
 from app_common import CommonResources, create_rest_api, create_ssm_string_parameter
 from gsi_infra import GsiInfraCore, GsiReadinessGate  # type: ignore
 from test.infra.handlers.base import WebhookBase
-from test.infra.stacks.test_constants import SSM_PARAMETERS
+from test.infra.stacks.test_constants import ITEST_LWA_CLIENT_ID, SSM_PARAMETERS
 
 
 class TestInfraBaseStack(Stack):
@@ -125,8 +125,9 @@ class TestInfraBaseStack(Stack):
             string_value=self.to_json_string({
                 "base_url": f"https://{self.api_gateway_cfn.rest_api_id}.execute-api.{self.region}.amazonaws.com/prod",
                 "api_key": mock_api_key_secret.secret_value.unsafe_unwrap(),
+                "lwa_client_id": ITEST_LWA_CLIENT_ID,
             }),
-            description="Itest webhook mock base URL and API key",
+            description="Itest webhook mock base URL, API key and the LWA profile it answers for",
         )
 
         self.gsi_readiness = GsiReadinessGate(

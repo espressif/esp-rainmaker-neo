@@ -22,9 +22,15 @@ var LambdaHandlerMap = make(map[string]LambdaHandler)
 type LambdaMock struct {
 	AddPermissionError    error
 	RemovePermissionError error
-	Permissions           map[string]lambda.AddPermissionInput
-	InvokeError           error
-	InvokeCalls           []lambda.InvokeInput
+	// Permissions is keyed by PermissionKey: Lambda scopes a statement id to its function, so one function can hold several.
+	Permissions map[string]lambda.AddPermissionInput
+	InvokeError error
+	InvokeCalls []lambda.InvokeInput
+}
+
+// PermissionKey is the Permissions key for a function's statement: ("fn", "Stmt") -> "fn/Stmt".
+func PermissionKey(functionName, statementID string) string {
+	return functionName + "/" + statementID
 }
 
 func NewLambdaMock() *LambdaMock {
@@ -42,7 +48,7 @@ func (m *LambdaMock) AddPermission(ctx context.Context, params *lambda.AddPermis
 	if m.Permissions == nil {
 		m.Permissions = make(map[string]lambda.AddPermissionInput)
 	}
-	m.Permissions[*params.FunctionName] = *params
+	m.Permissions[PermissionKey(aws.ToString(params.FunctionName), aws.ToString(params.StatementId))] = *params
 
 	return &lambda.AddPermissionOutput{}, nil
 }
@@ -52,17 +58,30 @@ func (m *LambdaMock) RemovePermission(ctx context.Context, params *lambda.Remove
 		return nil, m.RemovePermissionError
 	}
 
-	if m.Permissions != nil {
-		// Remove permission by finding the function name
-		for funcName, perm := range m.Permissions {
-			if aws.ToString(perm.StatementId) == aws.ToString(params.StatementId) {
-				delete(m.Permissions, funcName)
-				break
-			}
-		}
-	}
+	delete(m.Permissions, PermissionKey(aws.ToString(params.FunctionName), aws.ToString(params.StatementId)))
 
 	return &lambda.RemovePermissionOutput{}, nil
+}
+
+// GetPolicy renders the function's statements the way Lambda does, and answers ResourceNotFoundException when it has none.
+func (m *LambdaMock) GetPolicy(ctx context.Context, params *lambda.GetPolicyInput, optFns ...func(*lambda.Options)) (*lambda.GetPolicyOutput, error) {
+	type statement struct {
+		Sid string `json:"Sid"`
+	}
+	var statements []statement
+	for _, perm := range m.Permissions {
+		if aws.ToString(perm.FunctionName) == aws.ToString(params.FunctionName) {
+			statements = append(statements, statement{Sid: aws.ToString(perm.StatementId)})
+		}
+	}
+	if len(statements) == 0 {
+		return nil, &types.ResourceNotFoundException{Message: aws.String("The resource you requested does not exist.")}
+	}
+	policy, err := json.Marshal(map[string]interface{}{"Version": "2012-10-17", "Statement": statements})
+	if err != nil {
+		return nil, err
+	}
+	return &lambda.GetPolicyOutput{Policy: aws.String(string(policy))}, nil
 }
 
 func (m *LambdaMock) Invoke(ctx context.Context, params *lambda.InvokeInput, optFns ...func(*lambda.Options)) (*lambda.InvokeOutput, error) {

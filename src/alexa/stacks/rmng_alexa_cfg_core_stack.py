@@ -10,7 +10,9 @@ from aws_cdk import (
 from constructs import Construct
 
 from app_common import CommonResources, create_api_deployment
+from src.alexa.handlers.alexa_auto_cfg.stack import AlexaAutoCfgAPI
 from src.alexa.handlers.alexa_cfg.stack import AlexaCfgAPI
+from src.espuser.stacks.base_res_constants import USER_SSM_PARAMETERS
 from src.rmneo.stacks.base_res_constants import SSM_PARAMETERS
 
 
@@ -71,9 +73,19 @@ class RMNGAlexaCfgCoreStack(Stack):
         # shared voice-assistant OIDC client, so it needs that client's id.
         common_resources.esp_user_va_client_id = ssm.StringParameter.value_for_string_parameter(
             self, SSM_PARAMETERS['ESP_USER_VA_CLIENT_ID'])
+        # Automatic mode configures account linking itself, so it needs the OIDC provider's
+        # API base to derive the authorize and token endpoints.
+        common_resources.esp_user_api_url = ssm.StringParameter.value_for_string_parameter(
+            self, USER_SSM_PARAMETERS['ESP_USER_API_URL'])
 
         self.alexa_cfg = AlexaCfgAPI(self, "AlexaCfgAPI", common_resources,
                                      admin_integrations_resource_id=admin_integrations_resource_id)
+
+        # Automatic mode: one POST that creates and fully configures the skill over SMAPI,
+        # hung off the /v1/admin/integrations/alexa resource alexa_cfg just created.
+        self.alexa_auto_cfg = AlexaAutoCfgAPI(
+            self, "AlexaAutoCfgAPI", common_resources,
+            alexa_resource_id=self.alexa_cfg.alexa_resource_id)
 
         # Publish the routes to the shared API's prod stage — rmng-base owns that stage
         # and snapshotted it before these methods existed. See create_api_deployment.
@@ -84,3 +96,4 @@ class RMNGAlexaCfgCoreStack(Stack):
             logical_name="alexa-cfg-api-gateway-deploy",
         )
         api_deploy.node.add_dependency(self.alexa_cfg)
+        api_deploy.node.add_dependency(self.alexa_auto_cfg)
