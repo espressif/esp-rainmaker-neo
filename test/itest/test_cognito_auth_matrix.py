@@ -95,6 +95,7 @@ CODE_WAIT = {"max_retries": 6, "retry_delay": 3.0, "timeout": 45.0}
 NO_CODE_WAIT = {"max_retries": 2, "retry_delay": 5.0, "timeout": 20.0}
 
 UNCONFIRMED_ACCOUNT_MESSAGE = "Signin failed. Account not verified — reset your password."
+PASSWORD_RESET_REQUIRED_MESSAGE = "Signin failed. Password reset required — reset your password."
 
 SIGNUP_MESSAGES = {
     # Neither the bundled "cognito" provider nor the test-external one is named "rainmaker",
@@ -691,6 +692,36 @@ def test_signin_of_an_unconfirmed_account_asks_for_a_password_reset(cognito_pool
 
         # The same unconfirmed account, wrong password: back to the uniform refusal, so this
         # message cannot be used to test whether an address is registered.
+        guessed = requests.post(_auth_url("token"),
+                                json={"username": email, "password": generate_test_password()})
+        assert guessed.status_code == 401, f"[{label}] {guessed.text}"
+        assert _status(guessed) == "Authentication failed", guessed.text
+    finally:
+        try:
+            cognito.admin_delete_user(UserPoolId=pool_id, Username=email)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def test_signin_of_an_admin_reset_account_asks_for_a_password_reset(cognito_pool):
+    """An account an admin reset is told to reset its password, because Cognito raises
+    PasswordResetRequiredException only once the old password matches; a wrong password still gets
+    the uniform refusal, so the message cannot test whether an address is registered."""
+    label, pool_id = cognito_pool
+    email = generate_random_email()
+    password = generate_test_password()
+    cognito = boto3.client("cognito-idp", region_name=REGION)
+    cognito.admin_create_user(UserPoolId=pool_id, Username=email, MessageAction="SUPPRESS",
+                              UserAttributes=[{"Name": "email", "Value": email},
+                                              {"Name": "email_verified", "Value": "true"}])
+    try:
+        cognito.admin_set_user_password(UserPoolId=pool_id, Username=email, Password=password, Permanent=True)
+        cognito.admin_reset_user_password(UserPoolId=pool_id, Username=email)
+
+        refused = requests.post(_auth_url("token"), json={"username": email, "password": password})
+        assert refused.status_code == 401, f"[{label}] {refused.text}"
+        assert _status(refused) == PASSWORD_RESET_REQUIRED_MESSAGE, refused.text
+
         guessed = requests.post(_auth_url("token"),
                                 json={"username": email, "password": generate_test_password()})
         assert guessed.status_code == 401, f"[{label}] {guessed.text}"

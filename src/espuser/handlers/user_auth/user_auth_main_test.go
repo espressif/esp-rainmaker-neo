@@ -254,6 +254,11 @@ var _ = Describe("provider-specific wording", func() {
 		Expect(accountExistsMessage(false)).NotTo(ContainSubstring("RainMaker"))
 	})
 
+	It("tells an account an admin reset to reset its password, apart from the uniform refusal", func() {
+		Expect(passwordResetRequiredMessage).To(ContainSubstring("reset your password"))
+		Expect(passwordResetRequiredMessage).NotTo(Equal(unconfirmedAccountMessage))
+	})
+
 	It("advises a password reset only for an unconfirmed sign-in", func() {
 		Expect(unconfirmedAccountMessage).To(ContainSubstring("reset your password"))
 		// Distinct from the uniform refusal, which is what makes the branch observable at all.
@@ -321,4 +326,11 @@ var _ = Describe("against a pool with no such account", func() {
 		Entry("signup, a disabled password row", pathSignup, "retired"),
 		Entry("sign-in, a disabled password row", pathToken, "retired"),
 	)
+
+	It("keeps the native token route's uniform refusal when the pool fails rather than refuses", func() {
+		cog.InitiateAuthError = &cognitotypes.TooManyRequestsException{Message: aws.String("Rate exceeded")}
+		resp := post(pathToken, map[string]any{"username": "u@example.com", "password": "Password1!"}, nil)
+		Expect(resp.StatusCode).To(Equal(http.StatusUnauthorized))
+		Expect(resp.Body).To(MatchJSON(`{"message":"Authentication failed"}`))
+	})
 })

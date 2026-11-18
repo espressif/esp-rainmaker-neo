@@ -27,6 +27,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/session"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
+	cognitotypes "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -34,6 +35,9 @@ import (
 const legacyClientID = "rainmaker-neo-home-app-client"
 
 const legacyScope = "openid email phone"
+
+// challengeNewPasswordRequired is Cognito's name for "this account has never set its own password".
+const challengeNewPasswordRequired = "NEW_PASSWORD_REQUIRED"
 
 type Service struct {
 	cognito *cognitoutil.CognitoService
@@ -57,6 +61,18 @@ var ErrNoPasswordProvider = errors.New("legacyauth: no enabled provider has a pa
 // ErrProviderNotFound refuses a named provider whose password our page cannot check, rather than falling back to another pool and another account.
 var ErrProviderNotFound = errors.New("legacyauth: named provider is not one whose password our page can check")
 var ErrUserNotConfirmed = errors.New("legacyauth: account is not confirmed")
+
+// ErrNewPasswordRequired means the password was right but an admin created the account and it must choose its own.
+var ErrNewPasswordRequired = errors.New("legacyauth: the account must choose a new password")
+
+// ErrPasswordResetRequired means the password was right but an admin reset the account, so it must set a new one through forgot password.
+var ErrPasswordResetRequired = errors.New("legacyauth: the account must reset its password")
+
+// ErrSecondStepRequired means the password was right but the pool asks for a step this surface cannot take, such as an MFA code.
+var ErrSecondStepRequired = errors.New("legacyauth: the pool asks for a second step")
+
+// ErrAuthenticationFailed is the credential being refused, deliberately without saying why, so the form cannot test whether an address is registered.
+var ErrAuthenticationFailed = errors.New("legacyauth: authentication failed")
 
 // ErrPasswordRefused means the pool's password policy refused a new password, which the caller can fix, unlike the failures each route answers with one sentence.
 var ErrPasswordRefused = errors.New("legacyauth: the password does not meet the pool's policy")
@@ -119,22 +135,7 @@ func regionFromCognitoIssuer(issuer string) string {
 
 // SigninWithPassword covers every resource the password client may request, since this API takes no resource; a refresh narrows the access token to one of them.
 func (s *Service) SigninWithPassword(ctx context.Context, username, password string) (*auth.UserTokens, error) {
-	if username == "" || password == "" {
-		return nil, rmerror.NewRMError(nil, "username and password are required")
-	}
-	login, err := s.cognito.InitiateAuth(ctx, &cognitoutil.LoginRequest{Username: username, Password: password})
-	if err != nil || !login.Success {
-		if auth.IsUserNotConfirmedError(err) {
-			return nil, ErrUserNotConfirmed
-		}
-		return nil, rmerror.NewRMError(err, "authentication failed")
-	}
-	email, phone, err := verifiedContacts(login.IDToken)
-	if err != nil {
-		return nil, err
-	}
-	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, nil)
-	userID, err := s.oauth.ResolveOrCreateUserByContacts(rmngCtx, email, phone, s.loginProfile(login.IDToken))
+	userID, err := s.Authenticate(ctx, username, password)
 	if err != nil {
 		return nil, err
 	}
@@ -147,6 +148,56 @@ func (s *Service) SigninWithPassword(ctx context.Context, username, password str
 		AMR:                 []string{"pwd"},
 		Origin:              session.OriginApp,
 	})
+}
+
+// Authenticate checks the credential and resolves the person, the part the native API and the sign-in page share.
+func (s *Service) Authenticate(ctx context.Context, username, password string) (string, error) {
+	// A blank field is a failed sign-in like any other, never a server error.
+	if username == "" || password == "" {
+		return "", ErrAuthenticationFailed
+	}
+	login, err := s.cognito.InitiateAuth(ctx, &cognitoutil.LoginRequest{Username: username, Password: password})
+	if err != nil || !login.Success {
+		if auth.IsUserNotConfirmedError(err) {
+			return "", ErrUserNotConfirmed
+		}
+		// Cognito raises this only once the password matches, so naming it tells a caller nothing they did not already hold.
+		if errors.As(err, new(*cognitotypes.PasswordResetRequiredException)) {
+			return "", ErrPasswordResetRequired
+		}
+		if login != nil && login.ChallengeName == challengeNewPasswordRequired {
+			return "", ErrNewPasswordRequired
+		}
+		if login != nil && login.ChallengeName != "" {
+			return "", ErrSecondStepRequired
+		}
+		if err == nil {
+			return "", ErrAuthenticationFailed
+		}
+		if isCredentialRefusal(err) {
+			// Wrapped so the handler's log names the cause; callers still match only ErrAuthenticationFailed.
+			return "", fmt.Errorf("%w: %w", ErrAuthenticationFailed, err)
+		}
+		return "", rmerror.NewRMError(err, "legacyauth: the pool could not check the password")
+	}
+	email, phone, err := verifiedContacts(login.IDToken)
+	if err != nil {
+		return "", err
+	}
+	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, nil)
+	return s.oauth.ResolveOrCreateUserByContacts(rmngCtx, email, phone, s.loginProfile(login.IDToken))
+}
+
+// isCredentialRefusal is the pool turning this person away, a pre-auth trigger's no included; a NotAuthorizedException about the app client's secret is the deployment's fault instead.
+func isCredentialRefusal(err error) bool {
+	var notAuthorized *cognitotypes.NotAuthorizedException
+	if errors.As(err, &notAuthorized) {
+		message := strings.ToLower(notAuthorized.ErrorMessage())
+		return !strings.Contains(message, "secret hash") && !strings.Contains(message, "secret_hash")
+	}
+	var notFound *cognitotypes.UserNotFoundException
+	var triggerRefused *cognitotypes.UserLambdaValidationException
+	return errors.As(err, &notFound) || errors.As(err, &triggerRefused)
 }
 
 // RefreshLegacy renews a password sign-in; resource narrows the access token to one of its resources, or "" to let the sign-in decide.

@@ -43,6 +43,9 @@ const (
 
 	unconfirmedAccountMessage = "Signin failed. Account not verified — reset your password."
 
+	// An admin reset the account; forgot password sets the new one.
+	passwordResetRequiredMessage = "Signin failed. Password reset required — reset your password."
+
 	// One answer for every /signup/verify failure; the wording carries the sign-in hint.
 	rainmakerVerifyFailedMessage = "Invalid code or RainMaker account already exists. Try signin or reset password."
 	neutralVerifyFailedMessage   = "Invalid code or account already exists. Try signin or reset password."
@@ -171,6 +174,9 @@ func handleSignin(ctx context.Context, request events.APIGatewayProxyRequest, sv
 		// with no way to recover the account.
 		if errors.Is(err, legacyauth.ErrUserNotConfirmed) {
 			return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus(unconfirmedAccountMessage)), nil
+		}
+		if errors.Is(err, legacyauth.ErrPasswordResetRequired) {
+			return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus(passwordResetRequiredMessage)), nil
 		}
 		// Uniform 401 so the response is no oracle; operators get the real cause from the log.
 		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Authentication failed")), nil

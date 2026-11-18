@@ -63,13 +63,18 @@ type CognitoProviderMock struct {
 	UsersByEmail map[string]map[string]*UserState // key: user_pool_id -> email -> user
 	UsersByPhone map[string]map[string]*UserState // key: user_pool_id -> phone -> user
 
+	// InitiateAuthCalls counts every InitiateAuth, so a spec can prove a refusal came before the password reached the pool.
+	InitiateAuthCalls int
+
 	// Error injection for testing
-	DescribeUserPoolClientError    error
-	UpdateUserPoolClientError      error
-	SignUpError                    error
-	ConfirmSignUpError             error
-	InitiateAuthError              error
-	IDTokenMinter                  func(user *UserState) string
+	DescribeUserPoolClientError error
+	UpdateUserPoolClientError   error
+	SignUpError                 error
+	ConfirmSignUpError          error
+	InitiateAuthError           error
+	IDTokenMinter               func(user *UserState) string
+	// ChallengeOnAuth makes InitiateAuth answer a correct password with this challenge instead of tokens, as an admin-created account's first sign-in does.
+	ChallengeOnAuth                string
 	RespondToAuthChallengeError    error
 	ForgotPasswordError            error
 	ConfirmForgotPasswordError     error
@@ -508,6 +513,7 @@ func (m *CognitoProviderMock) ConfirmSignUp(ctx context.Context, params *cognito
 // InitiateAuth handles authentication with stateful session management
 // Supports both USER_PASSWORD_AUTH and REFRESH_TOKEN_AUTH flows
 func (m *CognitoProviderMock) InitiateAuth(ctx context.Context, params *cognitoidentityprovider.InitiateAuthInput, optFns ...func(*cognitoidentityprovider.Options)) (*cognitoidentityprovider.InitiateAuthOutput, error) {
+	m.InitiateAuthCalls++
 	if m.InitiateAuthError != nil {
 		return nil, m.InitiateAuthError
 	}
@@ -572,6 +578,13 @@ func (m *CognitoProviderMock) handleUserPasswordAuth(userPoolID string, params *
 	now := time.Now()
 	user.LastLoginAt = &now
 	m.usersMutex.Unlock()
+
+	if m.ChallengeOnAuth != "" {
+		return &cognitoidentityprovider.InitiateAuthOutput{
+			ChallengeName: types.ChallengeNameType(m.ChallengeOnAuth),
+			Session:       aws.String("challenge-session"),
+		}, nil
+	}
 
 	accessToken := m.generateToken()
 	refreshToken := m.generateToken()

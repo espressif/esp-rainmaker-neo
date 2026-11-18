@@ -7,6 +7,7 @@ package legacyauth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
@@ -265,6 +266,21 @@ var _ = Describe("SigninWithPassword", func() {
 		Expect(err).To(MatchError(auth.ErrResourceRequired))
 	})
 
+	It("answers a blank password as a failed sign-in, not as a server error (negative)", func() {
+		svc := newService("blank@example.com", true)
+		_, err := svc.SigninWithPassword(context.Background(), "blank@example.com", "")
+		Expect(err).To(MatchError(ErrAuthenticationFailed))
+	})
+
+	// An admin-created account answers its correct temporary password with a challenge, and "authentication failed" would strand the person on a password they know is right.
+	It("reports a forced password change as its own outcome, not as a failed sign-in", func() {
+		svc := newService("forced@example.com", true)
+		awscommon.GetCognitoProviderClient().(*mock.CognitoProviderMock).ChallengeOnAuth = challengeNewPasswordRequired
+
+		_, err := svc.SigninWithPassword(context.Background(), "forced@example.com", testPassword)
+		Expect(err).To(MatchError(ErrNewPasswordRequired))
+	})
+
 	It("rejects a login whose contact is unverified (negative)", func() {
 		svc := newService("u2@example.com", false)
 		_, err := svc.SigninWithPassword(context.Background(), "u2@example.com", testPassword)
@@ -276,6 +292,43 @@ var _ = Describe("SigninWithPassword", func() {
 		_, err := svc.SigninWithPassword(context.Background(), "u3@example.com", "wrong-password")
 		Expect(err).To(HaveOccurred())
 	})
+
+	DescribeTable("answers the pool refusing the person as a failed sign-in",
+		func(poolErr error) {
+			svc := newService("u4@example.com", true)
+			awscommon.GetCognitoProviderClient().(*mock.CognitoProviderMock).InitiateAuthError = poolErr
+			_, err := svc.Authenticate(context.Background(), "u4@example.com", testPassword)
+			Expect(err).To(MatchError(ErrAuthenticationFailed))
+			Expect(err).To(MatchError(poolErr), "the cause stays on the error for the handler's log")
+		},
+		Entry("a wrong password", &cognitotypes.NotAuthorizedException{Message: aws.String("Incorrect username or password.")}),
+		Entry("no such account", &cognitotypes.UserNotFoundException{}),
+		Entry("a pre-authentication trigger refusing the person", &cognitotypes.UserLambdaValidationException{Message: aws.String("PreAuthentication failed with error Blocked.")}),
+		Entry("a NotAuthorizedException that only mentions a secret elsewhere", &cognitotypes.NotAuthorizedException{Message: aws.String("Incorrect username or password; keep your secret safe.")}),
+	)
+
+	It("names an account an admin reset, which Cognito says only after the password matches", func() {
+		svc := newService("u4@example.com", true)
+		awscommon.GetCognitoProviderClient().(*mock.CognitoProviderMock).InitiateAuthError = &cognitotypes.PasswordResetRequiredException{Message: aws.String("Password reset required for the user")}
+		_, err := svc.Authenticate(context.Background(), "u4@example.com", testPassword)
+		Expect(err).To(MatchError(ErrPasswordResetRequired))
+		Expect(errors.Is(err, ErrAuthenticationFailed)).To(BeFalse())
+	})
+
+	DescribeTable("keeps the pool failing apart from a refusal, with its cause for the handler's log (negative)",
+		func(poolErr error) {
+			svc := newService("u4@example.com", true)
+			awscommon.GetCognitoProviderClient().(*mock.CognitoProviderMock).InitiateAuthError = poolErr
+			_, err := svc.Authenticate(context.Background(), "u4@example.com", testPassword)
+			Expect(errors.Is(err, ErrAuthenticationFailed)).To(BeFalse())
+			Expect(err).To(MatchError(poolErr))
+		},
+		Entry("throttled", &cognitotypes.TooManyRequestsException{}),
+		Entry("an app client the pool does not know", &cognitotypes.ResourceNotFoundException{}),
+		Entry("a wrong app client secret", &cognitotypes.NotAuthorizedException{Message: aws.String("Unable to verify secret hash for client native-client")}),
+		Entry("a secret hash named as the parameter", &cognitotypes.NotAuthorizedException{Message: aws.String("Unable to verify SECRET_HASH for client native-client")}),
+		Entry("an app client with a secret the provider row does not carry", &cognitotypes.NotAuthorizedException{Message: aws.String("Client native-client is configured with secret but SECRET_HASH was not received")}),
+	)
 
 	It("fails closed when no enabled provider has a password our page can check (negative)", func() {
 		rmngCtx := rmngctx.NewRmngContextWithCtx(context.Background(), nil)

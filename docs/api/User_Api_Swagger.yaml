@@ -1008,6 +1008,7 @@ paths:
           description: |
             `Authentication failed` — wrong password, or no such account.
             `Signin failed. Account not verified — reset your password.` — correct password, account never verified.
+            `Signin failed. Password reset required — reset your password.` — correct password, account an administrator reset.
           content:
             application/json:
               schema:
