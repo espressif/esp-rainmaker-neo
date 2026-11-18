@@ -216,3 +216,139 @@ var _ = Describe("AuthFlowsDB", func() {
 		})
 	})
 })
+
+var _ = Describe("auth flow expiry", func() {
+	var db *auth_flows_db.AuthFlowsDB
+
+	BeforeEach(func() {
+		test_utils.SetupEspUserBackend(context.Background())
+		db = auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
+	})
+
+	createFlow := func(flowID string, expiresIn time.Duration) {
+		Expect(db.CreateFlow(&auth_flows_db.AuthFlow{
+			FlowID:      flowID,
+			ClientID:    "test-client",
+			RedirectURI: "https://rp.example/cb",
+			ExpiresOn:   time.Now().Add(expiresIn).Unix(),
+		})).To(Succeed())
+	}
+
+	It("gives an issued code its own ten minutes rather than the sign-in's remaining window", func() {
+		createFlow("flow-coded", 14*time.Minute)
+
+		flow, err := db.IssueCode("flow-coded", "user-1", []string{"openid"}, "the-code", "", 0)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(flow.ExpiresOn).To(BeNumerically("~", time.Now().Add(auth_flows_db.CodeTTL).Unix(), 2))
+	})
+
+	It("refuses an expired flow everywhere except the restart read (negative)", func() {
+		createFlow("flow-expired", -time.Second)
+
+		_, err := db.GetFlow("flow-expired")
+		Expect(err).To(MatchError(auth_flows_db.ErrFlowExpired))
+		Expect(db.AwaitConsent("flow-expired", "user-1", []string{"openid"}, "sid-1", 100)).To(MatchError(auth_flows_db.ErrFlowNotFound))
+
+		flow, err := db.GetFlowIgnoringExpiry("flow-expired")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(flow.ClientID).To(Equal("test-client"))
+	})
+})
+
+var _ = Describe("a sign-in held for consent", func() {
+	var db *auth_flows_db.AuthFlowsDB
+
+	BeforeEach(func() {
+		test_utils.SetupEspUserBackend(context.Background())
+		db = auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
+		Expect(db.CreateFlow(&auth_flows_db.AuthFlow{
+			FlowID: "flow-held", ClientID: "third-party", RedirectURI: "https://rp.example/cb",
+			ExpiresOn: time.Now().Add(auth_flows_db.FlowTTL).Unix(),
+		})).To(Succeed())
+	})
+
+	It("binds the person but issues no code, keeping the sign-in's own expiry", func() {
+		before, err := db.GetFlow("flow-held")
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(db.AwaitConsent("flow-held", "user-1", []string{"openid"}, "sid-1", 100)).To(Succeed())
+
+		flow, err := db.GetFlow("flow-held")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(flow.AwaitingConsent()).To(BeTrue())
+		Expect(flow.Code).To(BeEmpty())
+		Expect(flow.Subject).To(Equal("user-1"))
+		Expect(flow.ExpiresOn).To(Equal(before.ExpiresOn))
+	})
+
+	It("issues the code once consent is given, with a code's ten minutes", func() {
+		Expect(db.AwaitConsent("flow-held", "user-1", []string{"openid"}, "sid-1", 100)).To(Succeed())
+
+		flow, err := db.IssueConsentedCode("flow-held", "the-code", "sid-1")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(flow.Code).To(Equal("the-code"))
+		Expect(flow.Subject).To(Equal("user-1"))
+		Expect(flow.ExpiresOn).To(BeNumerically("~", time.Now().Add(auth_flows_db.CodeTTL).Unix(), 2))
+	})
+
+	It("issues no code for a flow nobody has signed in to, even to a matching session (negative)", func() {
+		Expect(db.CreateFlow(&auth_flows_db.AuthFlow{
+			FlowID: "flow-no-person", ClientID: "third-party", RedirectURI: "https://rp.example/cb", SID: "sid-1",
+			ExpiresOn: time.Now().Add(auth_flows_db.FlowTTL).Unix(),
+		})).To(Succeed())
+
+		_, err := db.IssueConsentedCode("flow-no-person", "the-code", "sid-1")
+		Expect(err).To(MatchError(auth_flows_db.ErrFlowNotFound))
+	})
+
+	It("issues no code to another session than the one that signed in, or to none (negative)", func() {
+		Expect(db.AwaitConsent("flow-held", "user-1", []string{"openid"}, "sid-1", 100)).To(Succeed())
+
+		for _, sid := range []string{"sid-2", ""} {
+			_, err := db.IssueConsentedCode("flow-held", "the-code", sid)
+			Expect(err).To(MatchError(auth_flows_db.ErrFlowNotFound))
+		}
+	})
+
+	It("issues the code of a sign-in held with no session to a browser with none", func() {
+		Expect(db.AwaitConsent("flow-held", "user-1", []string{"openid"}, "", 100)).To(Succeed())
+
+		_, err := db.IssueConsentedCode("flow-held", "the-code", "")
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("issues a held flow's code only once (negative)", func() {
+		Expect(db.AwaitConsent("flow-held", "user-1", []string{"openid"}, "sid-1", 100)).To(Succeed())
+		_, err := db.IssueConsentedCode("flow-held", "first", "sid-1")
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = db.IssueConsentedCode("flow-held", "second", "sid-1")
+		Expect(err).To(MatchError(auth_flows_db.ErrFlowNotFound))
+	})
+
+	It("issues no code once the held sign-in has expired (negative)", func() {
+		Expect(db.CreateFlow(&auth_flows_db.AuthFlow{
+			FlowID: "flow-held-expired", ClientID: "third-party", RedirectURI: "https://rp.example/cb",
+			Subject: "user-1", SID: "sid-1", ExpiresOn: time.Now().Add(-time.Second).Unix(),
+		})).To(Succeed())
+
+		_, err := db.IssueConsentedCode("flow-held-expired", "the-code", "sid-1")
+		Expect(err).To(MatchError(auth_flows_db.ErrFlowNotFound))
+	})
+
+	It("ends a declined sign-in, so no code can be issued from it afterwards (negative)", func() {
+		Expect(db.AwaitConsent("flow-held", "user-1", []string{"openid"}, "sid-1", 100)).To(Succeed())
+
+		Expect(db.DeleteFlow("flow-held")).To(Succeed())
+
+		_, err := db.GetFlow("flow-held")
+		Expect(err).To(MatchError(auth_flows_db.ErrFlowNotFound))
+		_, err = db.IssueConsentedCode("flow-held", "the-code", "sid-1")
+		Expect(err).To(MatchError(auth_flows_db.ErrFlowNotFound))
+	})
+
+	It("cannot rebind a held flow to someone else (negative)", func() {
+		Expect(db.AwaitConsent("flow-held", "user-1", []string{"openid"}, "sid-1", 100)).To(Succeed())
+		Expect(db.AwaitConsent("flow-held", "user-2", []string{"openid"}, "sid-2", 100)).To(MatchError(auth_flows_db.ErrFlowNotFound))
+	})
+})
