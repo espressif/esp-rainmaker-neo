@@ -2484,6 +2484,9 @@ paths:
         Registration is not idempotent: submitting a certificate whose node is
         already registered returns 409. Use the update-jobs endpoint to modify
         an already-registered node.
+
+        A certificate whose CN contains `--` or ends in `-` returns 400: those
+        forms collide with the `<bridge>--<suffix>` names of bridge child nodes.
       tags:
         - Node Administration
       security:

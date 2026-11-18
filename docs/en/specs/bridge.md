@@ -98,6 +98,10 @@ and Thing attributes are capped at three without a thing type (see
   unusual that collisions are extremely rare in practice.
 - **Bridged child suffix** (the part after `--` in a child name, see §3.2)
   must not contain `--`.
+- **Bridge and direct device thing names** must not end in `-`. A bridge
+  `A-` would name its children `A---<suffix>`, which bridge `A`'s
+  `A--*` grant also matches, and the parent extraction in §3.4 would
+  resolve to `A`.
 
 The `--` separator is what enables pure-SQL parent extraction in the
 IoT Rules (§3.4) and unambiguous policy substitution
@@ -456,8 +460,9 @@ action topics. Only `update` is exercised today: shadow migration on a
 group or subgroup move is done cloud-side (§3.3, §5.5), so the grant is
 wider than the bridge currently needs. The scope is still named shadows
 only (`shadow/name/…`); unnamed (classic) shadows are not covered. The naming constraints in §3.1 (no `--`
-in bridge names, direct device names, or child suffixes) make `brdge--*`
-unambiguous: it can only match descendants of `brdge`.
+in bridge names, direct device names, or child suffixes, and no trailing `-`
+in bridge or direct device names) make `brdge--*` unambiguous: it can only
+match descendants of `brdge`.
 
 The bridge does **not** subscribe to `/update/accepted` or
 `/update/rejected` — see §5.2 for the fire-and-forget update model that
@@ -990,9 +995,9 @@ The bridge IoT policy statement for shadow publishes uses the substitution
 connect time, AWS IoT substitutes the bridge's own thing name, so a bridge
 `brdge` can publish only on `$aws/things/brdge--*/shadow/...`.
 
-This is airtight because of the `--` naming constraints in §3.1 (no `--`
+This is airtight because of the naming constraints in §3.1 (no `--`
 in bridge names, no `--` in direct device names, no `--` in child
-suffixes). With those constraints, `brdge--*` cannot match any other
+suffixes, no trailing `-` in bridge or direct device names). With those constraints, `brdge--*` cannot match any other
 bridge or any direct device or any other bridge's descendants — it can
 only match things created by `<parent>=brdge`'s `add_child` calls.
 

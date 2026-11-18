@@ -30,6 +30,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/iotutil"
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/s3util"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/node_details_db"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node/nodelifecycle"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/config"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
@@ -1542,6 +1543,10 @@ func RegisterNodeInRmng(rmngCtx *rmngctx.RmngContext, cert string, caCert string
 	}
 	rmngCtx.EnrichLogger("nid", nodeId)
 
+	if err := ValidateNodeID(nodeId); err != nil {
+		return nodeId, err
+	}
+
 	n := NewNode(nodeId)
 
 	// Cheap pre-check so a duplicate costs one read instead of a full IoT Core
@@ -1598,6 +1603,17 @@ var ErrNodeNotFound = errors.New("node not found")
 // already registered. Handlers map it to HTTP 409; use UpdateNodeInRmng to
 // modify an existing node.
 var ErrNodeAlreadyRegistered = errors.New("node already registered")
+
+// ErrInvalidNodeID is returned by ValidateNodeID, and so by RegisterNodeInRmng, for an ID the bridge naming rules forbid (docs/en/specs/bridge.md §3.1).
+var ErrInvalidNodeID = errors.New(`node id must not contain "--" or end in "-"`)
+
+// ValidateNodeID rejects an ID a bridge's "<bridge>--*" policy grant could match (bridge.md §3.1): "node1" -> nil; "a--b" or "a-" -> ErrInvalidNodeID.
+func ValidateNodeID(nodeID string) error {
+	if group.IsChildNode(nodeID) || strings.HasSuffix(nodeID, "-") {
+		return ErrInvalidNodeID
+	}
+	return nil
+}
 
 // UpdateNodeInRmng applies metadata updates (admin groups, tags) and
 // optionally a cert update to an existing registered node.

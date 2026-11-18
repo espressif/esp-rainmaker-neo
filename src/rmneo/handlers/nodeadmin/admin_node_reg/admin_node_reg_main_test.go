@@ -501,6 +501,22 @@ var _ = Describe("Admin Nodes Registration", func() {
 			Expect(response.Body).To(ContainSubstring(`capability \"bridge\" is not available on this deployment`))
 		})
 
+		It("returns 400 without creating its admin groups when the certificate CN contains \"--\"", func() {
+			reqBodyBytes, err := json.Marshal(map[string]interface{}{
+				"cert":              test_utils.SelfSignedCertPEM("bridge--device"),
+				"admin_group_names": []string{"Group1"},
+			})
+			Expect(err).To(BeNil())
+
+			request.Body = string(reqBodyBytes)
+			response, err := handleRequest(ctx.Context, request)
+			Expect(err).To(BeNil())
+			Expect(response.StatusCode).To(Equal(http.StatusBadRequest), response.Body)
+			Expect(response.Body).To(ContainSubstring("bridge--device"))
+			Expect(getIoTClientMock().VerifyThingExists("bridge--device")).To(BeFalse())
+			Expect(getIoTClientMock().ThingGroups).NotTo(HaveKey("Group1"))
+		})
+
 		It("should reject invalid JSON in request body", func() {
 			request.Body = `{"cert": "test", INVALID_JSON}`
 			response, err := handleRequest(ctx.Context, request)

@@ -70,6 +70,13 @@ ECC NIST P-256 / P-384 / P-521, RSA-PSS 2048. Each node is materialised as:
 Once registered, the node can be claimed by an end user and routed through
 the rest of the platform (assume-role, MQTT, schedules, group control, etc.).
 
+A `node_id` must not contain `--` or end in `-`: the bridge IoT policy grants
+each bridge `<bridge>--*`, and either form would let a bridge match a node it
+does not own (see [bridge.md](bridge.md) §3.1). Registration rejects such a
+certificate before provisioning the node in IoT Core: HTTP 400 on the
+single-node endpoint (checked before its admin groups are created),
+`INVALID_CERT` on a bulk row.
+
 ### 2.2 Input — CSV and request envelope
 
 Registration takes a CSV uploaded to S3 plus a JSON envelope:
