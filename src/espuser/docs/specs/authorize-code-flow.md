@@ -24,7 +24,7 @@ This is the interactive counterpart to [direct-token OTP](auth-flows.md): same O
 
 **In:** SSO sessions and silent re-auth — see [Single sign-on](#single-sign-on--the-session) below.
 
-**Out (deferred):** consent screen, per-client branding, and the full S3+CloudFront branded SPA. Those are deferred features and are **not** built here. Since first-party clients skip consent, the flow goes login → OTP → code with no consent step.
+**Out (deferred):** per-client branding and the full S3+CloudFront branded SPA. Those are deferred features and are **not** built here. A first-party client skips consent, so its flow goes sign-in → code; any other client is asked about first (see [Consent](#consent--clients-we-do-not-ship)).
 
 ## Pre-requisites
 
@@ -42,6 +42,7 @@ This is the interactive counterpart to [direct-token OTP](auth-flows.md): same O
 6. **Codes are short-lived** (TTL ≤ 60s recommended, ≤ 10 min hard cap) via the flow record's `expires_on` TTL.
 7. **`state` is echoed to the client's redirect** for CSRF protection. `nonce` is not accepted (see Open items).
 8. **No tokens in URLs** beyond the spec-mandated `code` on the authorization redirect.
+9. **A client we do not ship gets no code until the person allows it.** See [Consent](#consent--clients-we-do-not-ship).
 
 ## The flow, end to end
 
@@ -94,7 +95,7 @@ Starts the flow. Validates the request, writes a `LOGIN` flow record, and redire
 | `code_challenge` | conditional | PKCE (RFC 7636). Required when the client is registered with `require_pkce` (always true for public clients — RFC 9700 §2.1.1); optional otherwise. |
 | `code_challenge_method` | conditional | Must be `S256` when a `code_challenge` is present. |
 | `resource` | no | RFC 8707: the APIs this sign-in covers, repeatable. Each must be one of the client's `allowed_resources`; omitted, the sign-in covers the client's `default_resource`, and a client without one is refused. Either refusal redirects with `invalid_target`. Remembered on the flow and by the refresh family; each access token is for one of them ([resource-indicators.md](resource-indicators.md)). |
-| `prompt` | no | OIDC Core §3.1.2.1: `none` answers silently from the session or redirects with `login_required`; `login` always re-authenticates; other values disable the session shortcut. `none` with any other value redirects with `invalid_request`. |
+| `prompt` | no | OIDC Core §3.1.2.1: `none` answers silently from the session, or redirects with `login_required` (no session) or `consent_required` (a client that needs consent); `login` and `select_account` always re-authenticate; `consent` keeps the session and always shows the consent screen. `none` with any other value redirects with `invalid_request`. |
 | `max_age` | no | Maximum acceptable age (seconds) of the session's `auth_time`. An older session is not used. |
 | `id_token_hint` | no | A previously issued ID token naming the expected subject. A session belonging to anyone else, or an unverifiable hint, is not used — the flow never switches to the hinted user. |
 
@@ -119,6 +120,24 @@ What this flow relies on:
 - **Consulted** at `/oauth2/authorize`, after request validation: a live session that satisfies `prompt`/`max_age`/`id_token_hint` issues the code immediately. `prompt=none` with no usable session redirects with `error=login_required`; `prompt=login` is always honoured.
 - **Established** on every first-party login (federation, OTP, the legacy password API); the flow's `sid` is stamped at code issuance and carried onto the refresh family.
 - **`auth_time` is the session's**, stamped on the flow at code issuance and on the refresh family, so an ID token from the shortcut or a refresh names the original authentication, never the mint time.
+
+## Consent — clients we do not ship
+
+A client whose row has `first_party` is one we ship (the RainMaker app, the ESP Account dashboard); every other client — a voice assistant, an MCP client, another company's app — is asked about on every interactive sign-in. Without this, anyone holding a session hands a code to any registered client that redirects them, with no click. RFC 6749 §10.2 and RFC 8252 §8.6 forbid processing such requests automatically without the person's interaction, and RFC 9700 §4.11.2 allows an automatic redirect only to a redirection URI the authorization server trusts.
+
+| | First-party client | Any other client |
+|---|---|---|
+| Sign-in (password, code, Google, or an existing session) | code issued | sign-in held; browser sent to `/user/login/consent` |
+| `prompt=consent` | sign-in held | sign-in held |
+| `prompt=none` with a session | code issued | `error=consent_required` |
+
+- `/oauth2/authorize` makes the decision once, from the client and `prompt` it has just validated, and stores it on the flow as `skip_consent`; every sign-in that finishes the flow (password, code, federation, the session shortcut) reads it from there. An absent `skip_consent` means the person is asked.
+- **Held** means the flow records the person (`subject`, `sid`, `auth_time`, `granted_scope`) but no `code`, so nothing can be exchanged. The flow keeps its own expiry; an unanswered consent lapses with it.
+- `GET /user/login/consent` draws the screen from the held flow: the client's name (its `client_id` when it has none) and `logo_uri` (a generic app icon when it has none), the signed-in account, and the requested scopes.
+- `POST /user/login/consent` with `{"decision":"allow","flow_id":…}` issues the code, but only to the browser session that signed in: the held flow outlives a sign-out by minutes, so the flow cookie alone does not allow it; `{"decision":"deny","flow_id":…}` deletes the flow and returns `error=access_denied` to the client (RFC 6749 §4.1.2.1). Both answer `{ "redirect_to" }` with `Cache-Control: no-store`; an Allow or Cancel with no sign-in waiting, a repeated one included, and an Allow from a browser without that session, answers `400 expired_flow`.
+- The answer is bound to the browser by the `SameSite=Lax` flow cookie, so another site cannot post it, and the page carries `frame-ancestors 'none'`, so it cannot be framed to trick a click (RFC 9700 §4.16, RFC 6749 §10.13).
+- An absent `first_party` means third-party, so a client registered without thought is asked rather than trusted.
+- Nothing is remembered: there is no consents table, so a third-party client is asked on every sign-in.
 
 ## Login UI (service-served)
 
@@ -190,8 +209,9 @@ The flow record threading a request from `/oauth2/authorize` through OTP login t
 | `code_challenge` / `code_challenge_method` | String | PKCE (`S256`). |
 | `resources` | List<String> | The RFC 8707 resources this sign-in covers; read at the code exchange and carried onto the refresh family. |
 | `sid` | String | The browser session this login ran under; ties the refresh family to its parent session. |
-| `subject` | String | Resolved `user_id`; set by in-flow OTP verify. |
-| `granted_scope` | List<String> | Stamped at code issuance (= requested, first-party no-consent). |
+| `skip_consent` | Bool | Set at `/oauth2/authorize` for a first-party client without `prompt=consent`; absent means the person is asked. |
+| `subject` | String | Resolved `user_id`, bound once at sign-in. A `subject` with no `code` is a sign-in held for consent. |
+| `granted_scope` | List<String> | Stamped when the person is bound (= requested). |
 | `code` | String | The single-use authorization code; minted when the record becomes `CODE`. Looked up by a `by-code` GSI. |
 | `consumed` | Bool | Single-use guard (conditional `false → true`). Pointer-backed so `false` persists. |
 | `expires_on` | Number | **TTL** (epoch seconds); code lifetime ≤ 60s recommended. |
@@ -207,7 +227,8 @@ The flow record threading a request from `/oauth2/authorize` through OTP login t
 - **OAuth 2.1 / RFC 6749 §4.1** — authorization code grant.
 - **RFC 7636 / RFC 9700 §2.1.1** — PKCE (`S256`); required for public clients and any client with `require_pkce`, with token-endpoint downgrade protection.
 - **RFC 9700 (BCP 240) §2.1.1** — PKCE downgrade protection; exact redirect matching; no code replay.
-- **OIDC Core 1.0** — `openid` scope → id_token.
+- **OIDC Core 1.0** — `openid` scope → id_token; §3.1.2.1 and §3.1.2.6 for `prompt` and `consent_required`.
+- **RFC 6749 §10.2, RFC 8252 §8.6, RFC 9700 §4.11.2** — consent for clients the authorization server does not control; **RFC 9700 §4.16** — clickjacking.
 
 ## Open items
 
@@ -219,5 +240,6 @@ The flow record threading a request from `/oauth2/authorize` through OTP login t
 - `TODO:` fold the `OTP` challenge onto `espuser-auth-flows` instead of a separate `espuser-otp` row (one flow record carrying its challenge).
 - `TODO:` additional client-auth methods beyond `client_secret_basic`: `private_key_jwt` / `client_secret_jwt` (RFC 7523, needs per-client JWKS) and mTLS `tls_client_auth` (RFC 8705, needs cert distribution).
 - `TODO:` secret rotation for confidential clients (two active secrets during rollover); today a client has a single secret.
-- `TODO:` `prompt=consent` / `select_account` currently disable the session shortcut rather than rendering their surfaces (no consent screen exists).
+- `TODO:` remember a person's consent per client, so a third-party client is asked once rather than on every sign-in.
+- `TODO:` `select_account` forces a fresh login rather than offering an account chooser.
 - `TODO:` on authorization-code reuse, revoke the tokens (refresh-token family) minted from that code (RFC 6749 §10.5 SHOULD) — today reuse is only denied (`invalid_grant`), not revoked. Requires recording the minted family id on the flow record; mirror the refresh-token reuse-detection path.

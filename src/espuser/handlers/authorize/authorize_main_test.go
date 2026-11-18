@@ -25,6 +25,8 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/auth_flows_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/identity_providers_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/oauth_clients_db"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/sessions_db"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/user_details_db"
 	hostedui "github.com/espressif/esp-rainmaker-neo/src/espuser/hosted-ui"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/idp"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/session"
@@ -635,7 +637,7 @@ var _ = Describe("GET /oauth2/authorize with a session (SSO)", func() {
 
 		clientsDB := oauth_clients_db.NewOAuthClientsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
 		Expect(clientsDB.CreateClient(&oauth_clients_db.OAuthClientEntry{
-			ClientID: testClientID, ClientType: oauth_clients_db.ClientTypePublic,
+			ClientID: testClientID, ClientType: oauth_clients_db.ClientTypePublic, FirstParty: true,
 			RedirectURIs: []string{redirectURI}, Scopes: []string{"openid", "email"},
 			RequirePKCE:      utils.Ptr(true),
 			AllowedResources: []string{testResource, testAccountResource}, DefaultResource: testResource,
@@ -662,7 +664,6 @@ var _ = Describe("GET /oauth2/authorize with a session (SSO)", func() {
 
 	It("issues a code immediately for a live session: no login page, no upstream leg", func() {
 		cookie := establishSession("user-sso-1", time.Now().Unix())
-		// Reset after establishing, so the profile below measures only the shortcut.
 		backend.DBMock.ProfileReset()
 
 		resp, err := handleAuthorizeRequest(context.Background(), withCookie(getRequest(pathAuthorize, validQuery(nil)), cookie))
@@ -672,14 +673,10 @@ var _ = Describe("GET /oauth2/authorize with a session (SSO)", func() {
 		Expect(resp.Headers["Location"]).To(ContainSubstring("code="))
 		Expect(resp.Headers["Location"]).To(ContainSubstring("state=xyz"))
 
-		// One read and three writes:
-		//
-		//   1  GetItem    espuser-oauth-clients  the registry check inside StartAuthFlow
+		//   1  GetItem    espuser-oauth-clients  the registry check inside StartAuthFlow, reused for allowed_providers and consent
 		//   2  PutItem    espuser-auth-flows     the LOGIN flow record
 		//   3  UpdateItem espuser-sessions       Lookup: roll expiry and return the row (ALL_NEW)
 		//   4  UpdateItem espuser-auth-flows     the flow moves to CODE and returns redirect_uri/state (ALL_NEW)
-		//
-		// The client row is read once and reused for allowed_providers; a second read means it stopped being threaded through.
 		profile := backend.DBMock.ProfileGet()
 		readCnt, writeCnt := profile.TotalCounts()
 		Expect(readCnt).To(Equal(1))
@@ -806,11 +803,21 @@ var _ = Describe("GET /oauth2/authorize with a session (SSO)", func() {
 })
 
 var _ = Describe("GET /oauth2/federation/callback establishes the session", func() {
-	var backend *test_utils.EspUserBackend
+	const (
+		upstreamACR        = "urn:example:loa:2"
+		providerSessionCap = int64(2 * 60 * 60)
+		browserUA          = "Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/128.0"
+		browserIP          = "198.51.100.4"
+	)
+	var (
+		backend *test_utils.EspUserBackend
+		// rowMapping is the provider row's attribute_mapping; nil reads every claim by its default name.
+		rowMapping map[string]string
+		// tokenClaims override the upstream id token's defaults.
+		tokenClaims jwtgo.MapClaims
+	)
 
-	// A complete upstream: a token endpoint returning a signed id token whose auth_time is
-	// hours old (the upstream reused its own session), and a JWKS URL publishing its key.
-	// authTime 0 models an upstream whose token names no authentication time at all: no auth_time and no iat to fall back on.
+	// A complete upstream: a token endpoint returning a signed id token, and a JWKS URL publishing its key. authTime 0 models a token that names no authentication time at all.
 	setupUpstream := func(authTime int64, nonceFor func() string) (issuer string) {
 		priv, err := rsa.GenerateKey(rand.Reader, 2048)
 		Expect(err).NotTo(HaveOccurred())
@@ -826,52 +833,52 @@ var _ = Describe("GET /oauth2/federation/callback establishes the session", func
 			claims := jwtgo.MapClaims{
 				"iss": srv.URL, "aud": "broker-client", "sub": "up-sub-1", "nonce": nonceFor(),
 				"email": "sso@example.com", "email_verified": true,
+				"amr": []string{"pwd", "mfa"}, "acr": upstreamACR,
 				"exp": time.Now().Add(time.Hour).Unix(),
 			}
 			if authTime > 0 {
 				claims["auth_time"], claims["iat"] = authTime, time.Now().Unix()
+			}
+			for k, v := range tokenClaims {
+				claims[k] = v
 			}
 			tok, err := jwtutil.SignRS256(claims, priv, kid)
 			Expect(err).NotTo(HaveOccurred())
 			_ = json.NewEncoder(w).Encode(map[string]string{"id_token": tok})
 		})
 
-		enabled := true
 		Expect(identity_providers_db.NewIdentityProvidersDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).
 			CreateProvider(&identity_providers_db.ProviderEntry{
-				ProviderName: "up", Type: identity_providers_db.TypeOIDC, Enabled: &enabled,
+				ProviderName: "up", Type: identity_providers_db.TypeOIDC, Enabled: utils.Ptr(true),
 				Issuer: srv.URL, ClientID: "broker-client",
 				JWKSURL: srv.URL + "/jwks", TokenURL: srv.URL + "/token", AuthorizeURL: srv.URL + "/authorize",
+				SessionMaxTTLSeconds: providerSessionCap, AttributeMapping: rowMapping,
 			})).To(Succeed())
 		return srv.URL
 	}
 
 	BeforeEach(func() {
 		backend = test_utils.SetupEspUserBackend(context.Background())
+		rowMapping, tokenClaims = nil, nil
 		os.Setenv("ESPUSER_FEDERATION_CALLBACK_URL", "https://us.example/oauth2/federation/callback")
 	})
 
-	// runCallback drives the full brokered leg: flow row, upstream leg, then the callback carrying the given Cookie header ("" sends none).
-	runCallback := func(cookie string) events.APIGatewayProxyResponse {
+	// startLeg returns the state the upstream will echo back.
+	startLeg := func(skipConsent bool) string {
 		flowsDB := auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
 		Expect(flowsDB.CreateFlow(&auth_flows_db.AuthFlow{
-			FlowID: "fl_sso", ClientID: testClientID, RedirectURI: redirectURI,
+			FlowID: "fl_sso", ClientID: testClientID, RedirectURI: redirectURI, State: "xyz", SkipConsent: skipConsent,
 			RequestedScope: []string{"openid"}, ExpiresOn: time.Now().Add(auth_flows_db.FlowTTL).Unix(),
 		})).To(Succeed())
 
 		leg, err := idp.NewUpstreamLeg("fl_sso", idp.StateHMACKey([]byte(backend.RefreshSecret)))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(flowsDB.SetUpstreamLeg("fl_sso", "up", leg.State, leg.Nonce, leg.PKCEVerifier)).To(Succeed())
+		return leg.State
+	}
 
-		clientsDB := oauth_clients_db.NewOAuthClientsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
-		Expect(clientsDB.CreateClient(&oauth_clients_db.OAuthClientEntry{
-			ClientID: testClientID, ClientType: oauth_clients_db.ClientTypePublic,
-			RedirectURIs: []string{redirectURI}, Scopes: []string{"openid"},
-			RequirePKCE:      utils.Ptr(false),
-			AllowedResources: []string{testResource, testAccountResource}, DefaultResource: testResource,
-		})).To(Succeed())
-
-		req := getRequest(pathFederationCallback, map[string]string{"code": "upstream-code", "state": leg.State})
+	callback := func(cookie string, query map[string]string) events.APIGatewayProxyResponse {
+		req := getRequest(pathFederationCallback, query)
 		if cookie != "" {
 			req = withCookie(req, cookie)
 		}
@@ -879,6 +886,10 @@ var _ = Describe("GET /oauth2/federation/callback establishes the session", func
 		resp, err := handleAuthorizeRequest(context.Background(), req)
 		Expect(err).NotTo(HaveOccurred())
 		return resp
+	}
+
+	runCallback := func(cookie string, skipConsent bool) events.APIGatewayProxyResponse {
+		return callback(cookie, map[string]string{"code": "upstream-code", "state": startLeg(skipConsent)})
 	}
 
 	// The upstream nonce is minted when the leg is set up, so the fake upstream reads it back off the flow.
@@ -892,7 +903,7 @@ var _ = Describe("GET /oauth2/federation/callback establishes the session", func
 	DescribeTable("refuses a callback from a browser that did not start the flow, before reading it (RFC 6749 s10.12, negative)",
 		func(cookie string) {
 			setupUpstream(time.Now().Unix(), flowNonce)
-			resp := runCallback(cookie)
+			resp := runCallback(cookie, true)
 			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
 			Expect(resp.Headers).NotTo(HaveKey("Set-Cookie"))
 			Expect(resp.Headers).NotTo(HaveKey("Location"))
@@ -903,13 +914,12 @@ var _ = Describe("GET /oauth2/federation/callback establishes the session", func
 	)
 
 	It("sets the __Host- session cookie and records the upstream's auth_time on the federation callback", func() {
-		// Old enough to prove inheritance: auth_time is a fact carried from the upstream, never
-		// the row's write time, and rolling retention on use must not move it.
+		// Old enough to prove inheritance: auth_time is the upstream's, never the row's write time.
 		upstreamAuthTime := time.Now().Add(-30 * time.Minute).Unix()
 		flowsDB := auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
 		setupUpstream(upstreamAuthTime, flowNonce)
 
-		resp := runCallback(auth.FlowCookieName + "=fl_sso")
+		resp := runCallback(auth.FlowCookieName+"=fl_sso", true)
 		Expect(resp.StatusCode).To(Equal(http.StatusFound))
 		Expect(resp.Headers["Location"]).To(ContainSubstring("code="))
 
@@ -919,7 +929,7 @@ var _ = Describe("GET /oauth2/federation/callback establishes the session", func
 		Expect(strings.ToLower(setCookie)).NotTo(ContainSubstring("domain"))
 
 		cookieValue := strings.SplitN(strings.SplitN(setCookie, ";", 2)[0], "=", 2)[1]
-		s := session.NewService(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).Lookup(cookieValue)
+		s := session.NewService(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).Peek(cookieValue)
 		Expect(s).NotTo(BeNil())
 		Expect(s.AuthTime).To(Equal(upstreamAuthTime), "auth_time is the upstream's — 12:00 must not be recorded for a 09:00 login")
 
@@ -934,13 +944,95 @@ var _ = Describe("GET /oauth2/federation/callback establishes the session", func
 		setupUpstream(0, flowNonce)
 		before := time.Now().Unix()
 
-		resp := runCallback(auth.FlowCookieName + "=fl_sso")
+		resp := runCallback(auth.FlowCookieName+"=fl_sso", true)
 		Expect(resp.StatusCode).To(Equal(http.StatusFound))
 		loc, err := url.Parse(resp.Headers["Location"])
 		Expect(err).NotTo(HaveOccurred())
 		flow, err := auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).GetFlowByCode(loc.Query().Get("code"))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(flow.AuthTime).To(BeNumerically("~", before, 5), "with nothing upstream naming the sign-in, it happened on this request")
+	})
+
+	It("records the whole sign-in on the session it rotates: the provider's cap, the upstream's auth_time, amr and acr, and the browser", func() {
+		upstreamAuthTime := time.Now().Add(-10 * time.Minute).Unix()
+		setupUpstream(upstreamAuthTime, flowNonce)
+		rmngCtx := rmngctx.NewRmngContextWithCtx(context.Background(), nil)
+		oauth, err := auth.NewOAuthUserAuthService(context.Background())
+		Expect(err).NotTo(HaveOccurred())
+		userID, err := oauth.ResolveOrCreateUserByContacts(rmngCtx, "sso@example.com", "", nil)
+		Expect(err).NotTo(HaveOccurred())
+		priorCookie := establishSession(userID, upstreamAuthTime-3600)
+		sessions := session.NewService(rmngCtx)
+		prior := sessions.Peek(strings.TrimPrefix(priorCookie, session.CookieName+"="))
+		priorRows, err := sessions_db.NewSessionsDB(rmngCtx).ListByUser(userID)
+		Expect(err).NotTo(HaveOccurred())
+
+		req := getRequest(pathFederationCallback, map[string]string{"code": "upstream-code", "state": startLeg(true)})
+		req = withCookie(req, auth.FlowCookieName+"=fl_sso; "+priorCookie)
+		req.RequestContext.Identity.UserAgent = browserUA
+		req.RequestContext.Identity.SourceIP = browserIP
+		resp, err := handleAuthorizeRequest(context.Background(), req)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(resp.StatusCode).To(Equal(http.StatusFound))
+		Expect(resp.Headers["Location"]).To(MatchRegexp(`^com\.example://callback\?code=[^&]+&state=xyz$`))
+		Expect(resp.Headers["Referrer-Policy"]).To(Equal("no-referrer"), "the code in Location must not leak to the client's page as a Referer")
+		Expect(resp.Headers["Cache-Control"]).To(Equal("no-store"))
+		cookieValue := strings.SplitN(strings.SplitN(resp.Headers["Set-Cookie"], ";", 2)[0], "=", 2)[1]
+		Expect(resp.Headers["Set-Cookie"]).To(Equal(session.SetCookieHeader(cookieValue, sessions.MaxAge())))
+		Expect(sessions.Peek(strings.TrimPrefix(priorCookie, session.CookieName+"="))).To(BeNil(), "the cookie presented on the way in is retired")
+
+		rows, err := sessions_db.NewSessionsDB(rmngCtx).ListByUser(userID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(rows).To(HaveLen(1))
+		row := rows[0]
+		Expect(row).To(Equal(sessions_db.SessionEntry{
+			SessionHash: row.SessionHash, SID: prior.SID, UserID: userID, Provider: "up",
+			AuthTime: upstreamAuthTime, AMR: []string{"pwd", "mfa"}, ACR: upstreamACR,
+			ExpiresAt: upstreamAuthTime + providerSessionCap, MaxExpiresAt: upstreamAuthTime + providerSessionCap,
+			CookieExpiresAt: upstreamAuthTime + providerSessionCap, LastSeenAt: row.LastSeenAt,
+			Origin: session.OriginBrowser, CreatedAt: priorRows[0].CreatedAt, UserAgent: browserUA, IPAddress: browserIP,
+		}))
+
+		loc, err := url.Parse(resp.Headers["Location"])
+		Expect(err).NotTo(HaveOccurred())
+		flow, err := auth_flows_db.NewAuthFlowsDB(rmngCtx).GetFlowByCode(loc.Query().Get("code"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect([]any{flow.Subject, flow.SID, flow.AuthTime}).To(Equal([]any{userID, prior.SID, upstreamAuthTime}))
+	})
+
+	It("answers a flow finished meanwhile as an expired sign-in, and still hands over the session it established so the browser is never left with a retired cookie", func() {
+		setupUpstream(time.Now().Unix(), flowNonce)
+		state := startLeg(true)
+		_, err := auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).
+			IssueCode("fl_sso", "someone", []string{"openid"}, "other-tabs-code", "", time.Now().Unix())
+		Expect(err).NotTo(HaveOccurred())
+
+		resp := callback(auth.FlowCookieName+"=fl_sso", map[string]string{"code": "upstream-code", "state": state})
+		Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
+		Expect(resp.Headers).NotTo(HaveKey("Location"))
+		data := pageDataFrom(resp.Body)
+		Expect(data.Error).NotTo(BeNil())
+		Expect(data.Error.Code).To(Equal(oidc.RMErrExpiredFlow), "the answer an expired flow gets, not the 500 page")
+		Expect(data.RestartURL).To(Equal(pathRestart))
+		Expect(resp.Headers["Set-Cookie"]).To(HavePrefix(session.CookieName + "="))
+		cookieValue := strings.SplitN(strings.SplitN(resp.Headers["Set-Cookie"], ";", 2)[0], "=", 2)[1]
+		Expect(session.NewService(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).Peek(cookieValue)).NotTo(BeNil())
+	})
+
+	It("sends a sign-in held for consent to the consent screen, still establishing the session and reading no client", func() {
+		setupUpstream(time.Now().Unix(), flowNonce)
+
+		resp := runCallback(auth.FlowCookieName+"=fl_sso", false)
+		Expect(resp.StatusCode).To(Equal(http.StatusFound))
+		Expect(resp.Headers["Location"]).To(Equal(pathConsent))
+		Expect(resp.Headers["Referrer-Policy"]).To(Equal("no-referrer"))
+		Expect(resp.Headers["Set-Cookie"]).To(HavePrefix(session.CookieName + "="))
+		Expect(backend.DBMock.ProfileGet().Accesses).NotTo(HaveKey("espuser-oauth-clients"), "the flow carries the decision")
+
+		flow, err := auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).GetFlow("fl_sso")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(flow.AwaitingConsent()).To(BeTrue())
 	})
 })
 
@@ -957,7 +1049,7 @@ var _ = Describe("allowed_providers is enforced, not decorative", func() {
 	registerClient := func(clientID string, allowed []string) {
 		Expect(oauth_clients_db.NewOAuthClientsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).
 			CreateClient(&oauth_clients_db.OAuthClientEntry{
-				ClientID: clientID, ClientType: oauth_clients_db.ClientTypePublic,
+				ClientID: clientID, ClientType: oauth_clients_db.ClientTypePublic, FirstParty: true,
 				RedirectURIs: []string{redirectURI}, Scopes: []string{"openid", "email"},
 				AllowedProviders: allowed, RequirePKCE: utils.Ptr(true),
 				AllowedResources: []string{testResource, testAccountResource}, DefaultResource: testResource,
@@ -1111,6 +1203,320 @@ var _ = Describe("allowed_providers is enforced, not decorative", func() {
 	})
 })
 
+var _ = Describe("consent for a client we do not ship", func() {
+	const (
+		thirdPartyID = "third-party-app"
+		thirdPartyCB = "https://third.example/cb"
+	)
+	var flowsDB *auth_flows_db.AuthFlowsDB
+
+	BeforeEach(func() {
+		test_utils.SetupEspUserBackend(context.Background())
+		rmngCtx := rmngctx.NewRmngContextWithCtx(context.Background(), nil)
+		flowsDB = auth_flows_db.NewAuthFlowsDB(rmngCtx)
+		clientsDB := oauth_clients_db.NewOAuthClientsDB(rmngCtx)
+		Expect(clientsDB.CreateClient(&oauth_clients_db.OAuthClientEntry{
+			ClientID: testClientID, ClientType: oauth_clients_db.ClientTypePublic, FirstParty: true,
+			RedirectURIs: []string{redirectURI}, Scopes: []string{"openid", "email"}, RequirePKCE: utils.Ptr(true),
+			AllowedResources: []string{testResource, testAccountResource}, DefaultResource: testResource,
+		})).To(Succeed())
+		Expect(clientsDB.CreateClient(&oauth_clients_db.OAuthClientEntry{
+			ClientID: thirdPartyID, ClientName: "Third Party App", ClientType: oauth_clients_db.ClientTypePublic,
+			LogoURI:      "data:image/png;base64,iVBORw0KGgo=",
+			RedirectURIs: []string{thirdPartyCB}, Scopes: []string{"openid", "email"}, RequirePKCE: utils.Ptr(true),
+			AllowedResources: []string{testResource, testAccountResource}, DefaultResource: testResource,
+		})).To(Succeed())
+		Expect(user_details_db.NewUserDetailsDB(rmngCtx).CreateUserDetails(&user_details_db.UserDetailsEntry{
+			UserID: "user-consent", Email: "person@example.com",
+		})).To(Succeed())
+	})
+
+	thirdPartyQuery := func(overrides map[string]string) map[string]string {
+		q := validQuery(map[string]string{"client_id": thirdPartyID, "redirect_uri": thirdPartyCB})
+		for k, v := range overrides {
+			q[k] = v
+		}
+		return q
+	}
+
+	// startSignIn runs /oauth2/authorize with no session and returns the flow it started, which nobody has signed in to.
+	startSignIn := func(query map[string]string) string {
+		resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathAuthorize, query))
+		Expect(err).NotTo(HaveOccurred())
+		return flowIDFrom(resp.Headers["Set-Cookie"])
+	}
+
+	// browserSession is the session cookie of the browser that signed in, which its consent answers carry.
+	var browserSession string
+	BeforeEach(func() { browserSession = "" })
+
+	// consentCookies is what the browser sends with an answer: the flow cookie and, when it has one, its session.
+	consentCookies := func(flowID string) string {
+		cookies := auth.FlowCookieName + "=" + flowID
+		if browserSession != "" {
+			cookies += "; " + browserSession
+		}
+		return cookies
+	}
+
+	signInWithSession := func(query map[string]string) (events.APIGatewayProxyResponse, string) {
+		cookie := establishSession("user-consent", time.Now().Unix())
+		browserSession = cookie
+		resp, err := handleAuthorizeRequest(context.Background(), withCookie(getRequest(pathAuthorize, query), cookie))
+		Expect(err).NotTo(HaveOccurred())
+		for _, c := range resp.MultiValueHeaders["Set-Cookie"] {
+			if strings.HasPrefix(c, auth.FlowCookieName+"=") {
+				return resp, flowIDFrom(c)
+			}
+		}
+		return resp, ""
+	}
+
+	heldSignIn := func() string {
+		_, flowID := signInWithSession(thirdPartyQuery(nil))
+		Expect(flowID).NotTo(BeEmpty(), "the consent screen finds the sign-in by its flow cookie")
+		return flowID
+	}
+
+	// answer posts the person's answer as the page does, naming the flow it was drawn for unless the body already names one.
+	answer := func(flowID, body string) (int, oidc.OAuthError) {
+		fields := map[string]any{}
+		Expect(json.Unmarshal([]byte(body), &fields)).To(Succeed())
+		if _, named := fields["flow_id"]; !named {
+			fields["flow_id"] = flowID
+		}
+		raw, err := json.Marshal(fields)
+		Expect(err).NotTo(HaveOccurred())
+		req := events.APIGatewayProxyRequest{HTTPMethod: http.MethodPost, Path: pathConsent, Body: string(raw)}
+		if flowID != "" {
+			req = withCookie(req, consentCookies(flowID))
+		}
+		resp, err := handleAuthorizeRequest(context.Background(), req)
+		Expect(err).NotTo(HaveOccurred())
+		var refused oidc.OAuthError
+		Expect(json.Unmarshal([]byte(resp.Body), &refused)).To(Succeed())
+		return resp.StatusCode, refused
+	}
+
+	allow := func(flowID string) *url.URL {
+		resp, err := handleAuthorizeRequest(context.Background(), withCookie(events.APIGatewayProxyRequest{
+			HTTPMethod: http.MethodPost, Path: pathConsent, Body: `{"decision":"allow","flow_id":"` + flowID + `"}`,
+		}, consentCookies(flowID)))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
+		Expect(resp.Headers["Cache-Control"]).To(Equal("no-store"), "the redirect carries a code")
+		var out auth.RedirectResponse
+		Expect(json.Unmarshal([]byte(resp.Body), &out)).To(Succeed())
+		loc, err := url.Parse(out.RedirectTo)
+		Expect(err).NotTo(HaveOccurred())
+		return loc
+	}
+
+	DescribeTable("decides at /oauth2/authorize whether the sign-in asks, and stores it on the flow",
+		func(query map[string]string, skip bool) {
+			flow, err := flowsDB.GetFlow(startSignIn(query))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(flow.SkipConsent).To(Equal(skip))
+		},
+		Entry("a client we ship skips it", validQuery(nil), true),
+		Entry("a client we do not ship asks", thirdPartyQuery(nil), false),
+		Entry("a client we ship that sent prompt=consent asks", validQuery(map[string]string{"prompt": "consent"}), false),
+	)
+
+	DescribeTable("on an existing session, answers a client we ship at once and holds any other for consent",
+		func(query map[string]string, location types.GomegaMatcher) {
+			resp, _ := signInWithSession(query)
+			Expect(resp.StatusCode).To(Equal(http.StatusFound))
+			Expect(resp.Headers["Location"]).To(location)
+		},
+		Entry("a client we do not ship", thirdPartyQuery(nil), Equal(pathConsent)),
+		Entry("a client we ship", validQuery(nil), HavePrefix(redirectURI+"?code=")),
+		Entry("a client we ship that sent prompt=consent", validQuery(map[string]string{"prompt": "consent"}), Equal(pathConsent)),
+		Entry("prompt=none for a client we do not ship, which cannot show a screen (negative)",
+			thirdPartyQuery(map[string]string{"prompt": "none"}), Equal(thirdPartyCB+"?error=consent_required&state=xyz")),
+	)
+
+	It("describes the app, the account and what is asked for on the consent screen", func() {
+		flowID := heldSignIn()
+		resp, err := handleAuthorizeRequest(context.Background(),
+			withCookie(getRequest(pathConsent, nil), auth.FlowCookieName+"="+flowID))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
+		Expect(resp.Headers).To(Equal(hardenedPageHeaders), "frame-ancestors 'none', so the Allow click cannot be borrowed")
+
+		data := pageDataFrom(resp.Body)
+		Expect(data.FlowID).To(Equal(flowID), "the page sends it back with the answer")
+		Expect(data.Client).To(Equal(clientData{Name: "Third Party App", LogoURI: "data:image/png;base64,iVBORw0KGgo="}))
+		Expect(data.Consent).To(Equal(&consentData{Account: "person@example.com", Scopes: []string{"openid", "email"}}))
+	})
+
+	DescribeTable("gives the consent screen the restart link, stage prefix included, so the page never guesses one",
+		func(domain, restart string) {
+			flowID := heldSignIn()
+			req := withCookie(getRequest(pathConsent, nil), auth.FlowCookieName+"="+flowID)
+			req.RequestContext = events.APIGatewayProxyRequestContext{DomainName: domain, Stage: "prod"}
+			resp, err := handleAuthorizeRequest(context.Background(), req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pageDataFrom(resp.Body).RestartURL).To(Equal(restart))
+		},
+		Entry("the execute-api host", "abc123.execute-api.eu-west-1.amazonaws.com", "/prod/user/login/restart"),
+		Entry("a custom domain", "user.api.example.com", "/user/login/restart"),
+	)
+
+	DescribeTable("stores the skip_consent StartAuthFlow returns, and the session shortcut follows the value it is handed",
+		func(query map[string]string, stored bool, location types.GomegaMatcher) {
+			ctx := context.Background()
+			svc, err := auth.NewOAuthUserAuthService(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			flowID, client, skipConsent, err := svc.StartAuthFlow(ctx, auth.AuthorizeRequest{
+				ClientID: query["client_id"], RedirectURI: query["redirect_uri"], Scope: query["scope"], State: query["state"],
+				CodeChallenge: query["code_challenge"], CodeChallengeMethod: query["code_challenge_method"],
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(skipConsent).To(Equal(stored))
+			flow, err := flowsDB.GetFlow(flowID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(flow.SkipConsent).To(Equal(skipConsent))
+
+			// The opposite of what the client implies: only a value the shortcut recomputed from the client would ignore it.
+			cookie := establishSession("user-consent", time.Now().Unix())
+			resp, done := sessionShortCircuit(ctx, AuthorizeSessionRequest{
+				Request: withCookie(getRequest(pathAuthorize, query), cookie), Svc: svc, Query: query,
+				FlowID: flowID, Client: client, SkipConsent: !skipConsent,
+			})
+			Expect(done).To(BeTrue())
+			Expect(resp.Headers["Location"]).To(location)
+		},
+		Entry("a client we do not ship, handed true, is answered with a code", thirdPartyQuery(nil), false, HavePrefix(thirdPartyCB+"?code=")),
+		Entry("a client we ship, handed false, is held for consent", validQuery(nil), true, Equal(pathConsent)),
+	)
+
+	It("names an app registered without a name by its client_id, so the person never approves a blank", func() {
+		Expect(oauth_clients_db.NewOAuthClientsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).CreateClient(&oauth_clients_db.OAuthClientEntry{
+			ClientID: "unnamed-app", ClientType: oauth_clients_db.ClientTypePublic,
+			RedirectURIs: []string{thirdPartyCB}, Scopes: []string{"openid", "email"}, RequirePKCE: utils.Ptr(true),
+			AllowedResources: []string{testResource, testAccountResource}, DefaultResource: testResource,
+		})).To(Succeed())
+		_, flowID := signInWithSession(thirdPartyQuery(map[string]string{"client_id": "unnamed-app"}))
+		resp, err := handleAuthorizeRequest(context.Background(),
+			withCookie(getRequest(pathConsent, nil), auth.FlowCookieName+"="+flowID))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(pageDataFrom(resp.Body).Client).To(Equal(clientData{Name: "unnamed-app"}))
+	})
+
+	It("shows no consent screen for a sign-in nobody has completed (negative)", func() {
+		page, err := handleAuthorizeRequest(context.Background(),
+			withCookie(getRequest(pathConsent, nil), auth.FlowCookieName+"="+startSignIn(thirdPartyQuery(nil))))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(page.StatusCode).To(Equal(http.StatusBadRequest))
+		Expect(pageDataFrom(page.Body).Consent).To(BeNil())
+	})
+
+	It("issues the code to the person who signed in once they allow the app", func() {
+		loc := allow(heldSignIn())
+		Expect(loc.Scheme + "://" + loc.Host + loc.Path).To(Equal(thirdPartyCB))
+		Expect(loc.Query().Get("state")).To(Equal("xyz"))
+
+		flow, err := flowsDB.GetFlowByCode(loc.Query().Get("code"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(flow.Subject).To(Equal("user-consent"))
+	})
+
+	It("sends the app access_denied and ends the sign-in when the person cancels", func() {
+		flowID := heldSignIn()
+		resp, err := handleAuthorizeRequest(context.Background(), withCookie(events.APIGatewayProxyRequest{
+			HTTPMethod: http.MethodPost, Path: pathConsent, Body: `{"decision":"deny","flow_id":"` + flowID + `"}`,
+		}, auth.FlowCookieName+"="+flowID))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
+		Expect(resp.Headers["Cache-Control"]).To(Equal("no-store"))
+		Expect(resp.Body).To(MatchJSON(`{"redirect_to":"` + thirdPartyCB + `?error=access_denied&state=xyz"}`))
+
+		_, err = flowsDB.GetFlow(flowID)
+		Expect(err).To(MatchError(auth_flows_db.ErrFlowNotFound))
+	})
+
+	// Single use and the subject binding are the auth-flows table's own conditions (auth_flows_db_test); these pin what the page is told.
+	DescribeTable("refuses an answer that cannot be honoured (negative)",
+		func(prepare func() string, body string, code string) {
+			status, refused := answer(prepare(), body)
+			Expect(status).To(Equal(http.StatusBadRequest))
+			Expect(refused.Error).To(Equal(code))
+		},
+		Entry("a second Allow for one sign-in", func() string {
+			flowID := heldSignIn()
+			allow(flowID)
+			return flowID
+		}, `{"decision":"allow"}`, oidc.RMErrExpiredFlow),
+		Entry("a second Cancel for one sign-in", func() string {
+			flowID := heldSignIn()
+			status, _ := answer(flowID, `{"decision":"deny"}`)
+			Expect(status).To(Equal(http.StatusOK))
+			return flowID
+		}, `{"decision":"deny"}`, oidc.RMErrExpiredFlow),
+		Entry("a Cancel after the Allow", func() string {
+			flowID := heldSignIn()
+			allow(flowID)
+			return flowID
+		}, `{"decision":"deny"}`, oidc.RMErrExpiredFlow),
+		Entry("an Allow after the Cancel", func() string {
+			flowID := heldSignIn()
+			status, _ := answer(flowID, `{"decision":"deny"}`)
+			Expect(status).To(Equal(http.StatusOK))
+			return flowID
+		}, `{"decision":"allow"}`, oidc.RMErrExpiredFlow),
+		Entry("a Cancel for a sign-in nobody has completed", func() string {
+			return startSignIn(thirdPartyQuery(nil))
+		}, `{"decision":"deny"}`, oidc.RMErrExpiredFlow),
+		Entry("no sign-in behind it", func() string { return "" }, `{"decision":"allow"}`, oidc.OAuthErrInvalidRequest),
+		Entry("a sign-in nobody has completed, so consent cannot stand in for a login", func() string {
+			return startSignIn(thirdPartyQuery(nil))
+		}, `{"decision":"allow"}`, oidc.RMErrExpiredFlow),
+		Entry("an expired sign-in", func() string {
+			Expect(flowsDB.CreateFlow(&auth_flows_db.AuthFlow{
+				FlowID: "flow-stale", ClientID: thirdPartyID, RedirectURI: thirdPartyCB, Subject: "user-consent",
+				ExpiresOn: time.Now().Add(-time.Second).Unix(),
+			})).To(Succeed())
+			return "flow-stale"
+		}, `{"decision":"allow"}`, oidc.RMErrExpiredFlow),
+		Entry("neither allow nor deny", heldSignIn, `{"decision":"maybe"}`, oidc.OAuthErrInvalidRequest),
+	)
+
+	// A held sign-in outlives a sign-out by minutes, so the flow cookie alone must not be enough to allow it.
+	DescribeTable("refuses an Allow from a browser that is not signed in as the person the sign-in is held for (negative)",
+		func(change func()) {
+			flowID := heldSignIn()
+			change()
+
+			status, refused := answer(flowID, `{"decision":"allow"}`)
+
+			Expect(status).To(Equal(http.StatusBadRequest))
+			Expect(refused.Error).To(Equal(oidc.RMErrExpiredFlow))
+			flow, err := flowsDB.GetFlow(flowID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(flow.AwaitingConsent()).To(BeTrue(), "no code is issued")
+		},
+		Entry("no session cookie", func() { browserSession = "" }),
+		Entry("another person's session", func() { browserSession = establishSession("user-someone-else", time.Now().Unix()) }),
+		Entry("the session that signed in, ended since", func() {
+			held := strings.TrimPrefix(browserSession, session.CookieName+"=")
+			sessions := session.NewService(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
+			Expect(sessions.DeleteSessionBySID("user-consent", sessions.Peek(held).SID)).To(Succeed())
+		}),
+	)
+
+	It("refuses an answer from a page drawn for another sign-in, which a later one in this browser replaced (negative)", func() {
+		flowID := heldSignIn()
+		status, refused := answer(flowID, `{"decision":"allow","flow_id":"flow-the-page-showed"}`)
+		Expect(status).To(Equal(http.StatusBadRequest))
+		Expect(refused.Error).To(Equal(oidc.RMErrFlowReplaced))
+
+		flow, err := flowsDB.GetFlow(flowID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(flow.AwaitingConsent()).To(BeTrue(), "the sign-in the cookie names is not answered on the other page's say-so")
+	})
+})
+
 var _ = Describe("the footer links the operator configures", func() {
 	BeforeEach(func() {
 		test_utils.SetupEspUserBackend(context.Background())
@@ -1188,6 +1594,19 @@ var _ = Describe("where /oauth2/authorize sends a browser with no session", func
 		Expect(loc.Path).To(Equal(pathFederationStart))
 		Expect(loc.Query().Get("provider")).To(Equal("google"))
 		Expect(loc.Query().Get("flow_id")).NotTo(BeEmpty(), "the link names the sign-in authorize just started")
+	})
+})
+
+// A sign-in held for consent answers redirect_to with auth.ConsentPath, which the page at /user/login follows as a relative link.
+var _ = Describe("the consent link the sign-in page follows", func() {
+	It("resolves from /user/login to the consent route, under any stage prefix", func() {
+		for _, prefix := range []string{"", "/prod"} {
+			base, err := url.Parse(prefix + pathLogin)
+			Expect(err).NotTo(HaveOccurred())
+			ref, err := url.Parse(auth.ConsentPath)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(base.ResolveReference(ref).Path).To(Equal(prefix + pathConsent))
+		}
 	})
 })
 

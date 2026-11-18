@@ -38,8 +38,9 @@ class AuthorizeAPI(Construct):
         function_name = "authorize"
         authorize_lambda_role = create_base_lambda_role(self, function_name, common_resources)
 
+        # DeleteItem ends a sign-in the person cancelled, on the consent screen or at a lone provider.
         authorize_lambda_role.add_to_policy(iam.PolicyStatement(
-            actions=["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:GetItem"],
+            actions=["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:GetItem", "dynamodb:DeleteItem"],
             resources=[get_table_arn(USER_TABLE_NAMES['AUTH_FLOWS'], region)],
         ))
 
@@ -101,7 +102,7 @@ class AuthorizeAPI(Construct):
             },
         )
 
-        # API Gateway resources via CFn to avoid cyclic dependencies. All are GET and unauthenticated: the authorize endpoint and the pages under /user/ are browser entry points.
+        # API Gateway resources via CFn to avoid cyclic dependencies. All are GET (consent also POSTs) and unauthenticated: the authorize endpoint and the pages under /user/ are browser entry points.
         api_id = common_resources.esp_user_api_id
         oauth2_parent_id = get_or_create_api_resource(
             self, "OAuth2Resource", common_resources,
@@ -149,6 +150,20 @@ class AuthorizeAPI(Construct):
             authorization_type="NONE",  # a browser navigation, same as /user/login
             api_id=api_id
         )
+
+        # GET draws the consent screen and POST records the answer; the flow cookie, not a bearer, names the sign-in.
+        consent_resource_id = get_or_create_api_resource(
+            self, "UserLoginConsentResource", common_resources,
+            login_parent_id, "consent",
+            api_id=api_id
+        )
+        for verb in ("GET", "POST"):
+            create_cfn_api_method(
+                self, f"UserLoginConsent{verb.title()}Method", common_resources,
+                consent_resource_id, verb, self.authorize_function,
+                authorization_type="NONE",
+                api_id=api_id
+            )
 
         # Unauthenticated: the start link is a button on the login page, and the HMAC-signed upstream state is the credential on the callback.
         for verb_id, parent_id, parent_label in (

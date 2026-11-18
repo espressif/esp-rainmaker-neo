@@ -31,6 +31,7 @@ const (
 	pathAuthorize = "/oauth2/authorize"
 	pathLogin     = "/user/login"
 	pathRestart   = pathLogin + "/restart"
+	pathConsent   = "/user/" + auth.ConsentPath
 )
 
 // expiredFlowMessage is what every expired or lost sign-in says, page or JSON.
@@ -48,7 +49,7 @@ func handleAuthorize(ctx context.Context, request events.APIGatewayProxyRequest)
 		return errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.", ""), nil
 	}
 
-	flowID, client, _, err := svc.StartAuthFlow(ctx, auth.AuthorizeRequest{
+	flowID, client, skipConsent, err := svc.StartAuthFlow(ctx, auth.AuthorizeRequest{
 		ClientID:            q["client_id"],
 		RedirectURI:         q["redirect_uri"],
 		Scope:               q["scope"],
@@ -66,7 +67,7 @@ func handleAuthorize(ctx context.Context, request events.APIGatewayProxyRequest)
 
 	// A live session of our own answers without the login page or the upstream leg (SSO).
 	// Runs only after StartAuthFlow validated the request, so its error redirects are safe.
-	if resp, done := sessionShortCircuit(ctx, AuthorizeSessionRequest{Request: request, Svc: svc, Query: q, FlowID: flowID, Client: client}); done {
+	if resp, done := sessionShortCircuit(ctx, AuthorizeSessionRequest{Request: request, Svc: svc, Query: q, FlowID: flowID, Client: client, SkipConsent: skipConsent}); done {
 		return resp, nil
 	}
 
@@ -276,6 +277,9 @@ func errorPage(request events.APIGatewayProxyRequest, status int, code, descript
 }
 
 func handleAuthorizeRequest(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+	if request.Path == pathConsent && request.HTTPMethod == http.MethodPost {
+		return handleConsentAnswer(ctx, request), nil
+	}
 	if request.HTTPMethod != http.MethodGet {
 		return oidc.OAuthErrorResp(http.StatusMethodNotAllowed, oidc.OAuthErrInvalidRequest, "Method not allowed."), nil
 	}
@@ -286,6 +290,8 @@ func handleAuthorizeRequest(ctx context.Context, request events.APIGatewayProxyR
 		return handleAuthorize(ctx, request)
 	case pathLogin:
 		return handleLogin(ctx, request), nil
+	case pathConsent:
+		return handleConsentPage(ctx, request), nil
 	case pathFederationStart:
 		return handleFederationStart(ctx, request)
 	case pathFederationCallback:

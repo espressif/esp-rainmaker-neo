@@ -2,12 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Single sign-on: /oauth2/authorize consults the authorization server's OWN session and, when
-// one is live, issues the code immediately — no provider chooser, no upstream round trip.
-// Implemented prompt semantics (OIDC Core s3.1.2.1): prompt=none answers silently or fails
-// with login_required; any other requested prompt (login, consent, select_account) disables
-// the shortcut so an interactive login proceeds; max_age bounds the session's auth_time; and
-// id_token_hint pins the session to a named subject.
+// Single sign-on: /oauth2/authorize answers from our own live session; per OIDC Core s3.1.2.1, prompt=none answers silently or fails, login and select_account force a login, and consent keeps the session but shows the consent screen.
 package main
 
 import (
@@ -27,15 +22,14 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 )
 
-// AuthorizeSessionRequest is what the SSO shortcut needs from an already-validated
-// /oauth2/authorize request: the request itself, the auth service, the parsed query, the
-// flow id the login is running under, and the client row StartAuthFlow already read.
+// AuthorizeSessionRequest is what the SSO shortcut takes from an already-validated /oauth2/authorize request, including the client row and skip_consent StartAuthFlow settled.
 type AuthorizeSessionRequest struct {
-	Request events.APIGatewayProxyRequest
-	Svc     *auth.OAuthUserAuthService
-	Query   map[string]string
-	FlowID  string
-	Client  *clients.ClientResponse
+	Request     events.APIGatewayProxyRequest
+	Svc         *auth.OAuthUserAuthService
+	Query       map[string]string
+	FlowID      string
+	Client      *clients.ClientResponse
+	SkipConsent bool
 }
 
 // sessionShortCircuit runs after StartAuthFlow has validated the request (so redirect_uri is
@@ -49,14 +43,17 @@ func sessionShortCircuit(ctx context.Context, in AuthorizeSessionRequest) (event
 	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, nil)
 	sess := session.NewService(rmngCtx)
 
-	silent := false
+	// The app sent prompt=none: answer at once and never show a page (OIDC Core s3.1.2.1).
+	promptNone := false
 	for _, p := range strings.Fields(q["prompt"]) {
 		if p == "none" {
-			silent = true
+			promptNone = true
 			continue
 		}
-		// login / consent / select_account: the client explicitly asked for an interactive
-		// step. prompt=login in particular MUST always be honoured — never shortcut past it.
+		if p == "consent" {
+			continue
+		}
+		// login / select_account ask for a fresh login, and prompt=login MUST always be honoured.
 		return events.APIGatewayProxyResponse{}, false
 	}
 
@@ -98,33 +95,47 @@ func sessionShortCircuit(ctx context.Context, in AuthorizeSessionRequest) (event
 	}
 
 	if s == nil {
-		if silent {
+		if promptNone {
 			// Safe to redirect: StartAuthFlow already validated redirect_uri against the registry.
 			return oidc.OAuthErrorRedirect(q["redirect_uri"], oidc.OAuthErrLoginRequired, q["state"]), true
 		}
 		return events.APIGatewayProxyResponse{}, false
 	}
 
-	// Same scope StartAuthFlow just stored on the flow, so the flow need not be re-read.
-	// The session's auth_time, not now: nobody authenticated on this request.
-	redirectTo, err := svc.CompleteStartedAuthFlow(ctx, flowID, s.UserID, s.SID, strings.Fields(q["scope"]), s.AuthTime)
+	// A prompt=none request cannot show the consent screen, and with no stored consents it cannot be answered either.
+	if promptNone && !in.SkipConsent {
+		return oidc.OAuthErrorRedirect(q["redirect_uri"], oidc.OAuthErrConsentRequired, q["state"]), true
+	}
+
+	// Same scope StartAuthFlow just stored on the flow, and the session's auth_time because nobody authenticated on this request.
+	codeRedirect, awaitingConsent, err := svc.CompleteAuthFlow(ctx, auth.CompleteAuthFlowInput{
+		FlowID: flowID, UserID: s.UserID, SID: s.SID, RequestedScope: strings.Fields(q["scope"]), AuthTime: s.AuthTime, SkipConsent: in.SkipConsent,
+	})
 	if err != nil {
 		rlog.Warn(ctx).Err(err).Msg("sso: session shortcut failed; falling back to login")
-		if silent {
+		if promptNone {
 			return oidc.OAuthErrorRedirect(q["redirect_uri"], oidc.OAuthErrLoginRequired, q["state"]), true
 		}
 		return events.APIGatewayProxyResponse{}, false
 	}
-	// Roll the cookie on the shortcut too, not only at the federation callback: this is a
-	// front-channel event, Lookup already bumped both clocks, and re-issuing the same opaque
-	// value with a fresh Max-Age keeps cookie_expires_at in step so the browser does not drop a
-	// cookie whose user agent is still live. Same value, because the server never learns a new one.
-	headers := map[string]string{"Location": redirectTo, "Cache-Control": "no-store"}
+	// Re-issuing the same cookie value with a fresh Max-Age keeps the browser's copy alive as long as the session row Lookup just rolled.
+	rolledSession := ""
 	if cookieValue != "" {
-		headers["Set-Cookie"] = session.SetCookieHeader(cookieValue, sess.MaxAge())
+		rolledSession = session.SetCookieHeader(cookieValue, sess.MaxAge())
 	}
-	return events.APIGatewayProxyResponse{
-		StatusCode: 302,
-		Headers:    headers,
-	}, true
+	if awaitingConsent {
+		// The consent screen finds the held sign-in by the flow cookie, which this request has not set yet.
+		cookies := []string{flowCookie(flowID)}
+		if rolledSession != "" {
+			cookies = append(cookies, rolledSession)
+		}
+		resp := redirect(routeLocation(request, pathConsent))
+		resp.MultiValueHeaders = map[string][]string{"Set-Cookie": cookies}
+		return resp, true
+	}
+	resp := redirect(codeRedirect)
+	if rolledSession != "" {
+		resp.Headers["Set-Cookie"] = rolledSession
+	}
+	return resp, true
 }

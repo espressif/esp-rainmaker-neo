@@ -23,8 +23,9 @@ type pageData struct {
 	LoginHint  string `json:"login_hint,omitempty"`
 	IDP        string `json:"idp,omitempty"`
 	RestartURL string `json:"restart_url,omitempty"`
-	// Error replaces the sign-in form with another screen.
-	Error *errorData `json:"error,omitempty"`
+	// Consent, Logout, SignedOut and Error each replace the sign-in form with another screen.
+	Consent *consentData `json:"consent,omitempty"`
+	Error   *errorData   `json:"error,omitempty"`
 	// Links are the operator's footer pages; absent when none is configured, so the page never draws an empty link.
 	Links *linksData `json:"links,omitempty"`
 }
@@ -59,6 +60,12 @@ func httpsURL(raw string) string {
 	return raw
 }
 
+// consentData is what the consent screen asks about: who is signed in and what the client requested.
+type consentData struct {
+	Account string   `json:"account,omitempty"`
+	Scopes  []string `json:"scopes"`
+}
+
 // errorData never names a client or echoes a redirect uri: anyone can reach this page.
 type errorData struct {
 	Code    string `json:"code,omitempty"`
@@ -72,6 +79,8 @@ const (
 
 type clientData struct {
 	Name string `json:"name,omitempty"`
+	// LogoURI is only ever an inline image the registry validated, so the page can show it under img-src 'self' data:.
+	LogoURI string `json:"logo_uri,omitempty"`
 }
 
 // providerData carries a logo only as a data:image, never markup: an operator-written SVG on a sign-in page could run script.

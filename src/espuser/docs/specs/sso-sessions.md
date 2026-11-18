@@ -281,23 +281,23 @@ the app out. Whether that is right is an open question — see [Known limitation
 a code issued with no upstream round trip — only when all of the following hold:
 
 - a cookie was presented and names a row that exists and whose `expires_at` has not passed;
-- the request's `prompt` does not ask for an interactive step (`login`, `consent`, `select_account`
-  all disable it);
+- the request's `prompt` is not `login` or `select_account`;
 - `max_age`, when present, is satisfied by the row's `auth_time`;
 - `id_token_hint`, when present, names the subject the row belongs to;
 - the client's `allowed_providers`, if set, admits the provider the row was authenticated with — the
   same check as at `/user/login/federation/start`, so a shortcut cannot bypass a provider restriction.
 
-On a successful shortcut both clocks are bumped and the cookie is re-issued. A failure to record
+A shortcut for a client without `first_party` holds the sign-in for consent instead of issuing a code (see [authorize-code-flow.md](authorize-code-flow.md#consent--clients-we-do-not-ship)). On a successful shortcut both clocks are bumped and the cookie is re-issued. A failure to record
 that costs the extension and nothing else — the login still succeeds.
 
 ### The request parameters that override a session
 
 | Parameter | Effect |
 |---|---|
-| `prompt=none` | Never shows a page. A usable user agent yields a code; anything else redirects with `login_required` |
+| `prompt=none` | Never shows a page. A usable user agent yields a code; anything else redirects with `login_required`, or `consent_required` for a client that needs consent |
 | `prompt=login` | Always re-authenticates, whatever user agent exists |
-| other `prompt` values | Disable the shortcut, so the ordinary login runs |
+| `prompt=consent` | Keeps the shortcut and always shows the consent screen |
+| `prompt=select_account` | Disables the shortcut, so the ordinary login runs |
 | `max_age` | The row's `auth_time` must be no older than the given number of seconds. `>=` is the boundary, so `max_age=0` always re-authenticates; an unparseable value counts as unsatisfied |
 | `id_token_hint` | The user agent must belong to the subject the hint names. One that names someone else, or does not verify, drops the shortcut rather than switching user. Expiry is not checked — the same reasoning as at the logout endpoint, below |
 

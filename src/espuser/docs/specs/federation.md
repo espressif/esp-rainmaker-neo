@@ -132,8 +132,7 @@ Completes the upstream leg and issues **our** code.
      (rendered as a non-enumerating error).
   5. Identity resolution against every verified contact, described below. The upstream
      refresh token is discarded — never persisted.
-  6. Bind the resolved subject onto the flow (conditional on `subject` empty), then
-     issue our authorization code via `CompleteAuthFlowForSubject`.
+  6. Bind the resolved subject onto the flow (conditional on `subject` empty), then issue our authorization code, or, when the flow's `skip_consent` is not set, hold the sign-in and send the browser to `/user/login/consent` ([authorize-code-flow.md](authorize-code-flow.md#consent--clients-we-do-not-ship)).
 - **Output:** `302` to the client `redirect_uri?code=…&state=…`. The client then
   redeems the code at `/oauth2/token` for **our** tokens, exactly as any login.
 

@@ -161,19 +161,6 @@ func (s *OAuthUserAuthService) CompleteAuthFlow(ctx context.Context, in Complete
 	return appendCodeToRedirect(flow.RedirectURI, authCode, flow.State), false, nil
 }
 
-// CompleteStartedAuthFlow issues the flow's code for a caller that already knows its requested scope.
-func (s *OAuthUserAuthService) CompleteStartedAuthFlow(ctx context.Context, flowID, userID, sid string, requestedScope []string, authTime int64) (redirectTo string, err error) {
-	authCode, err := secretutil.GenRandom(secretutil.DefaultSecretBytes)
-	if err != nil {
-		return "", err
-	}
-	flow, err := auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(ctx, nil)).IssueCode(flowID, userID, requestedScope, authCode, sid, authTime)
-	if err != nil {
-		return "", err
-	}
-	return appendCodeToRedirect(flow.RedirectURI, authCode, flow.State), nil
-}
-
 // FlowAwaitingConsent returns the sign-in waiting for the person's consent, for the consent screen to describe.
 func (s *OAuthUserAuthService) FlowAwaitingConsent(ctx context.Context, flowID string) (*auth_flows_db.AuthFlow, error) {
 	flow, err := auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(ctx, nil)).GetFlow(flowID)

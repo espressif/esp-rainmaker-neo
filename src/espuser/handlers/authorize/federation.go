@@ -11,7 +11,6 @@ import (
 	"errors"
 	"net/http"
 	"os"
-	"time"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
@@ -184,16 +183,6 @@ func handleFederationCallback(ctx context.Context, request events.APIGatewayProx
 		}
 		return errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.", ""), nil
 	}
-	// Our own session, so single sign-on stops depending on the upstream's cookie. Any
-	// failure here degrades to "no session": the login itself must never be blocked by the
-	// session layer, it only loses SSO until the next login.
-	sid, sessionCookie := "", ""
-	sess := session.NewService(rmngCtx)
-	// The upstream's auth_time is when the person signed in (OIDC Core s2); a provider that omits it authenticated them on this request.
-	authTime := identity.AuthTime
-	if authTime <= 0 {
-		authTime = time.Now().Unix()
-	}
 	// The per-provider cap lives only on OIDC rows; other provider kinds fall back to the
 	// global cap (see idp.OIDCProvider.SessionMaxTTL on why this is a type assertion).
 	var providerMaxTTL int64
@@ -203,37 +192,35 @@ func handleFederationCallback(ctx context.Context, request events.APIGatewayProx
 	// The user agent is recorded HERE and nowhere else: this is the one request we know came
 	// from the browser itself, mid-redirect. A later API call arrives from the product's
 	// page and would describe whatever was calling, not who authenticated.
-	cookieValue, newSID, err := sess.Establish(session.EstablishInput{
-		UserID:                userID,
+	redirectTo, setCookie, err := svc.CompleteSignIn(ctx, flow, userID, auth.FirstPartyLogin{
 		Provider:              identity.Profile.Provider,
-		AuthTime:              authTime,
+		AuthTime:              identity.AuthTime,
 		AMR:                   identity.AMR,
 		ACR:                   identity.ACR,
 		ProviderMaxTTLSeconds: providerMaxTTL,
+		Origin:                session.OriginBrowser,
 		UserAgent:             utils.UserAgent(request),
 		IPAddress:             request.RequestContext.Identity.SourceIP,
-		// What this browser presented on the way in. Establish uses it to tell a
-		// re-authentication from a first login and retire the cookie being replaced.
-		PriorCookie: rmngrequest.Cookie(request, session.CookieName),
+		PriorCookie:           rmngrequest.Cookie(request, session.CookieName),
 	})
-	if err != nil {
-		rlog.Warn(ctx).Err(err).Msg("federation callback: session not established")
-	} else {
-		sid = newSID
-		sessionCookie = session.SetCookieHeader(cookieValue, sess.MaxAge())
-	}
-
-	redirectTo, err := svc.CompleteStartedAuthFlow(ctx, flowID, userID, sid, flow.RequestedScope, authTime)
-	if err != nil {
+	var resp events.APIGatewayProxyResponse
+	switch {
+	// The flow's conditional write refuses one that expired, or was finished by another tab, since it was read.
+	case errors.Is(err, auth_flows_db.ErrFlowNotFound):
+		resp = errorPage(request, http.StatusBadRequest, oidc.RMErrExpiredFlow, expiredFlowMessage, routeLocation(request, pathRestart))
+	case err != nil:
 		rlog.Error(ctx).Err(err).Msg("federation callback: issue code")
-		return errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.", ""), nil
+		resp = errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.", "")
+	default:
+		// ConsentPath is relative to the sign-in page, and this redirect leaves from the callback.
+		if redirectTo == auth.ConsentPath {
+			redirectTo = routeLocation(request, pathConsent)
+		}
+		resp = redirect(redirectTo)
+		resp.Headers["Referrer-Policy"] = "no-referrer"
 	}
-	headers := map[string]string{"Location": redirectTo, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
-	if sessionCookie != "" {
-		headers["Set-Cookie"] = sessionCookie
+	if setCookie != "" {
+		resp.Headers["Set-Cookie"] = setCookie
 	}
-	return events.APIGatewayProxyResponse{
-		StatusCode: http.StatusFound,
-		Headers:    headers,
-	}, nil
+	return resp, nil
 }

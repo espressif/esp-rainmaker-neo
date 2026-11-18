@@ -76,7 +76,8 @@ These OAuth 2.1 client invariants are enforced at create/patch so the admin UI f
 
 9. **`first_party` marks an app we ship ourselves** — the RainMaker app, a mobile client — as opposed to a
    delegated partner registered in the same table (the voice-assistant clients such as `rainmaker-neo-alexa-client`, the MCP proxy
-   `mcp-oauth-client`). It is what account-management endpoints gate on: `GET`/`DELETE /v1/user/sessions`
+   `mcp-oauth-client`). It decides whether a sign-in needs the person's consent (see
+   [authorize-code-flow.md](authorize-code-flow.md#consent--clients-we-do-not-ship)), and it is what account-management endpoints gate on: `GET`/`DELETE /v1/user/sessions`
    admit only a first-party client's user token, so a partner delegated *device* control cannot list or end
    a person's sign-ins. **Absent means `false`** — first-party is opt-in, set deliberately at registration
    and never derived, so a client made before this field, or any partner, is correctly not one. Read at the
@@ -101,7 +102,7 @@ All requests carry the admin Cognito token in `Authorization`. Errors use the AP
 | `response_types` | `["code"]` |  |
 | `scopes` | `["openid", "profile", "email", "phone"]` |  |
 | `require_pkce` | `true` |  |
-| `first_party` | `true` | marks an app **we ship ourselves** (vs a delegated partner); only a first-party client may call account-management endpoints such as `GET /v1/user/sessions`. Optional, default `false` |
+| `first_party` | `true` | marks an app **we ship ourselves** (vs a delegated partner); a first-party client signs in with no consent screen and is the only kind that may call account-management endpoints such as `GET /v1/user/sessions`. Optional, default `false` |
 | `logo_uri` | `data:image/png;base64,…` | RFC 7591 §2 logo, shown on the consent screen. Must be a base64 `data:` URI of a PNG, JPEG or WebP image, at most 4 KiB decoded: inline because the sign-in page's CSP is `img-src 'self' data:`, and raster only because SVG can carry script. Optional; without it the screen shows a generic app icon |
 > **Scope of this slice.** The body carries only fields with a live consumer today. Reserved for later slices (not accepted yet): `jwks_uri`, `audiences`, `branding_id`, and `token_ttls` — (M2M/`private_key_jwt`, hosted-UI branding, and per-client TTLs are later slices). `allowed_resources`, `default_resource`, `allowed_providers`, `post_logout_redirect_uris` and `logo_uri` are accepted now: RFC 8707 resource indicators, RP-Initiated Logout and the consent screen have landed, and a field the logout endpoint validates against but no API can write is a check that can never pass. They will be added to the schema when their features land; adding fields is Native.
 

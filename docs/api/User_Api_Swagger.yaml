@@ -308,16 +308,7 @@ paths:
             OIDC Core §3.1.2.1. **Default when
             omitted:** a live session answers the request silently.
 
-            `none` never shows a prompt — it answers from the session or redirects back
-            with `error=login_required`; with any other value it redirects back with `error=invalid_request`. `login` forces re-authentication even with a live
-            session, and is carried to the upstream provider so it re-authenticates too.
-
-            `consent` and `select_account` are accepted, but this server does not yet
-            distinguish them from `login`: all three disable the session shortcut, and the
-            value is forwarded verbatim to the upstream provider. Neither renders a surface
-            of its own here — there is no consent screen, and account choice belongs to the
-            provider — so any difference you observe between them comes from the provider,
-            not from us.
+            `none` never shows a page (`login_required` or `consent_required` instead; `invalid_request` with any other value). `login` and `select_account` re-authenticate; `consent` always asks.
           schema:
             type: string
             example: "none"
@@ -348,12 +339,7 @@ paths:
       responses:
         "302":
           description: |
-            Redirect to the login UI (with a `flow_id` session cookie) — or, when
-            a live session satisfies `prompt`/`max_age`/`id_token_hint`,
-            straight back to `redirect_uri?code=…&state=…` with
-            no login surface at all. A post-validation error instead redirects to
-            `redirect_uri?error=<code>&state=<state>` (`invalid_scope`,
-            `invalid_target`, or `login_required` for a failed `prompt=none`).
+            To the sign-in page; with a live session, back to `redirect_uri` with `code` and `state`, or to the consent page. Errors found after `redirect_uri` is validated go back to it as `error` and `state`.
           headers:
             Location:
               schema:
@@ -453,7 +439,7 @@ paths:
       responses:
         "302":
           description:
-            Redirect to the client's `redirect_uri` with `code` (+ `state`).
+            To `redirect_uri` with `code` and `state`, or to the consent page; after a cancel, to the sign-in page or to `redirect_uri` with `error=access_denied`.
           headers:
             Location:
               schema:
@@ -894,6 +880,92 @@ paths:
           description: No flow cookie, or nothing left to resume from; the error page is shown.
         "500":
           description: The flow could not be read; the error page is shown.
+
+  /user/login/consent:
+    get:
+      summary: The consent screen for a client we do not ship
+      description: |
+        Asks the person to allow an app we do not ship, or one that sent `prompt=consent`; no code exists until they answer (RFC 6749 s10.2).
+      tags:
+        - Sign-in Pages
+      security: []
+      parameters:
+        - in: cookie
+          name: __Host-esp_flow_id
+          required: true
+          schema:
+            type: string
+          description: The sign-in waiting for consent.
+      responses:
+        "200":
+          description: The sign-in application, drawing the consent screen.
+          content:
+            text/html:
+              schema:
+                type: string
+        "400":
+          description: No sign-in is waiting for consent; the error page is shown.
+        "500":
+          description: The sign-in could not be read; the error page is shown.
+    post:
+      summary: Allow or cancel the client's access
+      description: |
+        Allow issues the held code to this browser's session; Cancel returns `access_denied` to the app. The page then goes to `redirect_to`.
+      tags:
+        - Sign-in Pages
+      security: []
+      parameters:
+        - in: cookie
+          name: __Host-esp_flow_id
+          required: true
+          schema:
+            type: string
+        - in: cookie
+          name: __Host-esp_session
+          required: false
+          schema:
+            type: string
+          description: The session that signed in. An Allow from a browser without it, or with another session, is answered `expired_flow`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision, flow_id]
+              properties:
+                decision:
+                  type: string
+                  enum: [allow, deny]
+                flow_id:
+                  type: string
+                  description: The `flow_id` the consent screen was served with; it must be the flow cookie's.
+      responses:
+        "200":
+          description: Where to send the browser.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              description: Always `no-store`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RedirectResponse"
+              example:
+                redirect_to: https://app.example.com/cb?code=abc&state=xyz
+        "400":
+          description: "`invalid_request`: not allow or deny, or no flow cookie; `flow_replaced`: another sign-in replaced it; `expired_flow`: nothing is waiting for an answer."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+        "500":
+          description: The answer could not be recorded (`server_error`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
 
   /oauth2/logout/done:
     get:
@@ -1874,6 +1946,13 @@ components:
       description: A provider with a supported `password_verifier`; omitted, the first such provider by name. Any other name is `400` `Unknown provider.`.
       example: cognito
 
+    RedirectResponse:
+      type: object
+      description: Where a page of the sign-in application sends the browser next; it never carries a token.
+      properties:
+        redirect_to:
+          type: string
+
     TokenClientCredentialsRequest:
       type: object
       description: |
@@ -2129,7 +2208,7 @@ components:
           description: Always true for public clients.
         first_party:
           type: boolean
-          description: Whether this client is one the account ships itself; only a first-party client may manage a user's own sessions.
+          description: Whether this client is one the account ships itself. A first-party client signs in with no consent screen and may manage a user's own sessions.
         logo_uri:
           $ref: "#/components/schemas/LogoURI"
         allowed_resources:
@@ -2243,8 +2322,9 @@ components:
         first_party:
           type: boolean
           description:
-            Mark this client as one the account ships itself. Only a first-party client may
-            manage a user's own sessions; leave false for third-party integrations.
+            Mark this client as one the account ships itself. A first-party client signs in with
+            no consent screen and may manage a user's own sessions; leave false for third-party
+            integrations, which the person is asked to allow on every sign-in.
           default: false
         logo_uri:
           $ref: "#/components/schemas/LogoURI"
