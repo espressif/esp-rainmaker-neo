@@ -7,6 +7,6 @@
 import { defineConfig } from 'vite'
 
 export default defineConfig({
-  // Embedded in the authorize Lambda and served under its stage prefix, so every path is relative; the Lambda swaps the bundle's ./assets/ for the absolute prefix of the route it answers.
+  // Relative paths, so index.html names its files ./assets/…, which the authorize Lambda inlines into every page it serves.
   base: './',
 })

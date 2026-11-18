@@ -12,10 +12,15 @@ import { AppleMark, ChevronMark, GenericMark, GitHubMark, GoogleMark, MailMark }
 
 const BRAND_MARKS: Record<Brand, () => JSX.Element> = { google: GoogleMark, apple: AppleMark, github: GitHubMark }
 
-/** The mark a redirect provider is drawn with: its brand's own, else the generic shield. */
+/** The mark a provider is drawn with: its brand's own, else its own logo, else the generic shield. */
 export function ProviderMark({ option }: { option: Option }) {
-  const Mark = option.brand ? BRAND_MARKS[option.brand] : GenericMark
-  return <Mark />
+  if (option.brand) {
+    const Mark = BRAND_MARKS[option.brand]
+    return <Mark />
+  }
+  // Only an inline image: the server admits nothing else, and the page's CSP would block anything remote.
+  if (option.logo?.startsWith('data:image/')) return <img class="provider-logo" src={option.logo} alt="" />
+  return <GenericMark />
 }
 
 /** A provider that signs in elsewhere: a brand's own button, or a plain row naming it; a plain click hands the page over to the redirect screen. */
@@ -53,7 +58,7 @@ export function CodeButton({ onClick }: { onClick: () => void }) {
 export function PoolButton({ pool, selected, onSelect }: { pool: Option; selected: boolean; onSelect: (id: string) => void }) {
   return (
     <button type="button" class="method" aria-pressed={selected} onClick={() => onSelect(pool.id)}>
-      <span class="mark"><GenericMark /></span><span>{pool.label}</span>
+      <span class="mark"><ProviderMark option={pool} /></span><span>{pool.label}</span>
     </button>
   )
 }

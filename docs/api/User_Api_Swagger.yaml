@@ -71,7 +71,10 @@ tags:
       Authorization, token issuance/rotation, userinfo, revocation, and sign-out — the endpoints every login method converges on.
   - name: Federated Login
     description:
-      The upstream legs of a browser login started at `/oauth2/authorize`, brokered to an upstream identity provider (Cognito hosted UI in the open-source deployment). Clients only ever receive ESP User tokens.
+      The provider's return leg of a browser login started at `/oauth2/authorize`, brokered to an upstream identity provider. Clients only ever receive ESP User tokens.
+  - name: Sign-in Pages
+    description:
+      Our sign-in, consent and sign-out pages, and the calls they make. Applications never call them.
   - name: User Auth
     description:
       The main-era native `/v1/user/auth/*` password surface, kept
@@ -357,7 +360,7 @@ paths:
                 type: string
             Set-Cookie:
               description:
-                Short-lived HttpOnly Secure SameSite=Lax flow_id cookie.
+                Short-lived HttpOnly Secure SameSite=Lax `__Host-esp_flow_id` cookie.
               schema:
                 type: string
         "400":
@@ -369,20 +372,27 @@ paths:
               schema:
                 $ref: "#/components/schemas/OAuthError"
 
-  /oauth2/federation/start:
+  /user/login/federation/start:
     get:
       summary: Redirect to an upstream identity provider
       description: |
-        Sends the browser to the upstream provider's login. Reads the flow from the `__Host-esp_flow_id` cookie, refuses a provider the client does not allow, and records this leg's own `state`, `nonce` and PKCE verifier on the flow. The client's values never reach the provider.
+        Sends the browser to an `oidc` provider's own sign-in page for the current sign-in, if the client allows that provider.
       tags:
-        - Federated Login
+        - Sign-in Pages
       security: []
       parameters:
         - name: provider
           in: query
           required: true
           description:
-            Provider name from the identity-provider registry (e.g. `cognito`).
+            An `oidc` row's name from the identity-provider registry (e.g. `google`).
+          schema:
+            type: string
+        - name: flow_id
+          in: query
+          required: true
+          description:
+            The sign-in the page's link was drawn for; it must equal the flow cookie.
           schema:
             type: string
         - name: __Host-esp_flow_id
@@ -400,7 +410,14 @@ paths:
                 type: string
         "400":
           description:
-            Missing/expired flow or unknown provider (HTML error page).
+            "`invalid_request`: missing or expired flow, or unknown provider; `flow_replaced`: `flow_id` is not this browser's current sign-in (HTML error page)."
+          content:
+            text/html:
+              schema:
+                type: string
+        "500":
+          description:
+            "`server_error`: the provider registry could not be read, or the provider's authorize URL could not be built (HTML error page)."
           content:
             text/html:
               schema:
@@ -792,6 +809,91 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/OAuthError"
+
+  /user/login:
+    get:
+      summary: The sign-in page
+      description: |
+        The sign-in page. Its page data (`<script type="application/json" id="esp-page-data">`) names the client and the providers it allows; applications never call it.
+
+        Without a live sign-in it shows an error, with "Start again" when there is a sign-in to restart.
+      tags:
+        - Sign-in Pages
+      security: []
+      parameters:
+        - in: cookie
+          name: __Host-esp_flow_id
+          required: false
+          schema:
+            type: string
+          description: The login in progress. Set by `/oauth2/authorize`.
+        - in: query
+          name: login_hint
+          required: false
+          schema:
+            type: string
+          description: Carried from `/oauth2/authorize`; prefills the username. Nothing is authorized on it.
+        - in: query
+          name: idp
+          required: false
+          schema:
+            type: string
+          description: Carried from `/oauth2/authorize`; preselects a provider. Nothing is authorized on it.
+      responses:
+        "200":
+          description: The sign-in application.
+          headers:
+            Content-Security-Policy:
+              schema:
+                type: string
+              description: "`default-src 'none'` with no remote origin permitted, and `frame-ancestors 'none'`."
+            Cache-Control:
+              schema:
+                type: string
+              description: Always `no-store`.
+          content:
+            text/html:
+              schema:
+                type: string
+        "400":
+          description: No flow cookie (`invalid_request`), or the sign-in expired or is gone (`expired_flow`); the error screen offers "Start again" when it can.
+          content:
+            text/html:
+              schema:
+                type: string
+        "500":
+          description: The flow or its client could not be read (`server_error`); the error screen is drawn.
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /user/login/restart:
+    get:
+      summary: Start the same sign-in again after it expired
+      description: |
+        Starts the expired sign-in again with the request the app sent.
+      tags:
+        - Sign-in Pages
+      security: []
+      parameters:
+        - in: cookie
+          name: __Host-esp_flow_id
+          required: true
+          schema:
+            type: string
+          description: The login to resume.
+      responses:
+        "302":
+          description: Redirect to `/oauth2/authorize` with the original parameters.
+          headers:
+            Location:
+              schema:
+                type: string
+        "400":
+          description: No flow cookie, or nothing left to resume from; the error page is shown.
+        "500":
+          description: The flow could not be read; the error page is shown.
 
   /oauth2/logout/done:
     get:

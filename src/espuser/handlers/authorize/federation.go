@@ -31,7 +31,7 @@ import (
 )
 
 const (
-	pathFederationStart    = "/oauth2/federation/start"
+	pathFederationStart    = "/user/login/federation/start"
 	pathFederationCallback = "/oauth2/federation/callback"
 )
 
@@ -45,27 +45,31 @@ func newRegistry(ctx context.Context) (*idp.Registry, error) {
 }
 
 func handleFederationStart(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	flowID := rmngrequest.Cookie(request, flowCookieName)
+	flowID := rmngrequest.Cookie(request, auth.FlowCookieName)
 	providerName := request.QueryStringParameters["provider"]
-	if flowID == "" || providerName == "" {
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Missing flow or provider."), nil
+	if flowID == "" || providerName == "" || request.QueryStringParameters["flow_id"] == "" {
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Missing flow or provider.", ""), nil
+	}
+	// The link names the sign-in its page was drawn for; a newer sign-in in another tab took the cookie, and following it would finish that tab's app.
+	if request.QueryStringParameters["flow_id"] != flowID {
+		return errorPage(request, http.StatusBadRequest, oidc.RMErrFlowReplaced, "Another sign-in was started in this browser.", ""), nil
 	}
 
 	registry, err := newRegistry(ctx)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Msg("federation start: registry")
-		return errorPage(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
+		return errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.", ""), nil
 	}
 	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, nil)
 	flowsDB := auth_flows_db.NewAuthFlowsDB(rmngCtx)
 	flow, err := flowsDB.GetFlow(flowID)
 	if err != nil {
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Login session expired. Please try again."), nil
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Login session expired. Please try again.", ""), nil
 	}
 
 	provider, err := registry.Provider(providerName)
 	if err != nil || provider == nil {
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Unknown or unavailable provider."), nil
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Unknown or unavailable provider.", ""), nil
 	}
 
 	// allowed_providers is enforced HERE, not on the login page. The chooser only decides
@@ -76,28 +80,25 @@ func handleFederationStart(ctx context.Context, request events.APIGatewayProxyRe
 	if !clientAllowsProvider(ctx, rmngCtx, flow.ClientID, providerName) {
 		rlog.Warn(ctx).Str("client_id", flow.ClientID).Str("provider", providerName).
 			Msg("federation start: provider not allowed for this client")
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Unknown or unavailable provider."), nil
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Unknown or unavailable provider.", ""), nil
 	}
 
 	leg, err := registry.NewUpstreamLeg(flowID)
 	if err != nil {
-		return errorPage(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
+		return errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.", ""), nil
 	}
 	// Forward prompt/max_age upstream; otherwise the provider re-authenticates from its own cookie.
 	leg.Prompt, leg.MaxAge = flow.Prompt, flow.MaxAge
 	if err := flowsDB.SetUpstreamLeg(flowID, providerName, leg.State, leg.Nonce, leg.PKCEVerifier); err != nil {
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Login session expired. Please try again."), nil
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Login session expired. Please try again.", ""), nil
 	}
 
 	url, err := provider.AuthorizeRedirectURL(ctx, leg)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Msg("federation start: authorize url")
-		return errorPage(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
+		return errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.", ""), nil
 	}
-	return events.APIGatewayProxyResponse{
-		StatusCode: http.StatusFound,
-		Headers:    map[string]string{"Location": url, "Cache-Control": "no-store"},
-	}, nil
+	return redirect(url), nil
 }
 
 // clientAllowsProvider reports whether the client that started this flow may use this
@@ -119,40 +120,40 @@ func clientAllowsProvider(ctx context.Context, rmngCtx *rmngctx.RmngContext, cli
 func handleFederationCallback(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	q := request.QueryStringParameters
 	if upstreamErr := q["error"]; upstreamErr != "" {
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrAccessDenied, "Upstream sign-in was not completed."), nil
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrAccessDenied, "Upstream sign-in was not completed.", ""), nil
 	}
 	code, state := q["code"], q["state"]
 	if code == "" || state == "" {
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Missing code or state."), nil
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Missing code or state.", ""), nil
 	}
 
 	registry, err := newRegistry(ctx)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Msg("federation callback: registry")
-		return errorPage(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
+		return errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.", ""), nil
 	}
 
 	flowID, err := registry.FlowIDFromState(state)
 	if err != nil {
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Invalid or expired sign-in state."), nil
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Invalid or expired sign-in state.", ""), nil
 	}
 	// RFC 6749 s10.12: the callback must come from the browser that started this flow, or an attacker's own sign-in can be finished in the victim's browser.
-	if rmngrequest.Cookie(request, flowCookieName) != flowID {
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Invalid sign-in state."), nil
+	if rmngrequest.Cookie(request, auth.FlowCookieName) != flowID {
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Invalid sign-in state.", ""), nil
 	}
 	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, nil)
 	flow, err := auth_flows_db.NewAuthFlowsDB(rmngCtx).GetFlow(flowID)
 	if err != nil {
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Login session expired. Please try again."), nil
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Login session expired. Please try again.", ""), nil
 	}
 	// A state valid for one flow must not be spliceable onto another.
 	if flow.UpstreamState == "" || flow.UpstreamState != state {
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Invalid sign-in state."), nil
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Invalid sign-in state.", ""), nil
 	}
 
 	provider, err := registry.Provider(flow.Provider)
 	if err != nil || provider == nil {
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Unknown or unavailable provider."), nil
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Unknown or unavailable provider.", ""), nil
 	}
 
 	identity, err := provider.HandleCallback(ctx, code, idp.UpstreamLeg{
@@ -160,17 +161,17 @@ func handleFederationCallback(ctx context.Context, request events.APIGatewayProx
 	})
 	if err != nil {
 		rlog.Error(ctx).Err(err).Msg("federation callback: upstream verification failed")
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrAccessDenied, "Could not verify the upstream sign-in."), nil
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrAccessDenied, "Could not verify the upstream sign-in.", ""), nil
 	}
 
 	email, phone, err := identity.VerifiedContacts()
 	if err != nil {
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrAccessDenied, "Your account has no verified email or phone."), nil
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrAccessDenied, "Your account has no verified email or phone.", ""), nil
 	}
 
 	svc, err := auth.NewOAuthUserAuthService(ctx)
 	if err != nil {
-		return errorPage(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
+		return errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.", ""), nil
 	}
 	// Persisting the claims with the user is what lets the token endpoint stamp them without ever
 	// calling upstream.
@@ -179,9 +180,9 @@ func handleFederationCallback(ctx context.Context, request events.APIGatewayProx
 		rlog.Error(ctx).Err(err).Msg("federation callback: resolve user")
 		// Says only that sign-in was refused: the page must not reveal who holds the id.
 		if errors.Is(err, auth.ErrUpstreamUserIDUnusable) {
-			return errorPage(http.StatusForbidden, oidc.OAuthErrAccessDenied, "This account cannot be signed in. Please contact support."), nil
+			return errorPage(request, http.StatusForbidden, oidc.OAuthErrAccessDenied, "This account cannot be signed in. Please contact support.", ""), nil
 		}
-		return errorPage(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
+		return errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.", ""), nil
 	}
 	// Our own session, so single sign-on stops depending on the upstream's cookie. Any
 	// failure here degrades to "no session": the login itself must never be blocked by the
@@ -225,7 +226,7 @@ func handleFederationCallback(ctx context.Context, request events.APIGatewayProx
 	redirectTo, err := svc.CompleteStartedAuthFlow(ctx, flowID, userID, sid, flow.RequestedScope, authTime)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Msg("federation callback: issue code")
-		return errorPage(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
+		return errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.", ""), nil
 	}
 	headers := map[string]string{"Location": redirectTo, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
 	if sessionCookie != "" {

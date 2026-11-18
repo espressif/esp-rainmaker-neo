@@ -142,3 +142,14 @@ var _ = DescribeTable("OurPageTakesPassword",
 	Entry("an otp row, even one naming a password_verifier", identity_providers_db.ProviderEntry{Type: identity_providers_db.TypeOTP, PasswordVerifier: identity_providers_db.PasswordVerifierCognito, ClientID: "app"}, false),
 	Entry("a row of a type we do not know, such as a leftover cognito type", identity_providers_db.ProviderEntry{Type: "cognito", PasswordVerifier: identity_providers_db.PasswordVerifierCognito, ClientID: "app"}, false),
 )
+
+var _ = DescribeTable("RedirectsToProvider",
+	func(entry identity_providers_db.ProviderEntry, want bool) {
+		Expect(entry.RedirectsToProvider()).To(Equal(want))
+	},
+	Entry("an oidc row naming no password_verifier", identity_providers_db.ProviderEntry{Type: identity_providers_db.TypeOIDC}, true),
+	Entry("an oidc row whose password our page takes", identity_providers_db.ProviderEntry{Type: identity_providers_db.TypeOIDC, PasswordVerifier: identity_providers_db.PasswordVerifierCognito, ClientID: "app"}, false),
+	Entry("an oidc row naming a password_verifier we cannot call", identity_providers_db.ProviderEntry{Type: identity_providers_db.TypeOIDC, PasswordVerifier: "ldap"}, false),
+	Entry("an otp row", identity_providers_db.ProviderEntry{Type: identity_providers_db.TypeOTP}, false),
+	Entry("a row of a type we do not know", identity_providers_db.ProviderEntry{Type: "cognito"}, false),
+)

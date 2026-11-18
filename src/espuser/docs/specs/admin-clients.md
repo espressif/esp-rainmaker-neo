@@ -50,11 +50,11 @@ These OAuth 2.1 client invariants are enforced at create/patch so the admin UI f
    rejected at write time.
 
    **Enforced in three places, because there are three ways in.** The login page draws only
-   the buttons a client admits; `/oauth2/federation/start` refuses a provider it does not,
+   the buttons a client admits; `/user/login/federation/start` refuses a provider it does not,
    and that one is the gate -- the URL can be typed, so a menu is not an access control; and
    the SSO shortcut refuses to answer a client from a session established through a provider
    it forbids, or the restriction would hold for the first login of a browser and evaporate
-   for every one after it. The chooser fails **open** on an unreadable registry (the gate
+   for every one after it. The provider list fails **open** on an unreadable registry (the gate
    still refuses); the gate fails **closed**.
 6. **`post_logout_redirect_uris` get exactly the rules `redirect_uris` get** (rule 2) — same kind of destination, reached the same way, so validating only one of the two would just make the weaker list the one an attacker uses. Exact-match, no wildcards, validated at write
    time -- rule 2 applied to the other list of URLs this server will send a browser to.

@@ -16,12 +16,19 @@ const page = (over: Partial<PageData> = {}): PageData => ({ client: {}, provider
 describe('signInOptions', () => {
   it('answers a password pool on this page and sends anything else away, in order, with its brand', () => {
     const corp = google({ name: 'corp', display_name: 'Corp SSO', brand: undefined })
-    const options = signInOptions(page({ providers: [pool(), google(), pool({ name: 'insights', display_name: 'ESP Insights' }), corp] }))
+    const options = signInOptions(page({ flow_id: 'fl_1', providers: [pool(), google(), pool({ name: 'insights', display_name: 'ESP Insights' }), corp] }))
     assert.deepEqual(options.pools.map(p => p.id), ['cognito', 'insights'])
     assert.deepEqual(options.redirects.map(r => [r.href, r.brand]), [
-      ['login/federation/start?provider=google', 'google'],
-      ['login/federation/start?provider=corp', undefined],
+      ['login/federation/start?provider=google&flow_id=fl_1', 'google'],
+      ['login/federation/start?provider=corp&flow_id=fl_1', undefined],
     ])
+  })
+
+  it('carries a provider logo to its button, for a redirect and a pool alike', () => {
+    const logo = 'data:image/png;base64,iVBORw0KGgo='
+    const options = signInOptions(page({ providers: [pool({ logo }), google({ name: 'microsoft', brand: undefined, logo })] }))
+    assert.equal(options.pools[0]?.logo, logo)
+    assert.equal(options.redirects[0]?.logo, logo)
   })
 
   it('offers the one-time code only when it is enabled', () => {

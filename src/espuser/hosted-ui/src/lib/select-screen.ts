@@ -11,6 +11,7 @@ export interface Option {
   id: string
   label: string
   brand?: Brand
+  logo?: string
   /** Where a redirect goes; absent on a pool answered on this page. */
   href?: string
 }
@@ -50,10 +51,10 @@ function labelFor(p: Provider): string {
 export function signInOptions(page: PageData): SignInOptions {
   const options: SignInOptions = { redirects: [], pools: [], otp: page.otp_enabled }
   for (const p of page.providers) {
-    const option: Option = { id: p.name, label: labelFor(p), brand: p.brand }
+    const option: Option = { id: p.name, label: labelFor(p), brand: p.brand, logo: p.logo }
     if (p.method === 'password') options.pools.push(option)
-    // Relative to /user/login so the stage prefix carries over; the name is escaped since an operator wrote it.
-    else options.redirects.push({ ...option, href: `login/federation/start?provider=${encodeURIComponent(p.name)}` })
+    // Relative to /user/login so the stage prefix carries over; flow_id names this page's sign-in, so a newer one in another tab is refused rather than followed.
+    else options.redirects.push({ ...option, href: `login/federation/start?${new URLSearchParams({ provider: p.name, flow_id: page.flow_id ?? '' })}` })
   }
   return options
 }

@@ -12,6 +12,8 @@ export interface Provider {
   name: string
   display_name?: string
   brand?: Brand
+  /** A data:image the server checked, drawn on a plain button in place of the shield; never set on a brand's own button. */
+  logo?: string
   /** "password" is answered by this page's own form; "redirect" sends the person to the provider's own page. */
   method: 'password' | 'redirect'
 }

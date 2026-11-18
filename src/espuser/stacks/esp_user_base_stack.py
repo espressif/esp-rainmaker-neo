@@ -67,7 +67,6 @@ class CreateCommonBaseResources(Construct):
             common_resources=common_resources,
         )
 
-        self.user_api_base_res = self.esp_user_api.root.add_resource("user")
         self.admin_api_base_res = self.esp_user_api.root.add_resource("admin")
 
         self.jwks_fetcher_lambda = lambda_.Function(

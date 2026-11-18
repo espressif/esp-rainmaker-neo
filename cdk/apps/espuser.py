@@ -81,9 +81,11 @@ rmng_inputs = {} if os.environ.get('CDK_PUBLISH') == 'true' else get_rmng_inputs
 admin_emails = rmng_inputs.get('espuser-core', {}).get('admin_emails', '')
 if isinstance(admin_emails, str):
     admin_emails = [e.strip() for e in admin_emails.split(',') if e.strip()]
+# The sign-in page's footer links name the operator's own pages, so they are deployment inputs and never code.
+page_links = {key: rmng_inputs.get('espuser-core', {}).get(f'{key}_url', '') for key in ('support', 'privacy', 'terms')}
 
 esp_user_base_stack = EspUserBaseStack(app, "espuser-base", synthesizer=custom_synthesizer())
-esp_user_core_stack = EspUserCoreStack(app, "espuser-core", admin_emails=admin_emails, synthesizer=custom_synthesizer())
+esp_user_core_stack = EspUserCoreStack(app, "espuser-core", admin_emails=admin_emails, page_links=page_links, synthesizer=custom_synthesizer())
 esp_user_core_stack.add_stack_dependency(esp_user_base_stack)
 
 module_ctx = EspUserModuleContext(

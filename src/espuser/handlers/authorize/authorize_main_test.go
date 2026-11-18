@@ -5,10 +5,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -17,20 +21,25 @@ import (
 	"testing"
 	"time"
 
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/auth_flows_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/identity_providers_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/oauth_clients_db"
+	hostedui "github.com/espressif/esp-rainmaker-neo/src/espuser/hosted-ui"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/idp"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/session"
 	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/jwtutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
 	"github.com/aws/aws-lambda-go/events"
 	jwtgo "github.com/golang-jwt/jwt/v5"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/onsi/gomega/types"
+	"github.com/rs/zerolog"
 )
 
 func TestAuthorizeHandler(t *testing.T) {
@@ -44,6 +53,35 @@ const (
 	testResource        = "https://api.example.com"
 	testAccountResource = "https://account.example.com"
 )
+
+// hardenedPageHeaders are what every page of the sign-in app is served with, the error page included.
+var hardenedPageHeaders = map[string]string{
+	"Content-Type":            "text/html; charset=utf-8",
+	"Cache-Control":           "no-store",
+	"X-Content-Type-Options":  "nosniff",
+	"X-Frame-Options":         "DENY",
+	"Referrer-Policy":         "no-referrer",
+	"Content-Security-Policy": hostedui.CSP(),
+}
+
+// pageDataFrom decodes the block the app boots from; the page's contract is this JSON, not its markup.
+func pageDataFrom(body string) pageData {
+	_, rest, found := strings.Cut(body, `<script type="application/json" id="esp-page-data">`)
+	Expect(found).To(BeTrue(), "the page must carry its data block")
+	block, _, found := strings.Cut(rest, "</script>")
+	Expect(found).To(BeTrue())
+	var data pageData
+	Expect(json.Unmarshal([]byte(block), &data)).To(Succeed())
+	return data
+}
+
+func providerNames(body string) []string {
+	var names []string
+	for _, p := range pageDataFrom(body).Providers {
+		names = append(names, p.Name)
+	}
+	return names
+}
 
 // getRequest builds a GET the way API Gateway delivers it, with every query parameter in both maps.
 func getRequest(path string, query map[string]string) events.APIGatewayProxyRequest {
@@ -90,6 +128,10 @@ func withCookie(req events.APIGatewayProxyRequest, cookie string) events.APIGate
 	return req
 }
 
+func flowIDFrom(setCookie string) string {
+	return strings.SplitN(strings.TrimPrefix(setCookie, auth.FlowCookieName+"="), ";", 2)[0]
+}
+
 var _ = Describe("GET /oauth2/authorize", func() {
 	var backend *test_utils.EspUserBackend
 
@@ -105,101 +147,61 @@ var _ = Describe("GET /oauth2/authorize", func() {
 		})).To(Succeed())
 	})
 
-	It("302s to the login page with a flow_id cookie for a valid request", func() {
+	It("302s to the login page with a __Host- flow cookie for a valid request", func() {
 		backend.DBMock.ProfileReset()
 		resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathAuthorize, validQuery(nil)))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.StatusCode).To(Equal(http.StatusFound))
-		Expect(resp.Headers["Location"]).To(Equal(pathLogin + "?providers="))
-		Expect(resp.Headers["Set-Cookie"]).To(ContainSubstring(flowCookieName + "="))
-		Expect(resp.Headers["Set-Cookie"]).To(ContainSubstring("HttpOnly"))
+		Expect(resp.Headers["Location"]).To(Equal(pathLogin))
+		// The prefix holds only for a Secure, Path=/, Domain-less cookie, which is what stops a sibling host planting a flow id; Lax, because Strict would drop it on the upstream's cross-site return.
+		Expect(auth.FlowCookieName).To(HavePrefix("__Host-"))
+		Expect(resp.Headers["Set-Cookie"]).To(MatchRegexp(`^` + auth.FlowCookieName + `=[^;]+; Path=/; HttpOnly; Secure; SameSite=Lax$`))
 
-		// Two reads and one write, every time a browser starts a login:
-		//
 		//   1  GetItem espuser-oauth-clients      the registry check inside StartAuthFlow
 		//   2  PutItem espuser-auth-flows         the LOGIN flow record (write)
-		//   3  Scan    espuser-identity-providers loginRedirect, deciding chooser vs. straight-through
-		//
-		// Read 3 is a Scan, on the hot path of every unauthenticated login. It is pinned here so that
-		// caching the provider list, or moving that decision, shows up as a changed number rather
-		// than staying invisible as one more full table scan per login.
+		//   3  Scan    espuser-identity-providers loginRedirect, pinned because it is a Scan on every unauthenticated login
 		profile := backend.DBMock.ProfileGet()
 		readCnt, writeCnt := profile.TotalCounts()
 		Expect(readCnt).To(Equal(2))
 		Expect(writeCnt).To(Equal(1), "exactly one flow record, and nothing else written")
 	})
 
-	It("names the flow cookie with the __Host- prefix and the exact attribute set it requires", func() {
-		// Without the prefix, a page on a sibling host can plant a flow id: the victim then
-		// completes a login into the ATTACKER's flow and the authorization code is delivered
-		// to the attacker's registered redirect_uri. The prefix is honoured by the browser
-		// only for a Secure, Path=/, Domain-less cookie, which is what makes it unplantable
-		// from anywhere but this exact origin.
-		resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathAuthorize, validQuery(nil)))
-		Expect(err).NotTo(HaveOccurred())
-		cookie := resp.Headers["Set-Cookie"]
-		Expect(flowCookieName).To(HavePrefix("__Host-"))
-		Expect(cookie).To(ContainSubstring("Path=/"))
-		Expect(cookie).To(ContainSubstring("Secure"))
-		Expect(cookie).To(ContainSubstring("SameSite=Lax"),
-			"Strict would suppress the cookie on the upstream's cross-site return and break every federated login")
-		Expect(strings.ToLower(cookie)).NotTo(ContainSubstring("domain="),
-			"a Domain attribute voids the __Host- prefix, and the browser then drops the cookie entirely")
-	})
+	// API Gateway strips the stage from request.Path; only the execute-api host carries it in the browser's URL.
+	DescribeTable("keeps the stage prefix in the login redirect only where the browser's URL has one",
+		func(domain, location string) {
+			req := getRequest(pathAuthorize, validQuery(nil))
+			req.RequestContext.Stage = "prod"
+			req.RequestContext.DomainName = domain
+			resp, err := handleAuthorizeRequest(context.Background(), req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusFound))
+			Expect(resp.Headers["Location"]).To(Equal(location))
+		},
+		Entry("the execute-api host", "abc123.execute-api.eu-west-1.amazonaws.com", "/prod/user/login"),
+		Entry("a custom domain, whose base-path mapping pins the stage (negative)", "user.api.example.com", "/user/login"),
+	)
 
-	It("preserves the API Gateway stage prefix in the login redirect on the execute-api host", func() {
-		// API Gateway strips the stage from request.Path but exposes it on RequestContext; the redirect must re-prepend it so the browser keeps /<stage>.
-		req := getRequest(pathAuthorize, validQuery(nil))
-		req.RequestContext.Stage = "prod"
-		req.RequestContext.DomainName = "abc123.execute-api.eu-west-1.amazonaws.com"
-		resp, err := handleAuthorizeRequest(context.Background(), req)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.StatusCode).To(Equal(http.StatusFound))
-		Expect(resp.Headers["Location"]).To(Equal("/prod/oauth2/login?providers="))
-	})
-
-	It("omits the stage prefix in the login redirect on a custom domain (negative)", func() {
-		// A custom domain's base-path mapping pins the stage server-side; the public URL has no /<stage> prefix, so re-prepending it would 403 (/prod/oauth2/login does not exist there).
-		req := getRequest(pathAuthorize, validQuery(nil))
-		req.RequestContext.Stage = "prod"
-		req.RequestContext.DomainName = "user.api.example.com"
-		resp, err := handleAuthorizeRequest(context.Background(), req)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.StatusCode).To(Equal(http.StatusFound))
-		Expect(resp.Headers["Location"]).To(Equal("/oauth2/login?providers="))
-	})
-
-	It("renders the error page for an unknown client (negative, no redirect)", func() {
+	It("renders the hardened error page for an unknown client, naming nothing it was handed (negative, no redirect)", func() {
 		backend.DBMock.ProfileReset()
 		resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathAuthorize, validQuery(map[string]string{"client_id": "ghost"})))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
-		Expect(resp.Headers).NotTo(HaveKey("Location"), "an unvalidated request must not redirect")
-		Expect(resp.Headers["Content-Type"]).To(ContainSubstring("text/html"))
+		Expect(resp.Headers).To(Equal(hardenedPageHeaders), "no Location: an unvalidated request must not redirect")
+		Expect(pageDataFrom(resp.Body).Error).To(Equal(&errorData{Code: oidc.OAuthErrInvalidClient, Message: "Unknown client."}))
+		// Anyone can reach this page by typing a URL; echoing the parameters back makes it a mirror.
+		Expect(resp.Body).NotTo(ContainSubstring("ghost"))
+		Expect(resp.Body).NotTo(ContainSubstring(redirectURI))
 
-		// One registry GetItem and nothing more. This is what keeps an unauthenticated caller from
-		// filling the flows table: a rejected authorize costs one read and no write, whatever
-		// client_id it names.
+		// One registry GetItem and no write, so an unauthenticated caller cannot fill the flows table.
 		profile := backend.DBMock.ProfileGet()
 		readCnt, writeCnt := profile.TotalCounts()
 		Expect(readCnt).To(Equal(1))
 		Expect(writeCnt).To(BeZero(), "a rejected request must not create a flow record")
 	})
 
-	It("renders the error page for an unregistered redirect_uri (negative, open-redirect defense)", func() {
-		resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathAuthorize, validQuery(map[string]string{"redirect_uri": "com.evil://cb"})))
-		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
-		Expect(resp.Headers).NotTo(HaveKey("Location"))
-	})
-
-	// redirect_uri must match a registered value EXACTLY (RFC 9700 §4.1, OWASP). These are the
-	// classic bypass vectors that defeat prefix/substring/domain-only matching; each must fail
-	// closed to the error page and never redirect (no code leaks to an attacker endpoint). The
-	// base registered value is "https://app.example.com/cb".
+	// redirect_uri must match a registered value EXACTLY (RFC 9700 §4.1): each classic prefix/substring/domain bypass fails closed to the error page, so no code leaks to an attacker endpoint.
 	DescribeTable("rejects redirect_uri manipulation vectors (open-redirect defense)",
 		func(evil string) {
-			// Register an https client whose exact callback the vectors try to subvert.
 			clientsDB := oauth_clients_db.NewOAuthClientsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
 			Expect(clientsDB.CreateClient(&oauth_clients_db.OAuthClientEntry{
 				ClientID: "https_client", ClientType: oauth_clients_db.ClientTypePublic,
@@ -223,13 +225,20 @@ var _ = Describe("GET /oauth2/authorize", func() {
 		Entry("extra query param", "https://app.example.com/cb?x=1"),
 		Entry("open-redirect appended", "https://app.example.com/cb/redirect?to=https://evil.com"),
 		Entry("different host entirely", "https://evil.com/cb"),
+		Entry("another app's custom scheme", "com.evil://cb"),
 	)
 
-	It("rejects a missing PKCE challenge for a require_pkce client (negative)", func() {
-		resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathAuthorize, validQuery(map[string]string{"code_challenge": ""})))
-		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
-	})
+	DescribeTable("renders the error page for a malformed request (negative)",
+		func(overrides map[string]string) {
+			resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathAuthorize, validQuery(overrides)))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
+			Expect(resp.Headers).NotTo(HaveKey("Location"))
+		},
+		Entry("no PKCE challenge from a require_pkce client", map[string]string{"code_challenge": ""}),
+		Entry("a PKCE method other than S256", map[string]string{"code_challenge_method": "plain"}),
+		Entry("a response_type other than code", map[string]string{"response_type": "token"}),
+	)
 
 	It("allows a confidential client with require_pkce=false to omit the challenge", func() {
 		clientsDB := oauth_clients_db.NewOAuthClientsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
@@ -245,34 +254,20 @@ var _ = Describe("GET /oauth2/authorize", func() {
 		Expect(resp.StatusCode).To(Equal(http.StatusFound), "no-PKCE confidential client may start a flow without a challenge")
 	})
 
-	It("rejects a non-S256 PKCE method with the error page (negative)", func() {
-		resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathAuthorize, validQuery(map[string]string{"code_challenge_method": "plain"})))
-		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
-	})
-
-	It("rejects a non-code response_type (negative)", func() {
-		resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathAuthorize, validQuery(map[string]string{"response_type": "token"})))
-		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
-	})
-
-	It("redirects the client with invalid_target for an unregistered resource (negative)", func() {
-		// Redirects rather than rendering, and the distinction is not arbitrary: by this
-		// point redirect_uri has been checked against the registry, so the error can safely
-		// go back to the client (RFC 6749 s4.1.2.1). The two cases above cannot, because
-		// what failed was the client or the URI itself.
-		//
-		// It is caught here at all -- rather than at the code exchange -- so nobody
-		// completes a whole login, provider round trip included, to be told the request was
-		// never valid.
-		resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathAuthorize,
-			validQuery(map[string]string{"resource": "https://api.someone-else.example.com"})))
-		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.StatusCode).To(Equal(http.StatusFound))
-		Expect(resp.Headers["Location"]).To(ContainSubstring("error=invalid_target"))
-		Expect(resp.Headers["Location"]).NotTo(ContainSubstring("code="), "no code is issued")
-	})
+	// By this point redirect_uri has been checked against the registry, so the error goes back to the client (RFC 6749 s4.1.2.1), before anyone completes a login for a request that was never valid.
+	DescribeTable("redirects the client with the error once redirect_uri is validated (negative)",
+		func(overrides map[string]string, code string) {
+			resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathAuthorize, validQuery(overrides)))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusFound))
+			loc, err := url.Parse(resp.Headers["Location"])
+			Expect(err).NotTo(HaveOccurred())
+			Expect(loc.Scheme + "://" + loc.Host + loc.Path).To(Equal(redirectURI))
+			Expect(loc.Query()).To(Equal(url.Values{"error": {code}, "state": {"xyz"}}), "no code is issued")
+		},
+		Entry("an unregistered resource", map[string]string{"resource": "https://api.someone-else.example.com"}, oidc.OAuthErrInvalidTarget),
+		Entry("a scope outside the client's allowed set", map[string]string{"scope": "openid admin"}, oidc.OAuthErrInvalidScope),
+	)
 
 	It("lets one sign-in cover several resources (RFC 8707 s2.1)", func() {
 		req := getRequest(pathAuthorize, validQuery(nil))
@@ -282,147 +277,345 @@ var _ = Describe("GET /oauth2/authorize", func() {
 		Expect(resp.StatusCode).To(Equal(http.StatusFound))
 		Expect(resp.Headers["Location"]).NotTo(ContainSubstring("error="))
 	})
-
-	It("redirects the client with invalid_scope when a scope is outside the client's allowed set (negative)", func() {
-		resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathAuthorize, validQuery(map[string]string{"scope": "openid admin"})))
-		Expect(err).NotTo(HaveOccurred())
-		// redirect_uri is validated by this point, so the error is safe to redirect.
-		Expect(resp.StatusCode).To(Equal(http.StatusFound))
-		Expect(resp.Headers["Location"]).To(ContainSubstring("error=invalid_scope"))
-		Expect(resp.Headers["Location"]).To(ContainSubstring("state=xyz"))
-	})
-
 })
 
-var _ = Describe("GET /oauth2/login", func() {
+// startFlow is what /oauth2/authorize leaves behind for a client: the flow's id, which the browser holds as a cookie.
+func startFlow(clientID string) string {
+	resp, err := handleAuthorizeRequest(context.Background(),
+		getRequest(pathAuthorize, validQuery(map[string]string{"client_id": clientID})))
+	Expect(err).NotTo(HaveOccurred())
+	Expect(resp.StatusCode).To(Equal(http.StatusFound))
+	return flowIDFrom(resp.Headers["Set-Cookie"])
+}
+
+func loginRequest(flowID string, query map[string]string) events.APIGatewayProxyRequest {
+	return withCookie(getRequest(pathLogin, query), auth.FlowCookieName+"="+flowID)
+}
+
+var _ = Describe("GET /user/login", func() {
+	var backend *test_utils.EspUserBackend
+
+	enable := func(entry identity_providers_db.ProviderEntry) {
+		entry.Enabled = utils.Ptr(true)
+		Expect(identity_providers_db.NewIdentityProvidersDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).CreateProvider(&entry)).To(Succeed())
+	}
+	registerClient := func(clientID, name string, allowed []string) {
+		Expect(oauth_clients_db.NewOAuthClientsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).
+			CreateClient(&oauth_clients_db.OAuthClientEntry{
+				ClientID: clientID, ClientName: name, ClientType: oauth_clients_db.ClientTypePublic, FirstParty: true,
+				RedirectURIs: []string{redirectURI}, Scopes: []string{"openid", "email"},
+				AllowedProviders: allowed, RequirePKCE: utils.Ptr(true),
+				AllowedResources: []string{testResource, testAccountResource}, DefaultResource: testResource,
+			})).To(Succeed())
+	}
+
+	BeforeEach(func() {
+		backend = test_utils.SetupEspUserBackend(context.Background())
+		registerClient(testClientID, "Acme App", nil)
+	})
+
+	It("serves the hardened sign-in app, naming the flow the cookie holds", func() {
+		enable(identity_providers_db.ProviderEntry{ProviderName: "acme", Type: identity_providers_db.TypeOIDC})
+		enable(identity_providers_db.ProviderEntry{ProviderName: "personal", Type: identity_providers_db.TypeOIDC})
+		flowID := startFlow(testClientID)
+
+		resp, err := handleAuthorizeRequest(context.Background(), loginRequest(flowID, nil))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
+		Expect(resp.Headers).To(Equal(hardenedPageHeaders))
+		// The app's own data is application/json, which the browser never executes, so nothing needs a nonce.
+		Expect(hostedui.CSP()).To(ContainSubstring("default-src 'none'"))
+		Expect(hostedui.CSP()).To(ContainSubstring("script-src 'sha256-"))
+		Expect(hostedui.CSP()).To(ContainSubstring("frame-ancestors 'none'"))
+		Expect(hostedui.CSP()).NotTo(ContainSubstring("nonce-"))
+		Expect(hostedui.CSP()).NotTo(ContainSubstring("https://"), "no remote origin belongs on a sign-in page")
+		Expect(resp.Body).To(ContainSubstring(`<div id="root">`))
+		Expect(pageDataFrom(resp.Body).FlowID).To(Equal(flowID))
+	})
+
+	It("describes only the providers the flow's client allows, with that client's registered name", func() {
+		enable(identity_providers_db.ProviderEntry{ProviderName: "acme", DisplayName: "Acme SSO", Type: identity_providers_db.TypeOIDC})
+		enable(identity_providers_db.ProviderEntry{ProviderName: "personal", Type: identity_providers_db.TypeOIDC})
+		registerClient("restricted-client", "Restricted App", []string{"acme"})
+
+		resp, err := handleAuthorizeRequest(context.Background(), loginRequest(startFlow("restricted-client"), nil))
+		Expect(err).NotTo(HaveOccurred())
+		data := pageDataFrom(resp.Body)
+		Expect(data.Providers).To(Equal([]providerData{{Name: "acme", DisplayName: "Acme SSO", Method: "redirect"}}))
+		Expect(data.Client.Name).To(Equal("Restricted App"))
+	})
+
+	It("describes every enabled provider for a client that restricts none, by name, with its display name", func() {
+		enable(identity_providers_db.ProviderEntry{ProviderName: "cognito", DisplayName: "Espressif Account", Type: identity_providers_db.TypeOIDC, PasswordVerifier: identity_providers_db.PasswordVerifierCognito, ClientID: "app"})
+		enable(identity_providers_db.ProviderEntry{ProviderName: "acme", DisplayName: "Acme SSO", Type: identity_providers_db.TypeOIDC})
+
+		resp, err := handleAuthorizeRequest(context.Background(), loginRequest(startFlow(testClientID), nil))
+		Expect(err).NotTo(HaveOccurred())
+		data := pageDataFrom(resp.Body)
+		Expect(data.Providers).To(Equal([]providerData{
+			{Name: "acme", DisplayName: "Acme SSO", Method: "redirect"},
+			{Name: "cognito", DisplayName: "Espressif Account", Method: "password"},
+		}))
+		Expect(data.Client.Name).To(Equal("Acme App"))
+	})
+
+	It("leaves out a password row without a client_id, whose form could not check a password and must not become a button (negative)", func() {
+		enable(identity_providers_db.ProviderEntry{ProviderName: "cognito", Type: identity_providers_db.TypeOIDC, PasswordVerifier: identity_providers_db.PasswordVerifierCognito})
+		enable(identity_providers_db.ProviderEntry{ProviderName: "acme", Type: identity_providers_db.TypeOIDC})
+
+		resp, err := handleAuthorizeRequest(context.Background(), loginRequest(startFlow(testClientID), nil))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(providerNames(resp.Body)).To(Equal([]string{"acme"}))
+	})
+
+	It("keeps a display name that looks like markup out of the document structure", func() {
+		enable(identity_providers_db.ProviderEntry{ProviderName: "evil", Type: "oidc", DisplayName: `</a><script>alert(1)</script>`})
+
+		resp, err := handleAuthorizeRequest(context.Background(), loginRequest(startFlow(testClientID), nil))
+		Expect(err).NotTo(HaveOccurred())
+		// One unescaped </script> would end the data block; json.Marshal escapes < > &, a property of the encoder worth asserting rather than trusting.
+		Expect(resp.Body).NotTo(ContainSubstring("<script>alert(1)</script>"))
+		Expect(resp.Body).NotTo(ContainSubstring("</a>"))
+		// Escaped, not stripped, or the page would quietly rename providers.
+		Expect(pageDataFrom(resp.Body).Providers).To(Equal([]providerData{{Name: "evil", DisplayName: `</a><script>alert(1)</script>`, Method: "redirect"}}))
+	})
+
+	It("offers a code sign-in and no provider when only OTP is enabled", func() {
+		enable(identity_providers_db.ProviderEntry{ProviderName: "otp", Type: identity_providers_db.TypeOTP, DisplayName: "Code"})
+
+		resp, err := handleAuthorizeRequest(context.Background(), loginRequest(startFlow(testClientID), nil))
+		Expect(err).NotTo(HaveOccurred())
+		data := pageDataFrom(resp.Body)
+		Expect(data.Providers).To(BeEmpty())
+		Expect(data.OTPEnabled).To(BeTrue())
+	})
+
+	It("takes only login_hint and idp from the address, ignoring a providers or client it is handed (negative)", func() {
+		enable(identity_providers_db.ProviderEntry{ProviderName: "acme", Type: identity_providers_db.TypeOIDC})
+		enable(identity_providers_db.ProviderEntry{ProviderName: "personal", Type: identity_providers_db.TypeOIDC})
+		registerClient("restricted-client", "Restricted App", []string{"acme"})
+
+		resp, err := handleAuthorizeRequest(context.Background(), loginRequest(startFlow("restricted-client"), map[string]string{
+			"providers": "acme,personal", "client": "Your bank", "login_hint": "person@example.com", "idp": "acme",
+		}))
+		Expect(err).NotTo(HaveOccurred())
+		data := pageDataFrom(resp.Body)
+		Expect(providerNames(resp.Body)).To(Equal([]string{"acme"}))
+		Expect(data.Client.Name).To(Equal("Restricted App"))
+		Expect(data.LoginHint).To(Equal("person@example.com"))
+		Expect(data.IDP).To(Equal("acme"))
+	})
+
+	It("reads one flow and one client beside the provider scan", func() {
+		enable(identity_providers_db.ProviderEntry{ProviderName: "acme", Type: identity_providers_db.TypeOIDC})
+		enable(identity_providers_db.ProviderEntry{ProviderName: "personal", Type: identity_providers_db.TypeOIDC})
+		flowID := startFlow(testClientID)
+
+		backend.DBMock.ProfileReset()
+		resp, err := handleAuthorizeRequest(context.Background(), loginRequest(flowID, nil))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+		//   1  GetItem espuser-auth-flows         the flow the cookie names
+		//   2  GetItem espuser-oauth-clients      that flow's client
+		//   3  Scan    espuser-identity-providers the providers to draw
+		profile := backend.DBMock.ProfileGet()
+		readCnt, writeCnt := profile.TotalCounts()
+		Expect(readCnt).To(Equal(3))
+		Expect(writeCnt).To(BeZero())
+		Expect(profile.Accesses["espuser-auth-flows"].ReadCount).To(Equal(1))
+		Expect(profile.Accesses["espuser-oauth-clients"].ReadCount).To(Equal(1))
+	})
+
+	// No form: a page that listed providers for a sign-in nobody can finish would only send the person into an error one step later.
+	DescribeTable("draws the error screen and no form without a live flow (negative)",
+		func(cookie func() string, status int, code, restartURL string) {
+			enable(identity_providers_db.ProviderEntry{ProviderName: "acme", Type: identity_providers_db.TypeOIDC})
+			enable(identity_providers_db.ProviderEntry{ProviderName: "personal", Type: identity_providers_db.TypeOIDC})
+			req := getRequest(pathLogin, nil)
+			if c := cookie(); c != "" {
+				req = withCookie(req, auth.FlowCookieName+"="+c)
+			}
+			resp, err := handleAuthorizeRequest(context.Background(), req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(status))
+			Expect(resp.Headers).To(Equal(hardenedPageHeaders))
+			data := pageDataFrom(resp.Body)
+			Expect(data.Error).NotTo(BeNil())
+			Expect(data.Error.Code).To(Equal(code))
+			Expect(data.RestartURL).To(Equal(restartURL))
+			Expect(data.Providers).To(BeEmpty())
+			Expect(data.FlowID).To(BeEmpty(), "nothing on the page can finish a sign-in")
+		},
+		Entry("no cookie, so there is nothing to restart", func() string { return "" }, http.StatusBadRequest, oidc.OAuthErrInvalidRequest, ""),
+		Entry("a flow that does not exist, which Start again could not rebuild", func() string { return "fl_missing" }, http.StatusBadRequest, oidc.RMErrExpiredFlow, ""),
+		Entry("an expired flow", func() string {
+			Expect(auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).CreateFlow(&auth_flows_db.AuthFlow{
+				FlowID: "fl_expired", ClientID: testClientID, RedirectURI: redirectURI, State: "xyz",
+				RequestedScope: []string{"openid"}, ExpiresOn: time.Now().Add(-time.Minute).Unix(),
+			})).To(Succeed())
+			return "fl_expired"
+		}, http.StatusBadRequest, oidc.RMErrExpiredFlow, pathRestart),
+		Entry("a flow whose client no longer exists, which never means every provider", func() string {
+			flowID := startFlow(testClientID)
+			Expect(oauth_clients_db.NewOAuthClientsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).DeleteClient(testClientID)).To(Succeed())
+			return flowID
+		}, http.StatusBadRequest, oidc.RMErrExpiredFlow, pathRestart),
+	)
+
+	It("tells a browser with no flow cookie to start again from the application, in the message", func() {
+		resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathLogin, nil))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(pageDataFrom(resp.Body).Error.Message).To(ContainSubstring("start again from the application"))
+	})
+
+	It("logs a registry it cannot read as a warning, and says there is no way in rather than drawing an empty card", func() {
+		flowID := startFlow(testClientID)
+		Expect(os.Unsetenv("ESPUSER_REFRESH_SECRET_PARAM")).To(Succeed())
+		DeferCleanup(func() { Expect(os.Setenv("ESPUSER_REFRESH_SECRET_PARAM", backend.RefreshSecretParam)).To(Succeed()) })
+		level := zerolog.GlobalLevel()
+		zerolog.SetGlobalLevel(zerolog.WarnLevel)
+		DeferCleanup(func() { zerolog.SetGlobalLevel(level) })
+		var logged bytes.Buffer
+		ctx := zerolog.New(&logged).WithContext(context.Background())
+
+		resp, err := handleAuthorizeRequest(ctx, loginRequest(flowID, nil))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.StatusCode).To(Equal(http.StatusInternalServerError))
+		Expect(pageDataFrom(resp.Body).Error.Code).To(Equal(oidc.OAuthErrServerError))
+		Expect(logged.String()).To(And(ContainSubstring(`"level":"warn"`), ContainSubstring("provider registry")))
+	})
+
+	DescribeTable("answers a sign-in with no way in with the error screen, never an empty card (negative)",
+		func(allowed []string, enabled ...identity_providers_db.ProviderEntry) {
+			for _, entry := range enabled {
+				enable(entry)
+			}
+			registerClient("stranded-client", "Stranded App", allowed)
+
+			resp, err := handleAuthorizeRequest(context.Background(), loginRequest(startFlow("stranded-client"), nil))
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusInternalServerError))
+			data := pageDataFrom(resp.Body)
+			Expect(data.Error).NotTo(BeNil())
+			Expect(data.Error.Code).To(Equal(oidc.OAuthErrServerError))
+			Expect(data.FlowID).To(BeEmpty(), "nothing on the page can finish a sign-in")
+		},
+		Entry("the client allows only a provider that is not enabled", []string{"nope"},
+			identity_providers_db.ProviderEntry{ProviderName: "acme", Type: identity_providers_db.TypeOIDC}),
+		Entry("no provider is enabled at all", nil),
+	)
+})
+
+// The page carries its own script and stylesheet, so there is nothing else to fetch and the CSP admits exactly those bytes.
+var _ = Describe("the sign-in page's inlined app", func() {
 	BeforeEach(func() {
 		test_utils.SetupEspUserBackend(context.Background())
 	})
 
-	It("serves the login HTML with no-store and injects the flow id from the cookie", func() {
-		req := getRequest(pathLogin, nil)
-		req.Headers = map[string]string{"Cookie": flowCookieName + "=fl_abc123; other=x"}
-		resp, err := handleAuthorizeRequest(context.Background(), req)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.StatusCode).To(Equal(http.StatusOK))
-		Expect(resp.Headers["Content-Type"]).To(ContainSubstring("text/html"))
-		Expect(resp.Headers["Cache-Control"]).To(Equal("no-store"))
-		Expect(strings.ToLower(resp.Body)).To(ContainSubstring("<form"))
-		// The HttpOnly flow id is injected into the page JS (not read via document.cookie).
-		Expect(resp.Body).To(ContainSubstring(`var flowId = "fl_abc123";`))
-		// The escaped CSS width renders as a literal percent, not a format artifact.
-		Expect(resp.Body).To(ContainSubstring("width: 100%;"))
-	})
+	inline := func(body, open, close string) string {
+		_, rest, found := strings.Cut(body, open)
+		Expect(found).To(BeTrue(), "the page must carry "+open)
+		text, _, found := strings.Cut(rest, close)
+		Expect(found).To(BeTrue())
+		return text
+	}
+	hash := func(text string) string {
+		sum := sha256.Sum256([]byte(text))
+		return "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+	}
 
-	It("renders a button per federated provider so the user can pick one", func() {
-		db := identity_providers_db.NewIdentityProvidersDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
-		enabled := true
-		for name, display := range map[string]string{"cognito": "Espressif Account", "acme": "Acme SSO"} {
-			Expect(db.CreateProvider(&identity_providers_db.ProviderEntry{
-				ProviderName: name, Type: "oidc", DisplayName: display, Enabled: &enabled,
-			})).To(Succeed())
-		}
-
+	It("loads nothing from anywhere, and its CSP admits exactly the script and stylesheet it carries", func() {
 		resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathLogin, nil))
 		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.StatusCode).To(Equal(http.StatusOK))
-		for name, display := range map[string]string{"cognito": "Espressif Account", "acme": "Acme SSO"} {
-			Expect(resp.Body).To(ContainSubstring("federation/start?provider=" + name))
-			Expect(resp.Body).To(ContainSubstring(display))
-		}
-		// A provider with no logo of its own still gets a mark, drawn inline. Inline rather
-		// than an <img> so it inherits currentColor and works on either theme, which is also
-		// why the CSP needs no remote image origin.
-		Expect(resp.Body).To(ContainSubstring("<svg viewBox=\"0 0 24 24\""))
-		Expect(resp.Headers["Content-Security-Policy"]).To(ContainSubstring("default-src 'none'"))
-		Expect(resp.Headers["Content-Security-Policy"]).NotTo(ContainSubstring("https://"))
-	})
-
-	It("renders the Espressif login page", func() {
-		resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathLogin, nil))
-		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.StatusCode).To(Equal(http.StatusOK))
-		Expect(resp.Body).To(ContainSubstring("Sign in · Espressif"))
-		Expect(resp.Body).To(ContainSubstring(`<div class="brand">`))
-		Expect(resp.Body).To(ContainSubstring("#e7352c"))
-		// Still a complete page, not a placeholder.
-		Expect(resp.Body).To(ContainSubstring("<form"))
-	})
-
-	It("keeps a display name that looks like markup out of the document structure", func() {
-		db := identity_providers_db.NewIdentityProvidersDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
-		enabled := true
-		Expect(db.CreateProvider(&identity_providers_db.ProviderEntry{
-			ProviderName: "evil", Type: "oidc", Enabled: &enabled,
-			DisplayName: `</a><script>alert(1)</script>`,
-		})).To(Succeed())
-
-		resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathLogin, nil))
-		Expect(err).NotTo(HaveOccurred())
-		// The label is data. Only the page's own nonced script may execute.
-		Expect(resp.Body).NotTo(ContainSubstring("<script>alert(1)</script>"))
-		Expect(resp.Body).To(ContainSubstring("alert(1)"))
-	})
-
-	It("renders no provider buttons when only the OTP provider is enabled (its form is the page)", func() {
-		db := identity_providers_db.NewIdentityProvidersDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
-		enabled := true
-		Expect(db.CreateProvider(&identity_providers_db.ProviderEntry{
-			ProviderName: "otp", Type: "otp", DisplayName: "Email code", Enabled: &enabled,
-		})).To(Succeed())
-
-		resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathLogin, nil))
-		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.Body).NotTo(ContainSubstring("federation/start?provider="))
-		Expect(resp.Body).To(ContainSubstring("identifier-form"))
-	})
-
-	It("injects an empty flow id when the cookie is absent (page shows the expired message)", func() {
-		resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathLogin, nil))
-		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.StatusCode).To(Equal(http.StatusOK))
-		Expect(resp.Body).To(ContainSubstring(`var flowId = "";`))
-	})
-
-	// Browser-layer hardening (OWASP): the login page carries a nonce-based CSP (so an injected
-	// script without the nonce can't run), Referrer-Policy: no-referrer (so the auth code in a
-	// downstream URL can't leak via Referer), anti-framing, and nosniff.
-	It("sets a nonce-based CSP whose nonce matches the inline script, plus Referrer-Policy and anti-framing", func() {
-		req := getRequest(pathLogin, nil)
-		req.Headers = map[string]string{"Cookie": flowCookieName + "=fl_abc123"}
-		resp, err := handleAuthorizeRequest(context.Background(), req)
-		Expect(err).NotTo(HaveOccurred())
-
-		Expect(resp.Headers["Referrer-Policy"]).To(Equal("no-referrer"))
-		Expect(resp.Headers["X-Frame-Options"]).To(Equal("DENY"))
-		Expect(resp.Headers["X-Content-Type-Options"]).To(Equal("nosniff"))
+		Expect(resp.Body).NotTo(ContainSubstring(" src="), "no external script")
+		Expect(resp.Body).NotTo(ContainSubstring(`rel="stylesheet"`), "no external stylesheet")
 
 		csp := resp.Headers["Content-Security-Policy"]
-		Expect(csp).To(ContainSubstring("default-src 'none'"))
-		Expect(csp).To(ContainSubstring("frame-ancestors 'none'"))
-		Expect(csp).To(ContainSubstring("script-src 'nonce-"))
-		// The CSP nonce must equal the nonce on the one inline <script>, or the browser blocks it.
-		start := strings.Index(csp, "'nonce-") + len("'nonce-")
-		nonce := csp[start : start+strings.Index(csp[start:], "'")]
-		Expect(nonce).NotTo(BeEmpty())
-		Expect(resp.Body).To(ContainSubstring(`<script nonce="` + nonce + `">`))
+		Expect(csp).To(ContainSubstring("script-src " + hash(inline(resp.Body, `<script type="module">`, "</script>")) + ";"))
+		Expect(csp).To(ContainSubstring("style-src " + hash(inline(resp.Body, "<style>", "</style>")) + ";"))
 	})
+})
 
-	It("gives a fresh CSP nonce on each login render (not a fixed value)", func() {
-		req := getRequest(pathLogin, nil)
-		req.Headers = map[string]string{"Cookie": flowCookieName + "=fl_abc123"}
-		r1, _ := handleAuthorizeRequest(context.Background(), req)
-		r2, _ := handleAuthorizeRequest(context.Background(), req)
-		Expect(r1.Headers["Content-Security-Policy"]).NotTo(Equal(r2.Headers["Content-Security-Policy"]))
-	})
+// Restart replays the request a timed-out login began with, so what it rebuilds from is the whole of its security.
+var _ = Describe("GET /user/login/restart", func() {
+	var flowID string
 
-	It("hardens the error page with CSP, Referrer-Policy, and anti-framing", func() {
-		resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathAuthorize, validQuery(map[string]string{"client_id": "ghost"})))
+	BeforeEach(func() {
+		test_utils.SetupEspUserBackend(context.Background())
+		clientsDB := oauth_clients_db.NewOAuthClientsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
+		Expect(clientsDB.CreateClient(&oauth_clients_db.OAuthClientEntry{
+			ClientID: testClientID, ClientType: oauth_clients_db.ClientTypePublic,
+			RedirectURIs: []string{redirectURI}, Scopes: []string{"openid", "email"},
+			RequirePKCE:      utils.Ptr(true),
+			AllowedResources: []string{testResource, testAccountResource}, DefaultResource: testResource,
+		})).To(Succeed())
+
+		resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathAuthorize, validQuery(nil)))
 		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
-		Expect(resp.Headers["Referrer-Policy"]).To(Equal("no-referrer"))
-		Expect(resp.Headers["X-Frame-Options"]).To(Equal("DENY"))
-		Expect(resp.Headers["Content-Security-Policy"]).To(ContainSubstring("default-src 'none'"))
+		Expect(resp.StatusCode).To(Equal(http.StatusFound))
+		flowID = flowIDFrom(resp.Headers["Set-Cookie"])
+	})
+
+	restart := func(req events.APIGatewayProxyRequest) events.APIGatewayProxyResponse {
+		resp, err := handleAuthorizeRequest(context.Background(), req)
+		Expect(err).NotTo(HaveOccurred())
+		return resp
+	}
+
+	// Every parameter the client's own security rests on comes back, or the second attempt is weaker than the first: no state is no CSRF binding, no challenge is no PKCE.
+	DescribeTable("rebuilds the authorize request the login began with, never from the request's own query",
+		func(query map[string]string) {
+			resp := restart(withCookie(getRequest(pathRestart, query), auth.FlowCookieName+"="+flowID))
+			Expect(resp.StatusCode).To(Equal(http.StatusFound))
+			Expect(resp.Headers["Cache-Control"]).To(Equal("no-store"))
+
+			location, err := url.Parse(resp.Headers["Location"])
+			Expect(err).NotTo(HaveOccurred())
+			Expect(location.Path).To(Equal(pathAuthorize))
+			Expect(location.Query()).To(Equal(url.Values{
+				"response_type":         {"code"},
+				"client_id":             {testClientID},
+				"redirect_uri":          {redirectURI},
+				"scope":                 {"openid email"},
+				"state":                 {"xyz"},
+				"code_challenge":        {"E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"},
+				"code_challenge_method": {"S256"},
+				"resource":              {testResource},
+			}))
+		},
+		Entry("a bare restart", nil),
+		Entry("a restart carrying an attacker's parameters (negative)", map[string]string{
+			"redirect_uri": "https://attacker.example/steal", "client_id": "some-other-client", "state": "attacker-state",
+		}),
+	)
+
+	DescribeTable("tells the app there is nothing to restart (negative)",
+		func(cookie string) {
+			req := getRequest(pathRestart, nil)
+			if cookie != "" {
+				req = withCookie(req, cookie)
+			}
+			resp := restart(req)
+			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
+			Expect(pageDataFrom(resp.Body).Error.Code).To(Equal(oidc.OAuthErrInvalidRequest))
+		},
+		Entry("no flow cookie", ""),
+		Entry("a flow id that names nothing", auth.FlowCookieName+"=fl_not_a_flow"),
+	)
+
+	It("restarts a login that has already expired, which is the case it exists for", func() {
+		flows := auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
+		Expect(flows.CreateFlow(&auth_flows_db.AuthFlow{
+			FlowID: "fl_long_expired", ClientID: testClientID, RedirectURI: redirectURI,
+			State: "xyz", RequestedScope: []string{"openid", "email"},
+			ExpiresOn: time.Now().Add(-30 * time.Minute).Unix(),
+		})).To(Succeed())
+
+		resp := restart(withCookie(getRequest(pathRestart, nil), auth.FlowCookieName+"=fl_long_expired"))
+		Expect(resp.StatusCode).To(Equal(http.StatusFound))
+		Expect(resp.Headers["Location"]).To(ContainSubstring("client_id=" + testClientID))
 	})
 })
 
@@ -450,15 +643,13 @@ var _ = Describe("GET /oauth2/authorize with a session (SSO)", func() {
 	})
 
 	It("falls through to the login page for a session cookie that resolves to no live session (negative)", func() {
-		// A bogus or stale session cookie must be ignored -- no shortcut, no error -- and the
-		// request must proceed as an ordinary login, flow cookie and all.
 		req := withCookie(getRequest(pathAuthorize, validQuery(nil)), session.CookieName+"=whatever")
 		backend.DBMock.ProfileReset()
 		resp, err := handleAuthorizeRequest(context.Background(), req)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.StatusCode).To(Equal(http.StatusFound))
-		Expect(resp.Headers["Location"]).To(Equal(pathLogin + "?providers="))
-		Expect(resp.Headers["Set-Cookie"]).To(ContainSubstring(flowCookieName + "="))
+		Expect(resp.Headers["Location"]).To(Equal(pathLogin))
+		Expect(resp.Headers["Set-Cookie"]).To(ContainSubstring(auth.FlowCookieName + "="))
 
 		// The login-page cost (2 reads + the flow write) plus one conditional sessions UpdateItem that fails and changes nothing.
 		profile := backend.DBMock.ProfileGet()
@@ -541,14 +732,9 @@ var _ = Describe("GET /oauth2/authorize with a session (SSO)", func() {
 		resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathAuthorize, validQuery(map[string]string{"prompt": "none"})))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.StatusCode).To(Equal(http.StatusFound))
-		Expect(resp.Headers["Location"]).To(HavePrefix(redirectURI))
-		Expect(resp.Headers["Location"]).To(ContainSubstring("error=login_required"))
-		Expect(resp.Headers["Location"]).NotTo(ContainSubstring("code="))
+		Expect(resp.Headers["Location"]).To(Equal(redirectURI + "?error=login_required&state=xyz"))
 
-		// One registry read and the flow write, and nothing else -- no sessions read (there is no
-		// cookie to look up) and no providers Scan, because login_required returns before
-		// loginRedirect. prompt=none is the request a client can send on every page load, so it is
-		// the one whose cost most needs pinning.
+		// prompt=none is what a client can send on every page load, so its cost is pinned: the registry read and the flow write, and no sessions read or providers Scan.
 		profile := backend.DBMock.ProfileGet()
 		readCnt, writeCnt := profile.TotalCounts()
 		Expect(readCnt).To(Equal(1))
@@ -576,30 +762,21 @@ var _ = Describe("GET /oauth2/authorize with a session (SSO)", func() {
 		req := withCookie(getRequest(pathAuthorize, validQuery(map[string]string{"prompt": "login"})), cookie)
 		resp, err := handleAuthorizeRequest(context.Background(), req)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.Headers["Location"]).To(Equal(pathLogin+"?providers="), "prompt=login must never be shortcut past")
+		Expect(resp.Headers["Location"]).To(Equal(pathLogin), "prompt=login must never be shortcut past")
 	})
 
-	It("max_age=0 rejects a session minutes old and re-authenticates (negative)", func() {
-		cookie := establishSession("user-sso-5", time.Now().Add(-time.Minute).Unix())
-		req := withCookie(getRequest(pathAuthorize, validQuery(map[string]string{"max_age": "0"})), cookie)
-		resp, err := handleAuthorizeRequest(context.Background(), req)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.Headers["Location"]).To(Equal(pathLogin + "?providers="))
-	})
-
-	It("max_age=0 rejects a session created this very second (negative)", func() {
-		// The boundary the minutes-old spec above cannot reach. max_age=0 is what a relying
-		// party sends to force a fresh authentication; a session whose auth_time is NOW must
-		// not satisfy it, or the demand is silently answered from the session it was meant to
-		// bypass -- and only for logins less than a second old, which is exactly the kind of
-		// window that survives every test written with a comfortable margin.
-		cookie := establishSession("user-sso-maxage-now", time.Now().Unix())
-		req := withCookie(getRequest(pathAuthorize, validQuery(map[string]string{"max_age": "0"})), cookie)
-		resp, err := handleAuthorizeRequest(context.Background(), req)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.Headers["Location"]).To(Equal(pathLogin + "?providers="))
-		Expect(resp.Headers["Location"]).NotTo(ContainSubstring("code="))
-	})
+	// max_age=0 is how a relying party forces a fresh authentication, so a session from this very second must not satisfy it either.
+	DescribeTable("max_age=0 re-authenticates whatever the session's age (negative)",
+		func(authTime time.Time) {
+			cookie := establishSession("user-sso-maxage", authTime.Unix())
+			req := withCookie(getRequest(pathAuthorize, validQuery(map[string]string{"max_age": "0"})), cookie)
+			resp, err := handleAuthorizeRequest(context.Background(), req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.Headers["Location"]).To(Equal(pathLogin))
+		},
+		Entry("a session minutes old", time.Now().Add(-time.Minute)),
+		Entry("a session created this very second", time.Now()),
+	)
 
 	It("max_age accepts a session younger than the bound", func() {
 		cookie := establishSession("user-sso-6", time.Now().Unix())
@@ -609,37 +786,23 @@ var _ = Describe("GET /oauth2/authorize with a session (SSO)", func() {
 		Expect(resp.Headers["Location"]).To(ContainSubstring("code="))
 	})
 
-	It("id_token_hint naming a different subject drops the session rather than switching users (negative)", func() {
-		cookie := establishSession("user-sso-7", time.Now().Unix())
+	DescribeTable("answers from the session only when id_token_hint names its subject",
+		func(subject string, location types.GomegaMatcher) {
+			cookie := establishSession("user-sso-8", time.Now().Unix())
+			hint, err := jwtutil.SignRS256(jwtgo.MapClaims{
+				"iss": os.Getenv("USER_ISSUER"), "sub": subject, "aud": testClientID, "token_use": jwtutil.TokenUseID,
+				"iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(),
+			}, backend.SigningKey, jwtutil.RSAThumbprint(&backend.SigningKey.PublicKey))
+			Expect(err).NotTo(HaveOccurred())
 
-		hint, err := jwtutil.SignRS256(jwtgo.MapClaims{
-			"iss": os.Getenv("USER_ISSUER"), "sub": "someone-else", "aud": testClientID,
-			"iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(),
-		}, backend.SigningKey, jwtutil.RSAThumbprint(&backend.SigningKey.PublicKey))
-		Expect(err).NotTo(HaveOccurred())
-
-		req := withCookie(getRequest(pathAuthorize, validQuery(map[string]string{"id_token_hint": hint, "prompt": "none"})), cookie)
-		resp, err := handleAuthorizeRequest(context.Background(), req)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.Headers["Location"]).To(ContainSubstring("error=login_required"))
-		Expect(resp.Headers["Location"]).NotTo(ContainSubstring("code="))
-	})
-
-	It("id_token_hint naming the session's subject passes", func() {
-		cookie := establishSession("user-sso-8", time.Now().Unix())
-
-		hint, err := jwtutil.SignRS256(jwtgo.MapClaims{
-			"iss": os.Getenv("USER_ISSUER"), "sub": "user-sso-8", "aud": testClientID,
-			"iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(),
-		}, backend.SigningKey, jwtutil.RSAThumbprint(&backend.SigningKey.PublicKey))
-		Expect(err).NotTo(HaveOccurred())
-
-		req := withCookie(getRequest(pathAuthorize, validQuery(map[string]string{"id_token_hint": hint})), cookie)
-		resp, err := handleAuthorizeRequest(context.Background(), req)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.Headers["Location"]).To(ContainSubstring("code="))
-	})
-
+			req := withCookie(getRequest(pathAuthorize, validQuery(map[string]string{"id_token_hint": hint, "prompt": "none"})), cookie)
+			resp, err := handleAuthorizeRequest(context.Background(), req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.Headers["Location"]).To(location)
+		},
+		Entry("the session's own subject", "user-sso-8", ContainSubstring("code=")),
+		Entry("someone else, which drops the session rather than switching users (negative)", "someone-else", Equal(redirectURI+"?error=login_required&state=xyz")),
+	)
 })
 
 var _ = Describe("GET /oauth2/federation/callback establishes the session", func() {
@@ -736,7 +899,7 @@ var _ = Describe("GET /oauth2/federation/callback establishes the session", func
 			Expect(backend.DBMock.ProfileGet().Accesses["espuser-auth-flows"].ReadCount).To(BeZero(), "a forged callback costs no flow read")
 		},
 		Entry("no flow cookie", ""),
-		Entry("a flow cookie naming a different flow", flowCookieName+"=fl_someone_else"),
+		Entry("a flow cookie naming a different flow", auth.FlowCookieName+"=fl_someone_else"),
 	)
 
 	It("sets the __Host- session cookie and records the upstream's auth_time on the federation callback", func() {
@@ -746,7 +909,7 @@ var _ = Describe("GET /oauth2/federation/callback establishes the session", func
 		flowsDB := auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
 		setupUpstream(upstreamAuthTime, flowNonce)
 
-		resp := runCallback(flowCookieName + "=fl_sso")
+		resp := runCallback(auth.FlowCookieName + "=fl_sso")
 		Expect(resp.StatusCode).To(Equal(http.StatusFound))
 		Expect(resp.Headers["Location"]).To(ContainSubstring("code="))
 
@@ -771,7 +934,7 @@ var _ = Describe("GET /oauth2/federation/callback establishes the session", func
 		setupUpstream(0, flowNonce)
 		before := time.Now().Unix()
 
-		resp := runCallback(flowCookieName + "=fl_sso")
+		resp := runCallback(auth.FlowCookieName + "=fl_sso")
 		Expect(resp.StatusCode).To(Equal(http.StatusFound))
 		loc, err := url.Parse(resp.Headers["Location"])
 		Expect(err).NotTo(HaveOccurred())
@@ -781,23 +944,16 @@ var _ = Describe("GET /oauth2/federation/callback establishes the session", func
 	})
 })
 
-// allowed_providers decides which identity providers a client may be entered through. It is
-// checked in three places because there are three ways in, and a control that holds at one
-// door is not a control: the login page draws the buttons, /oauth2/federation/start is
-// reachable by typing a provider name into the address bar, and the SSO shortcut skips both.
+// allowed_providers is checked at all three ways in: the login page draws the buttons, /user/login/federation/start can be typed, and the SSO shortcut skips both.
 var _ = Describe("allowed_providers is enforced, not decorative", func() {
 	const (
 		restrictedClientID = "restricted-client"
 		openClientID       = "open-client"
 	)
 
-	var backend *test_utils.EspUserBackend
-
-	// Where each provider's fake upstream lives, so the positive controls can assert the
-	// browser was actually sent there rather than merely not refused.
+	// Where each provider's fake upstream lives, so the positive controls can assert the browser was actually sent there.
 	providerAuthorizeURL := map[string]string{}
 
-	// registerClient puts one client in the registry with the given provider restriction.
 	registerClient := func(clientID string, allowed []string) {
 		Expect(oauth_clients_db.NewOAuthClientsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).
 			CreateClient(&oauth_clients_db.OAuthClientEntry{
@@ -808,35 +964,28 @@ var _ = Describe("allowed_providers is enforced, not decorative", func() {
 			})).To(Succeed())
 	}
 
-	// flowIDFor drives a real /oauth2/authorize and returns the flow id it planted, so the
-	// specs below reach federation/start and the login page exactly as a browser would.
 	flowIDFor := func(clientID string) string {
 		resp, err := handleAuthorizeRequest(context.Background(),
 			getRequest(pathAuthorize, validQuery(map[string]string{"client_id": clientID})))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.StatusCode).To(Equal(http.StatusFound))
-		cookie := resp.Headers["Set-Cookie"]
-		Expect(cookie).To(HavePrefix(flowCookieName + "="))
-		return strings.SplitN(strings.TrimPrefix(cookie, flowCookieName+"="), ";", 2)[0]
+		Expect(resp.Headers["Set-Cookie"]).To(HavePrefix(auth.FlowCookieName + "="))
+		return flowIDFrom(resp.Headers["Set-Cookie"])
 	}
 
 	startFederation := func(flowID, provider string) events.APIGatewayProxyResponse {
-		req := withCookie(getRequest(pathFederationStart, map[string]string{"provider": provider}),
-			flowCookieName+"="+flowID)
+		req := withCookie(getRequest(pathFederationStart, map[string]string{"provider": provider, "flow_id": flowID}),
+			auth.FlowCookieName+"="+flowID)
 		resp, err := handleAuthorizeRequest(context.Background(), req)
 		Expect(err).NotTo(HaveOccurred())
 		return resp
 	}
 
 	BeforeEach(func() {
-		backend = test_utils.SetupEspUserBackend(context.Background())
+		test_utils.SetupEspUserBackend(context.Background())
 		os.Setenv("ESPUSER_FEDERATION_CALLBACK_URL", "https://us.example/oauth2/federation/callback")
 
-		// Both providers are fully usable, so a refusal below can only be the restriction and
-		// never an unreachable upstream -- the registry fetches a provider's JWKS before it
-		// will hand one back, and an unfetchable row fails with the SAME message this gate
-		// returns.
-		enabled := true
+		// Both providers are fully usable, so a refusal below can only be the restriction: an unfetchable row fails with the same message the gate returns.
 		db := identity_providers_db.NewIdentityProvidersDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
 		for _, name := range []string{"acme", "personal"} {
 			priv, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -850,7 +999,7 @@ var _ = Describe("allowed_providers is enforced, not decorative", func() {
 			DeferCleanup(srv.Close)
 			providerAuthorizeURL[name] = srv.URL + "/authorize"
 			Expect(db.CreateProvider(&identity_providers_db.ProviderEntry{
-				ProviderName: name, Type: identity_providers_db.TypeOIDC, Enabled: &enabled,
+				ProviderName: name, Type: identity_providers_db.TypeOIDC, Enabled: utils.Ptr(true),
 				DisplayName: name, Issuer: srv.URL, ClientID: "broker-client",
 				JWKSURL:      srv.URL + "/jwks",
 				TokenURL:     srv.URL + "/token",
@@ -861,12 +1010,32 @@ var _ = Describe("allowed_providers is enforced, not decorative", func() {
 		registerClient(openClientID, nil)
 	})
 
-	Describe("at /oauth2/federation/start — the gate, because this URL can be typed", func() {
+	Describe("at /user/login/federation/start — the gate, because this URL can be typed", func() {
 		It("refuses a provider the client did not register (negative)", func() {
 			resp := startFederation(flowIDFor(restrictedClientID), "personal")
 			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
-			Expect(resp.Body).To(ContainSubstring("Unknown or unavailable provider"),
+			Expect(pageDataFrom(resp.Body).Error.Message).To(Equal("Unknown or unavailable provider."),
 				"and it must read like an unknown provider: whether a client restricts one is not the caller's business")
+		})
+
+		It("refuses a link drawn for another sign-in, after a newer one in this browser took the cookie, and leaves for no provider (negative)", func() {
+			drawnFor, current := flowIDFor(restrictedClientID), flowIDFor(openClientID)
+			req := withCookie(getRequest(pathFederationStart, map[string]string{"provider": "acme", "flow_id": drawnFor}), auth.FlowCookieName+"="+current)
+			resp, err := handleAuthorizeRequest(context.Background(), req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
+			Expect(pageDataFrom(resp.Body).Error.Code).To(Equal(oidc.RMErrFlowReplaced))
+			flow, err := auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).GetFlow(current)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(flow.UpstreamState).To(BeEmpty(), "the current sign-in did not leave for a provider")
+		})
+
+		It("refuses a link that names no sign-in (negative)", func() {
+			req := withCookie(getRequest(pathFederationStart, map[string]string{"provider": "acme"}), auth.FlowCookieName+"="+flowIDFor(openClientID))
+			resp, err := handleAuthorizeRequest(context.Background(), req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
+			Expect(pageDataFrom(resp.Body).Error.Code).To(Equal(oidc.OAuthErrInvalidRequest))
 		})
 
 		It("admits a provider the client did register", func() {
@@ -881,56 +1050,27 @@ var _ = Describe("allowed_providers is enforced, not decorative", func() {
 				Expect(resp.StatusCode).To(Equal(http.StatusFound), provider)
 			}
 		})
+
 	})
 
 	Describe("on the login page — presentation, so it only has to agree with the gate", func() {
-		It("draws a button only for a provider the flow's client admits", func() {
-			req := withCookie(getRequest(pathLogin, nil), flowCookieName+"="+flowIDFor(restrictedClientID))
-			resp, err := handleAuthorizeRequest(context.Background(), req)
+		It("describes only a provider the flow's client admits", func() {
+			resp, err := handleAuthorizeRequest(context.Background(),
+				withCookie(getRequest(pathLogin, nil), auth.FlowCookieName+"="+flowIDFor(restrictedClientID)))
 			Expect(err).NotTo(HaveOccurred())
-			Expect(resp.Body).To(ContainSubstring("federation/start?provider=acme"))
-			Expect(resp.Body).NotTo(ContainSubstring("federation/start?provider=personal"),
-				"a button that would be refused on click is a dead end wearing a login's clothes")
+			Expect(providerNames(resp.Body)).To(Equal([]string{"acme"}))
 		})
 
-		It("hands the page the client's buttons in the login redirect", func() {
-			for clientID, want := range map[string]string{restrictedClientID: "acme", openClientID: "acme%2Cpersonal"} {
-				resp, err := handleAuthorizeRequest(context.Background(),
-					getRequest(pathAuthorize, validQuery(map[string]string{"client_id": clientID})))
-				Expect(err).NotTo(HaveOccurred())
-				Expect(resp.Headers["Location"]).To(Equal(pathLogin+"?providers="+want), clientID)
-			}
-		})
-
-		It("draws the listed buttons without reading the flow or the client", func() {
-			req := withCookie(getRequest(pathLogin, map[string]string{providersParam: "acme"}),
-				flowCookieName+"="+flowIDFor(openClientID))
-			backend.DBMock.ProfileReset()
-			resp, err := handleAuthorizeRequest(context.Background(), req)
+		It("describes them all for a client that restricts none", func() {
+			resp, err := handleAuthorizeRequest(context.Background(),
+				withCookie(getRequest(pathLogin, nil), auth.FlowCookieName+"="+flowIDFor(openClientID)))
 			Expect(err).NotTo(HaveOccurred())
-			Expect(resp.Body).To(ContainSubstring("federation/start?provider=acme"))
-			Expect(resp.Body).NotTo(ContainSubstring("federation/start?provider=personal"))
-			profile := backend.DBMock.ProfileGet()
-			readCnt, _ := profile.TotalCounts()
-			Expect(readCnt).To(Equal(1), "only the provider scan for labels and logos")
-			Expect(profile.Accesses["espuser-auth-flows"].ReadCount).To(BeZero())
-			Expect(profile.Accesses["espuser-oauth-clients"].ReadCount).To(BeZero())
-		})
-
-		It("draws them all for a client that restricts none", func() {
-			req := withCookie(getRequest(pathLogin, nil), flowCookieName+"="+flowIDFor(openClientID))
-			resp, err := handleAuthorizeRequest(context.Background(), req)
-			Expect(err).NotTo(HaveOccurred())
-			for _, provider := range []string{"acme", "personal"} {
-				Expect(resp.Body).To(ContainSubstring("federation/start?provider=" + provider))
-			}
+			Expect(providerNames(resp.Body)).To(Equal([]string{"acme", "personal"}))
 		})
 	})
 
 	Describe("at the SSO shortcut — the second door into the same room", func() {
-		// A session established through one provider must not open a client that admits only
-		// another. Without this the restriction holds for the first login of a browser and
-		// evaporates for every one after it.
+		// Without this the restriction holds for the first login of a browser and evaporates for every one after it.
 		sessionVia := func(provider string) string {
 			svc := session.NewService(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
 			cookieValue, _, err := svc.Establish(session.EstablishInput{
@@ -945,9 +1085,8 @@ var _ = Describe("allowed_providers is enforced, not decorative", func() {
 				validQuery(map[string]string{"client_id": restrictedClientID})), sessionVia("personal"))
 			resp, err := handleAuthorizeRequest(context.Background(), req)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(resp.Headers["Location"]).NotTo(ContainSubstring("code="),
+			Expect(resp.Headers["Location"]).To(Equal(pathLogin),
 				"single sign-on must not be a way around allowed_providers")
-			Expect(resp.Headers["Location"]).To(Equal(pathLogin + "?providers=acme"))
 		})
 
 		It("answers prompt=none with login_required rather than a code (negative)", func() {
@@ -956,8 +1095,7 @@ var _ = Describe("allowed_providers is enforced, not decorative", func() {
 			})), sessionVia("personal"))
 			resp, err := handleAuthorizeRequest(context.Background(), req)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(resp.Headers["Location"]).To(ContainSubstring("error=login_required"))
-			Expect(resp.Headers["Location"]).NotTo(ContainSubstring("code="))
+			Expect(resp.Headers["Location"]).To(Equal(redirectURI + "?error=login_required&state=xyz"))
 		})
 
 		It("shortcuts normally on a session from a provider the client allows, and rolls the cookie", func() {
@@ -966,11 +1104,109 @@ var _ = Describe("allowed_providers is enforced, not decorative", func() {
 			resp, err := handleAuthorizeRequest(context.Background(), req)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp.Headers["Location"]).To(ContainSubstring("code="))
-			// The shortcut is a front-channel event: it re-issues the session cookie (rolled)
-			// so cookie_expires_at keeps step with expires_at, not only at the federation
-			// callback. Same opaque value -- the server never learns a new one.
+			// A front-channel event re-issues the same cookie value with a fresh Max-Age, so cookie_expires_at keeps step with expires_at.
 			Expect(resp.Headers["Set-Cookie"]).To(HavePrefix(session.CookieName + "="))
 			Expect(resp.Headers["Set-Cookie"]).To(ContainSubstring("Max-Age="))
 		})
 	})
+})
+
+var _ = Describe("the footer links the operator configures", func() {
+	BeforeEach(func() {
+		test_utils.SetupEspUserBackend(context.Background())
+	})
+
+	setLinks := func(support, privacy, terms string) {
+		for name, value := range map[string]string{envSupportURL: support, envPrivacyURL: privacy, envTermsURL: terms} {
+			Expect(os.Setenv(name, value)).To(Succeed())
+			DeferCleanup(os.Unsetenv, name)
+		}
+	}
+
+	It("hands every page the support, privacy and terms URLs, the error page included", func() {
+		setLinks("https://example.com/support", "https://example.com/privacy", "https://example.com/terms")
+		want := &linksData{Support: "https://example.com/support", Privacy: "https://example.com/privacy", Terms: "https://example.com/terms"}
+
+		login, err := handleAuthorizeRequest(context.Background(), getRequest(pathLogin, nil))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(pageDataFrom(login.Body).Links).To(Equal(want))
+
+		failed, err := handleAuthorizeRequest(context.Background(), getRequest(pathAuthorize, validQuery(map[string]string{"client_id": "nobody"})))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(pageDataFrom(failed.Body).Links).To(Equal(want))
+	})
+
+	DescribeTable("names only a configured https link, so the page never draws an empty one or puts script behind one",
+		func(support, privacy, terms string, want *linksData) {
+			setLinks(support, privacy, terms)
+			resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathLogin, nil))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pageDataFrom(resp.Body).Links).To(Equal(want))
+		},
+		Entry("some unset", "", "https://example.com/privacy", "", &linksData{Privacy: "https://example.com/privacy"}),
+		Entry("none https (negative)", "javascript:alert(1)", "http://example.com/privacy", "https://", nil),
+	)
+})
+
+var _ = Describe("where /oauth2/authorize sends a browser with no session", func() {
+	BeforeEach(func() {
+		test_utils.SetupEspUserBackend(context.Background())
+		Expect(oauth_clients_db.NewOAuthClientsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).CreateClient(&oauth_clients_db.OAuthClientEntry{
+			ClientID: testClientID, ClientType: oauth_clients_db.ClientTypePublic, FirstParty: true,
+			RedirectURIs: []string{redirectURI}, Scopes: []string{"openid", "email"}, RequirePKCE: utils.Ptr(true),
+			AllowedResources: []string{testResource, testAccountResource}, DefaultResource: testResource,
+		})).To(Succeed())
+	})
+
+	enable := func(entry identity_providers_db.ProviderEntry) {
+		entry.Enabled = utils.Ptr(true)
+		Expect(identity_providers_db.NewIdentityProvidersDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).CreateProvider(&entry)).To(Succeed())
+	}
+	authorize := func(extra map[string]string) string {
+		resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathAuthorize, validQuery(extra)))
+		Expect(err).NotTo(HaveOccurred())
+		return resp.Headers["Location"]
+	}
+
+	It("shows our page for a lone password pool, handing it the client's login_hint and idp to prefill and preselect", func() {
+		enable(identity_providers_db.ProviderEntry{ProviderName: "cognito", Type: identity_providers_db.TypeOIDC, PasswordVerifier: identity_providers_db.PasswordVerifierCognito, ClientID: "app"})
+		loc, err := url.Parse(authorize(map[string]string{"login_hint": "person@example.com", "idp": "cognito"}))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(loc.Path).To(Equal(pathLogin))
+		Expect(loc.Query()).To(Equal(url.Values{"login_hint": {"person@example.com"}, "idp": {"cognito"}}))
+	})
+
+	It("shows our page for a lone otp row without reading its authorize_url", func() {
+		enable(identity_providers_db.ProviderEntry{ProviderName: "otp", Type: identity_providers_db.TypeOTP, AuthorizeURL: "https://login.example.com/otp"})
+		Expect(authorize(nil)).To(HavePrefix(pathLogin))
+	})
+
+	It("goes straight to a lone oidc provider, since there is nothing to choose", func() {
+		enable(identity_providers_db.ProviderEntry{ProviderName: "google", Type: identity_providers_db.TypeOIDC})
+		loc, err := url.Parse(authorize(nil))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(loc.Path).To(Equal(pathFederationStart))
+		Expect(loc.Query().Get("provider")).To(Equal("google"))
+		Expect(loc.Query().Get("flow_id")).NotTo(BeEmpty(), "the link names the sign-in authorize just started")
+	})
+})
+
+var _ = Describe("a deployment built without the sign-in bundle", func() {
+	BeforeEach(func() {
+		test_utils.SetupEspUserBackend(context.Background())
+		previous := renderShell
+		renderShell = func([]byte) (string, error) { return "", errors.New("hosted-ui bundle missing") }
+		DeferCleanup(func() { renderShell = previous })
+	})
+
+	DescribeTable("answers 500 on every page route, even where the page would have carried a 400 (negative)",
+		func(path string) {
+			resp, err := handleAuthorizeRequest(context.Background(), getRequest(path, nil))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusInternalServerError))
+			Expect(resp.Body).To(Equal("The sign-in page is not available."))
+		},
+		Entry("the sign-in page with no flow cookie", pathLogin),
+		Entry("authorize with no client", pathAuthorize),
+	)
 })

@@ -7,24 +7,20 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"html/template"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
-
-	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/auth_flows_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/identity_providers_db"
+	hostedui "github.com/espressif/esp-rainmaker-neo/src/espuser/hosted-ui"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngrequest"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -33,29 +29,23 @@ import (
 
 const (
 	pathAuthorize = "/oauth2/authorize"
-	pathLogin     = "/oauth2/login"
-	// providersParam carries the login page's button list from /authorize.
-	providersParam = "providers"
-
-	// __Host- for the same reason the session cookie carries it, and against the same attack:
-	// the prefix is honoured only for a Secure, Path=/, Domain-less cookie, so a page on a
-	// sibling host cannot plant one. Without it, an attacker starts a flow of their own,
-	// writes its id into the victim's browser, and the victim's login completes into the
-	// ATTACKER's flow -- the authorization code lands at the attacker's registered
-	// redirect_uri. That is login CSRF / code injection, and the prefix is what closes it.
-	flowCookieName = "__Host-esp_flow_id"
+	pathLogin     = "/user/login"
+	pathRestart   = pathLogin + "/restart"
 )
+
+// expiredFlowMessage is what every expired or lost sign-in says, page or JSON.
+const expiredFlowMessage = "This sign-in took too long. Start again."
 
 func handleAuthorize(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	q := request.QueryStringParameters
 	if code := oidc.ValidateResponseType(q["response_type"]); code != "" {
-		return errorPage(http.StatusBadRequest, code, "response_type must be code."), nil
+		return errorPage(request, http.StatusBadRequest, code, "response_type must be code.", ""), nil
 	}
 
 	svc, err := auth.NewOAuthUserAuthService(ctx)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Msg("Failed to build auth service")
-		return errorPage(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
+		return errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.", ""), nil
 	}
 
 	flowID, client, _, err := svc.StartAuthFlow(ctx, auth.AuthorizeRequest{
@@ -71,7 +61,7 @@ func handleAuthorize(ctx context.Context, request events.APIGatewayProxyRequest)
 		MaxAge:    q["max_age"],
 	})
 	if err != nil {
-		return authorizeError(q, err), nil
+		return authorizeError(request, err), nil
 	}
 
 	// A live session of our own answers without the login page or the upstream leg (SSO).
@@ -80,48 +70,55 @@ func handleAuthorize(ctx context.Context, request events.APIGatewayProxyRequest)
 		return resp, nil
 	}
 
-	// Location is built from the request path so the API Gateway stage prefix survives.
-	return events.APIGatewayProxyResponse{
-		StatusCode: http.StatusFound,
-		Headers: map[string]string{
-			"Location": loginRedirect(ctx, request, client),
-			// HttpOnly keeps the flow id out of JS; Secure/SameSite=Lax blunt leak/CSRF.
-			"Set-Cookie":    fmt.Sprintf("%s=%s; Path=/; HttpOnly; Secure; SameSite=Lax", flowCookieName, flowID),
-			"Cache-Control": "no-store",
-		},
-	}, nil
+	resp := redirect(loginRedirect(ctx, request, flowID))
+	resp.Headers["Set-Cookie"] = flowCookie(flowID)
+	return resp, nil
 }
 
-// A single enabled provider needs no chooser, so skip straight to it; anything else lands on the
-// login page. A registry read failure falls back there too rather than blocking login.
-func loginRedirect(ctx context.Context, request events.APIGatewayProxyRequest, client *clients.ClientResponse) string {
-	stage := stageFor(request)
-	loginPage := loginLocation(request.Path, stage)
+// flowCookie names the sign-in in progress; HttpOnly keeps it from scripts and SameSite=Lax keeps it off another site's POST.
+func flowCookie(flowID string) string {
+	return fmt.Sprintf("%s=%s; Path=/; HttpOnly; Secure; SameSite=Lax", auth.FlowCookieName, flowID)
+}
+
+func redirect(location string) events.APIGatewayProxyResponse {
+	return events.APIGatewayProxyResponse{
+		StatusCode: http.StatusFound,
+		Headers:    map[string]string{"Location": location, "Cache-Control": "no-store"},
+	}
+}
+
+// loginRedirect sends a lone oidc provider straight to its own page, since there is nothing to choose; anything else gets our page, which reads the flow's client itself.
+func loginRedirect(ctx context.Context, request events.APIGatewayProxyRequest, flowID string) string {
+	loginPage := routeLocation(request, pathLogin)
 	registry, err := newRegistry(ctx)
 	if err != nil {
 		return loginPage
 	}
 	enabled, err := registry.EnabledEntries()
-	if err != nil || client == nil {
+	if err != nil {
 		return loginPage
 	}
-	if len(enabled) != 1 {
-		// The page draws these instead of re-reading the flow and client; tampering only changes the buttons, federation/start is the gate.
-		return loginPage + "?" + providersParam + "=" + url.QueryEscape(strings.Join(buttonProviders(enabled, client.AllowsProvider), ","))
+	// A lone row answered on our own page (a password_verifier or otp) is not skipped to, so only a provider that redirects is.
+	if len(enabled) == 1 && enabled[0].RedirectsToProvider() {
+		return routeLocation(request, pathFederationStart+"?"+url.Values{"provider": {enabled[0].ProviderName}, "flow_id": {flowID}}.Encode())
 	}
-	p := enabled[0]
-	if p.Type == "otp" && p.AuthorizeURL != "" {
-		return withStage(p.AuthorizeURL, stage)
+	q := url.Values{}
+	for _, hint := range []string{"login_hint", "idp"} {
+		if v := request.QueryStringParameters[hint]; v != "" {
+			q.Set(hint, v)
+		}
 	}
-	base := strings.TrimSuffix(loginLocation(request.Path, stage), "login")
-	return base + "federation/start?provider=" + url.QueryEscape(p.ProviderName)
+	if len(q) == 0 {
+		return loginPage
+	}
+	return loginPage + "?" + q.Encode()
 }
 
 // stageFor returns the stage segment Location headers must re-prepend. On the default
 // <api-id>.execute-api host the browser-facing URL carries /<stage>, which API Gateway
 // strips from request.Path. Through a custom domain the base-path mapping pins the
 // stage server-side and the public URL has no /<stage> prefix, so re-prepending it
-// there would redirect to a path that does not exist (e.g. /prod/oauth2/login).
+// there would redirect to a path that does not exist (e.g. /prod/user/login).
 func stageFor(request events.APIGatewayProxyRequest) string {
 	if strings.Contains(request.RequestContext.DomainName, ".execute-api.") {
 		return request.RequestContext.Stage
@@ -129,23 +126,16 @@ func stageFor(request events.APIGatewayProxyRequest) string {
 	return ""
 }
 
-// request.Path omits the API Gateway stage, which a Location header needs.
-func withStage(path, stage string) string {
-	if stage == "" {
-		return path
-	}
-	return "/" + stage + path
-}
-
 // authorizeError picks the surface: client/redirect/PKCE render the error page (can't redirect to an unvalidated URI); scope redirects (redirect_uri already validated).
-func authorizeError(q map[string]string, err error) events.APIGatewayProxyResponse {
+func authorizeError(request events.APIGatewayProxyRequest, err error) events.APIGatewayProxyResponse {
+	q := request.QueryStringParameters
 	switch {
 	case errors.Is(err, auth.ErrInvalidClient):
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidClient, "Unknown client.")
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrInvalidClient, "Unknown client.", "")
 	case errors.Is(err, auth.ErrInvalidRedirect):
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "redirect_uri is not registered for this client.")
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "redirect_uri is not registered for this client.", "")
 	case errors.Is(err, auth.ErrInvalidRequest):
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Missing or invalid request parameters (PKCE S256 is required).")
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Missing or invalid request parameters (PKCE S256 is required).", "")
 	case errors.Is(err, auth.ErrInvalidPrompt):
 		return oidc.OAuthErrorRedirect(q["redirect_uri"], oidc.OAuthErrInvalidRequest, q["state"])
 	case errors.Is(err, auth.ErrInvalidScope):
@@ -156,178 +146,133 @@ func authorizeError(q map[string]string, err error) events.APIGatewayProxyRespon
 		// s4.1.2.1 asks for.
 		return oidc.OAuthErrorRedirect(q["redirect_uri"], oidc.OAuthErrInvalidTarget, q["state"])
 	default:
-		return errorPage(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.")
+		return errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.", "")
 	}
 }
 
-// loginLocation swaps the trailing "authorize" for "login" and re-prepends the stage (API Gateway strips it from request.Path) so the browser keeps the /<stage> prefix.
-func loginLocation(requestPath, stage string) string {
-	loginPath := strings.TrimSuffix(requestPath, "authorize") + "login"
+// withStagePrefix re-prepends the API Gateway stage a Location needs: on the default execute-api host the browser-facing URL carries /<stage>, which the gateway strips before we see it.
+func withStagePrefix(path, stage string) string {
 	if stage == "" {
-		return loginPath
+		return path
 	}
-	return "/" + stage + loginPath
+	return "/" + stage + path
 }
 
-// providerViews is one entry per enabled federated provider that allows admits, in the order an
-// operator gave them. OTP providers get none: the one-time-code form is the page's other column,
-// not a button. A registry failure yields no buttons rather than blocking the passwordless path.
-//
-// The allowed_providers filter here is presentation only -- it stops us drawing a button
-// that would be refused on click. The gate is in handleFederationStart, which is reachable
-// without this page at all, so this function fails OPEN (unreadable client => draw them all)
-// while that one fails closed.
-func providerViews(ctx context.Context, allows func(string) bool) []providerView {
+// routeLocation is the browser-facing URL of one of our routes: "/user/login/consent" on the execute-api host -> "/prod/user/login/consent".
+func routeLocation(request events.APIGatewayProxyRequest, route string) string {
+	return withStagePrefix(route, stageFor(request))
+}
+
+// handleRestart re-runs an expired login's original authorization request; the expired flow holds only the client's request, never a credential, and /oauth2/authorize validates it afresh.
+func handleRestart(ctx context.Context, request events.APIGatewayProxyRequest) events.APIGatewayProxyResponse {
+	flowID := rmngrequest.Cookie(request, auth.FlowCookieName)
+	if flowID == "" {
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "There is no sign-in to restart.", "")
+	}
+	svc, err := auth.NewOAuthUserAuthService(ctx)
+	if err != nil {
+		rlog.Error(ctx).Err(err).Msg("Failed to build auth service")
+		return errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.", "")
+	}
+	q, err := svc.RestartQuery(ctx, flowID)
+	switch {
+	case errors.Is(err, auth_flows_db.ErrFlowNotFound):
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "This sign-in can no longer be restarted. Please start from the application.", "")
+	case err != nil:
+		rlog.Error(ctx).Err(err).Msg("restart: flow unreadable")
+		return errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.", "")
+	}
+	return redirect(routeLocation(request, pathAuthorize) + "?" + q.Encode())
+}
+
+// handleLogin draws the page for the cookie's flow; a browser with no flow cookie gets no restart link, since there is nothing to restart.
+func handleLogin(ctx context.Context, request events.APIGatewayProxyRequest) events.APIGatewayProxyResponse {
+	flowID := rmngrequest.Cookie(request, auth.FlowCookieName)
+	if flowID == "" {
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "There is no sign-in in progress. Please start again from the application.", "")
+	}
+	restartURL := routeLocation(request, pathRestart)
+	svc, err := auth.NewOAuthUserAuthService(ctx)
+	if err != nil {
+		rlog.Error(ctx).Err(err).Msg("Failed to build auth service")
+		return errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.", restartURL)
+	}
+	_, client, err := svc.FlowWithClient(ctx, flowID)
+	switch {
+	// Restart rebuilds the request from the flow row, so once the row is gone there is nothing for Start again to do.
+	case errors.Is(err, auth_flows_db.ErrFlowNotFound):
+		return errorPage(request, http.StatusBadRequest, oidc.RMErrExpiredFlow, "This sign-in took too long. Please start again from the application.", "")
+	// A client deleted since the flow began ends it like an expiry; a restart then reports the client's own error.
+	case errors.Is(err, auth_flows_db.ErrFlowExpired), errors.Is(err, clients.ErrClientNotFound):
+		return errorPage(request, http.StatusBadRequest, oidc.RMErrExpiredFlow, expiredFlowMessage, restartURL)
+	case err != nil:
+		rlog.Error(ctx).Err(err).Msg("login page: flow or client unreadable")
+		return errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.", restartURL)
+	}
+	// One registry scan describes the whole login; the app renders from that description.
+	data := buildPageData(enabledProviders(ctx), client.AllowsProvider, client.ClientName, request.QueryStringParameters, restartURL, flowID)
+	// A page with no way in would be an empty card, so the person is told instead.
+	if len(data.Providers) == 0 && !data.OTPEnabled {
+		rlog.Warn(ctx).Str("client_id", client.ClientID).Msg("login page: no sign-in method for this client")
+		return errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "No sign-in method is available for this application.", "")
+	}
+	return renderPage(request, data)
+}
+
+// enabledProviders is the enabled registry rows, or none when the registry cannot be read: the page then draws what it can rather than failing.
+func enabledProviders(ctx context.Context) []identity_providers_db.ProviderEntry {
 	registry, err := newRegistry(ctx)
 	if err != nil {
+		rlog.Warn(ctx).Err(err).Msg("login page: provider registry unavailable")
 		return nil
 	}
 	enabled, err := registry.EnabledEntries()
 	if err != nil {
-		return nil
+		rlog.Warn(ctx).Err(err).Msg("login page: provider registry unreadable")
 	}
-	// By provider name, so the chooser has a stable order rather than whatever the table
-	// happened to return.
-	sort.SliceStable(enabled, func(i, j int) bool {
-		return enabled[i].ProviderName < enabled[j].ProviderName
-	})
-	var views []providerView
-	for _, p := range enabled {
-		if p.Type == "otp" {
-			continue
-		}
-		if !allows(p.ProviderName) {
-			continue
-		}
-		label := p.DisplayName
-		if label == "" {
-			label = p.ProviderName
-		}
-		views = append(views, providerView{
-			Label: label,
-			// Relative to /oauth2/login, so the API Gateway stage prefix carries over untouched.
-			Href: "federation/start?provider=" + url.QueryEscape(p.ProviderName),
-			// The row's own SVG when it carries one; otherwise the page draws its default.
-			LogoSVG: template.HTML(p.Logo), //nolint:gosec // G203: operator-set in the identity_providers table, and the page CSP admits only nonced scripts
-		})
-	}
-	return views
+	return enabled
 }
 
-// buttonProviders names the enabled federated providers allows admits: the buttons the login page draws.
-func buttonProviders(enabled []identity_providers_db.ProviderEntry, allows func(string) bool) []string {
-	var names []string
-	for _, p := range enabled {
-		if p.Type != "otp" && allows(p.ProviderName) {
-			names = append(names, p.ProviderName)
-		}
-	}
-	return names
-}
+// renderShell is hostedui.Shell; specs swap it to serve with the bundle missing.
+var renderShell = hostedui.Shell
 
-// loginProviderFilter prefers the providers= list /authorize computed; without it (a stale link or bookmark) it falls back to reading the flow's client.
-func loginProviderFilter(ctx context.Context, request events.APIGatewayProxyRequest, flowID string) func(string) bool {
-	listed, ok := request.QueryStringParameters[providersParam]
-	if !ok {
-		return clientProviderFilter(ctx, clientIDForFlow(ctx, flowID))
-	}
-	names := map[string]bool{}
-	for _, n := range strings.Split(listed, ",") {
-		names[n] = true
-	}
-	return func(name string) bool { return names[name] }
-}
-
-// clientIDForFlow reads the client this login flow belongs to. "" when the flow is missing
-// or unreadable, which the caller treats as "no restriction known".
-func clientIDForFlow(ctx context.Context, flowID string) string {
-	if flowID == "" {
-		return ""
-	}
-	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, nil)
-	flow, err := auth_flows_db.NewAuthFlowsDB(rmngCtx).GetFlow(flowID)
-	if err != nil || flow == nil {
-		return ""
-	}
-	return flow.ClientID
-}
-
-// clientProviderFilter returns the predicate the chooser draws by. Unknown client => admit
-// everything; see providerViews on why this direction is the safe one here.
-func clientProviderFilter(ctx context.Context, clientID string) func(string) bool {
-	if clientID == "" {
-		return func(string) bool { return true }
-	}
-	client, err := clients.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil)).Get(clientID)
-	if err != nil || client == nil {
-		return func(string) bool { return true }
-	}
-	return client.AllowsProvider
-}
-
-func handleLogin(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	// The flow id is HttpOnly, so JS can't read it via document.cookie; inject it into the page server-side instead.
-	flowID := rmngrequest.Cookie(request, flowCookieName)
-	// Per-response nonce ties the CSP to our one inline <script>: an injected script (no nonce) is
-	// refused by the browser, so a reflected/DOM XSS can't execute even if one were introduced.
-	nonce, err := newCSPNonce()
+// renderPage serves the sign-in app with its page data.
+func renderPage(request events.APIGatewayProxyRequest, data pageData) events.APIGatewayProxyResponse {
+	data.Links = footerLinks()
+	// Cannot fail: pageData holds only strings, bools and slices.
+	encoded, _ := json.Marshal(data)
+	body, err := renderShell(encoded)
 	if err != nil {
-		rlog.Error(ctx).Err(err).Msg("Failed to generate CSP nonce")
-		return errorPage(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
-	}
-	body, err := renderLoginPage(providerViews(ctx, loginProviderFilter(ctx, request, flowID)), nonce, flowID)
-	if err != nil {
-		rlog.Error(ctx).Err(err).Msg("Failed to render login page")
-		return errorPage(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
+		return events.APIGatewayProxyResponse{
+			StatusCode: http.StatusInternalServerError,
+			Headers:    map[string]string{"Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+			Body:       "The sign-in page is not available.",
+		}
 	}
 	return events.APIGatewayProxyResponse{
 		StatusCode: http.StatusOK,
 		Headers: map[string]string{
-			"Content-Type":           "text/html; charset=utf-8",
+			"Content-Type": "text/html; charset=utf-8",
+			// One person's login in progress: nothing about it is cacheable.
 			"Cache-Control":          "no-store",
 			"X-Content-Type-Options": "nosniff",
-			"X-Frame-Options":        "DENY",
-			"Referrer-Policy":        "no-referrer",
-			// img-src data: carries the provider logos, which are inlined rather than fetched.
-			"Content-Security-Policy": "default-src 'none'; script-src 'nonce-" + nonce + "'; style-src 'unsafe-inline'; img-src data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
-		},
-		Body: body,
-	}, nil
-}
-
-// newCSPNonce returns a fresh base64 nonce for the login page's inline-script CSP.
-func newCSPNonce() (string, error) {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	// URL alphabet, unpadded: the value appears both in a header and in an HTML attribute,
-	// and the standard alphabet's "+" is escaped to &#43; by the templating layer. A browser
-	// decodes that entity before comparing, so it would work -- but a security primitive
-	// should not depend on entity decoding to match. A-Za-z0-9-_ needs no escaping anywhere.
-	return base64.RawURLEncoding.EncodeToString(b), nil
-}
-
-// errorPage renders a non-leaking HTML error (never echoes upstream detail).
-func errorPage(status int, code, description string) events.APIGatewayProxyResponse {
-	body, err := renderErrorPage(code, description)
-	if err != nil {
-		// The error page failing to render must not become a second, worse error: fall back
-		// to text rather than recursing into this function.
-		body = "We couldn't sign you in. " + code
-	}
-	return events.APIGatewayProxyResponse{
-		StatusCode: status,
-		Headers: map[string]string{
-			"Content-Type":            "text/html; charset=utf-8",
-			"Cache-Control":           "no-store",
-			"X-Content-Type-Options":  "nosniff",
+			// The frame-ancestors of older browsers: a sign-in page is exactly what clickjacking targets.
 			"X-Frame-Options":         "DENY",
 			"Referrer-Policy":         "no-referrer",
-			"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
+			"Content-Security-Policy": hostedui.CSP(),
 		},
 		Body: body,
 	}
+}
+
+// errorPage renders the same app told it cannot proceed, and never echoes upstream detail; a non-empty restartURL adds "Start again", for a sign-in the person can resume from the application's own request.
+func errorPage(request events.APIGatewayProxyRequest, status int, code, description, restartURL string) events.APIGatewayProxyResponse {
+	resp := renderPage(request, pageData{Error: &errorData{Code: code, Message: description}, RestartURL: restartURL})
+	// A page that could not be rendered keeps its 500, which is the truer answer.
+	if resp.StatusCode == http.StatusOK {
+		resp.StatusCode = status
+	}
+	return resp
 }
 
 func handleAuthorizeRequest(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
@@ -335,10 +280,12 @@ func handleAuthorizeRequest(ctx context.Context, request events.APIGatewayProxyR
 		return oidc.OAuthErrorResp(http.StatusMethodNotAllowed, oidc.OAuthErrInvalidRequest, "Method not allowed."), nil
 	}
 	switch request.Path {
+	case pathRestart:
+		return handleRestart(ctx, request), nil
 	case pathAuthorize:
 		return handleAuthorize(ctx, request)
 	case pathLogin:
-		return handleLogin(ctx, request)
+		return handleLogin(ctx, request), nil
 	case pathFederationStart:
 		return handleFederationStart(ctx, request)
 	case pathFederationCallback:
@@ -349,5 +296,8 @@ func handleAuthorizeRequest(ctx context.Context, request events.APIGatewayProxyR
 }
 
 func main() {
+	if err := hostedui.Err(); err != nil {
+		rlog.Error(context.Background()).Err(err).Msg("sign-in pages unavailable; every page route answers 500")
+	}
 	lambda.Start(handleAuthorizeRequest)
 }

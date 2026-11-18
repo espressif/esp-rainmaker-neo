@@ -9,10 +9,11 @@ the same way. Cognito is one such row.
 
 | Field | Meaning |
 | --- | --- |
-| `provider_name` | Key; the value `/oauth2/federation/start?provider=` takes |
+| `provider_name` | Key; the value `/user/login/federation/start?provider=` takes. Providers are listed, and a default among them is picked, in `provider_name` order |
 | `type` | `oidc` for a brokered upstream, `otp` for a hosted login page |
 | `enabled` | Whether `/oauth2/authorize` offers it. Unset counts as disabled |
-| `display_name` | Label for the login chooser |
+| `display_name` | The label on this provider's button. Names the credential or the brand, never the vendor: nobody signing in knows what Cognito is |
+| `logo` | The image on this provider's button: a `data:image/png`, `jpeg` or `webp` base64 URI of at most 4 KiB, the same rule as a client's `logo_uri`, drawn as `<img>`. A row named `google`, `apple` or `github` gets that brand's own button instead and ignores it; any other value is ignored and the button shows a plain shield |
 | `issuer` | The provider's OIDC issuer; endpoints and keys are discovered from it |
 | `authorize_url` | Where a login begins: the upstream authorize endpoint, or the hosted page for an `otp` row |
 | `password_verifier` | Who checks a password typed on our page for this `oidc` row: `cognito` (Cognito `InitiateAuth` against the row's pool). Unset, the row is a button to the provider's own page. Any other value, or the field on an `otp` row, offers neither |

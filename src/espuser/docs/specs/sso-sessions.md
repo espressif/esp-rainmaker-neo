@@ -218,7 +218,7 @@ browser.
 ### The two clocks — what each event updates
 
 Two channels decide what an event can touch. The **front channel** is a
-response a browser processes — a navigation to `/oauth2/authorize`, or the login page's own
+response a browser processes — a navigation to `/oauth2/authorize`, or the sign-in page's own
 same-origin `fetch`. The **back channel** is an app's HTTP client: `POST /oauth2/token`,
 `POST /v1/user/auth/token`, a native `verify`.
 
@@ -286,7 +286,7 @@ a code issued with no upstream round trip — only when all of the following hol
 - `max_age`, when present, is satisfied by the row's `auth_time`;
 - `id_token_hint`, when present, names the subject the row belongs to;
 - the client's `allowed_providers`, if set, admits the provider the row was authenticated with — the
-  same check as at `/oauth2/federation/start`, so a shortcut cannot bypass a provider restriction.
+  same check as at `/user/login/federation/start`, so a shortcut cannot bypass a provider restriction.
 
 On a successful shortcut both clocks are bumped and the cookie is re-issued. A failure to record
 that costs the extension and nothing else — the login still succeeds.
@@ -628,7 +628,7 @@ Absent means no hop: a deployment that never fills these behaves exactly as it d
 | A cookie-less row being presented for SSO | Its key is the hash of a discarded value: no cookie exists to present, and the lookup fails closed. `origin` makes the property auditable from the data as well as from the argument |
 | A long-lived user agent with no calendar cap | Accepted deliberately, and safe only because the cookie is revocable **and** sensitive actions step up. The cap is replaced by revocation plus per-action re-authentication, not by a short timeout |
 | A single one-time code buying a long-lived user agent | The code is the first factor, as it is today; what changes is retention, not assurance. Bounded by remote revocation — which first-party users gain here for the first time — and by step-up. `amr` records `otp` and `sms` separately, so an SMS-authenticated user agent can be capped or step-up-gated without a code change |
-| A client's provider restriction bypassed via SSO | `allowed_providers` is checked at the shortcut as well as at `/oauth2/federation/start` |
+| A client's provider restriction bypassed via SSO | `allowed_providers` is checked at the shortcut as well as at `/user/login/federation/start` |
 | Script reading the session | `HttpOnly` |
 | A table read yielding a usable cookie | Only the hash is stored |
 | Keeping someone signed in past what the provider allowed | Retention is bounded by `auth_time` plus the lower of the deployment value and the provider's declared maximum |

@@ -20,6 +20,7 @@ This is the **user path only.** Admins authenticate against Cognito directly as 
 separate issuer with no brokering — users carry the ESP User issuer, admins carry
 Cognito's native issuer, and clients serving both validate both ("two issuers").
 
+
 ## Why brokered, not pass-through (security)
 
 The client's downstream leg is unchanged: our `/oauth2/authorize` validates our
@@ -54,8 +55,8 @@ sequenceDiagram
     participant Client as "Client (app / VA web view)"
     participant Browser
     participant Authz as "/oauth2/authorize"
-    participant Start as "/oauth2/federation/start"
-    participant IdP as "Upstream IdP (Cognito hosted UI)"
+    participant Start as "/user/login/federation/start"
+    participant IdP as "Upstream IdP (OIDC provider)"
     participant CB as "/oauth2/federation/callback"
     participant Token as "/oauth2/token"
     participant Flows as "espuser-auth-flows"
@@ -64,11 +65,11 @@ sequenceDiagram
     Client->>Browser: 302 to /oauth2/authorize (client_id, redirect_uri, scope, state, code_challenge S256)
     Browser->>Authz: GET /oauth2/authorize
     Authz->>Flows: Put LOGIN record (flow_id, client PKCE/state/redirect)
-    Authz-->>Browser: 302 to federation/start?provider=cognito (Set-Cookie: __Host-esp_flow_id) — single-provider auto-redirect
-    Browser->>Start: GET /oauth2/federation/start?provider=cognito (cookie: __Host-esp_flow_id)
+    Authz-->>Browser: 302 to login/federation/start?provider=<name>&flow_id=<id> (Set-Cookie: __Host-esp_flow_id) — a lone enabled oidc provider is skipped to
+    Browser->>Start: GET /user/login/federation/start?provider=<name>&flow_id=<id> (cookie: __Host-esp_flow_id)
     Start->>Flows: Store UPSTREAM leg (our state=HMAC(flow_id), our nonce, our PKCE verifier)
     Start-->>Browser: 302 to IdP authorize (broker client_id, OUR state/nonce/challenge)
-    Browser->>IdP: hosted-UI login (user authenticates upstream)
+    Browser->>IdP: the provider's own login page (user authenticates upstream)
     IdP-->>Browser: 302 to federation/callback?code=&state=
     Browser->>CB: GET /oauth2/federation/callback?code=&state= (cookie: __Host-esp_flow_id)
     Note over CB: the cookie must name the flow in state, else 400 before any read
@@ -93,12 +94,14 @@ verifier for the upstream leg.
 
 Both live on the authorize lambda (same `EspUserApi`), auth type `NONE`.
 
-### `GET /oauth2/federation/start`
+### `GET /user/login/federation/start`
 
 Begins the upstream leg for an in-flight authorization flow.
 
-- **Input:** `provider` (query) + the `__Host-esp_flow_id` HttpOnly cookie set by
-  `/oauth2/authorize`.
+- **Input:** `provider` and `flow_id` (query) + the `__Host-esp_flow_id` HttpOnly cookie set by
+  `/oauth2/authorize`. `flow_id` names the sign-in the page's link was drawn for and must equal the cookie, else
+  `400 flow_replaced` and nothing is sent upstream: a newer sign-in in another tab took the cookie, and following it
+  would finish that tab's app.
 - **Process:** resolve a live `LOGIN` flow by the cookie; load the provider from
   [`espuser-identity-providers`](#provider-registry) (must be `enabled`);
   generate a fresh upstream `state`, `nonce`, and PKCE `code_verifier`/S256
@@ -182,16 +185,15 @@ seeded `cognito` row maps no `sub`, and keeps one an operator adds across redepl
 After a valid `/oauth2/authorize`, the login surface is chosen by the enabled
 provider set:
 
-- **1 enabled external provider** → `302` straight to `/oauth2/federation/start`
-  for it (no chooser). This is the open-source `rmng` case: Cognito is the sole
-  provider, so voice-assistant account-linking (Alexa/GVA) follows the extra hop
-  transparently — nothing changes in their config, which already points at our
-  `/oauth2/authorize` + `/oauth2/token`.
-- **1 enabled `otp` provider** → `302` to its `authorize_url` (the hosted page of
-  the enterprise OTP addon, which is not part of this repository).
-- **0 or ≥2 providers** → the built-in login page (a dedicated chooser page is
-  deferred). An enterprise deployment with Cognito + OTP enabled lands here —
-  the built-in page carries the OTP form and the federation deep-link.
+- **1 enabled provider, an `oidc` row** → `302` straight to
+  `/user/login/federation/start` for it (the app never renders). Voice-assistant
+  account-linking (Alexa/GVA) follows the extra hop transparently — nothing changes in
+  their config, which already points at our `/oauth2/authorize` + `/oauth2/token`.
+- **Anything else** → `302` to `/user/login`, which carries only `login_hint` and `idp`.
+  A lone row whose password our page takes, or a lone `otp` row, is answered there, on our page, so it is never skipped:
+  the page collects the password, or the one-time code, itself.
+
+The provider's `type` and `password_verifier` say how it signs in; see [external-provider.md](external-provider.md#the-provider-row).
 
 ## Provider registry
 
@@ -209,7 +211,7 @@ can change on pool replacement). Fields:
 | `provider_name` | stable id, e.g. `cognito` |
 | `type` | `oidc` (Cognito) / `otp` (enterprise addon) / … |
 | `enabled` | drives selection above |
-| `display_name` | chooser label |
+| `display_name` | the label on this provider's button |
 | `issuer` | upstream OIDC issuer (discovery base + id_token `iss` check) |
 | `client_id` | our broker client id at the upstream |
 | `client_secret` | the app client secret |
@@ -244,9 +246,54 @@ recovered from the HMAC state.
 
 MCP is unaffected: the proxy still fronts our issuer and validates our tokens.
 
+## The sign-in app
+
+`/user/login` serves a small Preact application, built by Vite and compiled into the authorize
+Lambda with `go:embed`. It lives in `src/espuser/hosted-ui/`.
+
+**Embedded, not uploaded.** The UI and the backend that serves it are one artifact: they cannot
+deploy out of step, a rollback of one is a rollback of both, and there is no bucket or distribution
+to invalidate.
+
+**Same origin, so the policy can be absolute.** Every asset comes from this issuer, which is what
+lets the page send:
+
+```
+default-src 'none'; script-src 'sha256-<script>'; style-src 'sha256-<stylesheet>'; img-src 'self' data:;
+connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'
+```
+
+The Lambda inlines the built script and stylesheet into every page at start-up and admits exactly those bytes by their SHA-256 hashes, so a page is one response with nothing else to fetch, and no other script can run. No CDN, no analytics, no remote fonts. Its routes (`/user/login/password`, `/user/login/restart`, `/user/login/consent`, `/user/logout`) all sit under `/user/`, because the page's references are relative and resolve against it, which keeps whatever stage or base path the browser arrived on.
+
+**What it decides.** An `oidc` row whose `password_verifier` is `cognito`, with a `client_id`, is answered on our own form; an `oidc` row naming no `password_verifier` is a redirect; any other row is left out. With one such pool the form asks for an email and password and names no pool; with several, each is a button beside the redirects, and the pressed one is sent as the `provider` of `POST /user/login/password`. Brand marks ship inside the app, never from the registry, because markup from an operator-written row on a sign-in page is markup somebody else controls. A row named `google`, `apple` or `github` gets that brand's own button; any other draws a plain "Continue with" row, showing the row's `logo` when it is a valid inline image (drawn as `<img>`, which runs no script) and a shield otherwise.
+
+**The terminal error page is the same app**, told it cannot proceed.
+
+## What the sign-in page is told
+
+The page is described in one block delivered with the HTML, `<script type="application/json" id="esp-page-data">`, so the form is on screen at first paint and there is no second endpoint to authorize. The browser never executes `application/json`, so the block needs no CSP nonce.
+
+| Field | What the page does with it |
+| --- | --- |
+| `client.name`, `client.logo_uri` | Name the relying party, and on the consent screen show its logo |
+| `providers[]` | One entry per provider this client may use, in `provider_name` order, each carrying its `method` (`password` for our form, `redirect` for the provider's own page, never the row's `type`) and, for a brand's own button (a row named `google`, `apple` or `github`), `brand`, else a checked `logo` |
+| `otp_enabled` | Whether to offer code sign-in at all |
+| `flow_id` | The sign-in the page was drawn for, sent back with every answer so one a newer sign-in replaced is refused (`flow_replaced`) |
+| `login_hint`, `idp` | Prefill the username, preselect a provider. Suggestions from the relying party, never decisions — nothing is authorized on them |
+| `restart_url` | Where "start again" points |
+| `consent`, `logout`, `signed_out`, `error` | Draw the consent screen, the sign-out question, the signed-out page or the terminal error instead of the form |
+| `links` | The operator's Support, Privacy and Terms pages for the footer, from `support_url`, `privacy_url` and `terms_url` under `espuser-core` in `rmng-inputs.json`; only absolute `https` URLs are passed, and an unset one is not drawn |
+
+The login page reads the flow from its cookie and then the flow's client, and draws only the providers that client allows, under the client's registered name; one registry scan feeds the provider list. A flow that expired draws the "Start again" error screen and no form; a flow whose row is gone, or no cookie at all, leaves nothing to restart, so its error screen has no "Start again".
+
+## Sending someone straight to a social provider
+
+A pool that fronts Google, GitHub or Apple can be reached without its hosted UI rendering at all:
+the provider row pins an `authorize_url` that already carries `identity_provider=<Name>`, and
+Cognito answers that by redirecting straight upstream. This needs **no code** — `AppendQuery` preserves a pinned query string, so it is a registry row and nothing else.
+
 ## Deferred (tracked)
 
-- Provider chooser page (≥2 providers) and per-client `allowed_providers` gating.
 - Native RFC 8693 token-exchange grant; profile re-sync `sync_mode`.
 - Linking an existing account to an upstream identity, which also restores access after an
   upstream email change (today the taken `user_id` refuses its owner). -- We won't do this as fo rNeo email/phone is the primary identity.

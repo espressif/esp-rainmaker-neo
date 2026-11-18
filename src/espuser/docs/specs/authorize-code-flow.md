@@ -80,7 +80,7 @@ sequenceDiagram
 
 ## `GET /oauth2/authorize`
 
-Starts the flow. Validates the request, writes a `LOGIN` flow record, and redirects the browser to the login UI with the flow-id cookie set.
+Starts the flow. Validates the request, writes a `LOGIN` flow record, and redirects the browser to the sign-in page with the flow-id cookie set.
 
 **Query parameters**:
 
@@ -104,7 +104,7 @@ Starts the flow. Validates the request, writes a `LOGIN` flow record, and redire
 3. PKCE: if the client's `require_pkce` is set, a `code_challenge` MUST be present (RFC 7636 §4.4.1, else `invalid_request`); if a challenge is present its method MUST be `S256`.
 4. Validate requested `scope` ⊆ client's allowed scopes. An over-broad scope → redirect the client with `invalid_scope` (redirect is now safe, the URI is validated).
 5. Write a `LOGIN` record to [espuser-auth-flows](#espuser-auth-flows): fresh `flow_id`, `client_id`, `requested_scope`, `code_challenge`, `code_challenge_method`, `redirect_uri`, `state`, TTL'd `expires_on`.
-5. Set the `flow_id` in a short-lived `HttpOnly` `Secure` `SameSite=Lax` cookie and `302` to the login UI.
+5. Set the `flow_id` in a short-lived `HttpOnly` `Secure` `SameSite=Lax` cookie and `302` to `/user/login`, which carries only `login_hint` and `idp`; or, when the only enabled provider is an `oidc` row, straight to `/user/login/federation/start` for it ([federation.md](federation.md#provider-selection-at-oauth2authorize)).
 
 **Errors** — pre-redirect failures (steps 1–2) render the error page with an RFC 6749 §5.2 error body; post-validation failures (step 3+) redirect to `redirect_uri?error=<code>&state=<state>`.
 

@@ -1,5 +1,8 @@
 {
   "espuser-core": {
-    "admin_emails": "admin1@example.com,admin2@example.com"
+    "admin_emails": "admin1@example.com,admin2@example.com",
+    "support_url": "https://example.com/support",
+    "privacy_url": "https://example.com/privacy",
+    "terms_url": "https://example.com/terms"
   }
 }

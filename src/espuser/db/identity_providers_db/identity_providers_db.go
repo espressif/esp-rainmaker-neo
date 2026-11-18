@@ -54,10 +54,7 @@ type ProviderEntry struct {
 	// PasswordVerifier names who checks a password typed on our page for this oidc row; empty means the provider's own page takes it.
 	PasswordVerifier string `dynamodbav:"password_verifier,omitempty"`
 	DisplayName      string `dynamodbav:"display_name,omitempty"`
-	// Logo is the mark drawn on this provider's button, as inline SVG. Inline rather than a
-	// URL because the login page's CSP admits no remote origin, and rather than a data URI
-	// because inline markup inherits currentColor and so works on either theme. Absent draws
-	// a neutral default.
+	// Logo is the image on this provider's button: a data:image PNG, JPEG or WebP of at most 4 KiB (clients.ValidateLogoURI), drawn as <img>; Google, Apple and GitHub keep their own marks.
 	Logo string `dynamodbav:"logo,omitempty"`
 	// A pointer so a stored false persists, which omitempty would drop.
 	Enabled *bool `dynamodbav:"enabled,omitempty"`
@@ -101,6 +98,22 @@ func (p *ProviderEntry) IsInbuilt() bool { return p.ProviderName == InbuiltProvi
 // OurPageTakesPassword reports whether our page takes this row's password: an oidc row whose password_verifier we can call, with the client_id that call needs, so an unknown verifier or a half-written row exposes no password endpoint.
 func (p *ProviderEntry) OurPageTakesPassword() bool {
 	return p.Type == TypeOIDC && p.PasswordVerifier == PasswordVerifierCognito && p.ClientID != ""
+}
+
+// RedirectsToProvider reports whether signing in sends the browser to this row's own page: an oidc row naming no password_verifier, since a row that names one is answered on our page or not at all.
+func (p *ProviderEntry) RedirectsToProvider() bool {
+	return p.Type == TypeOIDC && p.PasswordVerifier == ""
+}
+
+// buttonBrands are the brands whose own sign-in buttons the page draws.
+var buttonBrands = map[string]bool{"google": true, "apple": true, "github": true}
+
+// ButtonBrand is the brand whose own button this provider gets, named by provider_name, else "" for a plain one: "Apple" -> "apple", "corp-sso" -> "".
+func (p *ProviderEntry) ButtonBrand() string {
+	if key := strings.ToLower(p.ProviderName); buttonBrands[key] {
+		return key
+	}
+	return ""
 }
 
 func (db *IdentityProvidersDB) GetProvider(name string) (*ProviderEntry, error) {
