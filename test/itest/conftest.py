@@ -151,6 +151,19 @@ SESSIONS_SCOPE = "account:sessions"
 # change to the tests.
 UPSTREAM_PROVIDER = os.getenv("ESPUSER_ITEST_PROVIDER", "cognito")
 
+# The identity-provider registry. A row that sorts after `cognito` and takes no password, or a uniquely named `itest-` row, changes nothing another test relies on; a row that changes the default pool or disables `cognito` changes every concurrent login, so its test must carry @pytest.mark.xdist_group("env_mut").
+PROVIDER_TABLE = "espuser-identity-providers"
+
+# The lambda re-reads the registry per request, but the Scan behind it is eventually consistent, so
+# a write needs a moment to become visible before a test drives the API.
+PROVIDER_SETTLE = 2.0
+
+
+def providers_table():
+    """The identity-provider registry table, shared by the suites that add to or flip rows in it."""
+    return boto3.resource("dynamodb", region_name=REGION).Table(PROVIDER_TABLE)
+
+
 # Skips the ESP User suites when no stack is deployed, so a checkout with no espuser outputs still
 # runs the rest of the itests instead of erroring.
 requires_espuser = pytest.mark.skipif(

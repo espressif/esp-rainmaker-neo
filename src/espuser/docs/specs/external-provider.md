@@ -15,11 +15,11 @@ the same way. Cognito is one such row.
 | `display_name` | Label for the login chooser |
 | `issuer` | The provider's OIDC issuer; endpoints and keys are discovered from it |
 | `authorize_url` | Where a login begins: the upstream authorize endpoint, or the hosted page for an `otp` row |
-| `client_id` | The one app client we hold for this provider |
+| `password_verifier` | Who checks a password typed on our page for this `oidc` row: `cognito` (Cognito `InitiateAuth` against the row's pool). Unset, the row is a button to the provider's own page. Any other value, or the field on an `otp` row, offers neither |
+| `client_id` | The one app client we hold for this provider. A row whose `password_verifier` is `cognito` takes no password without one |
 | `client_secret` | That client's secret |
 | `scopes` | Space-separated, requested on the upstream authorize |
 | `token_endpoint_auth` | How the client authenticates at the token endpoint: `client_secret_basic` or `client_secret_post` |
-| `password_grant` | Whether `client_id` also accepts a direct username/password exchange |
 | `attribute_mapping` | Our claim name → the provider's claim name; see [Attribute mapping](federation.md#attribute-mapping) |
 | `session_max_ttl_seconds` | Optional cap on OUR session's absolute lifetime for logins this provider authenticated — the operator's assertion of what the upstream sanctions (not discoverable over OIDC). Combined as `min(global, this)`, so a row can only shorten the deployment cap, never extend it. Unset ⇒ the global cap applies |
 | `end_session_url` | The provider's sign-out endpoint. Unset ⇒ the upstream hop is skipped entirely and only OUR session ends. See **Sign-out** below |
@@ -100,15 +100,14 @@ cached per issuer for the container lifetime. Its verify keys are then fetched f
 cached per URL, so upstream key rotation is picked up on cold start. A row may pin any of these as a
 URL, which a provider that publishes no discovery document needs and nothing else does.
 
-## The password grant
+## The password surface
 
 The legacy `/v1/user/auth/*` surface needs six things from a provider: password sign-in, sign-up,
 resend of a sign-up code, sign-up confirmation, password-reset start, and password-reset confirmation.
 All six are unauthenticated provider operations — they take the app client id and no AWS credential —
 which is what lets the surface work against a provider in any account.
 
-The first enabled provider that sets `password_grant` and carries a `client_id` serves the surface.
-When none does, it fails closed: the routes exist but authenticate nothing.
+The enabled row whose `password_verifier` is `cognito` and that has a `client_id`, named by a request's `provider`, or else the first such row by `provider_name`, serves it. Token refresh and sign-out reach no pool and take no `provider`. A named provider that is not such a row is refused with `400` `{"message":"Unknown provider."}`; when no row is, it fails closed: the routes exist but authenticate nothing.
 
 Operations that presume ownership of the provider's pool are not available. Nothing on this path is
 given a pool identifier, so an operation that would administer the pool has nothing to address.
@@ -117,7 +116,7 @@ role and is not offered.
 
 ## The bundled pool
 
-Our own CDK creates a Cognito pool and seeds it as one ordinary row, so a fresh deployment has a
+Our own CDK creates a Cognito pool and seeds it as one ordinary `oidc` row named `cognito` whose `password_verifier` is `cognito`, so a fresh deployment has a
 working login without manual configuration. It is a default, not a dependency: deleting the row leaves
 a system with no provider configured, and adding a different row is the same operation for Cognito as
 for anything else.

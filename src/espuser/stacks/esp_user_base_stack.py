@@ -763,13 +763,15 @@ def handler(event, context):
             table.put_item(Item={
                 'provider_name': 'cognito',
                 'type': 'oidc',
+                # Its password is typed on our page and checked against this pool, so it is never a redirect.
+                'password_verifier': 'cognito',
                 'enabled': existing.get('enabled', True) if existing else True,
-                'display_name': 'Cognito',
+                # The button label names the credential, not the vendor: nobody signing in knows what Cognito is.
+                'display_name': 'Email / password',
                 'issuer': os.environ['COGNITO_ISSUER'],
                 'client_id': os.environ['COGNITO_CLIENT_ID'],
                 'scopes': 'openid profile email phone aws.cognito.signin.user.admin',
                 'client_secret': os.environ['COGNITO_CLIENT_SECRET'],
-                'password_grant': True,
                 'token_endpoint_auth': 'client_secret_basic',
                 # Cognito's sign-out is not the OIDC-standard end_session_endpoint: it lives on the
                 # hosted-UI domain and names its return parameter logout_uri, not
@@ -797,10 +799,8 @@ def handler(event, context):
             properties={
                 "Issuer": self.end_user_pool.issuer,
                 "ClientId": self.end_user_pool.broker_client.user_pool_client_id,
-                # 7: the cognito row gained end_session_url + end_session_redirect_param so
-                # /oauth2/logout ends Cognito's own session. The seed re-runs only when a property
-                # here changes, so the bump is what refreshes the existing row.
-                "SeedVersion": "7",
+                # 9: the built-in row is an oidc row whose password_verifier is cognito.
+                "SeedVersion": "9",
             },
         )
         cr.node.add_dependency(self.gsi_readiness)

@@ -12,6 +12,7 @@ package legacyauth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
@@ -51,17 +52,22 @@ func (s *Service) IsRainMakerProvider() bool {
 
 // ErrNoPasswordProvider means no enabled provider advertises a password client, so this surface has
 // nothing to authenticate against.
-var ErrNoPasswordProvider = errors.New("legacyauth: no enabled provider offers a password grant")
+var ErrNoPasswordProvider = errors.New("legacyauth: no enabled provider has a password our page can check")
+
+// ErrProviderNotFound refuses a named provider whose password our page cannot check, rather than falling back to another pool and another account.
+var ErrProviderNotFound = errors.New("legacyauth: named provider is not one whose password our page can check")
 var ErrUserNotConfirmed = errors.New("legacyauth: account is not confirmed")
+
+// ErrPasswordRefused means the pool's password policy refused a new password, which the caller can fix, unlike the failures each route answers with one sentence.
+var ErrPasswordRefused = errors.New("legacyauth: the password does not meet the pool's policy")
 
 // ErrAccountAlreadyUsable means a duplicate signup authenticated an existing confirmed account, so
 // the caller owns it and should sign in rather than wait for a verification code. Not a failure —
 // the handler still answers 201, only with a different message.
 var ErrAccountAlreadyUsable = errors.New("legacyauth: account already exists and is usable")
 
-// NewService resolves the password app client from the provider registry, so the upstream may live in
-// any account and needs no deployment wiring here.
-func NewService(ctx context.Context) (*Service, error) {
+// NewService resolves the password app client from the provider registry; an empty providerName takes the first by name.
+func NewService(ctx context.Context, providerName string) (*Service, error) {
 	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, nil)
 	entries, err := identity_providers_db.NewIdentityProvidersDB(rmngCtx).ListEnabled()
 	if err != nil {
@@ -69,12 +75,15 @@ func NewService(ctx context.Context) (*Service, error) {
 	}
 	var provider *identity_providers_db.ProviderEntry
 	for i := range entries {
-		if entries[i].OffersPasswordGrant() {
+		if entries[i].OurPageTakesPassword() && (providerName == "" || entries[i].ProviderName == providerName) {
 			provider = &entries[i]
 			break
 		}
 	}
-	if provider == nil {
+	switch {
+	case provider == nil && providerName != "":
+		return nil, ErrProviderNotFound
+	case provider == nil:
 		return nil, ErrNoPasswordProvider
 	}
 	// The app client is confidential, so Cognito demands SECRET_HASH on every call below.
@@ -175,6 +184,9 @@ func (s *Service) Signup(ctx context.Context, email, phone, password string) err
 			_ = s.cognito.ResendSignupCode(ctx, username)
 			return nil
 		}
+		if auth.IsPasswordPolicyError(err) {
+			return fmt.Errorf("%w: %w", ErrPasswordRefused, err)
+		}
 		return rmerror.NewRMError(err, "signup failed")
 	}
 	return nil
@@ -201,6 +213,9 @@ func (s *Service) ForgotPassword(ctx context.Context, username string) error {
 
 func (s *Service) ConfirmForgotPassword(ctx context.Context, username, code, newPassword string) error {
 	if err := s.cognito.ConfirmForgotPassword(ctx, username, code, newPassword); err != nil {
+		if auth.IsPasswordPolicyError(err) {
+			return fmt.Errorf("%w: %w", ErrPasswordRefused, err)
+		}
 		return rmerror.NewRMError(err, "password recovery confirmation failed")
 	}
 	return nil

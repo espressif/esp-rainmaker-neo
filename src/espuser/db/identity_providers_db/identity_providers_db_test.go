@@ -111,6 +111,16 @@ var _ = Describe("IdentityProvidersDB", func() {
 			Expect(names).To(ConsistOf("idp_on_1", "idp_on_2", "idp_on_3"))
 		})
 
+		It("lists enabled providers by provider_name", func() {
+			for _, name := range []string{"idp_c", "idp_a", "idp_b"} {
+				Expect(db.CreateProvider(newProvider(name, utils.Ptr(true)))).To(Succeed())
+			}
+
+			enabled, err := db.ListEnabled()
+			Expect(err).NotTo(HaveOccurred())
+			Expect([]string{enabled[0].ProviderName, enabled[1].ProviderName, enabled[2].ProviderName}).To(Equal([]string{"idp_a", "idp_b", "idp_c"}))
+		})
+
 		It("returns nothing when every provider is disabled", func() {
 			Expect(db.CreateProvider(newProvider("idp_off", utils.Ptr(false)))).To(Succeed())
 
@@ -120,3 +130,15 @@ var _ = Describe("IdentityProvidersDB", func() {
 		})
 	})
 })
+
+var _ = DescribeTable("OurPageTakesPassword",
+	func(entry identity_providers_db.ProviderEntry, want bool) {
+		Expect(entry.OurPageTakesPassword()).To(Equal(want))
+	},
+	Entry("an oidc row whose password Cognito verifies, with a client_id", identity_providers_db.ProviderEntry{Type: identity_providers_db.TypeOIDC, PasswordVerifier: identity_providers_db.PasswordVerifierCognito, ClientID: "app"}, true),
+	Entry("an oidc row whose password Cognito verifies, without a client_id", identity_providers_db.ProviderEntry{Type: identity_providers_db.TypeOIDC, PasswordVerifier: identity_providers_db.PasswordVerifierCognito}, false),
+	Entry("an oidc row naming no password_verifier, even one with a client_id", identity_providers_db.ProviderEntry{Type: identity_providers_db.TypeOIDC, ClientID: "app"}, false),
+	Entry("an oidc row naming a password_verifier we cannot call", identity_providers_db.ProviderEntry{Type: identity_providers_db.TypeOIDC, PasswordVerifier: "ldap", ClientID: "app"}, false),
+	Entry("an otp row, even one naming a password_verifier", identity_providers_db.ProviderEntry{Type: identity_providers_db.TypeOTP, PasswordVerifier: identity_providers_db.PasswordVerifierCognito, ClientID: "app"}, false),
+	Entry("a row of a type we do not know, such as a leftover cognito type", identity_providers_db.ProviderEntry{Type: "cognito", PasswordVerifier: identity_providers_db.PasswordVerifierCognito, ClientID: "app"}, false),
+)

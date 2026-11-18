@@ -10,7 +10,7 @@ Every test here runs once per `cognito_pool` param:
                   provider row the stack seeds.
   external        a pool this suite creates itself, shaped like the production 3P pool
                   (UsernameAttributes = email + phone_number, so email IS the username) and
-                  registered as a password-grant provider row for the duration of the module.
+                  registered as a provider row with password_verifier cognito for the duration of the module.
 An AliasAttributes pool is NOT a param: Cognito rejects email-format usernames outright on that
 shape ("Username cannot be of email format, since user pool is configured for email alias"), and
 this surface signs up with the email as the username — so the whole API is unusable against such
@@ -48,9 +48,11 @@ from botocore.exceptions import ClientError
 
 from test.itest.conftest import (
     END_USER_POOL_ID,
+    PROVIDER_SETTLE,
     REGION,
     USER_API_GATEWAY_URL,
     decode_jwt_claims,
+    providers_table,
 )
 from test.itest.email_utils import (
     generate_mailosaur_email,
@@ -72,7 +74,6 @@ pytestmark = [pytest.mark.cognito, pytest.mark.xdist_group("env_mut")]
 # A pool this suite creates has no Lambda triggers and no SES sender, so Cognito mails the
 # code itself from its default address. That is the same delivery path the inbuilt pool
 # uses for signup verification, which is what these tests read.
-PROVIDER_TABLE = "espuser-identity-providers"
 TEST_PROVIDER_NAME = "itest-external-cognito"
 ALIAS_PROVIDER_NAME = "itest-external-cognito-alias"
 INBUILT_PROVIDER_NAME = "cognito"
@@ -92,10 +93,6 @@ LEGACY_SCOPE = "openid email phone"
 CODE_WAIT = {"max_retries": 6, "retry_delay": 3.0, "timeout": 45.0}
 # Asserting a code does NOT arrive: short, because it must fail fast to be worth running.
 NO_CODE_WAIT = {"max_retries": 2, "retry_delay": 5.0, "timeout": 20.0}
-
-# Seconds to let a provider-row swap become visible to the lambda's eventually-consistent Scan.
-PROVIDER_SWAP_SETTLE = 2.0
-
 
 UNCONFIRMED_ACCOUNT_MESSAGE = "Signin failed. Account not verified — reset your password."
 
@@ -185,19 +182,13 @@ def _create_external_pool(cognito, alias_shaped=False):
     return pool["Id"], client["ClientId"], client["ClientSecret"]
 
 
-def _providers_table():
-    return boto3.resource("dynamodb", region_name=REGION).Table(PROVIDER_TABLE)
-
-
 def _set_provider_enabled(provider_name, enabled):
     """Enable or disable one provider row, without creating it if it is absent.
 
-    NewService takes the first enabled row offering a password grant out of a DynamoDB Scan, whose
-    order is unspecified, and both rows here offer one. So exactly one of them must be enabled
-    whenever a request is made, which is what _select_pool below guarantees per test.
+    NewService takes the first enabled row whose password_verifier is cognito by provider_name, and the built-in `cognito` sorts before this suite's row, so _select_pool below keeps exactly one of them enabled per test.
     """
     try:
-        _providers_table().update_item(
+        providers_table().update_item(
             Key={"provider_name": provider_name},
             UpdateExpression="SET enabled = :e",
             ExpressionAttributeValues={":e": enabled},
@@ -222,7 +213,7 @@ def _select_pool(label):
     _set_provider_enabled(wanted, True)
     # The lambda re-reads the registry per request, but the Scan behind it is eventually
     # consistent, so give the swap a moment to be visible before the test drives the API.
-    time.sleep(PROVIDER_SWAP_SETTLE)
+    time.sleep(PROVIDER_SETTLE)
 
 
 def _register_provider(provider_name, pool_id, client_id, client_secret, attribute_mapping=None):
@@ -235,6 +226,7 @@ def _register_provider(provider_name, pool_id, client_id, client_secret, attribu
     item = {
         "provider_name": provider_name,
         "type": "oidc",
+        "password_verifier": "cognito",
         "display_name": "itest external cognito",
         "enabled": False,
         "issuer": issuer,
@@ -242,13 +234,12 @@ def _register_provider(provider_name, pool_id, client_id, client_secret, attribu
         "client_secret": client_secret,
         "jwks_url": f"{issuer}/.well-known/jwks.json",
         "scopes": "openid email phone",
-        "password_grant": True,
         "token_endpoint_auth": "client_secret_basic",
         "created_at": int(time.time()),
     }
     if attribute_mapping:
         item["attribute_mapping"] = attribute_mapping
-    _providers_table().put_item(Item=item)
+    providers_table().put_item(Item=item)
 
 
 @pytest.fixture(scope="module")
@@ -271,7 +262,7 @@ def external_pool():
         except Exception:  # noqa: BLE001
             pass
         try:
-            _providers_table().delete_item(Key={"provider_name": TEST_PROVIDER_NAME})
+            providers_table().delete_item(Key={"provider_name": TEST_PROVIDER_NAME})
         except Exception:  # noqa: BLE001
             pass
         try:
@@ -306,7 +297,7 @@ def external_alias_pool():
         except Exception:  # noqa: BLE001
             pass
         try:
-            _providers_table().delete_item(Key={"provider_name": ALIAS_PROVIDER_NAME})
+            providers_table().delete_item(Key={"provider_name": ALIAS_PROVIDER_NAME})
         except Exception:  # noqa: BLE001
             pass
         try:
@@ -876,6 +867,37 @@ def test_recovery_confirmation_rejects_existing_and_absent_alike(cognito_pool, c
     )
 
 
+# Shorter than any pool may allow (Cognito's minimum length setting is 6), so every pool shape refuses it.
+REFUSED_PASSWORD = "abcd"
+PASSWORD_REFUSED = "Password does not meet the password requirements"
+
+
+def test_a_refused_password_is_named_the_same_for_every_account(cognito_pool, confirmed_user):
+    """Naming a refused password must be no oracle: Cognito decides the order it checks the code, the
+    account and the policy in, so the confirmation is measured against an account that exists and one
+    that does not."""
+    label, _ = cognito_pool
+    existing_email, _ = confirmed_user
+
+    def confirm(username):
+        return requests.post(_auth_url("password-recovery/confirmation"),
+                             json={"username": username, "code": "000000", "new_password": REFUSED_PASSWORD})
+
+    on_existing, on_absent = confirm(existing_email), confirm(generate_random_email())
+    assert on_existing.status_code == 400, f"[{label}] existing: {on_existing.text}"
+    assert on_existing.text == on_absent.text, (
+        f"[{label}] a refused password must not reveal existence: {on_existing.text} vs {on_absent.text}")
+
+    def sign_up(email):
+        return requests.post(_auth_url("signup"), json={"email": email, "password": REFUSED_PASSWORD})
+
+    signup, signup_existing = sign_up(generate_random_email()), sign_up(existing_email)
+    assert signup.status_code == 400, f"[{label}] {signup.text}"
+    assert _status(signup) == PASSWORD_REFUSED, signup.text
+    assert signup_existing.status_code == 400 and signup_existing.text == signup.text, (
+        f"[{label}] a refused password at signup must not reveal existence: {signup_existing.status_code} {signup_existing.text} vs {signup.text}")
+
+
 # ============================================================================
 # token/refresh, signout, password — the token-bearing endpoints.
 # ============================================================================
@@ -1071,13 +1093,13 @@ USER_DETAILS_TABLE = "espuser-user-details"
 def _set_attribute_mapping(provider_name, attribute_mapping):
     """Set the row's attribute_mapping, or remove it when attribute_mapping is empty."""
     if attribute_mapping:
-        _providers_table().update_item(
+        providers_table().update_item(
             Key={"provider_name": provider_name},
             UpdateExpression="SET attribute_mapping = :m",
             ExpressionAttributeValues={":m": attribute_mapping},
         )
     else:
-        _providers_table().update_item(Key={"provider_name": provider_name},
+        providers_table().update_item(Key={"provider_name": provider_name},
                                        UpdateExpression="REMOVE attribute_mapping")
 
 

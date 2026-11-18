@@ -52,6 +52,9 @@ const (
 	neutralAccountExistsMessage   = "Account already exists. Signin or reset password."
 )
 
+// passwordRefusedMessage answers signup and recovery confirmation with a password the pool's policy refused; Cognito's own reason is its text, not ours to echo, and the sign-in page shows the rules beside the field.
+const passwordRefusedMessage = "Password does not meet the password requirements"
+
 func signupMessage(rainmaker bool) string {
 	if rainmaker {
 		return rainmakerSignupMessage
@@ -81,6 +84,11 @@ type tokenReq struct {
 	Resource []string `json:"resource,omitempty"`
 }
 
+// providerReq is read before the service exists, because the pool decides what it is built against; absent means the first row by name whose password our page takes.
+type providerReq struct {
+	Provider string `json:"provider,omitempty"`
+}
+
 type signupReq struct {
 	Email       string `json:"email,omitempty"`
 	PhoneNumber string `json:"phone_number,omitempty"`
@@ -106,13 +114,24 @@ type passwordReq struct {
 	NewPassword string `json:"new_password,omitempty"`
 }
 
-func newService(ctx context.Context) (*legacyauth.Service, error) {
-	return legacyauth.NewService(ctx)
+// accountRoutes reach a Cognito pool, so each takes an optional provider naming which; refresh and signout touch only our own tokens.
+var accountRoutes = map[string]bool{pathToken: true, pathSignup: true, pathSignupVerify: true, pathRecovery: true, pathRecoveryConfirm: true, pathPassword: true}
+
+func newService(ctx context.Context, request events.APIGatewayProxyRequest) (*legacyauth.Service, error) {
+	var req providerReq
+	if accountRoutes[request.Path] {
+		// An unparsable body names no provider here; the per-path handler answers it with 400 "Invalid request body".
+		_ = rmngrequest.ExtractRequestStruct(request, &req)
+	}
+	return legacyauth.NewService(ctx, req.Provider)
 }
 
 func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	svc, err := newService(ctx)
+	svc, err := newService(ctx, request)
 	if err != nil {
+		if errors.Is(err, legacyauth.ErrProviderNotFound) {
+			return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Unknown provider.")), nil
+		}
 		rlog.Error(ctx).Err(err).Msg("failed to build legacy auth service")
 		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Internal server error")), nil
 	}
@@ -197,6 +216,9 @@ func handleSignup(ctx context.Context, request events.APIGatewayProxyRequest, sv
 		if errors.Is(err, legacyauth.ErrAccountAlreadyUsable) {
 			return utils.APIGwRespJSON(http.StatusConflict, utils.NewAPIStatus(accountExistsMessage(svc.IsRainMakerProvider()))), nil
 		}
+		if errors.Is(err, legacyauth.ErrPasswordRefused) {
+			return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(passwordRefusedMessage)), nil
+		}
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Failed to create user account")), nil
 	}
 	return utils.APIGwRespJSON(http.StatusCreated, map[string]any{
@@ -238,6 +260,9 @@ func handleRecoveryConfirm(ctx context.Context, request events.APIGatewayProxyRe
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Invalid request body")), nil
 	}
 	if err := svc.ConfirmForgotPassword(ctx, req.Username, req.Code, req.NewPassword); err != nil {
+		if errors.Is(err, legacyauth.ErrPasswordRefused) {
+			return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(passwordRefusedMessage)), nil
+		}
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Invalid verification code")), nil
 	}
 	return utils.APIGwRespJSON(http.StatusOK, utils.NewAPIStatus("Password reset successful")), nil

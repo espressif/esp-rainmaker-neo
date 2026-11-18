@@ -23,6 +23,8 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
 	"github.com/aws/aws-lambda-go/events"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	cognitotypes "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
 	"github.com/golang-jwt/jwt/v5"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -42,6 +44,10 @@ var _ = Describe("legacy token responses (RFC 6749 s5.1)", func() {
 		neoResource     = "https://api.example.com"
 		accountResource = "https://account.example.com"
 		homeAppClientID = "rainmaker-neo-home-app-client"
+		// The same address holds an account in a second pool, under its own password, so a sign-in only succeeds against the pool it names.
+		secondPool     = "eu-west-2_secondpool"
+		secondProvider = "second"
+		secondPassword = "Second#123"
 	)
 
 	BeforeEach(func() {
@@ -49,6 +55,8 @@ var _ = Describe("legacy token responses (RFC 6749 s5.1)", func() {
 		cog := mock.NewCognitoProviderMock()
 		cog.AddTestUserPoolDirect(poolID, clientID)
 		cog.AddTestUserDirect(poolID, email, email, password, true)
+		cog.AddTestUserPoolDirect(secondPool, "second-client")
+		cog.AddTestUserDirect(secondPool, email, email, secondPassword, true)
 		cog.IDTokenMinter = func(*mock.UserState) string {
 			tok, err := jwtutil.SignRS256(jwt.MapClaims{"email": email, "email_verified": true}, backend.SigningKey, oidc.SigningKeyID)
 			Expect(err).NotTo(HaveOccurred())
@@ -57,8 +65,12 @@ var _ = Describe("legacy token responses (RFC 6749 s5.1)", func() {
 		awscommon.SetCognitoProviderClient(cog)
 		yes := true
 		Expect(identity_providers_db.NewIdentityProvidersDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).CreateProvider(&identity_providers_db.ProviderEntry{
-			ProviderName: "cognito", Type: identity_providers_db.TypeOIDC, Enabled: &yes,
-			ClientID: clientID, ClientSecret: "provider-client-secret", PasswordGrant: &yes,
+			ProviderName: "cognito", Type: identity_providers_db.TypeOIDC, PasswordVerifier: identity_providers_db.PasswordVerifierCognito, Enabled: &yes,
+			ClientID: clientID, ClientSecret: "provider-client-secret",
+		})).To(Succeed())
+		Expect(identity_providers_db.NewIdentityProvidersDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).CreateProvider(&identity_providers_db.ProviderEntry{
+			ProviderName: secondProvider, Type: identity_providers_db.TypeOIDC, PasswordVerifier: identity_providers_db.PasswordVerifierCognito, Enabled: &yes,
+			ClientID: "second-client", ClientSecret: "provider-client-secret",
 		})).To(Succeed())
 		// The password API signs in as the Home app client, covering every resource it is granted.
 		Expect(oauth_clients_db.NewOAuthClientsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).CreateClient(&oauth_clients_db.OAuthClientEntry{
@@ -153,6 +165,25 @@ var _ = Describe("legacy token responses (RFC 6749 s5.1)", func() {
 		Expect(audience(refresh)).To(Equal(accountResource))
 	})
 
+	It("signs in against the pool the request names, and against the first by name when it names none", func() {
+		tokenSet(post(pathToken, map[string]any{"username": email, "password": secondPassword, "provider": secondProvider}))
+		unnamed := post(pathToken, map[string]any{"username": email, "password": secondPassword})
+		Expect(unnamed.StatusCode).To(Equal(http.StatusUnauthorized), "the first pool by name does not hold this password (negative)")
+	})
+
+	It("changes the password in the pool the request names, leaving the first pool's account alone", func() {
+		signin := tokenSet(post(pathToken, map[string]any{"username": email, "password": secondPassword, "provider": secondProvider}))
+		const newPassword = "Second#456"
+
+		unnamed := post(pathPassword, map[string]any{"access_token": signin["access_token"], "old_password": secondPassword, "new_password": newPassword})
+		Expect(unnamed.StatusCode).To(Equal(http.StatusUnauthorized), "the first pool by name does not hold this password (negative)")
+
+		changed := post(pathPassword, map[string]any{"access_token": signin["access_token"], "old_password": secondPassword, "new_password": newPassword, "provider": secondProvider})
+		Expect(changed.StatusCode).To(Equal(http.StatusOK), changed.Body)
+		tokenSet(post(pathToken, map[string]any{"username": email, "password": newPassword, "provider": secondProvider}))
+		tokenSet(post(pathToken, map[string]any{"username": email, "password": password}))
+	})
+
 	It("refuses a refresh naming two resources, so no token is good at two APIs (negative)", func() {
 		tokens := tokenSet(post(pathToken, map[string]any{"username": email, "password": password}))
 		refresh := post(pathRefresh, map[string]any{"refresh_token": tokens["refresh_token"], "resource": []string{neoResource, accountResource}})
@@ -228,4 +259,66 @@ var _ = Describe("provider-specific wording", func() {
 		// Distinct from the uniform refusal, which is what makes the branch observable at all.
 		Expect(unconfirmedAccountMessage).NotTo(Equal("Authentication failed"))
 	})
+})
+
+var _ = Describe("against a pool with no such account", func() {
+	var cog *mock.CognitoProviderMock
+
+	BeforeEach(func() {
+		test_utils.SetupEspUserBackend(context.Background())
+		cog = mock.NewCognitoProviderMock()
+		cog.AddTestUserPoolDirect("eu-west-2_testpool", "native-client")
+		awscommon.SetCognitoProviderClient(cog)
+		Expect(identity_providers_db.NewIdentityProvidersDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).CreateProvider(&identity_providers_db.ProviderEntry{
+			ProviderName: "cognito", Type: identity_providers_db.TypeOIDC, PasswordVerifier: identity_providers_db.PasswordVerifierCognito, Enabled: utils.Ptr(true),
+			ClientID: "native-client", ClientSecret: "provider-client-secret",
+		})).To(Succeed())
+	})
+
+	post := func(path string, body map[string]any, headers map[string]string) events.APIGatewayProxyResponse {
+		raw, err := json.Marshal(body)
+		Expect(err).NotTo(HaveOccurred())
+		resp, err := handler(context.Background(), events.APIGatewayProxyRequest{HTTPMethod: http.MethodPost, Path: path, Body: string(raw), Headers: headers})
+		Expect(err).NotTo(HaveOccurred())
+		return resp
+	}
+
+	DescribeTable("answers a password the policy refuses as one to fix, in one sentence of ours rather than Cognito's",
+		func(path string, body map[string]any) {
+			refused := &cognitotypes.InvalidPasswordException{Message: aws.String("Password did not conform with policy: Password must have symbol characters")}
+			cog.SignUpError, cog.ConfirmForgotPasswordError = refused, refused
+			resp := post(path, body, nil)
+			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
+			Expect(resp.Body).To(MatchJSON(`{"message":"Password does not meet the password requirements"}`))
+		},
+		Entry("at signup", pathSignup, map[string]any{"email": "new@example.com", "password": "Password1"}),
+		Entry("at recovery confirmation", pathRecoveryConfirm, map[string]any{"username": "u@example.com", "code": "123456", "new_password": "Password1"}),
+	)
+
+	It("keeps a wrong recovery code on the route's own answer, never a password refusal (negative)", func() {
+		cog.ConfirmForgotPasswordError = &cognitotypes.CodeMismatchException{Message: aws.String("Invalid verification code provided, please try again.")}
+		resp := post(pathRecoveryConfirm, map[string]any{"username": "u@example.com", "code": "000000", "new_password": "NewPass#123"}, nil)
+		Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
+		Expect(resp.Body).To(MatchJSON(`{"message":"Invalid verification code"}`))
+	})
+
+	DescribeTable("refuses an account route naming a provider that is not a password pool, rather than using another pool (negative)",
+		func(path, provider string) {
+			Expect(identity_providers_db.NewIdentityProvidersDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).CreateProvider(&identity_providers_db.ProviderEntry{
+				ProviderName: "retired", Type: identity_providers_db.TypeOIDC, PasswordVerifier: identity_providers_db.PasswordVerifierCognito, Enabled: utils.Ptr(false),
+				ClientID: "native-client", ClientSecret: "provider-client-secret",
+			})).To(Succeed())
+			resp := post(path, map[string]any{"email": "new@example.com", "username": "new@example.com", "code": "123456", "password": "Password1!", "new_password": "Password1!", "provider": provider}, nil)
+			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
+			Expect(resp.Body).To(MatchJSON(`{"message":"Unknown provider."}`), "the account routes' own error shape")
+		},
+		Entry("signup, a name that does not exist", pathSignup, "nope"),
+		Entry("signup verification, a name that does not exist", pathSignupVerify, "nope"),
+		Entry("recovery, a name that does not exist", pathRecovery, "nope"),
+		Entry("recovery confirmation, a name that does not exist", pathRecoveryConfirm, "nope"),
+		Entry("sign-in, a name that does not exist", pathToken, "nope"),
+		Entry("password change, a name that does not exist", pathPassword, "nope"),
+		Entry("signup, a disabled password row", pathSignup, "retired"),
+		Entry("sign-in, a disabled password row", pathToken, "retired"),
+	)
 })

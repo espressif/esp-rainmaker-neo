@@ -9,20 +9,20 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
-
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/identity_providers_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/user_details_db"
-	"github.com/espressif/esp-rainmaker-neo/src/utils"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
-
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/jwtutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	cognitotypes "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
 	"github.com/golang-jwt/jwt/v5"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -46,15 +46,19 @@ const (
 
 // seedPasswordProvider registers the enabled provider row NewService resolves its app client from.
 func seedPasswordProvider(clientID string, attributeMapping map[string]string) {
+	seedNamedPasswordProvider("cognito", clientID, attributeMapping)
+}
+
+func seedNamedPasswordProvider(name, clientID string, attributeMapping map[string]string) {
 	rmngCtx := rmngctx.NewRmngContextWithCtx(context.Background(), nil)
 	yes := true
 	Expect(identity_providers_db.NewIdentityProvidersDB(rmngCtx).CreateProvider(&identity_providers_db.ProviderEntry{
-		ProviderName:     "cognito",
+		ProviderName:     name,
 		Type:             identity_providers_db.TypeOIDC,
+		PasswordVerifier: identity_providers_db.PasswordVerifierCognito,
 		Enabled:          &yes,
 		ClientID:         clientID,
 		ClientSecret:     "provider-client-secret",
-		PasswordGrant:    &yes,
 		AttributeMapping: attributeMapping,
 	})).To(Succeed())
 }
@@ -66,6 +70,54 @@ func unverifiedAudience(token string) any {
 	Expect(err).NotTo(HaveOccurred())
 	return claims["aud"]
 }
+
+// Which pool a password reaches is an authorization decision, so it must not depend on DynamoDB's scan order.
+var _ = Describe("provider selection", func() {
+	BeforeEach(func() {
+		backend := test_utils.SetupEspUserBackend(context.Background())
+		test_utils.PutParam(context.Background(), backend.SSMMock, poolJWKSParam, string(test_utils.TestJWKUtil.GetTestJWKS()))
+	})
+
+	DescribeTable("authenticates against the named provider, or the first by name when none is named",
+		func(named, want string) {
+			seedNamedPasswordProvider("beta", testClientID2, nil)
+			seedNamedPasswordProvider("alpha", testClientID2, nil)
+
+			svc, err := NewService(context.Background(), named)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(svc.providerName).To(Equal(want))
+		},
+		Entry("none named", "", "alpha"),
+		Entry("one named", "beta", "beta"),
+	)
+
+	It("refuses a provider that is not registered, rather than falling back to another one (negative)", func() {
+		seedNamedPasswordProvider("alpha", testClientID2, nil)
+
+		_, err := NewService(context.Background(), "nope")
+		Expect(err).To(MatchError(ErrProviderNotFound))
+	})
+
+	It("never picks an oidc row naming no password_verifier, which signs in on the provider's own page (negative)", func() {
+		Expect(identity_providers_db.NewIdentityProvidersDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).CreateProvider(&identity_providers_db.ProviderEntry{
+			ProviderName: "alpha", Type: identity_providers_db.TypeOIDC, Enabled: utils.Ptr(true), ClientID: testClientID2,
+		})).To(Succeed())
+
+		_, err := NewService(context.Background(), "")
+		Expect(err).To(MatchError(ErrNoPasswordProvider))
+	})
+
+	It("never picks a row naming a password_verifier it cannot call, even when it is the only one (negative)", func() {
+		Expect(identity_providers_db.NewIdentityProvidersDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).CreateProvider(&identity_providers_db.ProviderEntry{
+			ProviderName: "alpha", Type: identity_providers_db.TypeOIDC, PasswordVerifier: "ldap", Enabled: utils.Ptr(true), ClientID: testClientID2,
+		})).To(Succeed())
+
+		_, err := NewService(context.Background(), "alpha")
+		Expect(err).To(MatchError(ErrProviderNotFound))
+		_, err = NewService(context.Background(), "")
+		Expect(err).To(MatchError(ErrNoPasswordProvider))
+	})
+})
 
 var _ = Describe("SigninWithPassword", func() {
 	var backend *test_utils.EspUserBackend
@@ -98,7 +150,7 @@ var _ = Describe("SigninWithPassword", func() {
 			AllowedResources: []string{neoResource, accountResource}, DefaultResource: neoResource,
 		})
 		Expect(err).NotTo(HaveOccurred())
-		svc, err := NewService(context.Background())
+		svc, err := NewService(context.Background(), "")
 		Expect(err).NotTo(HaveOccurred())
 		return svc
 	}
@@ -225,7 +277,7 @@ var _ = Describe("SigninWithPassword", func() {
 		Expect(err).To(HaveOccurred())
 	})
 
-	It("fails closed when no enabled provider offers a password grant (negative)", func() {
+	It("fails closed when no enabled provider has a password our page can check (negative)", func() {
 		rmngCtx := rmngctx.NewRmngContextWithCtx(context.Background(), nil)
 		yes := true
 		Expect(identity_providers_db.NewIdentityProvidersDB(rmngCtx).CreateProvider(&identity_providers_db.ProviderEntry{
@@ -235,7 +287,7 @@ var _ = Describe("SigninWithPassword", func() {
 			ClientID:     "some-client",
 		})).To(Succeed())
 
-		_, err := NewService(context.Background())
+		_, err := NewService(context.Background(), "")
 		Expect(err).To(MatchError(ErrNoPasswordProvider))
 	})
 
@@ -267,6 +319,16 @@ var _ = Describe("SigninWithPassword", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(svc.ChangePassword(context.Background(), tokens.AccessToken, testPassword, "NewPass#123")).To(Succeed())
+	})
+
+	It("names a password the pool's policy refuses at signup and recovery confirmation, not the route's catch-all", func() {
+		svc := newService("u@example.com", true)
+		refused := &cognitotypes.InvalidPasswordException{Message: aws.String("Password did not conform with policy: Password must have symbol characters")}
+		cog := awscommon.GetCognitoProviderClient().(*mock.CognitoProviderMock)
+		cog.SignUpError, cog.ConfirmForgotPasswordError = refused, refused
+
+		Expect(svc.Signup(context.Background(), "new@example.com", "", "Password1")).To(MatchError(ErrPasswordRefused))
+		Expect(svc.ConfirmForgotPassword(context.Background(), "u@example.com", mockConfirmationCode, "Password1")).To(MatchError(ErrPasswordRefused))
 	})
 
 	Describe("enumeration resistance", func() {

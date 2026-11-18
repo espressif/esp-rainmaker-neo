@@ -220,7 +220,7 @@ paths:
     get:
       summary: Start browser login (authorization code + PKCE)
       description: |
-        Starts the authorization-code + PKCE (`S256`) login. Validates the client, the exact `redirect_uri` and PKCE, sets the `__Host-esp_flow_id` cookie, and sends the browser to the login: straight to `/oauth2/federation/start` when exactly one provider is enabled, to the OTP page in an OTP-only deployment, otherwise to `/oauth2/login`. On success the browser returns to `redirect_uri` with a single-use `code` and `state`.
+        Starts the authorization-code + PKCE (`S256`) login. It ends at `redirect_uri` with a single-use `code` and `state`.
 
         A live `__Host-esp_session` cookie skips the login and returns the code immediately (single sign-on), unless `prompt`, `max_age` or `id_token_hint` rule it out.
       tags:
@@ -410,7 +410,7 @@ paths:
     get:
       summary: Upstream provider callback
       description: |
-        The provider returns here after login. Verifies `state` against the flow, exchanges the upstream code, validates the upstream `id_token`, finds or creates the ESP User account, and redirects to the client's `redirect_uri` with a single-use `code`. Upstream tokens are discarded.
+        The provider returns here after sign-in. Finishes the sign-in and redirects to `redirect_uri` with a `code`, or to the consent page; upstream tokens are discarded.
       tags:
         - Federated Login
       security: []
@@ -691,7 +691,7 @@ paths:
         Signs this browser out: deletes every refresh family under its session, the session and its cookie, then redirects to `post_logout_redirect_uri`. When the identity provider has its own sign-out, the browser goes there first and comes back through `/oauth2/logout/done`.
 
         - Must be a top-level navigation; a `fetch` does not carry the `SameSite=Lax` session cookie.
-        - `post_logout_redirect_uri` must exactly match one registered for the client. Otherwise it is ignored and the response is `200 Signed out.`; the sign-out still happens.
+        - `post_logout_redirect_uri` must match one registered for the client; otherwise the browser lands on `/user/logout`.
         - Access tokens already issued stay valid until they expire (up to an hour).
       tags:
         - OAuth2 / OIDC Core
@@ -712,7 +712,7 @@ paths:
           schema:
             type: string
           description:
-            The client whose registered list the return URL is checked against. Optional when an `id_token_hint` is sent, which names the client itself; when both are sent and `client_id` is not the hint's audience, the return URL is ignored (RP-Initiated Logout 1.0 §2). The sign-out happens either way.
+            The client whose registered return URLs apply. Optional with an `id_token_hint`; ignored when it is not the hint's audience.
         - name: post_logout_redirect_uri
           in: query
           required: false
@@ -797,13 +797,13 @@ paths:
     get:
       summary: Return point for the upstream provider's sign-out
       description: |
-        Where the identity provider returns the browser after its own sign-out. Redirects to the `post_logout_redirect_uri` saved in the `__Host-esp_logout_to` cookie, or answers `200 Signed out.` when there is none. This is the one sign-out URL registered with the provider; applications never call it.
+        Where the provider returns the browser after its own sign-out; it continues to the saved destination, or to `/user/logout`.
       tags:
         - OAuth2 / OIDC Core
       security: []
       responses:
         "302":
-          description: Redirect to the remembered destination, clearing the memo cookie.
+          description: To the saved destination, or to `/user/logout` when there is none.
         "200":
           description: |
             No memo, or one naming somewhere this server will not forward to: the sign-out
@@ -974,7 +974,7 @@ paths:
     post:
       summary: Password sign-in
       description: |
-        Signs in with `username` and `password`, verified against the bundled Cognito pool, and returns an ESP User token set.
+        Signs in with `username` and `password` against the named `provider` (or the first password provider) and returns an ESP User token set.
         The sign-in covers every API the password client is granted (RFC 8707), and its access token is for the client's `default_resource`; `/v1/user/auth/token/refresh` with `resource` narrows it to another.
       tags:
         - User Auth
@@ -999,7 +999,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/TokenSet"
         "400":
-          description: "`Invalid request body`"
+          description: "`Invalid request body`, or `Unknown provider.`"
           content:
             application/json:
               schema:
@@ -1093,7 +1093,13 @@ paths:
                       Code sent. Existing RainMaker users must signin or reset
                       password.
         "400":
-          $ref: "#/components/responses/BadRequest"
+          description: A bad field, a refused address (`Failed to create user account`), a refused password (`Password does not meet the password requirements`), or `Unknown provider.`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: Password does not meet the password requirements
 
   /v1/user/auth/signup/verify:
     post:
@@ -1116,6 +1122,8 @@ paths:
                 code:
                   type: string
                   description: Verification code Cognito delivered at signup.
+                provider:
+                  $ref: "#/components/schemas/PasswordProvider"
       responses:
         "200":
           description: "`Verified successfully. You can now login.`"
@@ -1126,6 +1134,7 @@ paths:
         "400":
           description: |
             `Invalid code or RainMaker account already exists. Try signin or reset password.` — one answer for every failure: wrong, expired or empty code, an account that does not exist, and an account that is already confirmed. The product name appears only when the resolved provider is named RainMaker.
+            A `provider` that is not an enabled row whose `password_verifier` is `cognito` and that has a `client_id` is `Unknown provider.`.
           content:
             application/json:
               schema:
@@ -1148,6 +1157,8 @@ paths:
                 username:
                   type: string
                   description: The account email or phone number.
+                provider:
+                  $ref: "#/components/schemas/PasswordProvider"
       responses:
         "200":
           description: Reset code sent.
@@ -1158,7 +1169,11 @@ paths:
               example:
                 message: If your account exists, you will receive a code
         "400":
-          $ref: "#/components/responses/BadRequest"
+          description: A bad field (`Invalid request body`), a reset that could not start (`Failed to initiate password reset`), or `Unknown provider.`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /v1/user/auth/password-recovery/confirmation:
     post:
@@ -1180,6 +1195,8 @@ paths:
                   type: string
                 new_password:
                   type: string
+                provider:
+                  $ref: "#/components/schemas/PasswordProvider"
       responses:
         "200":
           description: Password reset.
@@ -1188,7 +1205,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         "400":
-          $ref: "#/components/responses/BadRequest"
+          description: A wrong or expired code, or no such account (`Invalid verification code`); a refused password (`Password does not meet the password requirements`); or `Unknown provider.`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: Password does not meet the password requirements
 
   /v1/user/auth/password:
     post:
@@ -1213,6 +1236,8 @@ paths:
                   type: string
                 new_password:
                   type: string
+                provider:
+                  $ref: "#/components/schemas/PasswordProvider"
       responses:
         "200":
           description: Password changed.
@@ -1221,7 +1246,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         "400":
-          description: Missing field.
+          description: Missing field, or `Unknown provider.`.
           content:
             application/json:
               schema:
@@ -1650,6 +1675,8 @@ components:
         password:
           type: string
           format: password
+        provider:
+          $ref: "#/components/schemas/PasswordProvider"
 
     LegacyRefreshRequest:
       type: object
@@ -1682,6 +1709,8 @@ components:
         password:
           type: string
           format: password
+        provider:
+          $ref: "#/components/schemas/PasswordProvider"
 
     TokenSet:
       type: object
@@ -1730,6 +1759,11 @@ components:
             Human-readable detail. Does not distinguish why the token was
             rejected.
           example: "The refresh token is invalid, expired, or revoked."
+
+    PasswordProvider:
+      type: string
+      description: A provider with a supported `password_verifier`; omitted, the first such provider by name. Any other name is `400` `Unknown provider.`.
+      example: cognito
 
     TokenClientCredentialsRequest:
       type: object

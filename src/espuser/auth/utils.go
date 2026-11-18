@@ -70,6 +70,12 @@ func IsUserNotConfirmedError(err error) bool {
 	return errors.As(err, &notConfirmed)
 }
 
+// IsPasswordPolicyError reports the pool's password policy refusing a new password.
+func IsPasswordPolicyError(err error) bool {
+	var refused *types.InvalidPasswordException
+	return errors.As(err, &refused)
+}
+
 // IsUserAlreadyExistsError checks if an error indicates that a user already exists
 func IsUserAlreadyExistsError(err error) bool {
 	if err == nil {

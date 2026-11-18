@@ -18,14 +18,16 @@ needs no change:
 
 | Route | Body | Returns |
 |---|---|---|
-| `POST /v1/user/auth/token` | `{username, password}` | token set |
+| `POST /v1/user/auth/token` | `{username, password, provider?}` | token set |
 | `POST /v1/user/auth/token/refresh` | `{refresh_token, resource?}` | token set |
-| `POST /v1/user/auth/signup` | `{email?\|phone_number?, password}` | `{user_id, requires_verification, message}` |
-| `POST /v1/user/auth/signup/verify` | `{email?\|phone_number?, code}` | `{message}` |
-| `POST /v1/user/auth/password-recovery` | `{username}` | `{message}` |
-| `POST /v1/user/auth/password-recovery/confirmation` | `{username, code, new_password}` | `{message}` |
-| `POST /v1/user/auth/password` | `{access_token, old_password, new_password}` | `{message}` |
+| `POST /v1/user/auth/signup` | `{email?\|phone_number?, password, provider?}` | `{user_id, requires_verification, message}` |
+| `POST /v1/user/auth/signup/verify` | `{email?\|phone_number?, code, provider?}` | `{message}` |
+| `POST /v1/user/auth/password-recovery` | `{username, provider?}` | `{message}` |
+| `POST /v1/user/auth/password-recovery/confirmation` | `{username, code, new_password, provider?}` | `{message}` |
+| `POST /v1/user/auth/password` | `{access_token, old_password, new_password, provider?}` | `{message}` |
 | `POST /v1/user/auth/signout` | `{access_token?, refresh_token?, global?}` | `{message}` |
+
+Every route that reaches a Cognito pool (sign-in, signup, signup verify, password recovery and its confirmation, password change) takes an optional `provider` naming the pool, so an account in any password pool can be created, signed in, recovered and changed; the sign-in page sends it, and a main-era client omits it. Refresh and signout touch only our own tokens and take none.
 
 Token response fields (RFC 6749 §5.1 names): `access_token`, `refresh_token`,
 `id_token`, `token_type` (`Bearer`), `expires_in`, `must_change_password`.
@@ -50,6 +52,17 @@ sequenceDiagram
     API-->>App: OUR token set (Cognito tokens discarded, never exposed)
     Note over API,Pool: Refresh never reaches Cognito — /v1/user/auth/token/refresh rotates OUR refresh token.
 ```
+
+## Choosing a provider
+
+`provider` names the registry row to authenticate against, and it must be an enabled `oidc` row whose
+`password_verifier` is `cognito` and that carries a `client_id`. Omitted, the first such row by `provider_name` answers — never the order
+DynamoDB happened to return, so two equally-valid pools cannot resolve differently between one request
+and the next.
+
+A named provider that is not such a row is **refused** (`400`, `Unknown provider.`: `invalid_request` on the password form, `{"message"}` on the native routes). It
+does not fall back: the caller asked for a specific pool, and quietly using another would resolve
+the person to a different account.
 
 ## Token conversion
 
@@ -107,6 +120,7 @@ this surface can be used to probe which contacts are registered:
 | Password recovery (`/password-recovery`) | 200 `If your account exists, you will receive a code` — code sent | 200 same message — nothing sent |
 | Recovery confirmation (`/password-recovery/confirmation`) | 400 `Invalid verification code` without the mailed code | 400 `Invalid verification code` |
 | Change password (`/password`) | 401 `Password change failed` unless the caller's own access token and old password both check out — no account probe possible without a token | 401 `Password change failed` |
+| Signup and recovery confirmation (`/signup`, `/password-recovery/confirmation`), with a password the pool's policy refuses | 400 `Password does not meet the password requirements` | 400 same message for `/password-recovery/confirmation`, whatever order the pool checks the code, the account and the policy in |
 
 ### Duplicate signup: how the resend is decided
 

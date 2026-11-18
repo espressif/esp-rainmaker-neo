@@ -9,6 +9,8 @@ package identity_providers_db
 
 import (
 	"errors"
+	"slices"
+	"strings"
 
 	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
@@ -22,6 +24,9 @@ const (
 
 	TypeOIDC = "oidc"
 	TypeOTP  = "otp"
+
+	// PasswordVerifierCognito checks a password typed on our page with Cognito InitiateAuth against the row's pool.
+	PasswordVerifierCognito = "cognito"
 
 	InbuiltProviderName = "cognito"
 )
@@ -46,7 +51,9 @@ func NewIdentityProvidersDB(ctx *rmngctx.RmngContext) *IdentityProvidersDB {
 type ProviderEntry struct {
 	ProviderName string `dynamodbav:"provider_name"`
 	Type         string `dynamodbav:"type,omitempty"`
-	DisplayName  string `dynamodbav:"display_name,omitempty"`
+	// PasswordVerifier names who checks a password typed on our page for this oidc row; empty means the provider's own page takes it.
+	PasswordVerifier string `dynamodbav:"password_verifier,omitempty"`
+	DisplayName      string `dynamodbav:"display_name,omitempty"`
 	// Logo is the mark drawn on this provider's button, as inline SVG. Inline rather than a
 	// URL because the login page's CSP admits no remote origin, and rather than a data URI
 	// because inline markup inherits currentColor and so works on either theme. Absent draws
@@ -56,19 +63,14 @@ type ProviderEntry struct {
 	Enabled *bool `dynamodbav:"enabled,omitempty"`
 	// Everything an admin may need to override per provider lives on the row, so adding a provider
 	// needs no deploy.
-	Issuer       string `dynamodbav:"issuer,omitempty"`
-	ClientID     string `dynamodbav:"client_id,omitempty"`
-	JWKSURL      string `dynamodbav:"jwks_url,omitempty"`
-	AuthorizeURL string `dynamodbav:"authorize_url,omitempty"`
-	TokenURL     string `dynamodbav:"token_url,omitempty"`
-	UserinfoURL  string `dynamodbav:"userinfo_url,omitempty"`
-	Scopes       string `dynamodbav:"scopes,omitempty"` // space-separated
-	ClientSecret string `dynamodbav:"client_secret,omitempty"`
-	// AuthorizeURL is where a login begins: the upstream authorize endpoint for an oidc provider, or
-	// the hosted login page for an otp one.
-	// PasswordGrant marks a provider whose app client also accepts a direct username/password
-	// exchange, which the legacy /v1/user/auth/* surface needs. Unset means no password surface.
-	PasswordGrant     *bool             `dynamodbav:"password_grant,omitempty"`
+	Issuer            string            `dynamodbav:"issuer,omitempty"`
+	ClientID          string            `dynamodbav:"client_id,omitempty"`
+	JWKSURL           string            `dynamodbav:"jwks_url,omitempty"`
+	AuthorizeURL      string            `dynamodbav:"authorize_url,omitempty"`
+	TokenURL          string            `dynamodbav:"token_url,omitempty"`
+	UserinfoURL       string            `dynamodbav:"userinfo_url,omitempty"`
+	Scopes            string            `dynamodbav:"scopes,omitempty"` // space-separated
+	ClientSecret      string            `dynamodbav:"client_secret,omitempty"`
 	TokenEndpointAuth string            `dynamodbav:"token_endpoint_auth,omitempty"` // one of the utils.TokenAuth* methods
 	AttributeMapping  map[string]string `dynamodbav:"attribute_mapping,omitempty"`   // OUR claim -> upstream claim
 	// SessionMaxTTLSeconds bounds OUR session's absolute lifetime for logins this provider
@@ -96,10 +98,9 @@ func (p *ProviderEntry) IsEnabled() bool { return p.Enabled != nil && *p.Enabled
 
 func (p *ProviderEntry) IsInbuilt() bool { return p.ProviderName == InbuiltProviderName }
 
-// OffersPasswordGrant reports whether the legacy password surface can authenticate against this
-// provider. Unset counts as no, so a half-written row cannot expose a password endpoint.
-func (p *ProviderEntry) OffersPasswordGrant() bool {
-	return p.PasswordGrant != nil && *p.PasswordGrant && p.ClientID != ""
+// OurPageTakesPassword reports whether our page takes this row's password: an oidc row whose password_verifier we can call, with the client_id that call needs, so an unknown verifier or a half-written row exposes no password endpoint.
+func (p *ProviderEntry) OurPageTakesPassword() bool {
+	return p.Type == TypeOIDC && p.PasswordVerifier == PasswordVerifierCognito && p.ClientID != ""
 }
 
 func (db *IdentityProvidersDB) GetProvider(name string) (*ProviderEntry, error) {
@@ -132,5 +133,7 @@ func (db *IdentityProvidersDB) ListEnabled() ([]ProviderEntry, error) {
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to list identity providers")
 	}
+	// Every surface shows and resolves providers in this order, never DynamoDB's scan order.
+	slices.SortFunc(enabled, func(a, b ProviderEntry) int { return strings.Compare(a.ProviderName, b.ProviderName) })
 	return enabled, nil
 }
