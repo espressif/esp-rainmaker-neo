@@ -64,6 +64,10 @@ A named provider that is not such a row is **refused** (`400`, `Unknown provider
 does not fall back: the caller asked for a specific pool, and quietly using another would resolve
 the person to a different account.
 
+`/v1/user/auth/token` checks the Home app client's `allowed_providers` before the password reaches
+the pool, and answers `403` otherwise, since it mints that client's tokens; the account routes do not,
+because the sign-in page also uses them for other clients' sign-ins.
+
 ## Token conversion
 
 - **`/token`**: `InitiateAuth USER_PASSWORD_AUTH` against the Cognito end-user

@@ -94,7 +94,7 @@ Starts the flow. Validates the request, writes a `LOGIN` flow record, and redire
 | `code_challenge` | conditional | PKCE (RFC 7636). Required when the client is registered with `require_pkce` (always true for public clients — RFC 9700 §2.1.1); optional otherwise. |
 | `code_challenge_method` | conditional | Must be `S256` when a `code_challenge` is present. |
 | `resource` | no | RFC 8707: the APIs this sign-in covers, repeatable. Each must be one of the client's `allowed_resources`; omitted, the sign-in covers the client's `default_resource`, and a client without one is refused. Either refusal redirects with `invalid_target`. Remembered on the flow and by the refresh family; each access token is for one of them ([resource-indicators.md](resource-indicators.md)). |
-| `prompt` | no | OIDC Core §3.1.2.1: `none` answers silently from the session or redirects with `login_required`; `login` always re-authenticates; other values disable the session shortcut. |
+| `prompt` | no | OIDC Core §3.1.2.1: `none` answers silently from the session or redirects with `login_required`; `login` always re-authenticates; other values disable the session shortcut. `none` with any other value redirects with `invalid_request`. |
 | `max_age` | no | Maximum acceptable age (seconds) of the session's `auth_time`. An older session is not used. |
 | `id_token_hint` | no | A previously issued ID token naming the expected subject. A session belonging to anyone else, or an unverifiable hint, is not used — the flow never switches to the hinted user. |
 

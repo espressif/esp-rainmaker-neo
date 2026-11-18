@@ -165,6 +165,25 @@ var _ = Describe("legacy token responses (RFC 6749 s5.1)", func() {
 		Expect(audience(refresh)).To(Equal(accountResource))
 	})
 
+	It("refuses a pool the Home app client does not allow before the password reaches it, and still signs in with one it does (negative)", func() {
+		clientsDB := oauth_clients_db.NewOAuthClientsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
+		Expect(clientsDB.DeleteClient(homeAppClientID)).To(Succeed())
+		Expect(clientsDB.CreateClient(&oauth_clients_db.OAuthClientEntry{
+			ClientID: homeAppClientID, ClientType: oauth_clients_db.ClientTypePublic,
+			RedirectURIs: []string{"com.example://cb"}, RequirePKCE: utils.Ptr(true),
+			AllowedResources: []string{neoResource, accountResource}, DefaultResource: neoResource,
+			AllowedProviders: []string{"cognito"},
+		})).To(Succeed())
+		cog := awscommon.GetCognitoProviderClient().(*mock.CognitoProviderMock)
+
+		refused := post(pathToken, map[string]any{"username": email, "password": secondPassword, "provider": secondProvider})
+		Expect(refused.StatusCode).To(Equal(http.StatusForbidden), refused.Body)
+		Expect(refused.Body).To(MatchJSON(`{"message":"This application does not allow signing in with that provider."}`))
+		Expect(cog.InitiateAuthCalls).To(BeZero(), "the second pool never saw the password")
+
+		tokenSet(post(pathToken, map[string]any{"username": email, "password": password}))
+	})
+
 	It("signs in against the pool the request names, and against the first by name when it names none", func() {
 		tokenSet(post(pathToken, map[string]any{"username": email, "password": secondPassword, "provider": secondProvider}))
 		unnamed := post(pathToken, map[string]any{"username": email, "password": secondPassword})

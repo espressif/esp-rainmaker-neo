@@ -58,7 +58,7 @@ func handleAuthorize(ctx context.Context, request events.APIGatewayProxyRequest)
 		return errorPage(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
 	}
 
-	flowID, client, err := svc.StartAuthFlow(ctx, auth.AuthorizeRequest{
+	flowID, client, _, err := svc.StartAuthFlow(ctx, auth.AuthorizeRequest{
 		ClientID:            q["client_id"],
 		RedirectURI:         q["redirect_uri"],
 		Scope:               q["scope"],
@@ -146,6 +146,8 @@ func authorizeError(q map[string]string, err error) events.APIGatewayProxyRespon
 		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "redirect_uri is not registered for this client.")
 	case errors.Is(err, auth.ErrInvalidRequest):
 		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Missing or invalid request parameters (PKCE S256 is required).")
+	case errors.Is(err, auth.ErrInvalidPrompt):
+		return oidc.OAuthErrorRedirect(q["redirect_uri"], oidc.OAuthErrInvalidRequest, q["state"])
 	case errors.Is(err, auth.ErrInvalidScope):
 		return oidc.OAuthErrorRedirect(q["redirect_uri"], oidc.OAuthErrInvalidScope, q["state"])
 	case errors.Is(err, auth.ErrInvalidTarget):

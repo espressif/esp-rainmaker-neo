@@ -135,6 +135,14 @@ func regionFromCognitoIssuer(issuer string) string {
 
 // SigninWithPassword covers every resource the password client may request, since this API takes no resource; a refresh narrows the access token to one of them.
 func (s *Service) SigninWithPassword(ctx context.Context, username, password string) (*auth.UserTokens, error) {
+	client, err := clients.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil)).Get(legacyClientID)
+	if err != nil {
+		return nil, rmerror.NewRMError(err, "legacyauth: password client unreadable")
+	}
+	// Checked before the password reaches the pool, as the sign-in page does, so a client limited to other providers cannot be signed in through this one.
+	if !client.AllowsProvider(s.providerName) {
+		return nil, auth.ErrProviderNotAllowed
+	}
 	userID, err := s.Authenticate(ctx, username, password)
 	if err != nil {
 		return nil, err
@@ -142,7 +150,7 @@ func (s *Service) SigninWithPassword(ctx context.Context, username, password str
 	// A cookie-less (app) user agent, so this legacy login is listed on the user agent screen and its
 	// families are reachable by sid, even though a ROPC client holds no browser and gets no SSO.
 	// auth_time is now (Establish defaults it): the authentication happened here, not upstream.
-	return s.oauth.MintTokenSetForFirstPartyLogin(ctx, userID, legacyClientID, legacyScope, auth.FirstPartyLogin{
+	return s.oauth.MintTokenSetForClient(ctx, userID, client, legacyScope, auth.FirstPartyLogin{
 		AllAllowedResources: true,
 		Provider:            s.providerName,
 		AMR:                 []string{"pwd"},

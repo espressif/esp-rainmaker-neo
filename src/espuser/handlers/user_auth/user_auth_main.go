@@ -43,6 +43,8 @@ const (
 
 	unconfirmedAccountMessage = "Signin failed. Account not verified — reset your password."
 
+	providerNotAllowedMessage = "This application does not allow signing in with that provider."
+
 	// An admin reset the account; forgot password sets the new one.
 	passwordResetRequiredMessage = "Signin failed. Password reset required — reset your password."
 
@@ -169,6 +171,10 @@ func handleSignin(ctx context.Context, request events.APIGatewayProxyRequest, sv
 	tokens, err := svc.SigninWithPassword(ctx, req.Username, req.Password)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Msg("legacy signin failed")
+		// Refused before the password was checked, so it says nothing about the account.
+		if errors.Is(err, auth.ErrProviderNotAllowed) {
+			return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus(providerNotAllowedMessage)), nil
+		}
 		// An unconfirmed account is named explicitly: the caller proved the password, so nothing
 		// is disclosed that they did not already know, and a generic refusal would leave them
 		// with no way to recover the account.

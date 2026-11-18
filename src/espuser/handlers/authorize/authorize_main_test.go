@@ -17,7 +17,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/auth_flows_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/identity_providers_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/oauth_clients_db"
@@ -557,6 +556,21 @@ var _ = Describe("GET /oauth2/authorize with a session (SSO)", func() {
 		Expect(profile.Accesses).NotTo(HaveKey("espuser-sessions"))
 	})
 
+	DescribeTable("refuses prompt=none with any other value back to the client, starting no sign-in (OIDC Core s3.1.2.1, negative)",
+		func(prompt string) {
+			cookie := establishSession("user-sso", time.Now().Unix())
+			resp, err := handleAuthorizeRequest(context.Background(), withCookie(getRequest(pathAuthorize, validQuery(map[string]string{"prompt": prompt})), cookie))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusFound))
+			loc, err := url.Parse(resp.Headers["Location"])
+			Expect(err).NotTo(HaveOccurred())
+			Expect(loc.Query().Get("error")).To(Equal("invalid_request"))
+			Expect(resp.Headers).NotTo(HaveKey("Set-Cookie"), "no flow was started")
+		},
+		Entry("none and login", "none login"),
+		Entry("none and consent", "consent none"),
+	)
+
 	It("prompt=login re-authenticates even with a live session — always honoured", func() {
 		cookie := establishSession("user-sso-4", time.Now().Unix())
 		req := withCookie(getRequest(pathAuthorize, validQuery(map[string]string{"prompt": "login"})), cookie)
@@ -679,7 +693,7 @@ var _ = Describe("GET /oauth2/federation/callback establishes the session", func
 		flowsDB := auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
 		Expect(flowsDB.CreateFlow(&auth_flows_db.AuthFlow{
 			FlowID: "fl_sso", ClientID: testClientID, RedirectURI: redirectURI,
-			RequestedScope: []string{"openid"}, ExpiresOn: time.Now().Add(auth.FlowTTL).Unix(),
+			RequestedScope: []string{"openid"}, ExpiresOn: time.Now().Add(auth_flows_db.FlowTTL).Unix(),
 		})).To(Succeed())
 
 		leg, err := idp.NewUpstreamLeg("fl_sso", idp.StateHMACKey([]byte(backend.RefreshSecret)))
