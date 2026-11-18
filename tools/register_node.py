@@ -18,114 +18,33 @@ Environment variables (optional):
 """
 
 import argparse
-import json
 import os
 import sys
+from pathlib import Path
+from types import SimpleNamespace
 
-import boto3
-import requests
-from botocore.auth import SigV4Auth
-from botocore.awsrequest import AWSRequest
-from test.test_user import _admin_cognito_auth
+# Run as a script, so only tools/ is on sys.path; adding the repo root makes py_sdk and scripts importable from any directory.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-
-def load_config(config_path):
-    """Load API URLs and region from rmng-outputs.json config file."""
-    with open(config_path) as f:
-        data = json.load(f)
-
-    base = data.get("rmng-base", {})
-    esp = data.get("espuser-base", {})
-
-    return {
-        "api_gateway_url": base.get("ApiGatewayUrl", "").rstrip("/"),
-        "user_api_gateway_url": esp.get("EspUserApiUrl", "").rstrip("/"),
-        "region": base.get("StackRegion", "us-east-1"),
-        "admin_client_id": esp.get("EspAdminUserPoolClientId", "")
-                           or base.get("AdminUserPoolClientId", ""),
-    }
+from py_sdk.test_user import User  # noqa: E402
+from scripts.rmng_outputs import RmngSettings  # noqa: E402
 
 
-def signin(region, admin_client_id, username, password):
-    """Sign in as admin against the admin Cognito pool and return the ID token.
-
-    Admins have no admin-auth API; they authenticate against Cognito directly.
-    """
-    if not admin_client_id:
+def signin(settings, username, password):
+    """An admin User holding AWS credentials, signed in against the admin Cognito pool."""
+    if not settings.admin_client_id:
         print("ERROR: Admin Cognito client id missing from config (EspAdminUserPoolClientId)")
         sys.exit(1)
 
-    resp = _admin_cognito_auth(
-        region, admin_client_id, "USER_PASSWORD_AUTH",
-        {"USERNAME": username, "PASSWORD": password},
-    )
-    if not resp.ok:
-        print(f"ERROR: Admin sign-in failed: {resp.text}")
-        sys.exit(1)
-
-    id_token = resp.json().get("id_token")
-    if not id_token:
-        print("ERROR: No id_token in Cognito auth result.")
+    user = User.from_settings(settings, username, password, is_admin=True)
+    if not user.get_aws_credentials():
+        print("ERROR: Admin sign-in failed (see preceding log lines)")
         sys.exit(1)
 
     print("Signed in successfully.")
-    return id_token
-
-
-def get_aws_credentials(api_url, id_token):
-    """Exchange ID token for temporary AWS credentials via /v1/user/credentials."""
-    url = f"{api_url}/v1/user/credentials"
-    headers = {"Authorization": f"Bearer {id_token}"}
-
-    resp = requests.post(url, headers=headers)
-    if resp.status_code != 200:
-        print(f"ERROR: Failed to get AWS credentials ({resp.status_code}): {resp.text}")
-        sys.exit(1)
-
-    creds = resp.json()
-    for field in ("access_key_id", "secret_access_key", "session_token"):
-        if field not in creds:
-            print(f"ERROR: Missing '{field}' in credentials response.")
-            sys.exit(1)
-
-    print("Obtained AWS credentials.")
-    return creds
-
-
-def register_node(api_url, region, creds, cert_pem, ca_cert_pem=None,
-                   thing_groups=None, tags=None):
-    """Register a node certificate via POST /v1/admin/nodes with SigV4-signed request."""
-    url = f"{api_url}/v1/admin/nodes"
-
-    body = {"cert": cert_pem}
-    if ca_cert_pem:
-        body["ca_cert"] = ca_cert_pem
-    if thing_groups:
-        body["admin_group_names"] = thing_groups
-    if tags:
-        body["tags"] = tags
-
-    json_body = json.dumps(body)
-
-    # Create and sign the request with SigV4
-    session = boto3.Session(
-        aws_access_key_id=creds["access_key_id"],
-        aws_secret_access_key=creds["secret_access_key"],
-        aws_session_token=creds["session_token"],
-        region_name=region,
-    )
-
-    aws_request = AWSRequest(method="POST", url=url, data=json_body)
-    SigV4Auth(session.get_credentials(), "execute-api", region).add_auth(aws_request)
-    prepared = aws_request.prepare()
-
-    resp = requests.post(
-        prepared.url,
-        headers=dict(prepared.headers),
-        data=json_body,
-    )
-
-    return resp
+    return user
 
 
 def main():
@@ -144,27 +63,15 @@ def main():
                         help="IoT Thing Group names to add the node to")
     parser.add_argument("--tags", nargs="+",
                         help="Tags in key:value format (e.g. env:prod owner:admin)")
-    parser.add_argument("--config", default="rmng-outputs.json",
-                        help="Path to rmng-outputs.json config file (default: rmng-outputs.json)")
+    parser.add_argument("--config",
+                        help="Path to rmng-outputs.json config file (default: the one at the repo root)")
 
     args = parser.parse_args()
 
-    # Load config
-    if not os.path.isfile(args.config):
-        print(f"ERROR: Config file not found: {args.config}")
-        sys.exit(1)
-
-    config = load_config(args.config)
-    api_url = config["api_gateway_url"]
-    user_api_url = config["user_api_gateway_url"]
-    region = config["region"]
-
-    if not api_url:
-        print("ERROR: ApiGatewayUrl not found in config file")
-        sys.exit(1)
-    if not user_api_url:
-        print("ERROR: EspUserApiUrl not found in config file")
-        sys.exit(1)
+    try:
+        settings = RmngSettings.from_source(os.path.abspath(args.config) if args.config else None)
+    except FileNotFoundError as e:
+        sys.exit(f"ERROR: {e.filename} not found. Run `make deploy` first.")
 
     if not args.username or not args.password:
         print("ERROR: --username and --password required (or set ADMIN_USERNAME / ADMIN_PASSWORD)")
@@ -185,29 +92,12 @@ def main():
         with open(args.ca_cert) as f:
             ca_cert_pem = f.read().strip()
 
-    # Authenticate
-    id_token = signin(region, config["admin_client_id"], args.username, args.password)
-    aws_creds = get_aws_credentials(api_url, id_token)
+    user = signin(settings, args.username, args.password)
 
-    # Register node
     print("Registering node certificate...")
-    resp = register_node(
-        api_url=api_url,
-        region=region,
-        creds=aws_creds,
-        cert_pem=cert_pem,
-        ca_cert_pem=ca_cert_pem,
-        thing_groups=args.thing_groups,
-        tags=args.tags,
-    )
-
-    if resp.status_code in (200, 201):
-        result = resp.json()
-        print("Node registered successfully.")
-        print(f"  Node ID: {result.get('node_id', 'N/A')}")
-        print(f"  Status:  {result.get('status', 'N/A')}")
-    else:
-        print(f"ERROR: Registration failed ({resp.status_code}): {resp.text}")
+    device = SimpleNamespace(node_thing_name=os.path.basename(args.cert), node_cert=cert_pem, node_ca_cert=ca_cert_pem)
+    if not user.register_node(device, tags=args.tags, admin_group_names=args.thing_groups):
+        print("ERROR: Registration failed (see preceding log lines)")
         sys.exit(1)
 
 

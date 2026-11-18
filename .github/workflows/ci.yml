@@ -69,10 +69,10 @@ jobs:
           echo "dashboard=$(check 'dashboard/**')" >> "$GITHUB_OUTPUT"
           echo "api_docs=$(check 'docs/api/**')" >> "$GITHUB_OUTPUT"
           echo "mqtt=$(check docs/api/MQTT_*.yaml docs/api/Push_*.yaml)" >> "$GITHUB_OUTPUT"
-          echo "cli=$(check 'cli/**' 'py_sdk/**')" >> "$GITHUB_OUTPUT"
+          echo "cli=$(check 'cli/**' 'py_sdk/**' 'scripts/rmng_outputs.py' 'tools/**' 'test/helpers/**')" >> "$GITHUB_OUTPUT"
 
   # The esp-morpheus CLI's offline suite: the command tree, the shell and the output
-  # formatter. Needs no AWS credentials and no deployment.
+  # formatter, plus a load check of the in-repo scripts built on the SDK. Needs no AWS credentials and no deployment.
   cli_test:
     name: CLI tests
     needs: changes

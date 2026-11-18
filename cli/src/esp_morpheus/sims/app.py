@@ -38,16 +38,8 @@ class AppSim:
         """
         self.user_id = user_id
 
-        settings = RmngSettings.from_source(rmng_outputs_path)
-        config_path = config_path or paths.test_config_path(settings.account_id, settings.region)
-        self.region = settings.region
-        self.identity_pool_id = settings.identity_pool_id
-        self.api_gateway_url = settings.api_gateway_url
-        self.iot_endpoint = settings.iot_endpoint
-        self.admin_user_pool_id = settings.admin_user_pool_id
-        self.admin_client_id = settings.admin_client_id
-        self.user_api_gateway_url = settings.user_api_gateway_url
-        self.end_user_pool_id = settings.end_user_pool_id
+        self.settings = RmngSettings.from_source(rmng_outputs_path)
+        config_path = config_path or paths.test_config_path(self.settings.account_id, self.settings.region)
 
         self.config = {}
         self.user = user
@@ -103,14 +95,7 @@ class AppSim:
             print(f"Error: Missing required configuration for user {user_id}")
             return None
 
-        if is_admin:
-            return User(username, password, self.region,
-                       self.identity_pool_id, self.api_gateway_url, self.user_api_gateway_url, self.iot_endpoint,
-                       admin_user_pool_id=self.admin_user_pool_id, admin_client_id=self.admin_client_id, is_admin=True)
-        # end_user_pool_id is what lets provisioning reach the pool this user signs in against.
-        return User(username, password, self.region,
-                    self.identity_pool_id, self.api_gateway_url, self.user_api_gateway_url, self.iot_endpoint,
-                    end_user_pool_id=self.end_user_pool_id)
+        return User.from_settings(self.settings, username, password, is_admin=is_admin)
 
     def _format_timestamp(self, timestamp):
         """Helper to format timestamp for JSON serialization"""
@@ -1381,7 +1366,7 @@ class AppSim:
             if resp.status_code != 201:
                 raise RuntimeError(f'Claim verify failed ({resp.status_code}): {resp.text}')
 
-            await prov_ble.claim_verify(tp, sec, resp.json()['certificate'], self.iot_endpoint)
+            await prov_ble.claim_verify(tp, sec, resp.json()['certificate'], self.settings.iot_endpoint)
         except Exception:
             await prov_ble.claim_abort(tp, sec)
             raise

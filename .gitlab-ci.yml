@@ -321,8 +321,8 @@ unittest:
       - build/coverage/coverage.xml
 
 # -------------------------
-# esp-morpheus CLI: the offline suite over the command tree, the shell and the output formatter.
-# It needs neither AWS credentials nor a deployment, so it runs on every MR that touches the CLI.
+# esp-morpheus CLI: the offline suite over the command tree, the shell and the output formatter, plus a load check of the in-repo scripts built on the SDK (cli/tests/test_repo_scripts.py).
+# It needs neither AWS credentials nor a deployment, so it runs on every MR that touches the CLI or those scripts.
 # -------------------------
 cli_test:
   stage: unittest
@@ -335,6 +335,9 @@ cli_test:
       changes:
         - cli/**/*
         - py_sdk/**/*
+        - scripts/rmng_outputs.py
+        - tools/**/*
+        - test/helpers/**/*
   before_script:
     # ./cli itself is installed in the image via requirements.txt; this adds the test extra.
     - pip3 install -e "./cli[test]"

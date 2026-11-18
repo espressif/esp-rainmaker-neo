@@ -90,7 +90,7 @@ class RMNGBridgeBaseStack(Stack):
         )
 
         # ---------------------------------------------------------------
-        # CfnOutputs — consumed by test/bridge_register.py and tests.
+        # CfnOutputs
         # ---------------------------------------------------------------
         CfnOutput(self, "BridgePolicyName", value=BRIDGE_RESOURCES["BRIDGE_POLICY_NAME"])
         CfnOutput(self, "BridgeChildrenTableName", value=bridge_children_table.table_name)

@@ -153,6 +153,20 @@ def test_admin_is_the_only_config_key_that_grants_the_admin_pool(outputs_file, t
     assert not session.get_user('stale@example.com').is_admin
 
 
+def test_from_settings_signs_admins_and_end_users_into_their_own_pools():
+    from esp_morpheus.outputs import RmngSettings
+    from esp_morpheus.sdk.user import User
+
+    outputs = {**OUTPUTS, 'espuser-base': {**OUTPUTS['espuser-base'], 'EspAdminUserPoolId': 'admin-pool',
+                                           'EspAdminUserPoolClientId': 'admin-client', 'EspEndUserPoolId': 'end-pool'}}
+    settings = RmngSettings.from_outputs(outputs)
+    admin = User.from_settings(settings, 'boss@example.com', 'pw', is_admin=True)
+    assert (admin.is_admin, admin.admin_client_id, admin.end_user_pool_id) == (True, 'admin-client', '')
+    end_user = User.from_settings(settings, 'someone@example.com', 'pw')
+    assert (end_user.is_admin, end_user.admin_client_id, end_user.end_user_pool_id) == (False, '', 'end-pool')
+    assert end_user.iot_endpoint == 'iot.example.com'
+
+
 def test_the_admin_identity_is_optional(run):
     """Half of these commands call AWS rather than the admin API, so a required identity would
     lock them out."""

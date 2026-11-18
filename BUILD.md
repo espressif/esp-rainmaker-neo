@@ -175,4 +175,4 @@ It needs AWS credentials for the target account and region for some commands, pl
 
 See the [CLI guide](cli/README.md).
 
-**Tests** — `pytest cli/tests` covers the command tree, the shell and the output formatter offline. `make itest-setup` calls `esp-morpheus admin test-data setup` to seed test users and nodes.
+**Tests** — `pytest cli/tests` covers the command tree, the shell and the output formatter offline, and checks that the in-repo scripts built on the SDK still load. `make itest-setup` calls `esp-morpheus admin test-data setup` to seed test users and nodes.

@@ -6,16 +6,16 @@
 """Register a fresh bridge node through the production admin REST API.
 
 Generates a key+cert locally, authenticates as an admin user from
-test_config.json, and POSTs to /v1/admin/nodes with
+esp-morpheus's test_config.json, and POSTs to /v1/admin/nodes with
 `capabilities: ["bridge"]`. Saves the cert + key under
-.bridges/<thing_name>/ so test/bridge_sim.py can drive the new bridge
+<repo root>/.bridges/<thing_name>/ so test/bridge_sim.py can drive the new bridge
 immediately (bridges_config.json is updated with the new entry).
 
 Usage:
     python3 tools/bridge_register.py my-bridge-001 \\
         [--user 0] [--tags tag1,tag2] [--admin-group-name homeA]
 
-Requires test_config.json + rmng-outputs.json in the working directory.
+Reads rmng-outputs.json from the repo root, so it runs from any directory.
 """
 
 import argparse
@@ -25,37 +25,47 @@ import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
 
-RMNG_OUTPUTS_PATH = Path("rmng-outputs.json")
-TEST_CONFIG_PATH = Path("test_config.json")
-BRIDGES_DIR = Path(".bridges")
+# Run as a script, so only tools/ is on sys.path; adding the repo root makes py_sdk and scripts importable from any directory.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from py_sdk.test_device import (  # noqa: E402
+    generate_key_and_cert,
+    split_combined_cert_pem,
+)
+from py_sdk.test_user import User  # noqa: E402
+from scripts.rmng_outputs import TEST_CONFIG_PATH, RmngSettings  # noqa: E402
+
+BRIDGES_DIR = REPO_ROOT / ".bridges"
 BRIDGES_CONFIG = BRIDGES_DIR / "bridges_config.json"
 ROOT_CA_PATH = BRIDGES_DIR / "AmazonRootCA1.pem"
 AMAZON_ROOT_CA_URL = "https://www.amazontrust.com/repository/AmazonRootCA1.pem"
 
 
-def _load_outputs() -> dict:
-    if not RMNG_OUTPUTS_PATH.exists():
-        sys.exit(f"ERROR: {RMNG_OUTPUTS_PATH} not found. Run `make deploy-rmng` first.")
-    with open(RMNG_OUTPUTS_PATH) as f:
-        return json.load(f)
+def _load_settings() -> RmngSettings:
+    try:
+        return RmngSettings.from_source()
+    except FileNotFoundError as e:
+        sys.exit(f"ERROR: {e.filename} not found. Run `make deploy` first.")
 
 
 def _load_test_config() -> dict:
-    if not TEST_CONFIG_PATH.exists():
-        sys.exit(f"ERROR: {TEST_CONFIG_PATH} not found.")
-    with open(TEST_CONFIG_PATH) as f:
-        return json.load(f)
+    try:
+        with open(TEST_CONFIG_PATH) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        sys.exit(f"ERROR: {TEST_CONFIG_PATH} not found. Run `esp-morpheus admin test-data setup` first.")
 
 
 def _pick_admin_user(test_config: dict, selector) -> dict:
-    """Resolve --user (index or username) to a test_config users[] entry
-    that has super_admin: true."""
+    """Resolve --user (index or username) to a test_config users[] entry; the default is the first with admin: true."""
     users = test_config.get("users", [])
     if selector is None:
         for u in users:
-            if u.get("super_admin"):
+            if u.get("admin"):
                 return u
-        sys.exit("ERROR: no super_admin user in test_config.json")
+        sys.exit(f"ERROR: no admin user in {TEST_CONFIG_PATH}")
     try:
         idx = int(selector)
         if 0 <= idx < len(users):
@@ -65,41 +75,14 @@ def _pick_admin_user(test_config: dict, selector) -> dict:
         for u in users:
             if u.get("name") == selector:
                 return u
-        sys.exit(f"ERROR: user {selector!r} not found in test_config.json")
+        sys.exit(f"ERROR: user {selector!r} not found in {TEST_CONFIG_PATH}")
 
 
-def _build_admin_user(outputs: dict, user_cfg: dict):
-    from test.test_user import User
-
-    rmng_base = outputs.get("rmng-base", {})
-    espuser_base = outputs.get("espuser-base", {})
-    espuser_core = outputs.get("espuser-core", {})
-
-    region = rmng_base["StackRegion"]
-    identity_pool_id = rmng_base["IdentityPoolId"]
-    api_gateway_url = rmng_base["ApiGatewayUrl"]
-    iot_endpoint = rmng_base["IoTEndpointUrl"]
-    admin_user_pool_id = espuser_base.get("EspAdminUserPoolId") or rmng_base.get("AdminUserPoolId", "")
-    admin_client_id = espuser_base.get("EspAdminUserPoolClientId") or rmng_base.get("AdminUserPoolClientId", "")
-    user_api_gateway_url = espuser_base.get("EspUserApiUrl", "")
-    register_user_lambda_arn = espuser_core.get("UserFunctionArn")
-
-    user = User(
-        user_cfg["name"],
-        user_cfg["password"],
-        region,
-        admin_user_pool_id,
-        admin_client_id,
-        identity_pool_id,
-        api_gateway_url,
-        user_api_gateway_url,
-        iot_endpoint,
-        register_user_lambda_arn,
-        is_super_admin=True,
-    )
+def _build_admin_user(settings: RmngSettings, user_cfg: dict) -> User:
+    user = User.from_settings(settings, user_cfg["name"], user_cfg["password"], is_admin=True)
     if not user.get_aws_credentials():
         sys.exit("ERROR: failed to authenticate admin user against Cognito")
-    return user, region, iot_endpoint
+    return user
 
 
 def _download_root_ca() -> Path:
@@ -148,7 +131,7 @@ def main() -> None:
     parser.add_argument("thing_name", help="Name of the new bridge to register.")
     parser.add_argument(
         "--user", default=None,
-        help="test_config.json users[] index or name (default: first super_admin user).",
+        help="test_config.json users[] index or name (default: first admin user).",
     )
     parser.add_argument(
         "--tags", default="",
@@ -161,26 +144,18 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # PYTHONPATH must include the repo root for `test.*` imports; run
-    # from the repo root (the standard for everything else in this repo).
-    sys.path.insert(0, str(Path.cwd()))
-    from test.test_device import generate_key_and_cert
-
-    outputs = _load_outputs()
+    settings = _load_settings()
     test_config = _load_test_config()
     user_cfg = _pick_admin_user(test_config, args.user)
-    user, region, iot_endpoint = _build_admin_user(outputs, user_cfg)
+    user = _build_admin_user(settings, user_cfg)
 
     thing_name = args.thing_name
     tags = [t.strip() for t in args.tags.split(",") if t.strip()]
 
     print(f"  [generate] key+cert for {thing_name}")
     key_pem, combined_cert_pem = generate_key_and_cert(thing_name)
-    device = SimpleNamespace(
-        node_thing_name=thing_name,
-        node_cert=combined_cert_pem.split("-----END CERTIFICATE-----\n", 1)[0] + "-----END CERTIFICATE-----\n",
-        node_ca_cert=combined_cert_pem.split("-----END CERTIFICATE-----\n", 1)[1] if "-----END CERTIFICATE-----\n" in combined_cert_pem else "",
-    )
+    node_cert, node_ca_cert = split_combined_cert_pem(combined_cert_pem)
+    device = SimpleNamespace(node_thing_name=thing_name, node_cert=node_cert, node_ca_cert=node_ca_cert)
 
     print(f"  [register] POST /v1/admin/nodes  capabilities=['bridge']  "
           f"tags={tags}  admin_group={args.admin_group_name!r}")
@@ -198,8 +173,8 @@ def main() -> None:
         thing_name=thing_name,
         key_pem=key_pem,
         combined_cert_pem=combined_cert_pem,
-        iot_endpoint=iot_endpoint,
-        region=region,
+        iot_endpoint=settings.iot_endpoint,
+        region=settings.region,
     )
     print(f"  [saved] cert at {entry['cert_pem_path']}")
     print(f"  [saved] key  at {entry['private_key_path']}")

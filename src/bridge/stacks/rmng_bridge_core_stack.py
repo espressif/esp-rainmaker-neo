@@ -330,7 +330,7 @@ class RMNGBridgeCoreStack(Stack):
         # (src/bridge/hooks), so this stack deploys no Lambda for either.
 
         # ---------------------------------------------------------------
-        # CfnOutputs — consumed by test/bridge_register.py and tests.
+        # CfnOutputs
         # ---------------------------------------------------------------
         CfnOutput(self, "AddRemoveChildLambdaName", value=add_remove_child_fn.function_name)
         CfnOutput(self, "CascadeDeleteLambdaName", value=cascade_delete_fn.function_name)

@@ -212,6 +212,16 @@ class User:
         self._boto3_session = None  # Cached boto3 session for SigV4 signing
         self._boto3_session_creds = None  # Credentials used to create cached boto3 session
 
+    @classmethod
+    def from_settings(cls, settings, username, password, is_admin=False):
+        """A User of the deployment `settings` describes; an admin signs in against the admin pool, an end user is provisioned into the end-user pool."""
+        common = (username, password, settings.region, settings.identity_pool_id, settings.api_gateway_url,
+                  settings.user_api_gateway_url, settings.iot_endpoint)
+        if is_admin:
+            return cls(*common, admin_user_pool_id=settings.admin_user_pool_id,
+                       admin_client_id=settings.admin_client_id, is_admin=True)
+        return cls(*common, end_user_pool_id=settings.end_user_pool_id)
+
     @property
     def session(self):
         """Lazily create and return a requests Session for connection reuse."""
