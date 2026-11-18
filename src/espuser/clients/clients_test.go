@@ -6,6 +6,8 @@ package clients_test
 
 import (
 	"context"
+	"encoding/base64"
+	"strings"
 	"testing"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
@@ -180,6 +182,42 @@ var _ = Describe("clients.Service", func() {
 				AllowedResources: []string{"https://api.example.com"}, DefaultResource: "https://other.example.com",
 			})
 			Expect(err).To(MatchError(ContainSubstring("default_resource")))
+		})
+
+		It("keeps a logo given as an inline PNG, JPEG or WebP image", func() {
+			in := publicClient("rm_logo")
+			in.LogoURI = "data:image/png;base64,iVBORw0KGgo="
+			_, err := svc.Create(in)
+			Expect(err).NotTo(HaveOccurred())
+			got, err := svc.Get("rm_logo")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got.LogoURI).To(Equal(in.LogoURI))
+		})
+
+		DescribeTable("rejects a logo the consent page could not show safely (negative)",
+			func(logo string) {
+				in := publicClient("rm_logo")
+				in.LogoURI = logo
+				_, err := svc.Create(in)
+				Expect(err).To(HaveOccurred())
+			},
+			Entry("a remote URL, which the page's img-src 'self' data: policy would block", "https://cdn.example.com/logo.png"),
+			Entry("SVG, which can carry script", "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4="),
+			Entry("not base64", "data:image/png;base64,not base64!"),
+			Entry("not an image", "data:text/html;base64,PGgxPmhpPC9oMT4="),
+			Entry("larger than the cap", "data:image/png;base64,"+strings.Repeat("A", 64*1024)),
+		)
+
+		It("caps a logo at 4 KiB decoded, so the client row the token path reads stays small", func() {
+			atCap := publicClient("rm_logo_cap")
+			atCap.LogoURI = "data:image/png;base64," + base64.StdEncoding.EncodeToString(make([]byte, 4*1024))
+			_, err := svc.Create(atCap)
+			Expect(err).NotTo(HaveOccurred())
+
+			overCap := publicClient("rm_logo_over")
+			overCap.LogoURI = "data:image/png;base64," + base64.StdEncoding.EncodeToString(make([]byte, 4*1024+1))
+			_, err = svc.Create(overCap)
+			Expect(err).To(MatchError(ContainSubstring("logo_uri may be at most 4 KiB")))
 		})
 
 		It("rejects an unknown client_type (negative)", func() {

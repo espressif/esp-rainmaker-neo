@@ -9,9 +9,11 @@ package clients
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 
 	"strings"
 	"time"
@@ -67,7 +69,9 @@ type ClientResponse struct {
 	AllowedProviders        []string `json:"allowed_providers,omitempty"`
 	RequirePKCE             bool     `json:"require_pkce"`
 	// FirstParty marks a client we ship ourselves; only a first-party client may manage a user's own sessions.
-	FirstParty   bool   `json:"first_party"`
+	FirstParty bool `json:"first_party"`
+	// LogoURI is the RFC 7591 s2 logo, held as a data: URI so the consent page can show it under img-src 'self' data:.
+	LogoURI      string `json:"logo_uri,omitempty"`
 	ClientSecret string `json:"client_secret,omitempty"`
 	CreatedAt    int64  `json:"created_at,omitempty"`
 	UpdatedAt    int64  `json:"updated_at,omitempty"`
@@ -140,6 +144,7 @@ type CreateInput struct {
 	AllowedProviders       []string
 	RequirePKCE            *bool
 	FirstParty             bool
+	LogoURI                string
 }
 
 // UpdateInput is the full desired state of a client's mutable fields (PUT semantics): the
@@ -155,6 +160,7 @@ type UpdateInput struct {
 	AllowedProviders       []string
 	RequirePKCE            *bool
 	FirstParty             bool
+	LogoURI                string
 }
 
 // Create validates and persists a new client, generating a secret for confidential clients.
@@ -289,6 +295,7 @@ func (s *Service) Update(clientID string, in UpdateInput) (*ClientResponse, erro
 	entry.DefaultResource = in.DefaultResource
 	entry.AllowedProviders = in.AllowedProviders
 	entry.FirstParty = in.FirstParty
+	entry.LogoURI = in.LogoURI
 	// Public clients are forced to require PKCE; otherwise take what was sent (nil ⇒ false).
 	if entry.ClientType == oauth_clients_db.ClientTypePublic {
 		entry.RequirePKCE = utils.Ptr(true)
@@ -351,6 +358,7 @@ func buildEntry(in CreateInput) (*oauth_clients_db.OAuthClientEntry, error) {
 		AllowedProviders:       in.AllowedProviders,
 		RequirePKCE:            in.RequirePKCE,
 		FirstParty:             in.FirstParty,
+		LogoURI:                in.LogoURI,
 	}
 	// Public clients must require PKCE — force it regardless of what was sent.
 	if entry.ClientType == oauth_clients_db.ClientTypePublic {
@@ -413,6 +421,9 @@ func validateEntry(e *oauth_clients_db.OAuthClientEntry) error {
 			return rmerror.NewRMError(nil, "allowed_providers may not contain a blank entry")
 		}
 	}
+	if err := ValidateLogoURI(e.LogoURI); err != nil {
+		return err
+	}
 	// Public clients are secretless and must require PKCE.
 	if e.ClientType == oauth_clients_db.ClientTypePublic {
 		if collections.Contains(e.GrantTypes, oidc.GrantClientCredentials) {
@@ -424,6 +435,31 @@ func validateEntry(e *oauth_clients_db.OAuthClientEntry) error {
 		if e.RequirePKCE == nil || !*e.RequirePKCE {
 			return rmerror.NewRMError(nil, "public clients must require PKCE")
 		}
+	}
+	return nil
+}
+
+// maxLogoBytes keeps a client row, which the token and refresh paths read on every call, near one DynamoDB read unit; a provider logo takes the same limit.
+const maxLogoBytes = 4 * 1024
+
+// logoDataURI admits raster images only: SVG is a document that can carry script.
+var logoDataURI = regexp.MustCompile(`^data:image/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$`)
+
+// ValidateLogoURI accepts "" or an inline raster image: "data:image/png;base64,iVBORw0..." passes, "https://cdn.example.com/a.png" does not.
+func ValidateLogoURI(logo string) error {
+	if logo == "" {
+		return nil
+	}
+	m := logoDataURI.FindStringSubmatch(logo)
+	if m == nil {
+		return rmerror.NewRMError(nil, "logo_uri must be a data:image/png, jpeg or webp URI in base64")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(m[2])
+	if err != nil {
+		return rmerror.NewRMError(nil, "logo_uri is not valid base64")
+	}
+	if len(decoded) > maxLogoBytes {
+		return rmerror.NewRMError(nil, fmt.Sprintf("logo_uri may be at most %d KiB", maxLogoBytes/1024))
 	}
 	return nil
 }
@@ -521,6 +557,7 @@ func toClient(e *oauth_clients_db.OAuthClientEntry, getSecret bool) ClientRespon
 		AllowedProviders:        e.AllowedProviders,
 		RequirePKCE:             derefBool(e.RequirePKCE),
 		FirstParty:              e.FirstParty,
+		LogoURI:                 e.LogoURI,
 		CreatedAt:               e.CreatedAt,
 		UpdatedAt:               e.UpdatedAt,
 	}

@@ -52,6 +52,8 @@ type ClientWriteRequest struct {
 	RequirePKCE      *bool     `json:"require_pkce,omitempty"`
 	// FirstParty marks a client we ship ourselves; only a first-party client may manage a user's own sessions.
 	FirstParty bool `json:"first_party,omitempty"`
+	// LogoURI is shown on the consent screen: a data:image/png, jpeg or webp URI of at most 4 KiB.
+	LogoURI string `json:"logo_uri,omitempty"`
 }
 
 // requireAdmin gates on the token verifying against the admin user pool via auth.RequireAdmin, mapping its errors to status codes.
@@ -90,6 +92,7 @@ func handleCreate(ctx context.Context, request events.APIGatewayProxyRequest) (e
 		AllowedProviders:       derefSlice(req.AllowedProviders),
 		RequirePKCE:            req.RequirePKCE,
 		FirstParty:             req.FirstParty,
+		LogoURI:                req.LogoURI,
 	})
 	if err != nil {
 		// A validation failure or a duplicate client_id is a 400 (client's fault).
@@ -133,6 +136,7 @@ func handlePut(ctx context.Context, request events.APIGatewayProxyRequest) (even
 		AllowedProviders:       derefSlice(req.AllowedProviders),
 		RequirePKCE:            req.RequirePKCE,
 		FirstParty:             req.FirstParty,
+		LogoURI:                req.LogoURI,
 	})
 	if err != nil {
 		if errors.Is(err, oauth_clients_db.ErrOAuthClientNotFound) {

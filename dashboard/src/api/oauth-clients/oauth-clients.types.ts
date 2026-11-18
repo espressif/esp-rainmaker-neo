@@ -26,6 +26,7 @@ export interface OAuthClient {
   allowed_providers?: string[]
   require_pkce?: boolean
   first_party?: boolean
+  logo_uri?: string
   /** Plaintext; present only when the list request set `get_secret=true` (confidential clients). */
   client_secret?: string
   created_at?: number
@@ -58,4 +59,5 @@ export interface UpdateOAuthClientRequest {
   allowed_providers: string[] | undefined
   require_pkce: boolean | undefined
   first_party: boolean | undefined
+  logo_uri: string | undefined
 }

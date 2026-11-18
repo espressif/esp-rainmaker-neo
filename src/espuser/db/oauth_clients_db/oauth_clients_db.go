@@ -75,6 +75,9 @@ type OAuthClientEntry struct {
 	// FirstParty marks a client this account ships itself (web dashboard, mobile app) rather than a delegated third party (voice assistant, MCP). Only a first-party client may manage a user's own sessions. Absent reads as false: first-party is opt-in, set at registration, so a client made before this field, or any third party, is correctly not one.
 	FirstParty bool `dynamodbav:"first_party,omitempty"`
 
+	// LogoURI is an inline data: image shown on the consent screen; inline because the page's CSP admits no remote image origin.
+	LogoURI string `dynamodbav:"logo_uri,omitempty"`
+
 	// TokenEndpointAuthMethod overrides the value otherwise derived from client_type: none
 	// for public, client_secret_basic for confidential.
 	TokenEndpointAuthMethod string `dynamodbav:"token_endpoint_auth_method,omitempty"`

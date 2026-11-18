@@ -2021,6 +2021,8 @@ components:
         first_party:
           type: boolean
           description: Whether this client is one the account ships itself; only a first-party client may manage a user's own sessions.
+        logo_uri:
+          $ref: "#/components/schemas/LogoURI"
         allowed_resources:
           type: array
           description:
@@ -2135,6 +2137,8 @@ components:
             Mark this client as one the account ships itself. Only a first-party client may
             manage a user's own sessions; leave false for third-party integrations.
           default: false
+        logo_uri:
+          $ref: "#/components/schemas/LogoURI"
         allowed_resources:
           type: array
           description:
@@ -2214,6 +2218,8 @@ components:
           description:
             Whether this client is one the account ships itself. PUT replaces it, so omitting
             it resets to false.
+        logo_uri:
+          $ref: "#/components/schemas/LogoURI"
         allowed_resources:
           type: array
           description:
@@ -2246,6 +2252,11 @@ components:
             absent menu cannot sensibly mean none.
           items:
             type: string
+
+    LogoURI:
+      type: string
+      description: "The client's logo on the consent screen (RFC 7591 §2): a base64 PNG, JPEG or WebP `data:` URI of at most 4 KiB."
+      example: data:image/png;base64,iVBORw0KGgo=
 
     ClientCreateResponse:
       type: object

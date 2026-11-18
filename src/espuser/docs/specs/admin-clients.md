@@ -102,7 +102,8 @@ All requests carry the admin Cognito token in `Authorization`. Errors use the AP
 | `scopes` | `["openid", "profile", "email", "phone"]` |  |
 | `require_pkce` | `true` |  |
 | `first_party` | `true` | marks an app **we ship ourselves** (vs a delegated partner); only a first-party client may call account-management endpoints such as `GET /v1/user/sessions`. Optional, default `false` |
-> **Scope of this slice.** The body carries only fields with a live consumer today. Reserved for later slices (not accepted yet): `jwks_uri`, `audiences`, `branding_id`, and `token_ttls` — (M2M/`private_key_jwt`, hosted-UI branding, and per-client TTLs are later slices). `allowed_resources`, `default_resource`, `allowed_providers` and `post_logout_redirect_uris` are accepted now: RFC 8707 resource indicators and RP-Initiated Logout have landed, and a field the logout endpoint validates against but no API can write is a check that can never pass. They will be added to the schema when their features land; adding fields is Native.
+| `logo_uri` | `data:image/png;base64,…` | RFC 7591 §2 logo, shown on the consent screen. Must be a base64 `data:` URI of a PNG, JPEG or WebP image, at most 4 KiB decoded: inline because the sign-in page's CSP is `img-src 'self' data:`, and raster only because SVG can carry script. Optional; without it the screen shows a generic app icon |
+> **Scope of this slice.** The body carries only fields with a live consumer today. Reserved for later slices (not accepted yet): `jwks_uri`, `audiences`, `branding_id`, and `token_ttls` — (M2M/`private_key_jwt`, hosted-UI branding, and per-client TTLs are later slices). `allowed_resources`, `default_resource`, `allowed_providers`, `post_logout_redirect_uris` and `logo_uri` are accepted now: RFC 8707 resource indicators, RP-Initiated Logout and the consent screen have landed, and a field the logout endpoint validates against but no API can write is a check that can never pass. They will be added to the schema when their features land; adding fields is Native.
 
 **Process**:
 1. Authorize (token verified against the admin Cognito pool).
@@ -128,7 +129,7 @@ Returns every client. By default the `secret` is omitted; pass **`?get_secret=tr
 
 **API**: `PUT /v1/admin/clients/{client_id}`
 
-**Full replace** of the mutable fields (client name, redirect URIs, post-logout redirect URIs, grant types, scopes, allowed resources, default resource, allowed providers, `require_pkce`, `first_party`): the body is the complete desired state, so an omitted field resets to empty/default. `client_id`, `client_type`, and the secret are immutable and rejected in the body. `client_name` is required. Re-runs the Key-Rule validation on the result. `404` if unknown.
+**Full replace** of the mutable fields (client name, redirect URIs, post-logout redirect URIs, grant types, scopes, allowed resources, default resource, allowed providers, `require_pkce`, `first_party`, `logo_uri`): the body is the complete desired state, so an omitted field resets to empty/default. `client_id`, `client_type`, and the secret are immutable and rejected in the body. `client_name` is required. Re-runs the Key-Rule validation on the result. `404` if unknown.
 
 ### Delete Client
 

@@ -145,6 +145,7 @@ async function ensurePreviewRedirectUri(
     allowed_providers: client.allowed_providers,
     require_pkce: client.require_pkce,
     first_party: client.first_party,
+    logo_uri: client.logo_uri,
   })
 
   const survived = updated.redirect_uris ?? []

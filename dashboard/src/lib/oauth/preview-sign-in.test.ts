@@ -36,6 +36,7 @@ const registered: OAuthClient = {
   allowed_providers: ['cognito'],
   require_pkce: false,
   first_party: true,
+  logo_uri: 'data:image/png;base64,AAAA',
   client_secret: 'secret',
   created_at: 1,
   updated_at: 2,
@@ -72,6 +73,7 @@ describe('openPreviewSignIn', () => {
       allowed_providers: ['cognito'],
       require_pkce: false,
       first_party: true,
+      logo_uri: 'data:image/png;base64,AAAA',
     })
   })
 })
