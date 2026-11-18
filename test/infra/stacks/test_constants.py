@@ -12,3 +12,6 @@ SSM_PARAMETERS = {
     # Read by testmock.PARAM_NAME (src/rmneo/notification/testmock): where an itest-marked endpoint is delivered.
     'WEBHOOK_MOCK': '/rmng/test/webhook-mock',
 }
+
+# Made up, so real LWA refuses it. The backend sends LWA and SMAPI calls made with it to the webhook mock.
+ITEST_LWA_CLIENT_ID = 'amzn1.application-oa2-client.itest-placeholder'

@@ -34,37 +34,70 @@ Account linking runs against the ESP User OIDC identity provider, not Cognito. A
 
 ### Automated Setup (recommended)
 
-`tools/alexa_setup.py` performs the entire skill setup — all four manual
-console steps below — in one command via SMAPI (Alexa Skill Management API) plus
-the config API. Only the final **enable + account-link in the Alexa app** stays
-manual (it is an end-user OAuth consent flow that Amazon does not expose to SMAPI).
+The backend does the whole setup in three parts: it creates the skill, configures it at Amazon over SMAPI (Alexa Skill Management API) — all four manual console steps below — and configures Neo to use it. Two entry points post the same request to `POST /v1/admin/integrations/alexa/auto-configuration` (admin, SigV4; schema in [Api_Swagger.yaml](../../api/Api_Swagger.yaml)):
+
+- `esp-morpheus admin integrations alexa setup-auto`, which reads the fields from a config file.
+- The Admin Dashboard: **Settings → Voice assistants → Alexa → Automatic** tab (the default) → **Create skill**.
+
+Nothing runs on the operator's machine and no AWS credentials are needed. Enabling the skill and linking the account in the Alexa app stays manual: that is the end user's OAuth consent.
+
+Setup is asynchronous: two Alexa manifest builds take 30-60s each, past API Gateway's 29s limit. The POST returns the skill id immediately with `status: IN_PROGRESS`, and `rmng-alexa-auto-cfg` configures it in a background invocation of itself, publishing progress to `/rmng/alexa/auto-configuration-status` (a plain `String`: it holds no secret):
+
+```json
+{ "status": "IN_PROGRESS|DONE|FAILED", "ref_id": "", "stage": "", "error": "", "updated_at": "" }
+```
+
+`GET /v1/admin/integrations/alexa/configuration` returns that document as the `config_status` object, even before the credentials exist. It is the only signal of how a run ended. The live invoke permission and the stored credentials keep pointing at the previous skill until the run's last stage (`activate`): a skill being set up invokes the Lambda through its own setup-only permission, so a failed run leaves a working skill untouched. If `activate` itself fails part-way, it restores the previous skill's permission and credentials. Each run first clears setup-only permissions left by runs that died, so run one automatic setup at a time: a concurrent run would lose its permission. `setup-auto` and the Automatic tab both poll it until `DONE` or `FAILED` for the skill they started, and print or show the stage and error on failure. A `FAILED` status names the skill id, because nothing in the backend can delete a skill Amazon has already created. A successful manual configuration (`POST /v1/admin/integrations/alexa/configuration`) clears the document, since it no longer describes the deployment.
+
+Where the itest infra is deployed, the `/rmng/test/webhook-mock` parameter names a made-up LWA profile (`ITEST_LWA_CLIENT_ID`). LWA and SMAPI calls made with that profile go to the test webhook mock (`test/infra/handlers/test_webhook`). Calls made with any other profile reach Amazon, so an admin on a shared test account still sets up a real skill. The end-to-end itest connects with that profile, so it runs on every deployment without creating or changing anything at Amazon, and restores the previous Alexa configuration afterwards.
 
 #### One-time prerequisites
 
-1. **LWA Security Profile** (lets the script authenticate to SMAPI as you):
-   - Create one at [Login with Amazon console](https://developer.amazon.com/loginwithamazon/console/site/lwa/overview.html)
-     → note **Client ID** + **Client Secret**.
-   - On its **Web Settings**, add Allowed Return URL exactly: `http://127.0.0.1:9090/cb`.
-   - The profile must live in the **same developer account** that owns the skill/vendor.
-2. **AWS credentials — only for the standalone-script path** (the esp-morpheus path posts
-   the config as the given admin instead, so it needs no AWS creds):
-   ```bash
-   aws sso login --profile <profile>
-   export AWS_PROFILE=<profile>
-   ```
+An **LWA Security Profile**, which is what authenticates to SMAPI as you:
+
+- Create one at [Login with Amazon console](https://developer.amazon.com/loginwithamazon/console/site/lwa/overview.html) → note **Client ID** + **Client Secret**.
+- On its **Web Settings**, add the Allowed Return URL of each place you will consent from, exactly:
+  - the dashboard: `<dashboard-origin>/alexa-lwa-callback` (the Automatic tab shows it)
+  - the CLI: `http://127.0.0.1:9090/cb`
+- The profile must live in the **same developer account** that owns the skill/vendor.
+
+#### Connecting the Amazon account
+
+SMAPI accepts only a token issued to a person who consented, so client id and secret alone are not enough: the account owner consents once, and the deployment keeps the resulting refresh token.
+
+`PUT /v1/admin/integrations/alexa/lwa-connection` takes the profile's `lwa_client_id` and `lwa_client_secret` with either the `lwa_authorization_code` LWA returned to `lwa_redirect_uri`, or an `lwa_refresh_token` minted elsewhere. The code is redeemed at once, since it expires within minutes. A refresh token is checked with LWA before it is kept. All three values are stored together in one `SecureString`, `/rmng/alexa/lwa-connection`. The refresh token can manage every skill of that developer account, so no API returns it: `GET …/configuration` reports only `lwa_client_id`. `DELETE` on the same path disconnects (200, also when nothing was connected). Access stays granted at Amazon until the owner removes it there.
+
+In the dashboard, **Connect Amazon account** opens Amazon's consent page in a popup with scope `alexa::ask:skills:readwrite alexa::ask:skills:test` and a random `state`. Amazon redirects the popup to `/alexa-lwa-callback`, an unauthenticated dashboard route, which hands `code` and `state` back to the form over a same-origin `BroadcastChannel` and closes. The form checks `state` and sends the code to the PUT. A `BroadcastChannel` rather than `window.opener`, because a page in between may set `Cross-Origin-Opener-Policy` and sever the opener.
+
+An automatic setup takes no LWA credentials of its own: it always runs as the connected account, and answers 400 when none is connected. The background worker reads the connection itself rather than receiving it in its event, because Lambda can keep an async event queued for up to 6 hours and an on-failure destination would write it out in plain text.
+
+When LWA refuses the connected account's token during a setup (revoked, or the owner's password changed), the account is disconnected and the POST answers 400 asking to connect again.
+
+#### Connecting from the CLI
+
+`setup-auto` needs no separate token step. With `lwa_client_id` and `lwa_client_secret` in `alexa_skills_config.json` and no `lwa_refresh_token`, it opens Amazon's consent in the browser on the loopback return URL (`SMAPI_REDIRECT_PORT`, default `9090`), and connects the account with the resulting refresh token before the POST. The token is also cached in `~/.config/rmng/smapi_token.json`, so later runs skip the browser. Delete that file after switching security profiles.
+
+Configs written before the rename, with `smapi_client_id`, `smapi_client_secret` and `smapi_refresh_token`, still work.
+
+#### Input
+
+| Field | Config key (`setup-auto`) | Required | Notes |
+|---|---|---|---|
+| `skill_name` | `skill_name`, or the command's argument | yes | skill display name |
+| — | `lwa_client_id` / `lwa_client_secret` | no | LWA Security Profile, not the skill's own `client_id`/`client_secret` that manual setup takes. When set, `setup-auto` [connects the account](#connecting-the-amazon-account) before the POST. Omitted, the run uses the account already connected |
+| — | `lwa_refresh_token` | no | optional with the client ID and secret, see [Connecting from the CLI](#connecting-from-the-cli). Without it, `setup-auto` opens Amazon's consent page |
+| `manufacturer_name` | `manufacturer_name` | no | brand advertised in Alexa discovery, set once the run succeeds; absent keeps the stored brand, empty restores the default (as in manual setup). The dashboard sends it only when filled in |
+
+Each run creates or replaces the deployment's skill configuration. The target is the deployment's live skill when the connected account can reach it; otherwise a new skill, created under the LWA profile's first vendor (developer organisation), whose account-linking redirect URLs (`…/api/skill/link/<vendorId>`) are registered on the va-client. A reused skill keeps the redirect URLs registered when it went live. Reconfiguring runs the same pipeline against the existing skill without creating one, so repeated runs (dashboard or CLI) never pile skills up at Amazon, and a repair is just a re-run. A live skill the connected account cannot reach (set up manually from another Amazon account, or deleted at Amazon) leads to a new skill, and the status says so. Other values (va-client creds, issuer endpoints, endpoint ARNs) are resolved by the backend from the deployment itself.
 
 #### Run
-
-**Via esp-morpheus** (recommended — the config-API POST is authenticated as the given
-admin user, no AWS creds needed). All inputs come from a config file:
 
 ```json
 // alexa_skills_config.json
 {
-  "smapi_client_id": "amzn1.application-oa2-client.xxxx",   // LWA security profile
-  "smapi_client_secret": "xxxx",
-  "skill_name": "ESP RainMaker",         // optional
-  "skill_id": "amzn1.ask.skill.xxxx"     // optional; omit to create a new skill
+  "lwa_client_id": "amzn1.application-oa2-client.xxxx",
+  "lwa_client_secret": "xxxx",
+  "skill_name": "ESP RainMaker"
 }
 ```
 ```bash
@@ -72,56 +105,44 @@ esp-morpheus admin integrations alexa setup-auto
 # reads alexa_skills_config.json by default
 ```
 
-**Or the script directly** (config-API POST is SigV4-signed with your AWS creds):
-```bash
-export SMAPI_CLIENT_ID=amzn1.application-oa2-client.xxxx     # LWA profile
-export SMAPI_CLIENT_SECRET=xxxx
-./myenv/bin/python tools/alexa_setup.py [--skill-name ...] [--skill-id ...]
-```
-
-`skill_id` / `--skill-id` unset → create a new skill; set → update that skill
-(idempotent). Other values (va-client creds, issuer endpoints, endpoint ARNs) are
-read from `rmng-outputs.json` automatically — the CDK stack-outputs file written
-at the repository root by a deploy, which is how the tooling discovers the
-deployment's API Gateway URL, Lambda ARNs and pool ids.
-
 #### Helpful commands
 
-Inside the `esp-morpheus admin` context (config-driven, no env vars). The config file
-defaults to `alexa_skills_config.json`; pass `--config` only to override:
+Inside the `esp-morpheus admin` context (config-driven, no env vars). The config file defaults to `alexa_skills_config.json`; pass `--config` only to override:
 ```
 admin integrations alexa setup-auto [--config config.json] [skill name]
 admin integrations alexa list-skills            # list all skills (id + name)
 admin integrations alexa delete-skill <skill_id>
 ```
 
-The standalone script exposes the same operations plus read-only diagnostics
-(used mainly in CI / without an esp-morpheus admin session):
+`tools/alexa_smapi_cli.py` adds SMAPI diagnostics and skill cleanup, for CI or when there is no esp-morpheus admin session. It talks to SMAPI only and never writes the deployment's config:
 ```bash
-./myenv/bin/python tools/alexa_setup.py --skill-id ... --status          # per-step report
-./myenv/bin/python tools/alexa_setup.py --skill-id ... --status --debug  # + raw SMAPI JSON
-./myenv/bin/python tools/alexa_setup.py --list-skills
-./myenv/bin/python tools/alexa_setup.py --skill-id ... --delete
-./myenv/bin/python tools/alexa_setup.py --dry-run                         # validate, no writes
+./myenv/bin/python tools/alexa_smapi_cli.py --skill-id ... --status          # per-step report
+./myenv/bin/python tools/alexa_smapi_cli.py --skill-id ... --status --debug  # + raw SMAPI JSON
+./myenv/bin/python tools/alexa_smapi_cli.py --list-skills
+./myenv/bin/python tools/alexa_smapi_cli.py --skill-id ... --delete
 ```
 
 #### Useful overrides
 
 | Flag / Var | Purpose |
 |---|---|
-| `--skill-id` | update an existing skill instead of creating a new one |
-| `--skill-name` | skill name (default `ESP RainMaker`) — distinct names for test skills |
-| `--manufacturer` / `ALEXA_MANUFACTURER_NAME` | brand advertised in discovery (see [Manufacturer name](#manufacturer-name)); omitted leaves the stored brand alone, `''` resets it to `Espressif` |
-| `PRIVACY_POLICY_URL` | manifest privacy URL (defaults to the RainMaker privacy URL) |
-| `ALEXA_REDIRECT_URLS` | comma-separated override if the vendor's redirect URLs differ from `…/api/skill/link/<vendorId>` |
+| `--skill-id` / `SMAPI_SKILL_ID` | the skill to inspect or delete |
 | `SMAPI_REDIRECT_PORT` | loopback port for LWA consent (default `9090`; must match the profile's Return URL) |
-| `ALEXA_CONFIG_API_URL` / `RMNG_REGION` | override the config API URL / region (else from outputs) |
+| `ALEXA_STAGE` | skill stage the diagnostics read (default `development`) |
+
+The brand advertised in discovery is the optional `manufacturer_name` above; manual setup takes the same field (see [Manufacturer name](#manufacturer-name)).
+
+#### Account-linking scopes
+
+The skill requests `openid email phone profile`, and every one of them must be in the `va-client` row's allowed scopes: the ESP User authorize endpoint rejects the whole request with `invalid_scope` if a single requested scope is outside that set, which the Alexa app reports only as "Unable to link the skill at this time".
+
+The scopes are written onto the skill when it is configured, so changing them in the backend affects **new** skills only. A skill created by an earlier build keeps its original list until its Account Linking is edited in the Alexa console or the skill is recreated.
 
 ---
 
 ### Manual Setup (Alexa Developer Console — reference)
 
-The steps the automated script performs, for reference or manual operation. Must be
+The steps the automated setup performs, for reference or manual operation. Must be
 done before calling the Store Configuration API.
 
 #### Step 1: Create Alexa Smart Home Skill
@@ -147,6 +168,12 @@ done before calling the Store Configuration API.
 #### Step 3: Store Configuration via API
 
 Store the configuration by calling the admin configuration API below. It persists the Alexa credentials to SSM, updates the Cognito VA client callback URLs, and grants the Alexa service permission to invoke the skill Lambda.
+
+From the CLI, fill in a copy of `cli/src/esp_morpheus/data/examples/alexa_skills_manual_config.example.json` (keep it as the gitignored `alexa_skills_manual_config.json`) and run:
+
+```bash
+esp-morpheus admin <admin-email> integrations alexa setup alexa_skills_manual_config.json
+```
 
 **API**: `POST /v1/admin/integrations/alexa/configuration`
 

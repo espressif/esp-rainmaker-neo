@@ -2,8 +2,6 @@
   "alexa": {
     "heading": "Alexa 配置",
     "secondaryText": "Amazon Alexa 技能凭证与账号关联重定向 URI",
-    "notConfiguredTitle": "尚未配置 Alexa",
-    "notConfiguredDescription": "尚未找到 Alexa 配置。",
     "copyJson": "复制 JSON",
     "copyJsonSuccess": "配置 JSON 已复制到剪贴板",
     "copyJsonError": "复制配置 JSON 失败",
@@ -18,7 +16,6 @@
     "redirectUris": "重定向 URI",
     "redirectUriPlaceholder": "https://example.com/api/skill/link/...",
     "addUri": "添加 URI",
-    "configureButton": "配置",
     "fetchError": "加载 Alexa 配置失败",
     "form": {
       "editTitle": "编辑 Alexa 配置",
@@ -42,6 +39,61 @@
         "redirectUrisRequired": "请至少添加一个重定向 URI。"
       },
       "manufacturerNameHint": "在 Alexa 应用中显示为设备品牌。留空则使用默认品牌（Espressif）。"
+    },
+    "autoCreate": {
+      "submitButton": "设置技能",
+      "skillName": "技能名称",
+      "skillNamePlaceholder": "例如 {{name}}",
+      "clientId": "安全配置文件客户端 ID",
+      "clientIdHint": "来自您的安全配置文件。",
+      "clientSecret": "安全配置文件客户端密钥",
+      "clientSecretPlaceholder": "请输入安全配置文件客户端密钥",
+      "manufacturerNameHint": "留空则保留当前品牌。",
+      "pendingDescription": "正在配置技能。通常需要一到两分钟。",
+      "pendingStage": "当前步骤：{{stage}}。",
+      "failedDescription": "配置在“{{stage}}”阶段失败：{{error}}",
+      "stalledDescription": "配置在“{{stage}}”阶段停止响应。请重新创建技能。",
+      "submitSuccess": "已开始设置，配置将在后台继续。",
+      "submitError": "创建 Alexa 技能失败。",
+      "errors": {
+        "skillNameRequired": "请输入技能名称。",
+        "clientIdRequired": "请输入安全配置文件客户端 ID。",
+        "clientSecretRequired": "请输入安全配置文件客户端密钥。",
+        "clientIdFormat": "Client ID 以 {{prefix}} 开头"
+      },
+      "heading": "自动配置 Alexa",
+      "secondaryText": "一步创建或更新您的 Alexa 技能，并将其接入 Neo",
+      "startButton": "设置 Alexa",
+      "emptyDescription": "尚未从此处创建技能。需要 Login with Amazon 安全配置文件。",
+      "title": "设置 Alexa 技能"
+    },
+    "setupMode": {
+      "manualTab": "手动",
+      "automaticTab": "自动"
+    },
+    "notConfiguredTitle": "尚未配置 Alexa",
+    "notConfiguredDescription": "尚未找到 Alexa 配置。",
+    "configureButton": "配置",
+    "lwa": {
+      "returnUrl": "允许的返回 URL（请添加到您的安全配置文件）",
+      "connectButton": "连接 Amazon 账户",
+      "connectSuccess": "已连接 Amazon 账户。",
+      "connectError": "连接 Amazon 账户失败。",
+      "connectFirst": "请先在上方连接 Amazon 账户。",
+      "connectedTitle": "已连接的 Amazon 账户（安全配置文件）",
+      "disconnectButton": "断开连接",
+      "disconnectTitle": "断开 Amazon 账户连接？",
+      "disconnectDescription": "此部署将忘记其 Amazon 登录信息，在重新连接之前无法使用自动设置。技能及其配置将保留。如需同时在 Amazon 端撤销访问权限，请在 Amazon 账户的 Login with Amazon 设置中将其移除。",
+      "disconnectSuccess": "已断开 Amazon 账户连接。",
+      "disconnectError": "断开 Amazon 账户连接失败。",
+      "errors": {
+        "popupFailed": "无法打开 Amazon 登录窗口。",
+        "popupBlocked": "浏览器阻止了 Amazon 登录窗口。请允许此网站的弹出窗口后重试。",
+        "denied": "Amazon 未授予访问权限：{{detail}}",
+        "timeout": "五分钟内未收到 Amazon 的响应。请重新连接。",
+        "noCode": "Amazon 返回时未附带授权码。请重新连接。"
+      },
+      "docsLink": "如何创建"
     }
   },
   "authorizationUri": "授权端点 URI",

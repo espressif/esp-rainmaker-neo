@@ -3149,6 +3149,312 @@ paths:
         "500":
           $ref: "#/components/responses/InternalServerError"
 
+  /v1/admin/integrations/alexa/configuration:
+    post:
+      summary: Configure the Alexa integration manually
+      description: |
+        Manual setup: stores the credentials of a skill the operator built in the Alexa
+        console (AcceptGrant client id/secret and skill id), registers `redirect_uris` on
+        the voice-assistant OIDC client, and grants the skill Lambda's invoke permission
+        to `skill_id` in every Alexa region. On success it clears any automatic-setup
+        status (`config_status`), since that no longer describes the deployment. Admin only.
+      tags:
+        - Alexa Skill
+      security:
+        - sigv4: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AlexaCfgRequest"
+            example:
+              redirect_uris:
+                - "https://pitangui.amazon.com/api/skill/link/M1ABCDEFGHIJ"
+                - "https://layla.amazon.com/api/skill/link/M1ABCDEFGHIJ"
+                - "https://alexa.amazon.co.jp/api/skill/link/M1ABCDEFGHIJ"
+              client_id: "amzn1.application-oa2-client.0123456789abcdef0123456789abcdef"
+              client_secret: "amzn1.oa2-cs.v1.0123456789abcdef0123456789abcdef"
+              skill_id: "amzn1.ask.skill.f5e4d3c2-b1a0-9876-5432-1fedcba98765"
+              manufacturer_name: "Acme"
+      responses:
+        "200":
+          description: Configuration stored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlexaCfgResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    get:
+      summary: Get the Alexa configuration and automatic-setup status
+      description: |
+        Returns the stored configuration (never the client secret) and, when an automatic
+        setup has run, its status as `config_status`. While an automatic setup is still
+        running on a deployment with no stored credentials yet, this answers 200 with only
+        `manufacturer_name` and `config_status`, so pollers can follow the run instead of
+        seeing a 404. The same holds when only an Amazon account is connected
+        (`lwa_client_id`), before any setup has run. A deployment configured only manually has
+        no `config_status`. Admin only.
+      tags:
+        - Alexa Skill
+      security:
+        - sigv4: []
+      responses:
+        "200":
+          description: Configuration and/or automatic-setup status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlexaCfgGetResponse"
+              examples:
+                configured:
+                  summary: Configured, last automatic setup finished
+                  value:
+                    client_id: "amzn1.application-oa2-client.0123456789abcdef0123456789abcdef"
+                    skill_id: "amzn1.ask.skill.f5e4d3c2-b1a0-9876-5432-1fedcba98765"
+                    redirect_uris:
+                      - "https://pitangui.amazon.com/api/skill/link/M1ABCDEFGHIJ"
+                    manufacturer_name: "Espressif"
+                    config_status:
+                      status: "DONE"
+                      ref_id: "amzn1.ask.skill.f5e4d3c2-b1a0-9876-5432-1fedcba98765"
+                      updated_at: "2026-10-27T10:00:00Z"
+                setupInProgress:
+                  summary: First automatic setup still running, nothing stored yet
+                  value:
+                    client_id: ""
+                    skill_id: ""
+                    manufacturer_name: "Espressif"
+                    config_status:
+                      status: "IN_PROGRESS"
+                      ref_id: "amzn1.ask.skill.f5e4d3c2-b1a0-9876-5432-1fedcba98765"
+                      stage: "manifest build"
+                      updated_at: "2026-10-27T10:00:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Alexa is not configured and no automatic setup has run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /v1/admin/integrations/alexa/auto-configuration:
+    post:
+      summary: Create an Alexa skill, configure it, and configure Neo to use it (runs in background)
+      description: |
+        Automatic setup, used by the dashboard's Automatic tab and `setup-auto`. Each POST
+        creates or replaces the deployment's skill configuration. The target skill is the
+        deployment's live skill when the connected Amazon account can reach it, else a new skill
+        created at Amazon; so repeating the call reconfigures
+        the same skill instead of adding another. The skill is then configured at Amazon
+        over SMAPI (manifest, endpoints, account linking), and Neo is configured to use it
+        (invoke permission, AcceptGrant credentials, OIDC redirect URIs). The request
+        returns the skill id immediately with `status: IN_PROGRESS`; the rest runs in the
+        background (Alexa builds take 30-60s each, beyond the 29s request limit): grant a
+        setup-only invoke permission, set the events + Smart Home endpoint manifest and
+        wait for its build, register `redirect_uris` on the voice-assistant OIDC client,
+        and set account linking against the ESP User provider. Only then does it make the
+        skill live: replace the deployment's invoke permission and store its AcceptGrant
+        credentials, so a failed run leaves a working skill untouched.
+
+        The response only confirms which skill is being configured. Poll `config_status`
+        (an `AlexaSetupStatus`) on `GET /v1/admin/integrations/alexa/configuration` until
+        it reports `DONE` or `FAILED` for this `skill_id`; a `FAILED` status carries the
+        stage and error.
+        The run authenticates to SMAPI as the Amazon account connected with
+        `PUT /v1/admin/integrations/alexa/lwa-connection`, so connect one first. If LWA
+        refuses the connected account's token, the account is disconnected and the request
+        answers 400, so the dashboard offers to connect it again. Admin only.
+      tags:
+        - Alexa Skill
+      security:
+        - sigv4: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [skill_name]
+              properties:
+                skill_name:
+                  type: string
+                manufacturer_name:
+                  type: string
+                  description: |
+                    Optional. Brand advertised in Alexa discovery, set once the run
+                    succeeds. Absent keeps the stored brand; empty restores the default,
+                    as in manual setup.
+            example:
+              skill_name: "ESP RainMaker"
+              manufacturer_name: "Acme"
+      responses:
+        "200":
+          description: Skill created or reused; configuration running in the background
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [skill_id, status]
+                properties:
+                  skill_id:
+                    type: string
+                    description: The created skill's id. Present even when configuration later fails, because nothing deletes a skill Amazon has created.
+                  status:
+                    type: string
+                    enum: [IN_PROGRESS]
+              example:
+                skill_id: "amzn1.ask.skill.f5e4d3c2-b1a0-9876-5432-1fedcba98765"
+                status: "IN_PROGRESS"
+        "400":
+          description: |
+            Invalid request body, no Amazon account connected (`No Amazon account
+            connected`), or LWA/SMAPI refused the connected account: a profile with no
+            vendor (`Failed to resolve SMAPI vendor`), the connected account's token
+            (`The connected Amazon account was refused, connect it again`, after which it
+            is disconnected), or a skill SMAPI would not create (`Failed to create skill`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          description: Server error, LWA or SMAPI unavailable (network error or upstream 5xx/429), or the background run could not be started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/admin/integrations/alexa/lwa-connection:
+    put:
+      summary: Connect the Amazon developer account automatic setup runs as
+      description: |
+        Verifies an LWA security profile and stores it with a refresh token, so automatic
+        setups need no further consent. Send either the authorization code LWA returned
+        to `lwa_redirect_uri` after the account owner consented (scope
+        `alexa::ask:skills:readwrite alexa::ask:skills:test`), which is redeemed here
+        because it expires within minutes, or a refresh token minted elsewhere, which is
+        checked with LWA first. Replaces any connected account. The refresh token can
+        manage every skill of that account, so it is stored encrypted and never returned.
+        Admin only.
+      tags:
+        - Alexa Skill
+      security:
+        - sigv4: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lwa_client_id, lwa_client_secret]
+              properties:
+                lwa_client_id:
+                  type: string
+                  description: LWA security profile client id.
+                lwa_client_secret:
+                  type: string
+                  description: LWA security profile client secret.
+                lwa_authorization_code:
+                  type: string
+                  description: Code from the consent redirect. Send with `lwa_redirect_uri`, not with `lwa_refresh_token`.
+                lwa_redirect_uri:
+                  type: string
+                  description: The redirect URI the consent request carried; LWA refuses the code for any other.
+                lwa_refresh_token:
+                  type: string
+                  description: A refresh token minted elsewhere, instead of a code.
+            examples:
+              authorizationCode:
+                summary: Code from the consent redirect
+                value:
+                  lwa_client_id: "amzn1.application-oa2-client.6b3c8e2a4f5d4b9c8a7e2f1d3b5a8c6e"
+                  lwa_client_secret: "amzn1.oa2-cs.v1.0123456789abcdef0123456789abcdef"
+                  lwa_authorization_code: "ANdNAVhyhqirUelHGEHA"
+                  lwa_redirect_uri: "https://dashboard.example.com/alexa-lwa-callback"
+              refreshToken:
+                summary: Refresh token minted elsewhere
+                value:
+                  lwa_client_id: "amzn1.application-oa2-client.6b3c8e2a4f5d4b9c8a7e2f1d3b5a8c6e"
+                  lwa_client_secret: "amzn1.oa2-cs.v1.0123456789abcdef0123456789abcdef"
+                  lwa_refresh_token: "Atzr|IwEBID...EXAMPLE"
+      responses:
+        "200":
+          description: Account connected
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+              example:
+                message: "Amazon account connected"
+        "400":
+          description: |
+            Missing client id or secret, neither or both of a code and a refresh token, a
+            code without `lwa_redirect_uri`, or LWA refused them (`Failed to redeem the LWA
+            authorization code`, `Failed to verify the LWA credentials`). Nothing is stored.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          description: Server error, or Login with Amazon unavailable (network error or upstream 5xx/429)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+    delete:
+      summary: Disconnect the Amazon developer account
+      description: |
+        Deletes the stored account, so automatic setup needs a new connection or inline
+        credentials. Idempotent: also succeeds when no account is connected. Access
+        stays granted at Amazon until the account owner removes it there. Admin only.
+      tags:
+        - Alexa Skill
+      security:
+        - sigv4: []
+      responses:
+        "200":
+          description: Account disconnected, or none was connected
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+              example:
+                message: "Amazon account disconnected"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
   # NOTE (not rendered): SmartThings is configured through this dedicated
   # path (served by the st_cfg Lambda), not through the unified
   # /v1/admin/integrations tree above — its credentials live in SSM, not
@@ -5359,6 +5665,17 @@ components:
             Brand currently advertised in discovery — the configured value, or
             the default brand when the deployment has set none. Never empty.
           example: "Espressif"
+        config_status:
+          $ref: "#/components/schemas/AlexaSetupStatus"
+          description: |
+            The last automatic setup's status. Absent when no
+            automatic setup has run, or a manual setup has replaced it. While a first
+            automatic setup is still running, `client_id` and `skill_id` are empty.
+        lwa_client_id:
+          type: string
+          description: |
+            Security profile client id of the connected Amazon developer account, absent
+            when none is connected. Its secret and refresh token are never returned.
         message:
           type: string
 
@@ -5381,6 +5698,30 @@ components:
           type: string
           maxLength: 256
           description: The SmartThings Schema App OAuth client secret.
+
+    AlexaSetupStatus:
+      type: object
+      description: |
+        Progress of an automatic setup, returned as `config_status`. Poll
+        until `status` is `DONE` or `FAILED` for the `ref_id` you started; an
+        `IN_PROGRESS` status whose `updated_at` stops advancing belongs to a worker that died.
+      required: [status, updated_at]
+      properties:
+        status:
+          type: string
+          enum: [IN_PROGRESS, DONE, FAILED]
+        ref_id:
+          type: string
+          description: The skill id; present on failure too, so an abandoned skill can be found at Amazon.
+        stage:
+          type: string
+          description: The stage running, or the one that failed (e.g. `manifest build`).
+        error:
+          type: string
+          description: Why the run failed; only with `FAILED`.
+        updated_at:
+          type: string
+          format: date-time
 
     STCfgGetResponse:
       type: object

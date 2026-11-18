@@ -21,6 +21,7 @@ export default defineConfig({
     // Page-level `_utils` are included too, but this config provides no DOM —
     // so anything matched here must be a unit that runs without one.
     include: [
+      'src/api/**/*.test.ts',
       'src/utils/**/*.test.ts',
       'src/lib/**/*.test.ts',
       'src/pages/**/*.test.ts',

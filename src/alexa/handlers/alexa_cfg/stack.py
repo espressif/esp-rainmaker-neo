@@ -120,6 +120,11 @@ class AlexaCfgAPI(Construct):
             admin_integrations_parent_id, "alexa"
         )
 
+        # Exposed so sibling constructs in this stack (alexa_auto_cfg) hang their
+        # routes off the same /v1/admin/integrations/alexa node: creating it twice
+        # collides on the shared API with a duplicate logical id.
+        self.alexa_resource_id = alexa_resource_id
+
         alexa_cfg_resource_id = get_or_create_api_resource(
             self, "AdminAlexaCfgResource", common_resources,
             alexa_resource_id, "configuration"

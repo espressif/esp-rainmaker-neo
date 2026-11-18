@@ -12,6 +12,7 @@ bot-iam-user-credentials.json
 coverage.out*
 coverage.xml
 .DS_Store
+*.swp
 .vscode
 myenv/
 .envrc
@@ -34,8 +35,9 @@ dist/
 misc/plans/IMPLEMENTATION_PLAN.md
 
 
-# Alexa setup config (holds LWA secret) — copy from cli/src/esp_morpheus/data/examples/alexa_skills_config.example.json
+# Alexa setup configs (hold secrets) — copy from cli/src/esp_morpheus/data/examples/alexa_skills_*config.example.json
 alexa_skills_config.json
+alexa_skills_manual_config.json
 
 cli/test_config.json
 test/itest/itest_config.json

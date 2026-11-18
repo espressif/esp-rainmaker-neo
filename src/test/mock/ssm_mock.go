@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/aws-sdk-go-v2/service/ssm/types"
 )
@@ -24,7 +25,12 @@ type MockSSM struct {
 	GetParameterErrors       map[string]error
 	GetParametersByPathError error
 	DeleteParameterError     error
+	// StrictDecryptionPrefix makes a SecureString under this prefix read without WithDecryption return ciphertext, as real SSM does. Opt-in and scoped: shared fixtures seed every parameter (JWKS included) as SecureString and auth reads JWKS undecrypted.
+	StrictDecryptionPrefix string
 }
+
+// EncryptedPlaceholder is what a StrictDecryptionPrefix read of an undecrypted SecureString returns.
+const EncryptedPlaceholder = "AQICAHh-mock-ciphertext"
 
 var (
 	mockSSM *MockSSM
@@ -77,11 +83,16 @@ func (m *MockSSM) GetParameter(ctx context.Context, params *ssm.GetParameterInpu
 	defer m.mutex.RUnlock()
 
 	if param, exists := m.Parameters[*params.Name]; exists {
+		value := param.Value
+		if m.StrictDecryptionPrefix != "" && strings.HasPrefix(*params.Name, m.StrictDecryptionPrefix) &&
+			param.Type == types.ParameterTypeSecureString && !aws.ToBool(params.WithDecryption) {
+			value = aws.String(EncryptedPlaceholder)
+		}
 		return &ssm.GetParameterOutput{
 			Parameter: &types.Parameter{
 				Name:  param.Name,
 				Type:  param.Type,
-				Value: param.Value,
+				Value: value,
 			},
 		}, nil
 	}

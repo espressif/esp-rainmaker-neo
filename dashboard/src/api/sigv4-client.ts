@@ -75,5 +75,7 @@ export async function sigv4Request<T>({ method, url, body }: Sigv4RequestOptions
     throw new Error(`Request failed with status code ${response.status}: ${errorBody}`)
   }
 
-  return response.json() as Promise<T>
+  // A 204 (e.g. an idempotent DELETE) has no body, and response.json() throws on an empty one.
+  const text = await response.text()
+  return (text ? JSON.parse(text) : undefined) as T
 }

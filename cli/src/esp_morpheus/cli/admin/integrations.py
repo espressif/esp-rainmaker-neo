@@ -5,17 +5,24 @@
 """`esp-morpheus admin integrations ...` — the voice-assistant credentials each skill needs."""
 
 import os
+import time
+import urllib.error
 
 import click
 
-from ...sdk import alexa_setup as alexa_smapi, gva_setup as gva_gcp
+from ...sdk import alexa_smapi_cli as alexa_smapi, gva_setup as gva_gcp
 from .. import output
 from ..context import Session, pass_session, pass_user
 from ..guide import print_alexa_instructions
 
 DEFAULT_ALEXA_CONFIG = 'alexa_skills_config.json'
-ALEXA_CONFIG_KEYS = ('smapi_client_id', 'smapi_client_secret', 'vendor_id',
-                     'smapi_refresh_token', 'redirect_urls', 'skill_name', 'skill_id')
+ALEXA_CONFIG_KEYS = ('lwa_client_id', 'lwa_client_secret', 'vendor_id',
+                     'lwa_refresh_token', 'skill_name', 'manufacturer_name')
+
+
+def _lwa_value(config, field):
+    """Read an LWA key, accepting its old smapi_ name from configs written before the rename: field 'client_id' reads lwa_client_id, else smapi_client_id."""
+    return config.get(f'lwa_{field}') or config.get(f'smapi_{field}')
 
 
 def _check_alexa_config(ctx, param, value):
@@ -52,29 +59,49 @@ def alexa():
     """
 
 
-def _alexa_config_to_env(session, config_file):
-    """Populate the env the SMAPI helper reads, so one config file drives both halves.
-
-    Example alexa_skills_config.json:
-        {"smapi_client_id": "...", "smapi_client_secret": "...",
-         "skill_name": "ESP RainMaker", "skill_id": "amzn1.ask.skill.xxxx"}
-    """
+def _alexa_config_to_env(config_file):
+    """Populate the env the SMAPI diagnostics read, so list-skills and delete-skill share setup-auto's config file."""
     config = output.read_json_file(config_file, 'Alexa config')
     env_map = {
-        'SMAPI_CLIENT_ID': 'smapi_client_id',
-        'SMAPI_CLIENT_SECRET': 'smapi_client_secret',
-        'SMAPI_VENDOR_ID': 'vendor_id',
-        'SMAPI_REFRESH_TOKEN': 'smapi_refresh_token',
-        'ALEXA_REDIRECT_URLS': 'redirect_urls',
+        'SMAPI_CLIENT_ID': _lwa_value(config, 'client_id'),
+        'SMAPI_CLIENT_SECRET': _lwa_value(config, 'client_secret'),
+        'SMAPI_VENDOR_ID': config.get('vendor_id'),
+        'SMAPI_REFRESH_TOKEN': _lwa_value(config, 'refresh_token'),
     }
-    for env_key, config_key in env_map.items():
-        value = config.get(config_key)
+    for env_key, value in env_map.items():
         if value:
-            os.environ[env_key] = ','.join(value) if isinstance(value, list) else str(value)
-    # alexa_setup reads outputs itself, keyed off RMNG_OUTPUTS; point it at the source esp-morpheus
-    # resolved so --client-outputs applies there too.
-    os.environ['RMNG_OUTPUTS'] = session.settings.source
-    return config
+            os.environ[env_key] = str(value)
+
+
+SETUP_POLL_SECONDS = 5
+# The worker is a Lambda capped at 900s, so waiting any less can report a timeout on a run that is still going.
+SETUP_TIMEOUT_SECONDS = 960
+
+
+def _wait_for_setup(session, integration, ref_id):
+    """Block until the backend reports the setup of ref_id finished, printing each stage.
+
+    Shaped like gva_setup.enable_homegraph: a deadline, a fixed interval, and a printed state,
+    because an operator watching a terminal needs to see it is alive. Polls the status the
+    backend publishes rather than waiting on a value to appear, so a worker that dies reports
+    FAILED instead of hanging until the timeout. A status for another ref_id is a previous run's,
+    so it is skipped rather than read as this run finishing.
+    """
+    getter = {'alexa': session.user.alexa_get_configuration}[integration]
+    deadline = time.monotonic() + SETUP_TIMEOUT_SECONDS
+    seen = None
+    while time.monotonic() < deadline:
+        response = getter()
+        body = response.json() if response.ok else {}
+        parsed = body.get('config_status') if isinstance(body, dict) else None
+        if parsed and parsed.get('ref_id') == ref_id:
+            if parsed.get('stage') and parsed['stage'] != seen:
+                seen = parsed['stage']
+                output.plain(f"  {seen}")
+            if parsed['status'] in ('DONE', 'FAILED'):
+                return parsed
+        time.sleep(SETUP_POLL_SECONDS)
+    output.fail(f"Timed out after {SETUP_TIMEOUT_SECONDS}s waiting for {integration} setup")
 
 
 @alexa.command('setup')
@@ -91,7 +118,8 @@ def alexa_config(ctx, config_file):
 
     output.emit_response(session.user.alexa_post_configuration(
         redirect_uris=config['redirect_urls'], client_id=config['alexa_client_id'],
-        client_secret=config['alexa_client_secret'], skill_id=config['skill_id']),
+        client_secret=config['alexa_client_secret'], skill_id=config['skill_id'],
+        manufacturer_name=config.get('manufacturer_name')),
         'Alexa configuration stored')
     print_alexa_instructions(session.settings)
 
@@ -101,20 +129,46 @@ def alexa_config(ctx, config_file):
 @click.argument('skill_name', nargs=-1)
 @click.pass_context
 def alexa_auto(ctx, config_file, skill_name):
-    """Create or update the skill over SMAPI, then store its configuration.
+    """Reconfigure the deployment's live skill (or create one), then store its credentials.
 
-    The config POST goes through this admin's session, so no separate AWS credentials are needed.
+    The backend runs the SMAPI pipeline, the same one the dashboard uses.
     """
     session = ctx.find_object(Session)
-    config = _alexa_config_to_env(session, config_file)
+    config = output.read_json_file(config_file, 'Alexa config')
+    client_id, client_secret = _lwa_value(config, 'client_id'), _lwa_value(config, 'client_secret')
+    refresh_token = _lwa_value(config, 'refresh_token')
+    # No keys means the backend's connected Amazon account; a refresh token alone, or half the profile, is a mistake.
+    if client_id or client_secret or refresh_token:
+        missing = [k for k, v in (('lwa_client_id', client_id), ('lwa_client_secret', client_secret)) if not v]
+        if missing:
+            output.fail(f"{config_file} is missing {', '.join(missing)}")
 
-    def post_config(skill_id, client_id, client_secret, redirect_uris):
-        output.emit_response(session.user.alexa_post_configuration(
-            redirect_uris=redirect_uris, client_id=client_id,
-            client_secret=client_secret, skill_id=skill_id), 'Alexa configuration stored')
+    name = ' '.join(skill_name) or config.get('skill_name')
+    if not name:
+        output.fail('Pass a skill name, or set skill_name in ' + config_file)
 
-    alexa_smapi.setup(post_config, skill_id=config.get('skill_id'),
-                      skill_name=' '.join(skill_name) or config.get('skill_name'))
+    if client_id and not refresh_token:
+        try:
+            refresh_token = alexa_smapi.get_refresh_token(
+                client_id, client_secret, int(os.environ.get('SMAPI_REDIRECT_PORT', '9090')))
+        except (RuntimeError, urllib.error.URLError) as e:
+            output.fail(f'Amazon consent failed: {e}')
+
+    if client_id:
+        output.emit_response(session.user.alexa_put_lwa_connection(
+            client_id, client_secret, lwa_refresh_token=refresh_token), show_body=False)
+    body = output.emit_response(session.user.alexa_create_auto_configuration(
+        skill_name=name, manufacturer_name=config.get('manufacturer_name')), show_body=False)
+    ref_id = body['skill_id']
+    output.ok(f"Skill {ref_id}; configuring")
+
+    final = _wait_for_setup(session, 'alexa', ref_id)
+    if final and final.get('status') == 'FAILED':
+        output.fail(f"Configuration failed: {final.get('error') or 'see the rmng-alexa-auto-cfg logs'}")
+    output.ok(f"Alexa configuration stored for skill {ref_id}")
+    # Not print_alexa_instructions: that is the manual console procedure this command just performed.
+    output.plain('')
+    output.plain(f'Next: enable "{name}" in the Alexa app (More -> Skills & Games -> Your Skills -> Dev) and link your RainMaker account.')
 
 
 @alexa.command('list-skills')
@@ -122,7 +176,8 @@ def alexa_auto(ctx, config_file, skill_name):
 @pass_session
 def alexa_list(session, config_file):
     """List every Alexa skill under the vendor."""
-    _alexa_config_to_env(session, config_file)
+    del session
+    _alexa_config_to_env(config_file)
     alexa_smapi.list_all()
 
 
@@ -132,7 +187,8 @@ def alexa_list(session, config_file):
 @pass_session
 def alexa_delete(session, skill_id, config_file):
     """Delete the Alexa skill SKILL_ID."""
-    _alexa_config_to_env(session, config_file)
+    del session
+    _alexa_config_to_env(config_file)
     alexa_smapi.delete(skill_id)
 
 

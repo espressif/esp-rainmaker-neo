@@ -9,6 +9,7 @@ import { initReactI18next } from 'react-i18next'
 import { appConfig } from '@/lib/app-config'
 import type { SupportedLanguage } from '@/lib/constants'
 import accountSettingsEn from './locales/en/account-settings.json'
+import alexaLwaCallbackEn from './locales/en/alexa-lwa-callback.json'
 import brandingEn from './locales/en/branding.json'
 import commonEn from './locales/en/common.json'
 import forgotPasswordEn from './locales/en/forgot-password.json'
@@ -27,6 +28,7 @@ import setPasswordEn from './locales/en/set-password.json'
 import staticEn from './locales/en/static.json'
 import voiceAssistantsEn from './locales/en/voice-assistants.json'
 import accountSettingsZh from './locales/zh/account-settings.json'
+import alexaLwaCallbackZh from './locales/zh/alexa-lwa-callback.json'
 import brandingZh from './locales/zh/branding.json'
 import commonZh from './locales/zh/common.json'
 import forgotPasswordZh from './locales/zh/forgot-password.json'
@@ -57,6 +59,7 @@ const resources = {
     'forgot-password': forgotPasswordEn,
     'set-password': setPasswordEn,
     'oauth-preview': oauthPreviewEn,
+    'alexa-lwa-callback': alexaLwaCallbackEn,
     static: staticEn,
     nodes: nodesEn,
     'node-groups': nodeGroupsEn,
@@ -77,6 +80,7 @@ const resources = {
     'forgot-password': forgotPasswordZh,
     'set-password': setPasswordZh,
     'oauth-preview': oauthPreviewZh,
+    'alexa-lwa-callback': alexaLwaCallbackZh,
     static: staticZh,
     nodes: nodesZh,
     'node-groups': nodeGroupsZh,

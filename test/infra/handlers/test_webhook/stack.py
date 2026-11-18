@@ -302,6 +302,26 @@ class WebhookApi(Construct):
             allowed_methods=["GET"]
         )
 
+    def _create_smapi_test_apis(self, common_resources: CommonResources, v1_parent_id: str, lambda_function: lambda_.Function) -> None:
+        """LWA token exchange and the SMAPI calls the alexa_auto_cfg Lambda makes, served by the mock for the itest's LWA profile (ITEST_LWA_CLIENT_ID). Server-to-server only, so no CORS."""
+        routes = [
+            (["lwa", "token"], "POST"),
+            (["smapi", "v1", "vendors"], "GET"),
+            (["smapi", "v1", "skills"], "POST"),
+            (["smapi", "v1", "skills", "{skillId}", "status"], "GET"),
+            (["smapi", "v1", "skills", "{skillId}", "credentials"], "GET"),
+            (["smapi", "v1", "skills", "{skillId}", "stages", "{stage}", "manifest"], "PUT"),
+            (["smapi", "v1", "skills", "{skillId}", "stages", "{stage}", "accountLinkingClient"], "PUT"),
+        ]
+        for segments, method in routes:
+            parent_id = v1_parent_id
+            for depth in range(len(segments)):
+                construct_id = "Smapi" + "".join(s.strip("{}")[:1].upper() + s.strip("{}")[1:] for s in segments[:depth + 1]) + "Resource"
+                parent_id = get_or_create_api_resource(self, construct_id, common_resources, parent_id, segments[depth], common_resources.api_gateway_id)
+            method_id = "Smapi" + "".join(s.strip("{}")[:1].upper() + s.strip("{}")[1:] for s in segments) + method.capitalize() + "Method"
+            create_cfn_api_method(self, method_id, common_resources, parent_id, method, lambda_function,
+                                  api_key_required=True, authorization_type="NONE")
+
     def _create_matter_test_apis(self, common_resources: CommonResources, v1_parent_id: str, lambda_function: lambda_.Function) -> None:
         """
             Create the following APIs
@@ -413,5 +433,6 @@ class WebhookApi(Construct):
         self._create_alexa_test_apis(common_resources, v1_parent_id, self.test_webhook_function)
         self._create_gva_test_apis(common_resources, v1_parent_id, self.test_webhook_function)
         self._create_smartthings_test_apis(common_resources, v1_parent_id, self.test_webhook_function)
+        self._create_smapi_test_apis(common_resources, v1_parent_id, self.test_webhook_function)
         self._create_matter_test_apis(common_resources, v1_parent_id, self.test_webhook_function)
         

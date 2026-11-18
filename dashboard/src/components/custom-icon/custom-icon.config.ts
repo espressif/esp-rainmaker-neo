@@ -8,6 +8,7 @@ import type { ComponentType } from "react"
 
 import {
   AmazonAlexaIcon,
+  AmazonIcon,
   AndroidIcon,
   Android2Icon,
   AppleIcon,
@@ -34,6 +35,7 @@ export interface CustomIconEntry {
  * 3. Add an entry here with the kebab-case icon id as the key
  */
 export const customIconRegistry = {
+  amazon: { component: AmazonIcon },
   "amazon-alexa": { component: AmazonAlexaIcon },
   android: { component: AndroidIcon },
   android2: { component: Android2Icon },

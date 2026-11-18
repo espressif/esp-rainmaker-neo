@@ -6,7 +6,7 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { integrationsApi, pushIntegrationsApi } from './integrations.api'
-import type { AlexaConfigGetResponse, AlexaConfigRequest, AlexaConfigResponse } from './integrations.types'
+import type { AlexaConfigGetResponse, AlexaConfigRequest, AlexaConfigResponse, AlexaLwaConnectionRequest, AlexaLwaConnectionResponse, AlexaAutoConfigurationRequest, AlexaAutoConfigurationResponse } from './integrations.types'
 import type { GvaConfigGetResponse, GvaConfigRequest, GvaConfigResponse, GvaConfigDeleteResponse } from './integrations.types'
 import type { SmartThingsConfigGetResponse, SmartThingsConfigRequest, SmartThingsConfigResponse, SmartThingsConfigDeleteResponse } from './integrations.types'
 import type { PushIntegrationType, PushIntegrationRequest, ListIntegrationsResponse, RegisterIntegrationResponse, IntegrationStatusResponse } from './integrations.types'
@@ -39,10 +39,61 @@ export const integrationsQueries = {
 /**
  * Hook for fetching Alexa integration configuration
  */
-export function useGetAlexaConfig(options?: { enabled?: boolean }) {
+export function useGetAlexaConfig(options?: {
+  enabled?: boolean
+  refetchInterval?: number | false | ((data: AlexaConfigGetResponse | undefined, dataUpdatedAt: number) => number | false)
+}) {
   return useQuery<AlexaConfigGetResponse, Error>({
     ...integrationsQueries.alexaConfig(),
     enabled: options?.enabled ?? true,
+    // Automatic mode finishes in the background, so the tab polls config_status until the run ends.
+    refetchInterval: (query) => {
+      const interval = options?.refetchInterval ?? false
+      return typeof interval === 'function' ? interval(query.state.data, query.state.dataUpdatedAt) : interval
+    },
+  })
+}
+
+/**
+ * Hook for automatic mode: the backend creates the skill, configures it at Amazon and configures Neo to use it. Resolves once the skill exists; the rest runs in the background, which is why callers poll config_status rather than trusting this response to mean "ready".
+ */
+export function useCreateAlexaAutoConfiguration() {
+  const queryClient = useQueryClient()
+
+  return useMutation<AlexaAutoConfigurationResponse, Error, AlexaAutoConfigurationRequest>({
+    mutationFn: integrationsApi.createAlexaAutoConfiguration,
+    // Also on failure: a refused stored account is disconnected by the backend, and the form must offer to reconnect.
+    onSettled: () => {
+      return queryClient.invalidateQueries({ queryKey: integrationsKeys.alexaConfig() })
+    },
+  })
+}
+
+/**
+ * Connects an Amazon developer account for automatic mode. Resolves once the backend has redeemed the authorization code and stored the connection.
+ */
+export function useConnectAlexaLwa() {
+  const queryClient = useQueryClient()
+
+  return useMutation<AlexaLwaConnectionResponse, Error, AlexaLwaConnectionRequest>({
+    mutationFn: integrationsApi.connectAlexaLwa,
+    onSuccess: () => {
+      return queryClient.invalidateQueries({ queryKey: integrationsKeys.alexaConfig() })
+    },
+  })
+}
+
+/**
+ * Forgets the stored Amazon developer account connection. Access granted at Amazon stays until revoked there.
+ */
+export function useDisconnectAlexaLwa() {
+  const queryClient = useQueryClient()
+
+  return useMutation<void, Error, void>({
+    mutationFn: integrationsApi.disconnectAlexaLwa,
+    onSuccess: () => {
+      return queryClient.invalidateQueries({ queryKey: integrationsKeys.alexaConfig() })
+    },
   })
 }
 

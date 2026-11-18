@@ -126,6 +126,10 @@ const AlexaSSMClientIDParam = "/rmng/alexa/client_id"
 const AlexaSSMClientSecretParam = "/rmng/alexa/client_secret"
 const AlexaSSMSkillIDParam = "/rmng/alexa/skill_id"
 
+// AlexaSSMConfigStatusParam carries the progress of an automatic setup; the credential parameters above keep the previous skill's values until a run's last step, so only this says how a run ended.
+// A plain String: it holds no secret. Renamed from the SecureString /rmng/alexa/config_status because SSM cannot change an existing parameter's type in place (HierarchyTypeMismatchException).
+const AlexaSSMConfigStatusParam = "/rmng/alexa/auto-configuration-status"
+
 // AlexaSSMManufacturerNameParam holds the brand advertised in discovery. It is deployment
 // configuration rather than a build-time constant, so an OEM rebrand is a config API call
 // instead of a stack redeploy.
@@ -166,3 +170,6 @@ type DeleteReportPayload struct {
 	Endpoints []DeleteReportEndpoint `json:"endpoints"`
 	Scope     *Scope                 `json:"scope,omitempty"`
 }
+
+// AlexaSSMLWAConnectionParam holds the connected Amazon developer account: the LWA security profile and the refresh token its consent minted, so later automatic setups need no new consent.
+const AlexaSSMLWAConnectionParam = "/rmng/alexa/lwa-connection"

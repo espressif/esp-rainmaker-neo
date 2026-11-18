@@ -86,6 +86,12 @@ export const routesConfig: RouteConfig[] = [
    */
   { path: "/oauth-preview" },
 
+  /*
+   * Where Amazon returns the "Connect Amazon account" popup of automatic Alexa setup.
+   * Unauthenticated for the same reason as /oauth-preview: it is reached mid-redirect.
+   */
+  { path: "/alexa-lwa-callback" },
+
   // Public static documents - readable without an account or a reachable backend
   {
     path: STATIC_BASE_PATH,

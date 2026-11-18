@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+export { AmazonIcon } from "./amazon"
 export { AmazonAlexaIcon } from "./amazon-alexa"
 export { AndroidIcon } from "./android"
 export { Android2Icon } from "./android2"

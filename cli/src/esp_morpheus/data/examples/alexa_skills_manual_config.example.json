@@ -1,0 +1,11 @@
+{
+  "redirect_urls": [
+    "https://pitangui.amazon.com/api/skill/link/REPLACE_ME",
+    "https://layla.amazon.com/api/skill/link/REPLACE_ME",
+    "https://alexa.amazon.co.jp/api/skill/link/REPLACE_ME"
+  ],
+  "alexa_client_id": "amzn1.application-oa2-client.REPLACE_ME",
+  "alexa_client_secret": "REPLACE_ME",
+  "skill_id": "amzn1.ask.skill.REPLACE_ME",
+  "manufacturer_name": "Espressif"
+}

@@ -2,8 +2,6 @@
   "alexa": {
     "heading": "Alexa Configuration",
     "secondaryText": "Amazon Alexa skill credentials and account-linking redirect URIs",
-    "notConfiguredTitle": "Alexa not configured",
-    "notConfiguredDescription": "No Alexa configuration found yet.",
     "copyJson": "Copy JSON",
     "copyJsonSuccess": "Configuration JSON copied to clipboard",
     "copyJsonError": "Failed to copy configuration JSON",
@@ -18,7 +16,6 @@
     "redirectUris": "Redirect URIs",
     "redirectUriPlaceholder": "https://example.com/api/skill/link/...",
     "addUri": "Add URI",
-    "configureButton": "Configure",
     "fetchError": "Failed to load Alexa configuration",
     "form": {
       "editTitle": "Edit Alexa configuration",
@@ -42,6 +39,61 @@
         "redirectUrisRequired": "Add at least one redirect URI."
       },
       "manufacturerNameHint": "Shown as the device brand in the Alexa app. Leave empty to use the default (Espressif)."
+    },
+    "autoCreate": {
+      "submitButton": "Set up skill",
+      "skillName": "Skill Name",
+      "skillNamePlaceholder": "e.g. {{name}}",
+      "clientId": "Security Profile Client ID",
+      "clientIdHint": "From your security profile.",
+      "clientSecret": "Security Profile Client Secret",
+      "clientSecretPlaceholder": "Enter the Security Profile client secret",
+      "manufacturerNameHint": "Leave empty to keep the current brand.",
+      "pendingDescription": "The skill is being configured. This usually takes a minute or two.",
+      "pendingStage": "Current step: {{stage}}.",
+      "failedDescription": "Configuration failed at \"{{stage}}\": {{error}}",
+      "stalledDescription": "Configuration stopped responding at \"{{stage}}\". Create the skill again.",
+      "submitSuccess": "Setup started. Configuration continues in the background.",
+      "submitError": "Failed to create the Alexa skill.",
+      "errors": {
+        "skillNameRequired": "Skill name is required.",
+        "clientIdRequired": "Security Profile Client ID is required.",
+        "clientSecretRequired": "Security Profile Client Secret is required.",
+        "clientIdFormat": "Client ID starts with {{prefix}}"
+      },
+      "heading": "Automatic Alexa Configuration",
+      "secondaryText": "Creates or updates your Alexa skill and connects it to Neo in one step",
+      "startButton": "Set up Alexa",
+      "emptyDescription": "No skill created from here yet. You need a Login with Amazon security profile.",
+      "title": "Set up Alexa skill"
+    },
+    "setupMode": {
+      "manualTab": "Manual",
+      "automaticTab": "Automatic"
+    },
+    "notConfiguredTitle": "Alexa not configured",
+    "notConfiguredDescription": "No Alexa configuration found yet.",
+    "configureButton": "Configure",
+    "lwa": {
+      "returnUrl": "Allowed Return URL (add to your security profile)",
+      "connectButton": "Connect Amazon account",
+      "connectSuccess": "Amazon account connected.",
+      "connectError": "Failed to connect the Amazon account.",
+      "connectFirst": "Connect an Amazon account above first.",
+      "connectedTitle": "Connected Amazon account (security profile)",
+      "disconnectButton": "Disconnect",
+      "disconnectTitle": "Disconnect the Amazon account?",
+      "disconnectDescription": "The deployment forgets its Amazon sign-in, so automatic setup stops working until you connect again. The skill and its configuration stay. To revoke the access at Amazon as well, remove it under your Amazon account's Login with Amazon settings.",
+      "disconnectSuccess": "Amazon account disconnected.",
+      "disconnectError": "Failed to disconnect the Amazon account.",
+      "errors": {
+        "popupFailed": "Could not open the Amazon sign-in window.",
+        "popupBlocked": "The browser blocked the Amazon sign-in window. Allow pop-ups for this site and try again.",
+        "denied": "Amazon did not grant access: {{detail}}",
+        "timeout": "No answer from Amazon within five minutes. Connect again.",
+        "noCode": "Amazon returned without an authorization code. Connect again."
+      },
+      "docsLink": "How to create one"
     }
   },
   "authorizationUri": "Authorization URI",
