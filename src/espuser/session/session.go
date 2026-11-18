@@ -20,6 +20,7 @@ import (
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/sessions_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/secretutil"
 )
@@ -218,6 +219,30 @@ func (s *Service) Lookup(cookieValue string) *Session {
 		return nil
 	}
 	return &Session{SID: entry.SID, UserID: entry.UserID, Provider: entry.Provider, AuthTime: entry.AuthTime}
+}
+
+// Peek is Lookup without the retention roll, for a caller whose response does not re-issue the cookie; it fails to nil the same way.
+func (s *Service) Peek(cookieValue string) *Session {
+	sess, err := s.Find(cookieValue)
+	if err != nil {
+		rlog.Warn(s.ctx.Context).Err(err).Msg("session: peek failed")
+	}
+	return sess
+}
+
+// Find is Peek for a caller that must tell a failed read apart from no session: (nil, nil) means none, (nil, err) means the row could not be read.
+func (s *Service) Find(cookieValue string) (*Session, error) {
+	if cookieValue == "" {
+		return nil, nil
+	}
+	entry, err := sessions_db.NewSessionsDB(s.ctx).GetSession(hashCookie(cookieValue))
+	if errors.Is(err, sessions_db.ErrSessionNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, rmerror.NewRMError(err, "session: read failed")
+	}
+	return &Session{SID: entry.SID, UserID: entry.UserID, Provider: entry.Provider, AuthTime: entry.AuthTime}, nil
 }
 
 // BumpRetentionBySID rolls a user agent's expires_at forward from a BACK-channel token event and

@@ -225,6 +225,8 @@ const (
 	// OIDC Core s3.1.2.6: prompt=none was requested and there is no usable session. Never a
 	// visible prompt — the client asked to fail silently instead.
 	OAuthErrLoginRequired = "login_required"
+	// OIDC Core s3.1.2.6: prompt=none, but the client may not be answered until the person consents.
+	OAuthErrConsentRequired = "consent_required"
 
 	// RFC 6750 s3.1: the two codes a bearer-protected resource returns, as opposed to the
 	// codes above, which an authorization-server endpoint returns. invalid_token collapses
@@ -233,6 +235,21 @@ const (
 	// making, because it tells a client that refreshing will not help.
 	OAuthErrInvalidToken      = "invalid_token"
 	OAuthErrInsufficientScope = "insufficient_scope"
+)
+
+// The sign-in page's own codes (RFC 6749 s8.5 extensions) for conditions it must tell apart; the first three follow a proven password, so they disclose nothing new.
+const (
+	RMErrUnconfirmedAccount  = "unconfirmed_account"
+	RMErrNewPasswordRequired = "new_password_required"
+	// An admin reset the account; unlike new_password_required, forgot password clears it.
+	RMErrPasswordResetRequired = "password_reset_required"
+	RMErrExpiredFlow           = "expired_flow"
+	// The page names the sign-in it was drawn for, and the browser has started a newer one since.
+	RMErrFlowReplaced = "flow_replaced"
+	// One answer for a wrong password and an unknown account, so the form cannot test whether an address is registered.
+	RMErrInvalidCredentials = "invalid_credentials"
+	// The client that started the sign-in did not register this provider, or could not be read.
+	RMErrProviderNotAllowed = "provider_not_allowed"
 )
 
 type OAuthError struct {
@@ -259,15 +276,20 @@ func OAuthUnauthorizedResp() events.APIGatewayProxyResponse {
 	return resp
 }
 
-func OAuthErrorRedirect(redirectURI, errCode, state string) events.APIGatewayProxyResponse {
+// ErrorRedirectURL is the client's redirect carrying an RFC 6749 s4.1.2.1 error and its state.
+func ErrorRedirectURL(redirectURI, errCode, state string) string {
 	q := url.Values{}
 	q.Set("error", errCode)
 	if state != "" {
 		q.Set("state", state)
 	}
+	return AppendQuery(redirectURI, q)
+}
+
+func OAuthErrorRedirect(redirectURI, errCode, state string) events.APIGatewayProxyResponse {
 	return events.APIGatewayProxyResponse{
 		StatusCode: http.StatusFound,
-		Headers:    map[string]string{"Location": AppendQuery(redirectURI, q), "Cache-Control": "no-store"},
+		Headers:    map[string]string{"Location": ErrorRedirectURL(redirectURI, errCode, state), "Cache-Control": "no-store"},
 	}
 }
 

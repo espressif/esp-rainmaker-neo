@@ -36,6 +36,9 @@ type UpstreamIdentity struct {
 	ACR      string
 }
 
+// ErrNoVerifiedContact is an upstream identity vouching for neither an email nor a phone, so no account can be found or opened for it.
+var ErrNoVerifiedContact = errors.New("no verified contact on the upstream identity")
+
 // VerifiedContacts returns every contact the upstream vouched for, so an account can be found by
 // either of them. Unverified values are dropped: identity is derived from a contact, so trusting one
 // would let anyone who can set an arbitrary email or phone upstream claim the matching ESP User.
@@ -47,7 +50,7 @@ func (id UpstreamIdentity) VerifiedContacts() (email, phone string, err error) {
 		phone = id.PhoneNumber
 	}
 	if email == "" && phone == "" {
-		return "", "", errors.New("no verified contact on the upstream identity")
+		return "", "", ErrNoVerifiedContact
 	}
 	return email, phone, nil
 }

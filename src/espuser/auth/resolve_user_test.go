@@ -207,3 +207,33 @@ var _ = Describe("ResolveOrCreateUserByContacts", func() {
 		Expect(err).To(HaveOccurred())
 	})
 })
+
+var _ = Describe("AccountLabel", func() {
+	var (
+		svc     *auth.OAuthUserAuthService
+		rmngCtx *rmngctx.RmngContext
+	)
+
+	BeforeEach(func() {
+		test_utils.SetupEspUserBackend(context.Background())
+		var err error
+		svc, err = auth.NewOAuthUserAuthService(context.Background())
+		Expect(err).NotTo(HaveOccurred())
+		rmngCtx = rmngctx.NewRmngContextWithCtx(context.Background(), nil)
+	})
+
+	DescribeTable("names the person by their email, else their phone",
+		func(email, phone, want string) {
+			userID, err := svc.ResolveOrCreateUserByContacts(rmngCtx, email, phone, nil)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(svc.AccountLabel(context.Background(), userID)).To(Equal(want))
+		},
+		Entry("both", "ada@example.com", "+15550100", "ada@example.com"),
+		Entry("a phone only", "", "+15550100", "+15550100"),
+	)
+
+	It("fails for an account that does not exist (negative)", func() {
+		_, err := svc.AccountLabel(context.Background(), "no-such-user")
+		Expect(err).To(HaveOccurred())
+	})
+})

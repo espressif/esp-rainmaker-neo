@@ -420,6 +420,18 @@ func (s *OAuthUserAuthService) lookupUserByID(ctx context.Context, userID string
 	return userInfoFromEntry(entry), nil
 }
 
+// AccountLabel is how the consent and sign-out screens name the signed-in person: their email, else their phone.
+func (s *OAuthUserAuthService) AccountLabel(ctx context.Context, userID string) (string, error) {
+	user, err := s.lookupUserByID(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	if user.Email != "" {
+		return user.Email, nil
+	}
+	return user.PhoneNumber, nil
+}
+
 func userInfoFromEntry(entry *user_details_db.UserDetailsEntry) UserInfo {
 	return UserInfo{
 		Email:        entry.Email,

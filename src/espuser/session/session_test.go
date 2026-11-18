@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -177,6 +178,33 @@ var _ = Describe("session service", func() {
 			Expect(after.CookieExpiresAt).To(BeNumerically(">", aged.CookieExpiresAt),
 				"a front-channel event carries a Set-Cookie, so cookie_expires_at rolls with expires_at")
 			Expect(after.LastSeenAt).To(BeNumerically(">", aged.LastSeenAt))
+		})
+
+		It("peeks at a live session without moving either clock, and at an expired one not at all", func() {
+			cookie, sid, err := svc.Establish(session.EstablishInput{UserID: "u1", Provider: "cognito", AuthTime: 100})
+			Expect(err).NotTo(HaveOccurred())
+			before, err := entryFor(cookie)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(svc.Peek(cookie)).To(Equal(&session.Session{SID: sid, UserID: "u1", Provider: "cognito", AuthTime: 100}))
+			Expect(entryFor(cookie)).To(Equal(before), "a caller that re-sends no cookie must not roll the row")
+
+			expired := *before
+			expired.ExpiresAt = time.Now().Add(-time.Minute).Unix()
+			rewrite(&expired)
+			Expect(svc.Peek(cookie)).To(BeNil())
+			Expect(svc.Peek("")).To(BeNil())
+		})
+
+		It("tells a failed read apart from no session, which Peek cannot (negative)", func() {
+			cookie, _, err := svc.Establish(session.EstablishInput{UserID: "u1", Provider: "cognito", AuthTime: 100})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(svc.Find("never-issued")).To(BeNil())
+
+			awscommon.GetDynamoDBClient().(*mock.DynamoDBMock).NextGetItemError = errors.New("throttled")
+			sess, err := svc.Find(cookie)
+			Expect(err).To(MatchError(ContainSubstring("session: read failed")))
+			Expect(sess).To(BeNil())
 		})
 	})
 
