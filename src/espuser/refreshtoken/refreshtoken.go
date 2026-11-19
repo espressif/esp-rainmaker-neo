@@ -351,6 +351,23 @@ func (s *Service) DeleteFamilies(families []refresh_tokens_db.FamilyEntry) error
 	return nil
 }
 
+// ListOfflineFamilies returns the user's live offline_access grants, the families the connected apps list shows; one past its expiry is left out although the table's TTL has not swept it yet.
+func (s *Service) ListOfflineFamilies(userID string) ([]refresh_tokens_db.FamilyEntry, error) {
+	families, err := s.db.ListByUser(userID)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().Unix()
+	return slices.DeleteFunc(families, func(family refresh_tokens_db.FamilyEntry) bool {
+		return !family.IsOffline() || family.IsExpired(now)
+	}), nil
+}
+
+// ListClientFamilies returns every family one client holds for the user.
+func (s *Service) ListClientFamilies(userID, clientID string) ([]refresh_tokens_db.FamilyEntry, error) {
+	return s.db.ListByUserAndClient(userID, clientID)
+}
+
 // IsReuse reports whether an error from Rotate is the reuse/theft signal.
 func IsReuse(err error) bool {
 	return errors.Is(err, refresh_tokens_db.ErrRefreshReuse)

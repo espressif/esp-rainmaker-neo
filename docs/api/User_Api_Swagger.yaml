@@ -86,8 +86,9 @@ tags:
       Cognito pool server-side; every token returned is an ESP User token.
   - name: Sessions
     description:
-      The authorization server's own browser session — sign-out, and a person's
-      list of the browsers they are signed in on.
+      The authorization server's own browser session — sign-out, a person's
+      list of the browsers they are signed in on, and the apps that hold
+      offline access.
   - name: Users
     description: User lookup.
   - name: Admin Clients
@@ -1159,11 +1160,7 @@ paths:
                         clients:
                           type: array
                           items:
-                            type: object
-                            properties:
-                              client_id: { type: string }
-                              created_at: { type: integer, format: int64 }
-                              last_used: { type: integer, format: int64 }
+                            $ref: "#/components/schemas/ClientGrant"
               example:
                 sessions:
                   - session_id: sess_9fA2
@@ -1277,6 +1274,135 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/OAuthError"
+
+  /v1/user/connected-apps:
+    get:
+      summary: The apps that hold offline access
+      description: |
+        The clients holding a live `offline_access` grant for the person, one per client, most recently used first; a grant past its expiry is left out. Requires a first-party client's token with `account:sessions`.
+      tags:
+        - Sessions
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The caller's connected apps.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [connected_apps]
+                properties:
+                  connected_apps:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ClientGrant"
+              example:
+                connected_apps:
+                  - { client_id: rainmaker-neo-alexa-client, created_at: 1725000000, last_used: 1725300000 }
+                  - { client_id: mcp-oauth-client, created_at: 1725100000, last_used: 1725200000 }
+        "401":
+          description: Missing, malformed, expired, or not an access token; a `client_credentials` token is refused here too.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: invalid_token
+                error_description: The access token is missing, expired, or invalid.
+        "403":
+          description: The token lacks `account:sessions` (`insufficient_scope`), or its client is not first-party (`access_denied`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: insufficient_scope
+                error_description: This token was not granted the account:sessions scope.
+        "405":
+          description: A method this resource does not offer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: invalid_request
+                error_description: Method not allowed.
+        "500":
+          description: The grants or the client registry could not be read.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: server_error
+                error_description: Internal server error.
+
+  /v1/user/connected-apps/{clientId}:
+    delete:
+      summary: Disconnect one app
+      description: |
+        Ends every login the client holds for the person, offline and session alike. Requires a first-party client's token with `account:sessions`.
+      tags:
+        - Sessions
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: clientId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The client's id, from `GET /v1/user/connected-apps`.
+          example: rainmaker-neo-alexa-client
+      responses:
+        "204":
+          description: The app was disconnected. No body.
+        "401":
+          description: Missing, malformed, expired, or not an access token; a `client_credentials` token is refused here too.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: invalid_token
+                error_description: The access token is missing, expired, or invalid.
+        "403":
+          description: The token lacks `account:sessions` (`insufficient_scope`), or its client is not first-party (`access_denied`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: insufficient_scope
+                error_description: This token was not granted the account:sessions scope.
+        "404":
+          description: The caller has no offline grant for this client; nothing is ended.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: invalid_request
+                error_description: No such connected app.
+        "405":
+          description: A method this resource does not offer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: invalid_request
+                error_description: Method not allowed.
+        "500":
+          description: The grants could not be read or changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: server_error
+                error_description: Internal server error.
 
   /v1/user/auth/token:
     post:
@@ -1799,6 +1925,21 @@ paths:
 
 components:
   schemas:
+    ClientGrant:
+      type: object
+      description: An application holding refresh grants, under a session or as a connected app.
+      required: [client_id]
+      properties:
+        client_id:
+          type: string
+        created_at:
+          type: integer
+          format: int64
+          description: When the earliest of these grants was made, epoch seconds; for an older grant with no record, absent under a session and its last refresh for a connected app.
+        last_used:
+          type: integer
+          format: int64
+          description: The most recent refresh of any of those grants, epoch seconds.
     CredsRequest:
       type: object
       properties:

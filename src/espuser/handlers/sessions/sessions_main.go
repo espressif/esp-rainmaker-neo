@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The account's own session-management surface: which browsers am I signed in on, what is
-// signed in on each, and end one or all of them.
+// signed in on each, and end one or all of them; and the connected apps that hold offline access.
 //
 // Two tables answer this together. Sessions are keyed by the SHA-256 of the cookie, which
 // cannot be derived from a sid, so reaching one from anywhere but the browser holding it needs
@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -38,8 +37,11 @@ import (
 )
 
 const (
-	pathSessions = "/v1/user/sessions"
-	pathLogout   = "/oauth2/logout"
+	pathSessions      = "/v1/user/sessions"
+	pathConnectedApps = "/v1/user/connected-apps"
+	pathSession       = pathSessions + "/{sessionId}"
+	pathConnectedApp  = pathConnectedApps + "/{clientId}"
+	pathLogout        = "/oauth2/logout"
 	// pathLogoutDone is where the upstream provider hands the browser back: a distinct exact
 	// route from pathLogout.
 	pathLogoutDone = "/oauth2/logout/done"
@@ -70,7 +72,7 @@ type SessionView struct {
 	Clients         []ClientView `json:"clients"`
 }
 
-// ClientView is one application holding a live refresh family under a session.
+// ClientView is one application holding live refresh families: under its session in the session list, or as a connected app when its grants are offline.
 type ClientView struct {
 	ClientID string `json:"client_id"`
 	// CreatedAt is when this application first got tokens under this login; LastUsed is the
@@ -168,7 +170,7 @@ func handleDeleteAll(ctx context.Context, rmngCtx *rmngctx.RmngContext, identity
 	return noContent()
 }
 
-// noContent is the success shape for both deletes: a bodyless 204. Built by hand rather than
+// noContent is the success shape for every delete: a bodyless 204. Built by hand rather than
 // through utils.APIGwRespJSON because that always attaches a JSON body and Content-Type, and a
 // 204 must carry neither.
 //
@@ -189,53 +191,61 @@ func noContent() events.APIGatewayProxyResponse {
 }
 
 func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	path := strings.TrimRight(request.Path, "/")
-
-	if path == pathLogoutDone {
-		return handleLogoutDone(ctx, request)
-	}
-	if path == pathLogout {
+	switch request.Resource {
+	case pathLogout:
 		return handleLogout(ctx, request)
+	case pathLogoutDone:
+		return handleLogoutDone(ctx, request)
+	case pathSessions, pathSession, pathConnectedApps, pathConnectedApp:
+		return handleAccountRequest(ctx, request), nil
 	}
-	if !strings.HasPrefix(path, pathSessions) {
-		return oidc.OAuthErrorResp(http.StatusNotFound, oidc.OAuthErrInvalidRequest, "Not found."), nil
-	}
+	return oidc.OAuthErrorResp(http.StatusNotFound, oidc.OAuthErrInvalidRequest, "Not found."), nil
+}
 
+// handleAccountRequest serves the routes that share one gate: a user token from a first-party client, granted account:sessions.
+func handleAccountRequest(ctx context.Context, request events.APIGatewayProxyRequest) events.APIGatewayProxyResponse {
 	rmngCtx := user.NewContextWithAnyAPIToken(ctx, request)
 	identity := user.ClaimsFrom(rmngCtx)
 	if identity.Subject == "" {
 		rlog.Info(ctx).Msg("sessions: token rejected")
-		return oidc.OAuthUnauthorizedResp(), nil
+		return oidc.OAuthUnauthorizedResp()
 	}
 	// First-party is a client-registration attribute, not a token claim, so revoking a client's standing takes effect on its next call rather than when its tokens expire.
 	// A registry failure is ours (500); a valid token from a non-first-party client is authenticated but not allowed (403), since 401 invalid_token would make it retry with an identical token forever.
 	if err := clients.NewService(rmngCtx).RequireFirstParty(identity.ClientID); err != nil {
 		if !errors.Is(err, clients.ErrNotFirstParty) {
 			rlog.Error(ctx).Err(err).Str("client_id", identity.ClientID).Msg("sessions: client registry read failed")
-			return oidc.OAuthErrorResp(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
+			return oidc.OAuthErrorResp(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.")
 		}
 		rlog.Info(ctx).Str("client_id", identity.ClientID).Msg("sessions: refused non-first-party client")
-		return oidc.OAuthErrorResp(http.StatusForbidden, oidc.OAuthErrAccessDenied, "This client may not manage sessions."), nil
+		return oidc.OAuthErrorResp(http.StatusForbidden, oidc.OAuthErrAccessDenied, "This client may not manage sessions.")
 	}
 	if !scope.Has(identity.Scope, scope.Sessions) {
-		return forbidden(), nil
+		return forbidden()
 	}
 
-	// Empty for the collection path; API Gateway always sets it on the {sessionId} resource.
-	sid := request.PathParameters["sessionId"]
-
-	switch request.HTTPMethod {
-	case http.MethodGet:
-		if sid == "" {
-			return handleList(ctx, rmngCtx, identity), nil
+	switch request.Resource {
+	case pathSessions:
+		switch request.HTTPMethod {
+		case http.MethodGet:
+			return handleList(ctx, rmngCtx, identity)
+		case http.MethodDelete:
+			return handleDeleteAll(ctx, rmngCtx, identity)
 		}
-	case http.MethodDelete:
-		if sid == "" {
-			return handleDeleteAll(ctx, rmngCtx, identity), nil
+	case pathSession:
+		if request.HTTPMethod == http.MethodDelete {
+			return handleDeleteOne(ctx, rmngCtx, identity, request.PathParameters["sessionId"])
 		}
-		return handleDeleteOne(ctx, rmngCtx, identity, sid), nil
+	case pathConnectedApps:
+		if request.HTTPMethod == http.MethodGet {
+			return handleListConnectedApps(ctx, rmngCtx, identity)
+		}
+	case pathConnectedApp:
+		if request.HTTPMethod == http.MethodDelete {
+			return handleDisconnectApp(ctx, rmngCtx, identity, request.PathParameters["clientId"])
+		}
 	}
-	return oidc.OAuthErrorResp(http.StatusMethodNotAllowed, oidc.OAuthErrInvalidRequest, "Method not allowed."), nil
+	return oidc.OAuthErrorResp(http.StatusMethodNotAllowed, oidc.OAuthErrInvalidRequest, "Method not allowed.")
 }
 
 func main() {

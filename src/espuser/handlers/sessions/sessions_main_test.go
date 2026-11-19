@@ -99,14 +99,16 @@ func foreignIssuerToken(userID string) string {
 }
 
 func req(method, path, token string) events.APIGatewayProxyRequest {
-	r := events.APIGatewayProxyRequest{HTTPMethod: method, Path: path}
+	r := events.APIGatewayProxyRequest{HTTPMethod: method, Path: path, Resource: path}
 	if token != "" {
 		r.Headers = map[string]string{"Authorization": "Bearer " + token}
 	}
-	// API Gateway sets the {sessionId} path parameter from the matched resource; these tests
-	// drive handleRequest directly, so populate it from the last path segment.
+	// API Gateway names the matched route template in Resource and fills its path parameter; these tests drive handleRequest directly, so both come from the path.
 	if id := strings.TrimPrefix(path, pathSessions+"/"); id != path && id != "" && !strings.Contains(id, "/") {
-		r.PathParameters = map[string]string{"sessionId": id}
+		r.Resource, r.PathParameters = pathSession, map[string]string{"sessionId": id}
+	}
+	if id := strings.TrimPrefix(path, pathConnectedApps+"/"); id != path && id != "" && !strings.Contains(id, "/") {
+		r.Resource, r.PathParameters = pathConnectedApp, map[string]string{"clientId": id}
 	}
 	return r
 }
@@ -143,9 +145,14 @@ func putFamily(userID, clientID, familyID, sid string) {
 // putOfflineFamily writes an offline_access grant as the token endpoint mints one: no sid.
 func putOfflineFamily(userID, clientID, familyID string) {
 	now := time.Now().Unix()
+	putGrant(userID, clientID, familyID, now, now)
+}
+
+// putGrant writes an offline_access grant with explicit clocks, so ordering and folding are spec inputs.
+func putGrant(userID, clientID, familyID string, createdAt, rotatedAt int64) {
 	Expect(refresh_tokens_db.NewRefreshTokensDB(rctx()).CreateFamily(&refresh_tokens_db.FamilyEntry{
-		UserID: userID, ClientID: clientID, FamilyID: familyID, ClientFamily: clientID + "#" + familyID,
-		Scope: "openid offline_access", CreatedAt: now, RotatedAt: now, ExpiresOn: now + 86400,
+		UserID: userID, ClientID: clientID, FamilyID: familyID, Scope: "openid offline_access",
+		CreatedAt: createdAt, RotatedAt: rotatedAt, ExpiresOn: time.Now().Unix() + 86400,
 	})).To(Succeed())
 }
 

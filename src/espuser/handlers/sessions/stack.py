@@ -31,6 +31,8 @@ class SessionsAPI(Construct):
         GET    /v1/user/sessions          my browsers, with the products on each
         DELETE /v1/user/sessions/{sessionId}    end one -- the lost-phone case
         DELETE /v1/user/sessions          end all of them, this browser included
+        GET    /v1/user/connected-apps    the apps holding offline_access grants
+        DELETE /v1/user/connected-apps/{clientId}    disconnect one of them
         GET    /oauth2/logout             RP-Initiated Logout 1.0, advertised in discovery
         POST   /oauth2/logout             the same, as a form; answered with a 303 to the GET
 
@@ -111,7 +113,7 @@ class SessionsAPI(Construct):
             },
         )
 
-        # ── /v1/user/sessions and /v1/user/sessions/{sessionId} ──────────────────────
+        # ── /v1/user/sessions, /v1/user/connected-apps and their item resources ──────
         v1_id = get_or_create_api_resource(
             self, "V1Resource", common_resources,
             common_resources.esp_user_api_root_resource_id, "v1",
@@ -130,9 +132,20 @@ class SessionsAPI(Construct):
             api_id=common_resources.esp_user_api_id,
         )
 
+        connected_apps_id = get_or_create_api_resource(
+            self, "V1UserConnectedAppsResource", common_resources, user_id, "connected-apps",
+            api_id=common_resources.esp_user_api_id,
+        )
+        connected_apps_client_id = get_or_create_api_resource(
+            self, "V1UserConnectedAppsClientResource", common_resources, connected_apps_id, "{clientId}",
+            api_id=common_resources.esp_user_api_id,
+        )
+
         for resource_id, label, verbs in (
             (sessions_id, "Sessions", ("GET", "DELETE")),
             (sessions_sid_id, "SessionsSid", ("DELETE",)),
+            (connected_apps_id, "ConnectedApps", ("GET",)),
+            (connected_apps_client_id, "ConnectedAppsClient", ("DELETE",)),
         ):
             for verb in verbs:
                 create_cfn_api_method(

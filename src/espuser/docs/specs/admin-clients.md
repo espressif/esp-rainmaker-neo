@@ -77,7 +77,7 @@ These OAuth 2.1 client invariants are enforced at create/patch so the admin UI f
 9. **`first_party` marks an app we ship ourselves** — the RainMaker app, a mobile client — as opposed to a
    delegated partner registered in the same table (the voice-assistant clients such as `rainmaker-neo-alexa-client`, the MCP proxy
    `mcp-oauth-client`). It decides whether a sign-in needs the person's consent (see
-   [authorize-code-flow.md](authorize-code-flow.md#consent--clients-we-do-not-ship)), and it is what account-management endpoints gate on: `GET`/`DELETE /v1/user/sessions`
+   [authorize-code-flow.md](authorize-code-flow.md#consent--clients-we-do-not-ship)), and it is what account-management endpoints gate on: `GET`/`DELETE /v1/user/sessions` and `/v1/user/connected-apps`
    admit only a first-party client's user token, so a partner delegated *device* control cannot list or end
    a person's sign-ins. **Absent means `false`** — first-party is opt-in, set deliberately at registration
    and never derived, so a client made before this field, or any partner, is correctly not one. Read at the

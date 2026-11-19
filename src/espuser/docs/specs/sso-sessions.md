@@ -355,8 +355,11 @@ a sign-out in a browser must not unlink it.
   agent.
 - **Redeemed only while its approving session lives:** a code with `offline_access` whose browser row has ended is refused, since the grant would outlive the sign-out.
 - **Renewed only while its client may hold it:** a client whose registration no longer allows `offline_access` gets `invalid_grant` on the next refresh, and the grant is not spent.
-- **What ends one:** revoking its own token (`POST /oauth2/revoke`), reuse detection on rotation, and
-  expiry. Signing out of a browser, ending a user agent from the list and sign out everywhere do not.
+- **Where it is listed:** under its client in `GET /v1/user/connected-apps`, never under a user agent.
+- **What ends one:** being disconnected from the connected apps list
+  (`DELETE /v1/user/connected-apps/{clientId}`), revoking its own token (`POST /oauth2/revoke`), reuse
+  detection on rotation, and expiry. Signing out of a browser, ending a user agent from the list and
+  sign out everywhere do not.
 
 ### Step-up: re-proving identity for sensitive actions
 
@@ -454,6 +457,8 @@ to sign somebody in is not a reason to enumerate every user agent they use.
 | `GET` | `/v1/user/sessions` | Every live user agent, with the refresh families grouped under each by `sid` |
 | `DELETE` | `/v1/user/sessions/{sessionId}` | Ends one user agent and its families. `204`, or `404` when the caller has no such session |
 | `DELETE` | `/v1/user/sessions` | Ends every user agent, the caller's own included |
+| `GET` | `/v1/user/connected-apps` | Every client holding a live offline grant: `client_id`, the earliest grant's `created_at` (its `rotated_at` when absent) and the latest `last_used`, most recently used first; a grant past `expires_on` is left out; `[]` when none |
+| `DELETE` | `/v1/user/connected-apps/{clientId}` | Ends every login that client holds for the person, session logins included, and an app row left with none. `204`, or `404`, ending nothing, when the caller holds no offline grant for it |
 
 The response body names the session id `session_id`, matching the snake_case every other field on
 this surface uses. The path parameter stays `{sessionId}`, matching the camelCase every other path
@@ -478,6 +483,9 @@ and `mcp-oauth-client` — partners delegated device control — do not. It is r
 into the token so that revoking a client's first-party standing takes effect on its next call, not an hour
 later at token expiry. The flag is admin-only, so a client can never mark itself first-party.
 
+Offline grants belong to no user agent, so the session list never shows them; the connected apps
+list is where they are seen and ended. Disconnecting a client ends every login it holds for the person, its session logins too, so removing an app leaves nothing of it behind. A client the caller has not connected answers the same `404` as an unknown client id, whether or not anyone else has connected it.
+
 `session_hash` never appears in a response — it is the hash of a secret, and the delete path
 re-resolves a `sid` through the index rather than trusting a client to return an internal key.
 
@@ -499,6 +507,7 @@ own expiry. It is **never** deleted by a user agent timing out, a cookie lapsing
 |---|---|---|
 | Sign-out — one user agent | every family with that `sid` | `GET /oauth2/logout` · `DELETE /v1/user/sessions/{sessionId}` |
 | Sign-out — everywhere | every session family for the user, with or without a `sid`; offline grants stay | `DELETE /v1/user/sessions` |
+| Disconnect a connected app | every family of that client for the user | `DELETE /v1/user/connected-apps/{clientId}` |
 | Token revocation | the presented token's family | `POST /oauth2/revoke` (RFC 7009) |
 | Reuse / theft detected | that one family | rotation sees a replayed or stale counter |
 | Natural expiry | that one family | `expires_on` passes with no rotation |
@@ -528,6 +537,7 @@ Each exists because none of the others can do its job: only a browser navigation
 | `GET /oauth2/logout/done` | — | the upstream provider, handing the browser back | the `__Host-esp_logout_to` memo | nothing; forwards to the validated `post_logout_redirect_uri` |
 | `DELETE /v1/user/sessions/{sessionId}` | — | a signed-in user agent list | `sid` | one user agent and its families, from anywhere |
 | `DELETE /v1/user/sessions` | — | "sign out everywhere" | the access token's subject | every user agent and session family of the person; offline grants stay |
+| `DELETE /v1/user/connected-apps/{clientId}` | — | a connected apps list | the access token's subject and the client id | every login of that client |
 | `POST /oauth2/revoke` | RFC 7009 | any OAuth client | a refresh token | that token's family: one application's login |
 | `POST /v1/user/auth/signout` | — (legacy) | pre-OIDC RainMaker apps | a refresh token | that token's family, the same path as `/oauth2/revoke`; `global` is refused |
 
@@ -538,6 +548,7 @@ Which to call:
 | A web app signing the person out of this browser | `GET /oauth2/logout` |
 | A native app or SDK ending its own login | `POST /oauth2/revoke` |
 | A user agent list | `DELETE /v1/user/sessions/{sessionId}`, `DELETE /v1/user/sessions` |
+| A connected apps list | `DELETE /v1/user/connected-apps/{clientId}` |
 | The RainMaker app | `POST /v1/user/auth/signout`, until it moves to `/oauth2/revoke` |
 
 An access token already issued is never recalled by any of these; it lives out its hour.
@@ -703,7 +714,7 @@ Absent means no hop: a deployment that never fills these behaves exactly as it d
 
 ## Migration
 
-The model above is the current state of the code; this is the one-time data step for a deployment that already holds rows under the old schema. Existing session rows carry `expires_on` and no `origin`; reads enforce `expires_at`, so no stale row is ever *usable*, but a one-shot backfill copying `expires_on` → `expires_at` is recommended before the first deploy so pre-existing sessions are not swept early. Absent `origin` reads as `browser` (the federation callback was the only writer before this model). Refresh families with `sid == ""` stay unclamped and remain the only possible `unattached_products`. No change to the `espuser-refresh-tokens` schema.
+The model above is the current state of the code; this is the one-time data step for a deployment that already holds rows under the old schema. Existing session rows carry `expires_on` and no `origin`; reads enforce `expires_at`, so no stale row is ever *usable*, but a one-shot backfill copying `expires_on` → `expires_at` is recommended before the first deploy so pre-existing sessions are not swept early. Absent `origin` reads as `browser` (the federation callback was the only writer before this model). Refresh families with `sid == ""` stay unclamped; the offline grants among them are listed by `GET /v1/user/connected-apps`. No change to the `espuser-refresh-tokens` schema.
 
 ## Out of scope
 

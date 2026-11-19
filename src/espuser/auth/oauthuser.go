@@ -587,7 +587,7 @@ func (s *OAuthUserAuthService) VerifyAccessToken(token string) (TokenClaims, err
 	return claims, nil
 }
 
-// VerifyUserTokenForAnyAPI verifies one of our user access tokens whatever API it is addressed to, for the ESP User API's own endpoints, which serve the signed-in account rather than one API: /oauth2/userinfo (OIDC Core s5.3), /v1/users/*, /v1/user/sessions and the legacy password change.
+// VerifyUserTokenForAnyAPI verifies one of our user access tokens whatever API it is addressed to, for the ESP User API's own endpoints, which serve the signed-in account rather than one API: /oauth2/userinfo (OIDC Core s5.3), /v1/users/*, /v1/user/sessions, /v1/user/connected-apps and the legacy password change.
 func (s *OAuthUserAuthService) VerifyUserTokenForAnyAPI(token string) (TokenClaims, error) {
 	return s.verifyUserAccessToken(token)
 }

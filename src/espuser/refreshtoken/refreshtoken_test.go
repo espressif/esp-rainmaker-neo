@@ -325,6 +325,32 @@ var _ = Describe("refreshtoken.Service", func() {
 			Expect(families("user-123")).To(HaveLen(5))
 		})
 
+		It("lists one client's families and no other client's", func() {
+			rows, err := svc.ListClientFamilies("user-123", otherClient)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(rows).To(HaveLen(2))
+			for i := range rows {
+				Expect(rows[i].ClientID).To(Equal(otherClient))
+			}
+		})
+
+		It("lists live offline grants only, leaving out one past its expiry that the TTL has not swept (negative)", func() {
+			_, err := svc.MintRefreshtoken("user-123", clientID, "openid offline_access", nil, "", 0)
+			Expect(err).NotTo(HaveOccurred())
+			rows, err := svc.ListClientFamilies("user-123", clientID)
+			Expect(err).NotTo(HaveOccurred())
+			for i := range rows {
+				if rows[i].IsOffline() {
+					Expect(refresh_tokens_db.NewRefreshTokensDB(rmngCtx).AdvanceCounter(rows[i].UserID, rows[i].ClientID, rows[i].FamilyID, rows[i].Counter, time.Now().Add(-time.Minute).Unix(), time.Now().Unix())).To(Succeed())
+				}
+			}
+
+			offline, err := svc.ListOfflineFamilies("user-123")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(offline).To(HaveLen(1))
+			Expect(offline[0].ClientID).To(Equal(otherClient))
+		})
+
 		It("stops at the first failed delete and leaves the rest for a retry (negative)", func() {
 			rows, err := svc.ListFamilies("user-123")
 			Expect(err).NotTo(HaveOccurred())

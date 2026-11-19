@@ -171,7 +171,7 @@ with no names refuses every access token.
 |---|---|---|
 | neo REST API, and the Alexa, Google Home and SmartThings skills that act on its data | `RmngApiAudiences` (rmng-base) | `RmngApiResource` |
 | MCP server (`/v1/mcp`) | `McpAudiences` (rmng-core) | `McpResource`, which the MCP OAuth proxy requests itself |
-| ESP User API's own endpoints: `/v1/users/*`, `/v1/user/sessions`, `/oauth2/userinfo`, `/v1/user/auth/password` | any of this issuer's user access tokens | `EspUserApiResource` (optional) |
+| ESP User API's own endpoints: `/v1/users/*`, `/v1/user/sessions`, `/v1/user/connected-apps`, `/oauth2/userinfo`, `/v1/user/auth/password` | any of this issuer's user access tokens | `EspUserApiResource` (optional) |
 
 ### The authorization server's own endpoints do not check `aud`
 
@@ -188,7 +188,7 @@ MCP server and the assistants each refuse a token for another API. The ESP User 
 - **`/oauth2/userinfo` takes the access token the sign-in returned, whatever API it is for** (OIDC
   Core §5.3.1). Requiring its own `aud` would break standard OIDC client libraries, or make every app
   fetch a third token just for userinfo.
-- **The account endpoints (`/v1/users/*`, `/v1/user/sessions`) and the legacy password change serve
+- **The account endpoints (`/v1/users/*`, `/v1/user/sessions`, `/v1/user/connected-apps`) and the legacy password change serve
   the signed-in account, not one API.** An app holds a token for the API it mostly calls, usually neo;
   requiring an ESP User API token as well would add a second token and a refresh to every app just
   to read its own profile.
@@ -203,7 +203,7 @@ What each endpoint accepts instead of an `aud` match:
 |---|---|---|
 | `/oauth2/userinfo` | any client, first-party or not | none: it returns only the scope-gated claims already in the token |
 | `/v1/users/*` | **first-party clients only** | the client's registry row has `first_party = true`, read on every call; otherwise 403 `access_denied` |
-| `/v1/user/sessions` | **first-party clients only** | `first_party = true` and the `account:sessions` scope; otherwise 403 |
+| `/v1/user/sessions`, `/v1/user/connected-apps` | **first-party clients only** | `first_party = true` and the `account:sessions` scope; otherwise 403 |
 | `/v1/user/auth/password` | any client | the old password, which is what authorizes the change |
 
 **Why first-party.** Without an `aud` match, a token handed to a third party (Alexa, Google Home,

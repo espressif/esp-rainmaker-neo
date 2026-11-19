@@ -80,6 +80,11 @@ func (e *FamilyEntry) IsOffline() bool {
 	return scope.HasOfflineAccess(e.Scope)
 }
 
+// IsExpired reports whether the family is past its expiry at now; the table's TTL deletes it only some time later.
+func (e *FamilyEntry) IsExpired(now int64) bool {
+	return e.ExpiresOn > 0 && e.ExpiresOn <= now
+}
+
 // SetKey composes the SK from client_id + family_id.
 func (e *FamilyEntry) SetKey(clientID, familyID string) *FamilyEntry {
 	e.ClientID = clientID
@@ -149,6 +154,17 @@ func (db *RefreshTokensDB) ListByUser(userID string) ([]FamilyEntry, error) {
 	page, err := db.families.Query(db.Ctx.Context, expression.Key(refreshTokensHashKey).Equal(expression.Value(userID)))
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "failed to query user refresh token families")
+	}
+	return page.Items, nil
+}
+
+// ListByUserAndClient returns every family one client holds for a user; the "#" in the prefix keeps client "app" from matching client "app-2".
+func (db *RefreshTokensDB) ListByUserAndClient(userID, clientID string) ([]FamilyEntry, error) {
+	keyCond := expression.Key(refreshTokensHashKey).Equal(expression.Value(userID)).
+		And(expression.Key(refreshTokensRangeKey).BeginsWith(clientID + refreshTokensSKSep))
+	page, err := db.families.Query(db.Ctx.Context, keyCond)
+	if err != nil {
+		return nil, rmerror.NewRMError(err, "failed to query a client's refresh token families")
 	}
 	return page.Items, nil
 }

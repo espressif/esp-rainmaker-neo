@@ -73,7 +73,7 @@ func expiredIDToken(userID, sid string) string {
 // holds. No query parameters: the provider matches our return URL exactly, so nothing can be
 // appended to it -- which is precisely why the destination travels in a cookie.
 func logoutDone(cookie string) events.APIGatewayProxyResponse {
-	req := events.APIGatewayProxyRequest{HTTPMethod: http.MethodGet, Path: pathLogoutDone}
+	req := events.APIGatewayProxyRequest{HTTPMethod: http.MethodGet, Path: pathLogoutDone, Resource: pathLogoutDone}
 	if cookie != "" {
 		req.Headers = map[string]string{"Cookie": cookie}
 	}
@@ -84,7 +84,7 @@ func logoutDone(cookie string) events.APIGatewayProxyResponse {
 
 func logout(cookie string, query map[string]string) events.APIGatewayProxyResponse {
 	req := events.APIGatewayProxyRequest{
-		HTTPMethod: http.MethodGet, Path: pathLogout, QueryStringParameters: query,
+		HTTPMethod: http.MethodGet, Path: pathLogout, Resource: pathLogout, QueryStringParameters: query,
 	}
 	if cookie != "" {
 		req.Headers = map[string]string{"Cookie": cookie}
@@ -405,7 +405,7 @@ var _ = Describe("GET /oauth2/logout", func() {
 
 	It("405s a verb RP-Initiated Logout does not define (negative)", func() {
 		resp, err := handleRequest(ctx(), events.APIGatewayProxyRequest{
-			HTTPMethod: http.MethodDelete, Path: pathLogout,
+			HTTPMethod: http.MethodDelete, Path: pathLogout, Resource: pathLogout,
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.StatusCode).To(Equal(http.StatusMethodNotAllowed))
@@ -419,7 +419,7 @@ var _ = Describe("POST /oauth2/logout (RP-Initiated Logout 1.0 s2)", func() {
 
 	post := func(headers map[string]string, body string, base64Encoded bool) events.APIGatewayProxyResponse {
 		resp, err := handleRequest(ctx(), events.APIGatewayProxyRequest{
-			HTTPMethod: http.MethodPost, Path: pathLogout, Headers: headers, Body: body, IsBase64Encoded: base64Encoded,
+			HTTPMethod: http.MethodPost, Path: pathLogout, Resource: pathLogout, Headers: headers, Body: body, IsBase64Encoded: base64Encoded,
 		})
 		Expect(err).NotTo(HaveOccurred())
 		return resp

@@ -16,9 +16,7 @@ const (
 	Email   = "email"
 	Profile = "profile"
 	Phone   = "phone"
-	// Sessions gates the account's own session-management surface: list my user agents, end
-	// one, end them all. Deliberately not implied by openid -- signing a person in and
-	// enumerating every browser they use are different powers.
+	// Sessions gates the account's own surface (its user agents and the apps holding offline access) and is deliberately not implied by openid, because signing a person in and enumerating where they are signed in are different powers.
 	Sessions = "account:sessions"
 	// OfflineAccess asks for a refresh token that outlives every sign-out (OIDC Core 1.0 s11).
 	OfflineAccess = "offline_access"

@@ -709,3 +709,57 @@ def test_sso_offline_access_always_asks_for_consent(register_espuser_client, esp
 
     silent = offline.authorize(browser, prompt="none")
     assert silent.error == "consent_required", f"{silent!r}"
+
+
+def connected_client_ids(access_token):
+    listed = WebClient.connected_apps(access_token)
+    assert listed.status_code == 200, f"{listed.status_code} {listed.text[:200]}"
+    return [app["client_id"] for app in listed.json()["connected_apps"]]
+
+
+def test_sso_connected_apps_lists_and_disconnects_an_offline_grant(apps, register_espuser_client, espuser_person):
+    """An offline grant is listed as a connected app rather than under a session, and disconnecting the app ends every login it holds."""
+    plain, _ = apps
+    offline = offline_client(register_espuser_client, "connected")
+    browser = Browser()
+    session_tokens = signed_in(plain, browser, espuser_person)
+    offline_tokens = offline.tokens(offline.sign_in_allowing(browser, espuser_person))
+    manager = session_tokens["access_token"]
+
+    ordinary = WebClient(offline.client_id, offline.redirect_uri)
+    ordinary_tokens = signed_in(ordinary, browser, espuser_person)
+    assert offline.client_id in connected_client_ids(manager), "the offline grant is a connected app"
+    for view in WebClient.sessions(manager).json()["sessions"]:
+        assert offline.client_id not in client_ids_under(view), f"an offline grant belongs to no session: {view}"
+
+    ended = WebClient.disconnect_app(manager, offline.client_id)
+    assert ended.status_code == 204, f"{ended.status_code} {ended.text[:200]}"
+    assert not offline.still_signed_in(offline_tokens["refresh_token"]), "a disconnected app can no longer refresh"
+    assert not ordinary.still_signed_in(ordinary_tokens["refresh_token"]), "its session login ends with it"
+    assert offline.client_id not in connected_client_ids(manager)
+    assert plain.still_signed_in(session_tokens["refresh_token"]), "the session that asked is untouched"
+
+    again = WebClient.disconnect_app(manager, offline.client_id)
+    assert again.status_code == 404, f"nothing left to disconnect: {again.status_code} {again.text[:200]}"
+
+
+def test_sso_connected_apps_refuse_other_people_and_tokens_without_the_scope(
+        apps, register_espuser_client, espuser_person, second_espuser_person):
+    """Another person's connected app is a 404, never theirs to end, and a token without account:sessions is refused with a challenge naming the scope (RFC 6750 s3.1)."""
+    plain, _ = apps
+    offline = offline_client(register_espuser_client, "connected-guarded")
+    offline_tokens = offline.tokens(offline.sign_in_allowing(Browser("mine"), espuser_person))
+
+    theirs = signed_in(plain, Browser("theirs"), second_espuser_person)
+    stolen = WebClient.disconnect_app(theirs["access_token"], offline.client_id)
+    assert stolen.status_code == 404, f"another person's connected app must be a 404: {stolen.status_code} {stolen.text[:200]}"
+
+    uri = CALLBACK.format("connected-noscope")
+    noscope = WebClient(register_espuser_client(redirect_uris=[uri], scopes=["openid", "email"]).client_id, uri,
+                        scope="openid email")
+    unscoped = signed_in(noscope, Browser("noscope"), espuser_person)["access_token"]
+    for refused in (WebClient.connected_apps(unscoped), WebClient.disconnect_app(unscoped, offline.client_id)):
+        assert refused.status_code == 403, f"{refused.status_code} {refused.text[:200]}"
+        assert SESSIONS_SCOPE in bearer_challenge(refused), f"the challenge names the scope: {bearer_challenge(refused)!r}"
+
+    assert offline.still_signed_in(offline_tokens["refresh_token"]), "neither refusal ended the grant"

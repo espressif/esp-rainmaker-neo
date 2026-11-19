@@ -311,6 +311,16 @@ class WebClient:
         return requests.delete(f"{API_BASE}/v1/user/sessions",
                                headers={"Authorization": f"Bearer {access_token}"}, timeout=30)
 
+    @staticmethod
+    def connected_apps(access_token):
+        return requests.get(f"{API_BASE}/v1/user/connected-apps",
+                            headers={"Authorization": f"Bearer {access_token}"}, timeout=30)
+
+    @staticmethod
+    def disconnect_app(access_token, client_id):
+        return requests.delete(f"{API_BASE}/v1/user/connected-apps/{client_id}",
+                               headers={"Authorization": f"Bearer {access_token}"}, timeout=30)
+
     def logout(self, browser, *, id_token_hint=None, post_logout_redirect_uri=None,
                with_client_id=True):
         """GET /oauth2/logout as a top-level navigation, unfollowed.

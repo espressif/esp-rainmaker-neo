@@ -169,4 +169,18 @@ var _ = Describe("RefreshTokensDB", func() {
 			Expect(rows).To(BeNil())
 		})
 	})
+
+	Describe("ListByUserAndClient", func() {
+		It("returns every family of that client for the user across pages, and never a client whose id it prefixes", func() {
+			backend.DBMock.MaxPageItems = 1
+			create("u1", "c1", "f1", "")
+			create("u1", "c1", "f2", "")
+			create("u1", "c1-other", "f3", "")
+			create("u2", "c1", "f4", "")
+
+			rows, err := db.ListByUserAndClient("u1", "c1")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(clientFamilies(rows)).To(Equal([]string{"c1#f1", "c1#f2"}))
+		})
+	})
 })

@@ -158,6 +158,9 @@ var _ = Describe("signout.Service", func() {
 		Entry("3. One app session is removed from the list: that app alone",
 			func(s *signout.Service) error { return s.EndSession(ravi, "appSession2") },
 			[]string{appB + "@appSession2"}, []string{"appSession2"}, [2]int{7, 2}),
+		Entry("4. A connected app is disconnected: its grant alone",
+			func(s *signout.Service) error { return s.DisconnectClient(ravi, alexa) },
+			[]string{alexa + "@offline"}, nil, [2]int{1, 1}),
 		Entry("5 and 7. Sign out everywhere or a password reset: every session and its logins; connected apps stay",
 			func(s *signout.Service) error { return s.EndAllSessions(ravi) },
 			without(raviFamilies, alexa+"@offline", mcp+"@offline"), raviSessions, [2]int{10, 8}),
@@ -175,6 +178,34 @@ var _ = Describe("signout.Service", func() {
 			Expect(signout.NewService(rmngCtx).EndSession(ravi, "browserSession1")).NotTo(Succeed())
 			awscommon.SetDynamoDBClient(backend.DBMock)
 			Expect(sessionSIDs(ravi)).To(Equal(raviSessions))
+		})
+	})
+
+	Describe("DisconnectClient", func() {
+		It("ends the client's session logins too, and an app session left with none", func() {
+			mint(ravi, appB, offline, "")
+			Expect(signout.NewService(rmngCtx).DisconnectClient(ravi, appB)).To(Succeed())
+			Expect(families(ravi)).To(Equal(without(raviFamilies, appB+"@appSession2")))
+			Expect(sessionSIDs(ravi)).To(Equal(without(raviSessions, "appSession2")))
+		})
+
+		It("answers ErrNotConnected for a client holding only session logins and ends nothing (negative)", func() {
+			Expect(signout.NewService(rmngCtx).DisconnectClient(ravi, homeApp)).To(MatchError(signout.ErrNotConnected))
+			Expect(families(ravi)).To(Equal(raviFamilies))
+		})
+
+		It("answers ErrNotConnected for a client only someone else connected (negative, cross-user)", func() {
+			mint(asha, "asha-only-client", offline, "")
+			Expect(signout.NewService(rmngCtx).DisconnectClient(ravi, "asha-only-client")).To(MatchError(signout.ErrNotConnected))
+			Expect(families(asha)).To(ContainElement("asha-only-client@offline"))
+		})
+
+		It("answers ErrNotConnected for a client whose only offline grant has expired, and ends nothing (negative)", func() {
+			Expect(refresh_tokens_db.NewRefreshTokensDB(rmngCtx).CreateFamily(&refresh_tokens_db.FamilyEntry{
+				UserID: ravi, ClientID: "lapsed-assistant", FamilyID: "fam_lapsed", Scope: offline, ExpiresOn: time.Now().Unix() - 60,
+			})).To(Succeed())
+			Expect(signout.NewService(rmngCtx).DisconnectClient(ravi, "lapsed-assistant")).To(MatchError(signout.ErrNotConnected))
+			Expect(families(ravi)).To(ContainElement("lapsed-assistant@offline"))
 		})
 	})
 
