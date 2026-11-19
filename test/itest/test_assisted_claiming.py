@@ -717,6 +717,12 @@ def unpooled_user():
     _destroy_user(user)
 
 
+@pytest.fixture
+def test_user1(unpooled_user):
+    # Overrides the pooled conftest user: a pooled user carries every earlier claim in the session against its lifetime quota of 20, and this file alone makes more than that.
+    return unpooled_user
+
+
 def test_quota_is_enforced_and_is_a_lifetime_cap(unpooled_user, claimed_nodes):
     """Minting is bounded per caller, and repeat claims stay exempt."""
     limit = int(os.environ.get("CLAIM_QUOTA_LIMIT", "20"))
