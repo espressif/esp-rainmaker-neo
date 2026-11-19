@@ -16,6 +16,8 @@
   --border:        #2A2A2E;
   /* A filled panel inside the card, such as the consent screen's list. */
   --tonal:         #1C1C1F;
+  /* The brand share in the tint of the consent list's stay-connected row; dark needs more to show. */
+  --stay-connected-tint:  11%;
   --method-selected-bg:     #232327;
   --method-selected-border: #82828C;
   /* Input edges need 3:1 against the card (WCAG 1.4.11); --border is decorative. */
@@ -77,6 +79,7 @@
     --method-hover:           #F1F5F9;
     --border:        #E2E8F0;
     --tonal:         #F8FAFC;
+    --stay-connected-tint:  6%;
     --method-selected-bg:     #FFFFFF;
     --method-selected-border: #0F172A;
     --field-border:  #8792A2;
@@ -389,6 +392,19 @@ input:-webkit-autofill:focus {
 .grants li + li { border-top: 1px solid var(--border); }
 .grant-label { font-weight: 600; color: var(--text); }
 .grant-detail { color: var(--text-2); }
+/* offline_access closes the list as a tinted row, because it is how long access lasts rather than more data the app reads. */
+.grants li.grant-stay-connected {
+  flex-direction: row; align-items: center; gap: 16px;
+  margin: 4px -16px -4px; padding: 13px 16px 14px;
+  border-top: 1px solid color-mix(in srgb, var(--brand) 26%, var(--border));
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: color-mix(in srgb, var(--brand) var(--stay-connected-tint), var(--tonal));
+}
+.grant-stay-connected-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.grant-stay-connected-icon {
+  width: 36px; height: 36px; flex: none; border-radius: 50%; display: grid; place-items: center;
+  color: var(--brand); background: var(--card); border: 1px solid color-mix(in srgb, var(--brand) 30%, var(--border));
+}
 /* Cancel first and Allow last, so the button that grants access sits where a reader finishes. */
 .consent-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 

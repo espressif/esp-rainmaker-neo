@@ -10,7 +10,7 @@ import type { ShownError } from '../api/errors.ts'
 import { AccountChip } from '../components/account-chip.tsx'
 import { Assist } from '../components/inputs.tsx'
 import { AppMark, EspressifMark } from '../components/marks.tsx'
-import { describeScopes } from '../lib/scopes.ts'
+import { describeScopes, OFFLINE_ACCESS, stayConnected, type Grant } from '../lib/scopes.ts'
 import { useRequest } from './use-request.ts'
 
 export function ConsentScreen({ appName, logoURI, account, scopes, flowID, onEnded }: {
@@ -54,6 +54,7 @@ export function ConsentScreen({ appName, logoURI, account, scopes, flowID, onEnd
             {grant.detail ? <span class="grant-detail">{grant.detail}</span> : null}
           </li>
         ))}
+        {scopes.includes(OFFLINE_ACCESS) ? <StayConnectedRow grant={stayConnected(appName)} /> : null}
       </ul>
 
       <Assist error={error} />
@@ -66,5 +67,24 @@ export function ConsentScreen({ appName, logoURI, account, scopes, flowID, onEnd
         </button>
       </div>
     </div>
+  )
+}
+
+/** The list's closing row for offline_access, tinted apart from the data rows above it. */
+function StayConnectedRow({ grant }: { grant: Grant }) {
+  return (
+    <li class="grant-stay-connected">
+      <span class="grant-stay-connected-text">
+        <span class="grant-label">{grant.label}</span>
+        <span class="grant-detail">{grant.detail}</span>
+      </span>
+      <span class="grant-stay-connected-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2.1"
+             strokeLinecap="round" strokeLinejoin="round">
+          <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5"/>
+          <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5"/>
+        </svg>
+      </span>
+    </li>
   )
 }
