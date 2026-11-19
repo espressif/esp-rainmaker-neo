@@ -108,7 +108,7 @@ Properties of the allowance that clients and product need to account for:
 
 **Behaviour when the allowance is exceeded.** The credential request is rejected as a whole: `POST /v1/assumed-roles` returns HTTP 500 with `"Unable to issue credentials: too many accessible groups to encode in a session policy"`. The failure is *not* scoped to the group that crossed the threshold — the user loses MQTT access to **every** group, including groups they own. REST endpoints are unaffected, so `GET /v1/groups` continues to list every group; a client in this state shows a complete group list with no live device data.
 
-**Sharing is not capacity-checked.** `POST /v1/groups/{groupId}/sharing-requests` does not evaluate the invitee's remaining allowance. A share can therefore be created (201) and approved (200) successfully and still leave the invitee unable to reach any device, with no error surfaced to either party. Clients should treat an over-allowance `assumed-roles` failure as an actionable state — prompting the user to leave a group — rather than as a transient fault to retry.
+**Sharing is not capacity-checked.** `POST /v1/groups/{groupId}/sharing-requests` does not evaluate the invitee's remaining allowance. A share can therefore be created (201) and approved (200) successfully and still leave the invitee unable to reach any device, with no error surfaced to either party. Clients should treat an over-allowance `assumed-roles` failure as an actionable state rather than as a transient fault to retry, and recover by requesting credentials one group at a time through the group-scoped routes below.
 
 > The per-group and per-subgroup character costs above follow from the ARN templates the MQTT session policy emits and from the region and account-id lengths of the deployment. Adding or lengthening any per-group ARN lowers the group ceiling for every user, so these figures need re-deriving whenever that document changes.
 
@@ -123,21 +123,12 @@ POST /v1/groups/{groupId}/assumed-roles
 POST /v1/groups/{groupId}/subgroups/{subGroupId}/assumed-roles
 ```
 
-encode exactly one group, at ~850 characters regardless of how many groups the
-caller has — but they are **restricted to admins**, so a regular client
-cannot use them to sidestep the ceiling. Opening them to regular users would
-require resolving the caller's *own* scope for the requested group; the
-admin path grants full-group access through a system actor, and reusing it
-for a regular user would hand a `subentity` member the whole group's ARNs.
+encode exactly one group, at ~850 characters regardless of how many groups the caller has. They are open to any caller with access to the group, narrowed to that caller's own grant (a `subentity` member never gets the whole group's ARNs; see `user_auth.md` §3.3), so they are the recovery path for a client past the ceiling: request credentials per group, or per subgroup, instead of all at once.
 
 Two further properties are worth knowing:
 
-- Even under a scoped policy, a member holding many shared subgroups **of the
-  same group** still accumulates three ARNs per subgroup, so roughly 5 shared
-  subgroups overruns a single-group policy.
-- The over-allowance failure surfaces as HTTP 500, which a client cannot
-  distinguish from a transient fault. Clients must treat a repeated
-  `assumed-roles` 500 alongside a non-empty group list as this condition.
+- Even under a scoped policy, a member holding many shared subgroups **of the same group** still accumulates three ARNs per subgroup, so roughly 5 shared subgroups overruns a single-group policy. `POST /v1/groups/{groupId}/assumed-roles` then returns HTTP 422 `"Unable to issue credentials: too many shared subgroups to encode in a session policy; request per subgroup"`; the per-subgroup route encodes one subgroup and always fits.
+- On the unscoped route the over-allowance failure surfaces as HTTP 500, which a client cannot distinguish from a transient fault. Clients must treat a repeated `assumed-roles` 500 alongside a non-empty group list as this condition.
 
 ## NOCs and CAT IDs
 
@@ -1876,4 +1867,4 @@ sequenceDiagram
     - Yes. The allowance is per user and pooled: a group shared to you costs exactly as much as one you own. This means other users' sharing decisions consume your allowance, and nothing warns either party when that happens.
 
 15. **A user says all their devices stopped responding, but the app still lists every group. Why?**
-    - This is the signature of an exceeded session-policy allowance. REST endpoints keep working, so the group list renders normally, but `POST /v1/assumed-roles` fails and the client holds no MQTT credentials, so no device in *any* group responds. Check the group count and the `assumed-roles` response; the user must leave a group to recover.
+    - This is the signature of an exceeded session-policy allowance. REST endpoints keep working, so the group list renders normally, but `POST /v1/assumed-roles` fails and the client holds no MQTT credentials, so no device in *any* group responds. Check the group count and the `assumed-roles` response; the client recovers by requesting credentials one group at a time through `POST /v1/groups/{groupId}/assumed-roles`, or one subgroup at a time through `POST /v1/groups/{groupId}/subgroups/{subGroupId}/assumed-roles`, instead of through the unscoped route.

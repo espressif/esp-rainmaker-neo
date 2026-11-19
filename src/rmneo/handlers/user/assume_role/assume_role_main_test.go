@@ -7,12 +7,16 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
+	"slices"
 	"testing"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/sharing_request_db"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_group_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
@@ -50,16 +54,37 @@ func putNodeInGroup(ctx context.Context, groupID, nodeID string, subgroups ...st
 	Expect(err).To(BeNil())
 }
 
-var profile *mock.Profile
-var timingFile *os.File
-var _ = BeforeSuite(func() {
-	timingFile, _ = test_utils.CreateCommonSummaryFile("assume_role_main.txt")
-})
+// putEmptySubEntityGrant writes a subentity user-group row with no shared subgroups, a state the sharing APIs never leave behind but the policy builders must still deny.
+func putEmptySubEntityGrant(ctx context.Context, userID, groupID string) {
+	_, err := awscommon.GetDynamoDBClient().(*mock.DynamoDBMock).PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(user_group_db.UserGroupMappingTable),
+		Item: map[string]dynamodb_types.AttributeValue{
+			"user_id":     &dynamodb_types.AttributeValueMemberS{Value: userID},
+			"group_id":    &dynamodb_types.AttributeValueMemberS{Value: groupID},
+			"access_type": &dynamodb_types.AttributeValueMemberS{Value: string(utils.GroupSubEntityAccess)},
+		},
+	})
+	Expect(err).To(BeNil())
+}
+
+var (
+	profile    *mock.Profile
+	timingFile *os.File
+	_          = BeforeSuite(func() {
+		timingFile, _ = test_utils.CreateCommonSummaryFile("assume_role_main.txt")
+	})
+)
 
 type ActionResourcePair struct {
 	Action   string
 	Resource []string
 }
+
+// supportedGroupsPerSession is the largest number of full-access groups whose ARNs still fit maxSessionPolicyChars on the unscoped route: ~343 chars per group on ~503 of fixed overhead.
+const supportedGroupsPerSession = 4
+
+// supportedSharedSubgroupsPerSession is the same budget for a caller holding only shared subgroups: ~271 chars per subgroup (shadow filter, unicast and subgroup control ARNs).
+const supportedSharedSubgroupsPerSession = 5
 
 func TestAssumeRoleMain(t *testing.T) {
 	RegisterFailHandler(Fail)
@@ -195,8 +220,8 @@ var _ = Describe("Assume Role Main", func() {
 			p := dbMock.ProfileGet()
 			profile = &p
 			readCount, writeCount := profile.TotalCounts()
-			// 1 for ListGroupsForUser + 1 for the OIDC caller ResolveESPUserByID lookup.
-			Expect(readCount).To(Equal(2))
+			// 1 for ListGroupsForUser, 1 LoadGroup per group (2) and 1 for the OIDC caller ResolveESPUserByID lookup.
+			Expect(readCount).To(Equal(4))
 			Expect(writeCount).To(Equal(0))
 
 			policy := *stsMock.GetLastAssumeRoleInput().Policy
@@ -287,6 +312,12 @@ var _ = Describe("Assume Role Main", func() {
 		It("should return an error for invalid request body", func() {
 			request := events.APIGatewayProxyRequest{
 				Body: "invalid json",
+				RequestContext: events.APIGatewayProxyRequestContext{
+					Identity: events.APIGatewayRequestIdentity{
+						CognitoIdentityID:             testUser.GetID(),
+						CognitoAuthenticationProvider: oidcProvider(testUser.GetID()),
+					},
+				},
 			}
 
 			response, err := handleRequest(ctx, request)
@@ -296,12 +327,51 @@ var _ = Describe("Assume Role Main", func() {
 			Expect(response.Body).To(ContainSubstring("Invalid request body"))
 		})
 
+		It("should return a generic 500 without the STS error text when AssumeRole fails", func() {
+			stsMock.AssumeRoleError = errors.New("AccessDenied: sts internal detail")
+			DeferCleanup(func() { stsMock.AssumeRoleError = nil })
+
+			response := callRaw(ctx, testUser.GetID(), Request{})
+			Expect(response.StatusCode).To(Equal(http.StatusInternalServerError))
+			Expect(response.Body).To(ContainSubstring("Internal Server Error"))
+			Expect(response.Body).ToNot(ContainSubstring("sts internal detail"))
+		})
+
 		It("should return 500 when IOT_USER_ROLE_ARN is not set", func() {
 			os.Unsetenv("IOT_USER_ROLE_ARN")
 			response := callRaw(ctx, testUser.GetID(), Request{})
 			Expect(response.StatusCode).To(Equal(http.StatusInternalServerError))
-			Expect(response.Body).To(ContainSubstring("Internal server error"))
+			Expect(response.Body).To(ContainSubstring("Internal Server Error"))
 		})
+
+		It("should not grant the whole group for a subentity row with no shared subgroups", func() {
+			putEmptySubEntityGrant(ctx, testUser.GetID(), "orphan-group")
+
+			response := callRaw(ctx, testUser.GetID(), Request{})
+			Expect(response.StatusCode).To(Equal(http.StatusOK))
+
+			policy := *stsMock.GetLastAssumeRoleInput().Policy
+			Expect(policy).To(ContainSubstring(testGroup.GroupID))
+			Expect(policy).ToNot(ContainSubstring("orphan-group"))
+		})
+
+		It("should return 409 when the only grant is a subentity row with no shared subgroups", func() {
+			putEmptySubEntityGrant(ctx, testUser2.GetID(), testGroup.GroupID)
+
+			response := callRaw(ctx, testUser2.GetID(), Request{})
+			Expect(response.StatusCode).To(Equal(http.StatusConflict))
+			Expect(response.Body).To(ContainSubstring("User has no groups"))
+		})
+
+		DescribeTable("should return 401 when the caller cannot be resolved",
+			func(pathParams map[string]string) {
+				response := callRawWithProvider(ctx, "", "", Request{}, pathParams)
+				Expect(response.StatusCode).To(Equal(http.StatusUnauthorized))
+				Expect(stsMock.GetLastAssumeRoleInput()).To(BeNil())
+			},
+			Entry("on the unscoped route", nil),
+			Entry("on a group-scoped route", map[string]string{"groupId": "any-group"}),
+		)
 
 		It("should forward request tags to STS AssumeRole", func() {
 			response := callRaw(ctx, testUser.GetID(), Request{
@@ -419,6 +489,7 @@ var _ = Describe("Assume Role Main", func() {
 			Expect(err).To(BeNil())
 			response := CallAssumeRoleHandlerWithServices(ctx, testUser.GetID(), otherGroup.GroupID, nodeID, []string{"s3"})
 			Expect(response.StatusCode).To(Equal(http.StatusForbidden))
+			Expect(response.Body).To(ContainSubstring("User does not have access to this node"))
 		})
 
 		It("should return 403 when user has subgroup access but node belongs to a sibling subgroup", func() {
@@ -438,6 +509,7 @@ var _ = Describe("Assume Role Main", func() {
 
 			response := CallAssumeRoleHandlerWithServices(ctx, testUser2.GetID(), testGroup.GroupID, nodeID, []string{"kvs"})
 			Expect(response.StatusCode).To(Equal(http.StatusForbidden))
+			Expect(response.Body).To(ContainSubstring("User does not have access to this node"))
 		})
 
 		It("should allow user access via a shared subgroup that the node belongs to", func() {
@@ -465,6 +537,172 @@ var _ = Describe("Assume Role Main", func() {
 			policy := *stsMock.GetLastAssumeRoleInput().Policy
 			Expect(GetResourceForAction(policy, "s3:ListBucket")).To(BeEmpty())
 			Expect(GetResourceForAction(policy, "s3:GetObject")).To(BeEmpty())
+		})
+	})
+
+	// Open to regular users so a client with many groups can stay inside the STS budget one group at a time, without ever widening its own grant.
+	Describe("Group-scoped routes for regular users", func() {
+		// shareSubGroupWithUser2 shares subGroupID of testGroup with testUser2 and approves it.
+		shareSubGroupWithUser2 := func(subGroupID string) {
+			_, err := group.ShareSubGroup(rmng_context, testGroup.GroupID, subGroupID, testUser2.GetID(), auth.UserInfo{})
+			Expect(err).To(BeNil())
+			sharingRequests, err := group.GetMySharingRequests(rmng_context2)
+			Expect(err).To(BeNil())
+			idx := slices.IndexFunc(sharingRequests, func(r *sharing_request_db.SharingRequestEntry) bool { return r.SubEntityID == subGroupID })
+			Expect(idx).To(BeNumerically(">=", 0))
+			Expect(group.ApproveSharingRequest(rmng_context2, sharingRequests[idx].SharingRequestID)).To(BeNil())
+		}
+
+		It("should scope the policy to the requested group for a full-access member", func() {
+			response := CallAssumeRoleHandlerWithGroup(ctx, testUser.GetID(), testGroup.GroupID, "")
+			Expect(response.StatusCode).To(Equal(http.StatusOK))
+
+			policy := *stsMock.GetLastAssumeRoleInput().Policy
+			expectedPairs := []ActionResourcePair{
+				{
+					Action: "iot:Publish",
+					Resource: []string{
+						topicPrefix + "topic/rainmaker/nodes/*/user/params-" + testGroup.GroupID + "*/*",
+						topicPrefix + "topic/rainmaker/nodes/groups/" + testGroup.GroupID + "/control",
+						topicPrefix + "topic/rainmaker/nodes/groups/" + testGroup.GroupID + "/subgroups/*/control",
+						topicPrefix + "*/$aws/things/*/shadow/name/params-" + testGroup.GroupID + "*/*",
+					},
+				},
+				{
+					Action: "iot:Connect",
+					Resource: []string{
+						topicPrefix + "client/user:test-user@example.com:*",
+					},
+				},
+			}
+			for _, pair := range expectedPairs {
+				Expect(GetResourceForAction(policy, pair.Action)).To(Equal(pair.Resource), "For action: "+pair.Action)
+			}
+		})
+
+		It("should encode only the requested group when the caller has several", func() {
+			otherGroup, err := group.CreateGroupForUser(rmng_context, "Other Group")
+			Expect(err).To(BeNil())
+
+			response := CallAssumeRoleHandlerWithGroup(ctx, testUser.GetID(), testGroup.GroupID, "")
+			Expect(response.StatusCode).To(Equal(http.StatusOK))
+
+			policy := *stsMock.GetLastAssumeRoleInput().Policy
+			Expect(policy).ToNot(ContainSubstring(otherGroup.GroupID))
+			Expect(len(policy)).To(BeNumerically("<=", maxSessionPolicyChars))
+		})
+
+		It("should keep the policy inside the STS budget past the unscoped ceiling", func() {
+			for i := 0; i <= supportedGroupsPerSession; i++ {
+				extra, err := group.CreateGroupForUser(rmng_context, fmt.Sprintf("Scoped Group %d", i))
+				Expect(err).To(BeNil())
+				Expect(extra).ToNot(BeNil())
+			}
+
+			// The unscoped route can no longer serve this caller at all.
+			unscoped := callRaw(ctx, testUser.GetID(), Request{})
+			Expect(unscoped.StatusCode).To(Equal(http.StatusInternalServerError))
+
+			response := CallAssumeRoleHandlerWithGroup(ctx, testUser.GetID(), testGroup.GroupID, "")
+			Expect(response.StatusCode).To(Equal(http.StatusOK))
+			Expect(len(*stsMock.GetLastAssumeRoleInput().Policy)).To(BeNumerically("<=", maxSessionPolicyChars))
+		})
+
+		It("should scope the policy to one subgroup for a full-access member", func() {
+			subGroup, err := group.CreateSubGroup(rmng_context, testGroup.GroupID, "Sub")
+			Expect(err).To(BeNil())
+
+			response := CallAssumeRoleHandlerWithGroup(ctx, testUser.GetID(), testGroup.GroupID, subGroup.SubGroupID)
+			Expect(response.StatusCode).To(Equal(http.StatusOK))
+
+			policy := *stsMock.GetLastAssumeRoleInput().Policy
+			Expect(GetResourceForAction(policy, "iot:Publish")).To(Equal([]string{
+				topicPrefix + "topic/rainmaker/nodes/*/user/params-" + testGroup.GroupID + "*" + subGroup.SubGroupID + "*/*",
+				topicPrefix + "topic/rainmaker/nodes/groups/" + testGroup.GroupID + "/subgroups/" + subGroup.SubGroupID + "/control",
+				topicPrefix + "*/$aws/things/*/shadow/name/params-" + testGroup.GroupID + "*" + subGroup.SubGroupID + "*/*",
+			}))
+		})
+
+		It("should give a subentity member only its shared subgroups, not the group wildcards", func() {
+			subA, err := group.CreateSubGroup(rmng_context, testGroup.GroupID, "SubA")
+			Expect(err).To(BeNil())
+			_, err = group.CreateSubGroup(rmng_context, testGroup.GroupID, "SubB")
+			Expect(err).To(BeNil())
+			shareSubGroupWithUser2(subA.SubGroupID)
+
+			response := CallAssumeRoleHandlerWithGroup(ctx, testUser2.GetID(), testGroup.GroupID, "")
+			Expect(response.StatusCode).To(Equal(http.StatusOK))
+
+			policy := *stsMock.GetLastAssumeRoleInput().Policy
+			Expect(GetResourceForAction(policy, "iot:Publish")).To(Equal([]string{
+				topicPrefix + "topic/rainmaker/nodes/*/user/params-" + testGroup.GroupID + "*" + subA.SubGroupID + "*/*",
+				topicPrefix + "topic/rainmaker/nodes/groups/" + testGroup.GroupID + "/subgroups/" + subA.SubGroupID + "/control",
+				topicPrefix + "*/$aws/things/*/shadow/name/params-" + testGroup.GroupID + "*" + subA.SubGroupID + "*/*",
+			}))
+			Expect(policy).ToNot(ContainSubstring("/subgroups/*/control"))
+		})
+
+		It("should point a subentity member with too many shared subgroups at the per-subgroup route", func() {
+			var subGroupIDs []string
+			for i := 0; i < 12; i++ {
+				sub, err := group.CreateSubGroup(rmng_context, testGroup.GroupID, fmt.Sprintf("Shared %d", i))
+				Expect(err).To(BeNil())
+				shareSubGroupWithUser2(sub.SubGroupID)
+				subGroupIDs = append(subGroupIDs, sub.SubGroupID)
+			}
+
+			response := CallAssumeRoleHandlerWithGroup(ctx, testUser2.GetID(), testGroup.GroupID, "")
+			Expect(response.StatusCode).To(Equal(http.StatusUnprocessableEntity))
+			Expect(response.Body).To(ContainSubstring("request per subgroup"))
+
+			perSubgroup := CallAssumeRoleHandlerWithGroup(ctx, testUser2.GetID(), testGroup.GroupID, subGroupIDs[0])
+			Expect(perSubgroup.StatusCode).To(Equal(http.StatusOK))
+		})
+
+		It("should let a subentity member scope down to its own shared subgroup", func() {
+			subA, err := group.CreateSubGroup(rmng_context, testGroup.GroupID, "SubA")
+			Expect(err).To(BeNil())
+			shareSubGroupWithUser2(subA.SubGroupID)
+
+			response := CallAssumeRoleHandlerWithGroup(ctx, testUser2.GetID(), testGroup.GroupID, subA.SubGroupID)
+			Expect(response.StatusCode).To(Equal(http.StatusOK))
+
+			policy := *stsMock.GetLastAssumeRoleInput().Policy
+			Expect(GetResourceForAction(policy, "iot:Publish")).To(Equal([]string{
+				topicPrefix + "topic/rainmaker/nodes/*/user/params-" + testGroup.GroupID + "*" + subA.SubGroupID + "*/*",
+				topicPrefix + "topic/rainmaker/nodes/groups/" + testGroup.GroupID + "/subgroups/" + subA.SubGroupID + "/control",
+				topicPrefix + "*/$aws/things/*/shadow/name/params-" + testGroup.GroupID + "*" + subA.SubGroupID + "*/*",
+			}))
+		})
+
+		It("should return forbidden when a subentity member asks for a sibling subgroup", func() {
+			subA, err := group.CreateSubGroup(rmng_context, testGroup.GroupID, "SubA")
+			Expect(err).To(BeNil())
+			subB, err := group.CreateSubGroup(rmng_context, testGroup.GroupID, "SubB")
+			Expect(err).To(BeNil())
+			shareSubGroupWithUser2(subA.SubGroupID)
+
+			response := CallAssumeRoleHandlerWithGroup(ctx, testUser2.GetID(), testGroup.GroupID, subB.SubGroupID)
+			Expect(response.StatusCode).To(Equal(http.StatusForbidden))
+			Expect(response.Body).To(ContainSubstring("User does not have access to this subgroup"))
+		})
+
+		It("should return forbidden when the caller has no access to the group", func() {
+			response := CallAssumeRoleHandlerWithGroup(ctx, testUser2.GetID(), testGroup.GroupID, "")
+			Expect(response.StatusCode).To(Equal(http.StatusForbidden))
+			Expect(response.Body).To(ContainSubstring("User does not have access to this group"))
+		})
+
+		It("should return forbidden for a non-existent group", func() {
+			response := CallAssumeRoleHandlerWithGroup(ctx, testUser.GetID(), "nonexistent-group", "")
+			Expect(response.StatusCode).To(Equal(http.StatusForbidden))
+			Expect(response.Body).To(ContainSubstring("User does not have access to this group"))
+		})
+
+		It("should return bad request when a full-access member asks for a non-existent subgroup", func() {
+			response := CallAssumeRoleHandlerWithGroup(ctx, testUser.GetID(), testGroup.GroupID, "nonexistent-subgroup")
+			Expect(response.StatusCode).To(Equal(http.StatusBadRequest))
+			Expect(response.Body).To(ContainSubstring("Subgroup not found"))
 		})
 	})
 
@@ -558,11 +796,11 @@ var _ = Describe("Assume Role Main", func() {
 			Expect(response.StatusCode).To(Equal(http.StatusOK))
 		})
 
-		It("should return forbidden when non-admin user requests specific group access", func() {
+		It("should return forbidden when a regular user requests a group it cannot access", func() {
 			response := CallAssumeRoleHandlerWithGroup(ctx, testUser.GetID(), adminGroup.GroupID, "")
 
 			Expect(response.StatusCode).To(Equal(http.StatusForbidden))
-			Expect(response.Body).To(ContainSubstring("Admin privileges required"))
+			Expect(response.Body).To(ContainSubstring("User does not have access to this group"))
 		})
 
 		It("should return bad request when admin requests non-existent group", func() {

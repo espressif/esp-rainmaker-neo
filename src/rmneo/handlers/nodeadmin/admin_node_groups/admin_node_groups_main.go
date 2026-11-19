@@ -14,7 +14,6 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -50,11 +49,7 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("nodeId is required")), nil
 	}
 
-	// Use system context to bypass normal permission checks
-	systemActor := utils.NewSystemActor()
-	systemContext := rmngctx.NewRmngContextWithCtx(ctx, systemActor)
-
-	nodesGroups, err := group_node_db.NewGroupNodeDB(systemContext).GetNodesGroup(nodeID)
+	nodesGroups, err := group_node_db.NewGroupNodeDB(rctx).GetNodesGroup(nodeID)
 	if err != nil {
 		rlog.Error(rctx).Err(err).Msg("Failed to get node's group")
 		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Failed to get node's group")), nil

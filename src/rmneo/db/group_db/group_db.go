@@ -86,6 +86,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
@@ -302,7 +303,7 @@ func (gdb *GroupDB) GetGroupByID(groupID string) (*GroupInDB, error) {
 	}
 
 	if !found {
-		return nil, rmerror.NewRMError(nil, "group not found")
+		return nil, rmerror.NewRMError(nil, "group not found").WithClientStatus(http.StatusBadRequest, "Group not found")
 	}
 
 	group := &GroupInDB{

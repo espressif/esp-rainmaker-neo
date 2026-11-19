@@ -7,6 +7,7 @@ package rmngrequest
 import (
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
 	"net/url"
 	"reflect"
 	"strconv"
@@ -113,14 +114,14 @@ func flattenValues(values url.Values) map[string]string {
 
 func ExtractRequestStruct(request events.APIGatewayProxyRequest, inputRequest any, customValidationFuncs ...validation.ValidationFunc) error {
 	if err := GetRequest(request, inputRequest); err != nil {
-		return err
+		return rmerror.NewRMError(err, "failed to parse request").WithClientStatus(http.StatusBadRequest, "Invalid request body")
 	}
 
 	// Canonicalize identity fields before validation so clients may send any case.
 	formatUsernameFields(inputRequest)
 
 	if err := validation.ValidateRequest(inputRequest, customValidationFuncs...); err != nil {
-		return rmerror.NewRMError(err, "failed to validate request")
+		return rmerror.NewRMError(err, "failed to validate request").WithClientStatus(http.StatusBadRequest, err.Error())
 	}
 
 	return nil

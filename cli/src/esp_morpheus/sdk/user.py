@@ -1034,10 +1034,12 @@ class User:
 
         return assumed_credentials
 
-    def assume_role_admin(self, group_id, subgroup_id=None):
-        """Assume role with admin privileges for a specific group/subgroup.
+    def assume_role_scoped(self, group_id, subgroup_id=None):
+        """Assume role scoped to one group/subgroup.
 
-        This is only available for admin users.
+        Open to any caller with access to it: an admin is granted the whole group,
+        every other caller is narrowed to its own user-group grant and refused
+        without one.
 
         Args:
             group_id (str): The group ID to get access to
@@ -1055,12 +1057,12 @@ class User:
 
         response = self.make_api_request('POST', path)
         if response.status_code not in (200, 201):
-            user_log(f"Admin Assume Role failed. Status code: {response.status_code}")
+            user_log(f"Scoped Assume Role failed. Status code: {response.status_code}")
             user_log(f"Response: {response.text}")
             return None
 
         assumed_credentials = json.loads(response.text)
-        user_log(f"Admin assumed role successfully for group: {group_id}" + (f", subgroup: {subgroup_id}" if subgroup_id else ""))
+        user_log(f"Assumed role successfully for group: {group_id}" + (f", subgroup: {subgroup_id}" if subgroup_id else ""))
 
         return assumed_credentials
 
