@@ -29,6 +29,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/refreshtoken"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/scope"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/session"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/signout"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
@@ -147,34 +148,21 @@ func handleList(ctx context.Context, rmngCtx *rmngctx.RmngContext, identity auth
 // indistinguishable: a 403 would confirm that the sid exists, turning this endpoint into an
 // oracle for guessing valid session identifiers.
 func handleDeleteOne(ctx context.Context, rmngCtx *rmngctx.RmngContext, identity auth.TokenClaims, sid string) events.APIGatewayProxyResponse {
-	// Families first. If the session delete succeeded and this failed, the browser would
-	// hold no session but its applications would keep refreshing -- signed out of the login
-	// but not of anything it opened, which is the worse half to leave behind.
-	if _, err := refreshtoken.NewService(rmngCtx).DeleteFamiliesBySID(identity.Subject, sid); err != nil {
-		rlog.Error(ctx).Err(err).Msg("sessions: delete families")
-		return oidc.OAuthErrorResp(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.")
-	}
-	switch err := session.NewService(rmngCtx).DeleteSessionBySID(identity.Subject, sid); {
+	switch err := signout.NewService(rmngCtx).EndSession(identity.Subject, sid); {
 	case err == nil:
 		return noContent()
 	case errors.Is(err, sessions_db.ErrSessionNotFound):
 		return oidc.OAuthErrorResp(http.StatusNotFound, oidc.OAuthErrInvalidRequest, "No such session.")
 	default:
-		rlog.Error(ctx).Err(err).Msg("sessions: delete session")
+		rlog.Error(ctx).Err(err).Msg("sessions: end session")
 		return oidc.OAuthErrorResp(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.")
 	}
 }
 
-// handleDeleteAll is "sign out everywhere", and it means everywhere: this browser included.
-// Signing a person out of every user agent except the one they are asking from would be a
-// different feature wearing this one's name.
+// handleDeleteAll is "sign out everywhere", this browser included; offline_access grants stay, because OIDC Back-Channel Logout 1.0 s2.7 keeps them through logout.
 func handleDeleteAll(ctx context.Context, rmngCtx *rmngctx.RmngContext, identity auth.TokenClaims) events.APIGatewayProxyResponse {
-	if err := refreshtoken.NewService(rmngCtx).RevokeAllForUser(identity.Subject); err != nil {
-		rlog.Error(ctx).Err(err).Msg("sessions: delete all families")
-		return oidc.OAuthErrorResp(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.")
-	}
-	if err := session.NewService(rmngCtx).DeleteAllSessions(identity.Subject); err != nil {
-		rlog.Error(ctx).Err(err).Msg("sessions: delete all sessions")
+	if err := signout.NewService(rmngCtx).EndAllSessions(identity.Subject); err != nil {
+		rlog.Error(ctx).Err(err).Msg("sessions: sign out everywhere")
 		return oidc.OAuthErrorResp(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.")
 	}
 	return noContent()

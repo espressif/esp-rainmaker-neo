@@ -349,6 +349,27 @@ var _ = Describe("session service", func() {
 		})
 	})
 
+	Describe("DeleteAllSessions", func() {
+		var svc *session.Service
+
+		BeforeEach(func() {
+			svc = session.NewService(rmngCtx())
+		})
+
+		It("ends every session of the user, browser and app alike, and no one else's", func() {
+			_, _, err := svc.Establish(session.EstablishInput{UserID: "u1"})
+			Expect(err).NotTo(HaveOccurred())
+			_, _, err = svc.Establish(session.EstablishInput{UserID: "u1", Origin: session.OriginApp})
+			Expect(err).NotTo(HaveOccurred())
+			_, otherSID, err := svc.Establish(session.EstablishInput{UserID: "u2"})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(svc.DeleteAllSessions("u1")).To(Succeed())
+			Expect(svc.ListSessions("u1")).To(BeEmpty())
+			Expect(svc.ListSessions("u2")).To(HaveExactElements(HaveField("SID", otherSID)))
+		})
+	})
+
 	Describe("re-authentication rotates the session (never adds one)", func() {
 		var svc *session.Service
 

@@ -25,7 +25,7 @@ Refresh tokens rotate on every use, per RFC 9700 §4.14.2 (BCP 240) / OAuth 2.1;
 
 **Revocation is family-wide, and user-wide is one query.** `/oauth2/revoke` (RFC 7009 §2.1: revoking a token MAY revoke the underlying grant) deletes the presented token's family row, ending that login.
 
-**revoking every session for a user** — "sign out everywhere", password reset, compromise response — is a single `Query(user_id)` + delete of all its family rows, with **no GSI**. Access tokens are stateless RS256 JWTs and cannot be revoked server-side (the RFC 7009 §2.2 access-token SHOULD does not apply); they expire on their own within the hour. TODO: add an API for signout later
+**revoking every session for a user** — "sign out everywhere", password reset, compromise response — is a single `Query(user_id)` + delete of every family row that is not an `offline_access` grant, with **no GSI**. Access tokens are stateless RS256 JWTs and cannot be revoked server-side (the RFC 7009 §2.2 access-token SHOULD does not apply); they expire on their own within the hour.
 
 **Storage**:
 

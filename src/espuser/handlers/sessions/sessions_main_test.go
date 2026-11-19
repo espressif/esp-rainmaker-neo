@@ -140,6 +140,15 @@ func putFamily(userID, clientID, familyID, sid string) {
 	})).To(Succeed())
 }
 
+// putOfflineFamily writes an offline_access grant as the token endpoint mints one: no sid.
+func putOfflineFamily(userID, clientID, familyID string) {
+	now := time.Now().Unix()
+	Expect(refresh_tokens_db.NewRefreshTokensDB(rctx()).CreateFamily(&refresh_tokens_db.FamilyEntry{
+		UserID: userID, ClientID: clientID, FamilyID: familyID, ClientFamily: clientID + "#" + familyID,
+		Scope: "openid offline_access", CreatedAt: now, RotatedAt: now, ExpiresOn: now + 86400,
+	})).To(Succeed())
+}
+
 // familyClientIDs reads a user's surviving refresh families straight from the DB and returns
 // their client ids. It replaces the removed orphan/unattached-products view: a sign-out that
 // leaves a family standing is now caught by querying the table, not by a list-response field.
@@ -400,6 +409,17 @@ var _ = Describe("DELETE /v1/user/sessions", func() {
 		body := listBody(call(http.MethodGet, pathSessions, tokenFor(me, scope.Sessions, sidMac)))
 		Expect(body.Sessions).To(BeEmpty())
 		Expect(familyClientIDs(me)).To(BeEmpty(), "every family must be gone, not orphaned")
+	})
+
+	It("keeps offline_access grants through sign-out-everywhere and ends every session family, with or without a sid", func() {
+		putFamily(me, "legacy-app", "fam_nosid", "")
+		putOfflineFamily(me, "voice-assistant", "fam_offline")
+
+		Expect(call(http.MethodDelete, pathSessions, tokenFor(me, scope.Sessions, sidMac)).StatusCode).
+			To(Equal(http.StatusNoContent))
+
+		Expect(listBody(call(http.MethodGet, pathSessions, tokenFor(me, scope.Sessions, sidMac))).Sessions).To(BeEmpty())
+		Expect(familyClientIDs(me)).To(ConsistOf("voice-assistant"), "only the offline grant survives")
 	})
 
 	It("leaves another user untouched by sign-out-everywhere (negative, cross-user)", func() {

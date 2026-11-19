@@ -141,21 +141,6 @@ func (db *RefreshTokensDB) DeleteFamily(userID, clientID, familyID string) error
 	return nil
 }
 
-// DeleteAllForUser removes every family row for a user — "sign out everywhere" / compromise
-// response. The user partition listed, then a delete per family; no GSI.
-func (db *RefreshTokensDB) DeleteAllForUser(userID string) error {
-	rows, err := db.ListByUser(userID)
-	if err != nil {
-		return err
-	}
-	for i := range rows {
-		if err := db.families.Delete(db.Ctx.Context, db.familyKey(rows[i].UserID, rows[i].ClientID, rows[i].FamilyID)); err != nil {
-			return rmerror.NewRMError(err, "failed to delete refresh token family")
-		}
-	}
-	return nil
-}
-
 // ListByUser returns every refresh family a user holds -- one per application per login.
 // The base table is already partitioned by user_id, so this is a plain Query and needs no
 // index: "what am I signed in to" was always answerable, it is reaching the SESSION rows
@@ -166,31 +151,4 @@ func (db *RefreshTokensDB) ListByUser(userID string) ([]FamilyEntry, error) {
 		return nil, rmerror.NewRMError(err, "failed to query user refresh token families")
 	}
 	return page.Items, nil
-}
-
-// DeleteBySID deletes every family created through one browser session, and reports how
-// many went. This is what makes one sign-out reach every product opened in that browser:
-// the session is the parent, the families are its children, and sid is the link already
-// stored on each row.
-//
-// Families with no sid are left alone. They predate sessions or were minted after a failed session write, and deleting a family we cannot prove belongs to this session would sign the user out of something they never asked about.
-func (db *RefreshTokensDB) DeleteBySID(userID, sid string) (int, error) {
-	if sid == "" {
-		return 0, nil
-	}
-	rows, err := db.ListByUser(userID)
-	if err != nil {
-		return 0, err
-	}
-	deleted := 0
-	for i := range rows {
-		if rows[i].SID != sid {
-			continue
-		}
-		if err := db.families.Delete(db.Ctx.Context, db.familyKey(rows[i].UserID, rows[i].ClientID, rows[i].FamilyID)); err != nil {
-			return deleted, rmerror.NewRMError(err, "failed to delete refresh token family")
-		}
-		deleted++
-	}
-	return deleted, nil
 }

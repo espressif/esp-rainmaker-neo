@@ -1198,10 +1198,16 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/OAuthError"
+        "500":
+          description: "`server_error`: the client registry or storage failed."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
     delete:
       summary: Sign out everywhere
       description: |
-        Signs the person out of every user agent, including this one, by deleting every session and refresh family. Requires the `account:sessions` scope.
+        Signs the person out of every user agent, including this one; `offline_access` grants stay (OIDC Back-Channel Logout 1.0 §2.7). Requires the `account:sessions` scope.
       tags:
         - Sessions
       security:
@@ -1217,6 +1223,12 @@ paths:
                 $ref: "#/components/schemas/OAuthError"
         "403":
           description: The token was not granted `account:sessions`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+        "500":
+          description: "`server_error`: the client registry or storage failed; a retry finishes the sign-out."
           content:
             application/json:
               schema:
@@ -1255,6 +1267,12 @@ paths:
                 $ref: "#/components/schemas/OAuthError"
         "404":
           description: No such session for this user (the cross-user case included).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+        "500":
+          description: "`server_error`: the client registry or storage failed; a retry finishes the sign-out."
           content:
             application/json:
               schema:

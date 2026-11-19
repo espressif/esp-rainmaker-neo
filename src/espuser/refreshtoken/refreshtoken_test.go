@@ -69,23 +69,14 @@ func (s *staleIndex) Query(ctx context.Context, in *dynamodb.QueryInput, opts ..
 	return out, nil
 }
 
-// failingIndex fails every query on the sessions by-user index, as a throttled table would.
-type failingIndex struct {
-	*mock.DynamoDBMock
-}
-
-func (f *failingIndex) Query(ctx context.Context, in *dynamodb.QueryInput, opts ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
-	if aws.ToString(in.IndexName) == sessions_db.SessionsByUserIndex {
-		return nil, &types.ProvisionedThroughputExceededException{Message: aws.String("throttled")}
-	}
-	return f.DynamoDBMock.Query(ctx, in, opts...)
-}
-
 var _ = Describe("refreshtoken.Service", func() {
-	var svc *refreshtoken.Service
+	var (
+		svc     *refreshtoken.Service
+		backend *test_utils.EspUserBackend
+	)
 
 	BeforeEach(func() {
-		test_utils.SetupEspUserBackend(context.Background())
+		backend = test_utils.SetupEspUserBackend(context.Background())
 		svc = refreshtoken.NewService(&rmngctx.RmngContext{Context: context.Background()})
 	})
 
@@ -297,37 +288,53 @@ var _ = Describe("refreshtoken.Service", func() {
 		})
 	})
 
-	Describe("RevokeAllForUser", func() {
-		It("deletes every family for a user across clients, leaving none able to rotate", func() {
-			mobile, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, "", 0)
+	Describe("listing and deleting families", func() {
+		rmngCtx := &rmngctx.RmngContext{Context: context.Background()}
+		families := func(userID string) []string {
+			rows, err := refresh_tokens_db.NewRefreshTokensDB(rmngCtx).ListByUser(userID)
 			Expect(err).NotTo(HaveOccurred())
-			dashboard, err := svc.MintRefreshtoken("user-123", otherClient, "openid", nil, "", 0)
-			Expect(err).NotTo(HaveOccurred())
-
-			Expect(svc.RevokeAllForUser("user-123")).To(Succeed())
-
-			_, err = svc.Rotate(clientID, mobile)
-			Expect(err).To(HaveOccurred())
-			_, err = svc.Rotate(otherClient, dashboard)
-			Expect(err).To(HaveOccurred())
+			described := make([]string, 0, len(rows))
+			for i := range rows {
+				described = append(described, rows[i].ClientID+"|"+rows[i].Scope+"|"+rows[i].SID)
+			}
+			return described
+		}
+		BeforeEach(func() {
+			backend.DBMock.MaxPageItems = 1
+			for _, family := range []struct{ user, client, scope, sid string }{
+				{"user-123", clientID, "openid", "sid-a"},
+				{"user-123", otherClient, "openid", "sid-a"},
+				{"user-123", clientID, "openid", "sid-b"},
+				{"user-123", clientID, "openid", ""},
+				{"user-123", otherClient, "openid offline_access", ""},
+				{"user-999", clientID, "openid", "sid-a"},
+			} {
+				_, err := svc.MintRefreshtoken(family.user, family.client, family.scope, nil, family.sid, 0)
+				Expect(err).NotTo(HaveOccurred())
+			}
 		})
 
-		It("leaves another user's families intact (negative, scoped to the target user)", func() {
-			mine, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, "", 0)
-			Expect(err).NotTo(HaveOccurred())
-			theirs, err := svc.MintRefreshtoken("user-999", clientID, "openid", nil, "", 0)
-			Expect(err).NotTo(HaveOccurred())
-
-			Expect(svc.RevokeAllForUser("user-123")).To(Succeed())
-
-			_, err = svc.Rotate(clientID, mine)
-			Expect(err).To(HaveOccurred())
-			_, err = svc.Rotate(clientID, theirs)
-			Expect(err).NotTo(HaveOccurred())
+		It("deletes every family of the user under the sid across pages, keeping no-sid, offline and other-sid families", func() {
+			Expect(svc.DeleteFamiliesBySID("user-123", "sid-a")).To(Equal(2))
+			Expect(families("user-123")).To(ConsistOf(clientID+"|openid|sid-b", clientID+"|openid|", otherClient+"|openid offline_access|"))
+			Expect(families("user-999")).To(ConsistOf(clientID+"|openid|sid-a"), "another user's family under the same sid stays (negative)")
 		})
 
-		It("rejects an empty user id (negative)", func() {
-			Expect(svc.RevokeAllForUser("")).NotTo(Succeed())
+		It("deletes nothing for an empty sid, which would otherwise match every sid-less family (negative)", func() {
+			Expect(svc.DeleteFamiliesBySID("user-123", "")).To(BeZero())
+			Expect(families("user-123")).To(HaveLen(5))
+		})
+
+		It("stops at the first failed delete and leaves the rest for a retry (negative)", func() {
+			rows, err := svc.ListFamilies("user-123")
+			Expect(err).NotTo(HaveOccurred())
+			awscommon.SetDynamoDBClient(&mock.FailingDeleteItem{DynamoDBMock: backend.DBMock, TableName: "espuser-refresh-tokens"})
+			Expect(refreshtoken.NewService(rmngCtx).DeleteFamilies(rows)).NotTo(Succeed())
+			awscommon.SetDynamoDBClient(backend.DBMock)
+			Expect(families("user-123")).To(HaveLen(5))
+
+			Expect(refreshtoken.NewService(rmngCtx).DeleteFamilies(rows)).To(Succeed())
+			Expect(families("user-123")).To(BeEmpty())
 		})
 	})
 
@@ -454,7 +461,7 @@ var _ = Describe("refreshtoken.Service", func() {
 			putCappedUserAgent("user-dberr", "sid_dberr", time.Now().Add(time.Hour).Unix())
 			token, err := svc.MintRefreshtoken("user-dberr", clientID, "openid", nil, "sid_dberr", 0)
 			Expect(err).NotTo(HaveOccurred())
-			awscommon.SetDynamoDBClient(&failingIndex{DynamoDBMock: awscommon.GetDynamoDBClient().(*mock.DynamoDBMock)})
+			awscommon.SetDynamoDBClient(&mock.FailingIndexQuery{DynamoDBMock: backend.DBMock, IndexName: sessions_db.SessionsByUserIndex})
 
 			_, err = svc.Rotate(clientID, token)
 			Expect(err).NotTo(HaveOccurred())

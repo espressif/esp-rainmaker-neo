@@ -356,7 +356,7 @@ a sign-out in a browser must not unlink it.
 - **Redeemed only while its approving session lives:** a code with `offline_access` whose browser row has ended is refused, since the grant would outlive the sign-out.
 - **Renewed only while its client may hold it:** a client whose registration no longer allows `offline_access` gets `invalid_grant` on the next refresh, and the grant is not spent.
 - **What ends one:** revoking its own token (`POST /oauth2/revoke`), reuse detection on rotation, and
-  expiry. Signing out of a browser and ending a user agent from the list do not; sign out everywhere still does.
+  expiry. Signing out of a browser, ending a user agent from the list and sign out everywhere do not.
 
 ### Step-up: re-proving identity for sensitive actions
 
@@ -498,7 +498,7 @@ own expiry. It is **never** deleted by a user agent timing out, a cookie lapsing
 | Trigger | Scope | Path |
 |---|---|---|
 | Sign-out — one user agent | every family with that `sid` | `GET /oauth2/logout` · `DELETE /v1/user/sessions/{sessionId}` |
-| Sign-out — everywhere | every family for the user | `DELETE /v1/user/sessions` |
+| Sign-out — everywhere | every session family for the user, with or without a `sid`; offline grants stay | `DELETE /v1/user/sessions` |
 | Token revocation | the presented token's family | `POST /oauth2/revoke` (RFC 7009) |
 | Reuse / theft detected | that one family | rotation sees a replayed or stale counter |
 | Natural expiry | that one family | `expires_on` passes with no rotation |
@@ -527,7 +527,7 @@ Each exists because none of the others can do its job: only a browser navigation
 | `GET /oauth2/logout` | OIDC RP-Initiated Logout 1.0 | a browser app, as a top-level navigation | the session cookie | this browser: its user agent row and every family under its `sid`, then the upstream provider's session |
 | `GET /oauth2/logout/done` | — | the upstream provider, handing the browser back | the `__Host-esp_logout_to` memo | nothing; forwards to the validated `post_logout_redirect_uri` |
 | `DELETE /v1/user/sessions/{sessionId}` | — | a signed-in user agent list | `sid` | one user agent and its families, from anywhere |
-| `DELETE /v1/user/sessions` | — | "sign out everywhere" | the access token's subject | every user agent and family of the person |
+| `DELETE /v1/user/sessions` | — | "sign out everywhere" | the access token's subject | every user agent and session family of the person; offline grants stay |
 | `POST /oauth2/revoke` | RFC 7009 | any OAuth client | a refresh token | that token's family: one application's login |
 | `POST /v1/user/auth/signout` | — (legacy) | pre-OIDC RainMaker apps | a refresh token | that token's family, the same path as `/oauth2/revoke`; `global` is refused |
 

@@ -20,6 +20,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -318,28 +319,36 @@ func (s *Service) RevokeFamily(refreshToken string) error {
 	return nil
 }
 
-// RevokeAllForUser ends every session for a user — "sign out everywhere", password reset, or
-// compromise response — by deleting all their family rows in one user-partition query.
-func (s *Service) RevokeAllForUser(userID string) error {
-	if userID == "" {
-		return rmerror.NewRMError(nil, "user id is required")
-	}
-	if err := s.db.DeleteAllForUser(userID); err != nil {
-		return rmerror.NewRMError(err, "failed to revoke user refresh tokens")
-	}
-	return nil
-}
-
 // ListFamilies returns every refresh family the user holds -- one per application per login --
 // for the session/user agent list.
 func (s *Service) ListFamilies(userID string) ([]refresh_tokens_db.FamilyEntry, error) {
 	return s.db.ListByUser(userID)
 }
 
-// DeleteFamiliesBySID ends every family opened through one browser session, and reports how
-// many went. This is what makes one sign-out reach every product opened in that browser.
+// DeleteFamiliesBySID ends every family opened through one session and reports how many went; families with no sid are left alone, since nothing proves they belong to it.
 func (s *Service) DeleteFamiliesBySID(userID, sid string) (int, error) {
-	return s.db.DeleteBySID(userID, sid)
+	if sid == "" {
+		return 0, nil
+	}
+	families, err := s.db.ListByUser(userID)
+	if err != nil {
+		return 0, err
+	}
+	families = slices.DeleteFunc(families, func(family refresh_tokens_db.FamilyEntry) bool { return family.SID != sid })
+	if err := s.DeleteFamilies(families); err != nil {
+		return 0, err
+	}
+	return len(families), nil
+}
+
+// DeleteFamilies deletes the given families one by one and stops at the first failure, so a caller can retry and finish.
+func (s *Service) DeleteFamilies(families []refresh_tokens_db.FamilyEntry) error {
+	for i := range families {
+		if err := s.db.DeleteFamily(families[i].UserID, families[i].ClientID, families[i].FamilyID); err != nil {
+			return rmerror.NewRMError(err, "failed to delete a refresh token family")
+		}
+	}
+	return nil
 }
 
 // IsReuse reports whether an error from Rotate is the reuse/theft signal.

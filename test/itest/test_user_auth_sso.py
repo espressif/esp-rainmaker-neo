@@ -670,6 +670,30 @@ def offline_client(register_espuser_client, name):
     return WebClient(client.client_id, uri, scope=OFFLINE_SCOPE)
 
 
+def test_sso_an_offline_grant_outlives_logout_and_sign_out_everywhere(apps, register_espuser_client, espuser_person):
+    """An offline grant belongs to no session (OIDC Back-Channel Logout 1.0 s2.7), so logout and sign out everywhere leave it refreshing, with no sid in anything it is issued."""
+    plain, _ = apps
+    offline = offline_client(register_espuser_client, "offline")
+    browser = Browser()
+    session_tokens = signed_in(plain, browser, espuser_person)
+    offline_tokens = offline.tokens(offline.sign_in_allowing(browser, espuser_person))
+    assert "sid" not in decode_jwt_claims(offline_tokens["id_token"]), "an offline grant belongs to no session"
+
+    out = plain.logout(browser, id_token_hint=session_tokens["id_token"])
+    assert not plain.still_signed_in(session_tokens["refresh_token"]), "the session's own product is signed out"
+
+    renewed = offline.refresh(offline_tokens["refresh_token"])
+    assert renewed.status_code == 200, f"the offline grant must survive the logout: {renewed.status_code} {renewed.text[:200]}"
+    for token in ("access_token", "id_token"):
+        assert "sid" not in decode_jwt_claims(renewed.json()[token]), f"a renewed {token} names no session either"
+
+    again = signed_in(plain, browser, espuser_person)
+    ended = WebClient.end_all_sessions(again["access_token"])
+    assert ended.status_code == 204, f"{ended.status_code} {ended.text[:200]}"
+    assert not plain.still_signed_in(again["refresh_token"])
+    assert offline.still_signed_in(renewed.json()["refresh_token"]), "sign out everywhere leaves the offline grant"
+
+
 def test_sso_offline_access_always_asks_for_consent(register_espuser_client, espuser_person):
     """Even an app we ship must ask for consent before an offline grant (OIDC Core 1.0 s11), so prompt=none gets consent_required."""
     offline = offline_client(register_espuser_client, "offline-consent")
