@@ -128,7 +128,7 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 			if err != nil {
 				// Specific handling for 404
 				if strings.Contains(err.Error(), "not found") {
-					return utils.APIGwRespJSON(http.StatusNotFound, utils.NewAPIStatus(err.Error())), nil
+					return utils.APIGwRespJSON(http.StatusNotFound, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 				}
 			}
 		} else {
@@ -142,7 +142,7 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 	if err != nil {
 		rlog.Error(rctx).Err(err).Send()
 		// Use err.Error() so the client knows what happened
-		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
+		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 	}
 
 	return utils.APIGwRespJSON(statusCode, response), nil

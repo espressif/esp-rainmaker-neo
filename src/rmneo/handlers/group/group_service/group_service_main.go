@@ -16,6 +16,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/automation"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -72,7 +73,7 @@ func HandleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		// Get service from registry
 		svc, err := service.Registry().GetService(serviceName)
 		if err != nil {
-			return utils.APIGwRespJSON(http.StatusNotFound, utils.NewAPIStatus(err.Error())), nil
+			return utils.APIGwRespJSON(http.StatusNotFound, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 		}
 
 		// Check if it's a GroupService
@@ -93,7 +94,7 @@ func HandleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		}
 
 		if err != nil {
-			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
+			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 		}
 
 		return utils.APIGwRespJSON(http.StatusOK, data), nil
@@ -111,7 +112,7 @@ func HandleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		// Get service from registry
 		svc, err := service.Registry().GetService(serviceName)
 		if err != nil {
-			return utils.APIGwRespJSON(http.StatusNotFound, utils.NewAPIStatus(err.Error())), nil
+			return utils.APIGwRespJSON(http.StatusNotFound, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 		}
 
 		// Check if it's a GroupService
@@ -137,9 +138,9 @@ func HandleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 			// group) is a client error, not a server fault.
 			if errors.Is(err, automation.ErrActionTargetNotInGroup) ||
 				errors.Is(err, automation.ErrConditionNodeNotInGroup) {
-				return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(err.Error())), nil
+				return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 			}
-			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
+			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 		}
 
 		// If the service returned a result, use it, otherwise return a generic success message
@@ -152,7 +153,7 @@ func HandleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		// Get service from registry
 		svc, err := service.Registry().GetService(serviceName)
 		if err != nil {
-			return utils.APIGwRespJSON(http.StatusNotFound, utils.NewAPIStatus(err.Error())), nil
+			return utils.APIGwRespJSON(http.StatusNotFound, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 		}
 
 		// Check if it's a GroupService
@@ -165,12 +166,12 @@ func HandleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		if resourceID != "" && groupSvc.SupportsResourceID() {
 			// Delete specific resource
 			if err := groupSvc.DeleteWithResourceID(userCtx, groupID, resourceID); err != nil {
-				return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
+				return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 			}
 		} else {
 			// Delete all service data
 			if err := groupSvc.Delete(userCtx, groupID); err != nil {
-				return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
+				return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 			}
 		}
 

@@ -98,7 +98,7 @@ var _ = Describe("UpdateSubGroup when the node leaves the group mid-update", fun
 		awscommon.SetDynamoDBClient(deletesBeforeUpdate{mockDB})
 		DeferCleanup(awscommon.SetDynamoDBClient, mockDB)
 		_, err := group_node_db.NewGroupNodeDB(ctx).UpdateSubGroup("grp001", "node-01", "sub1", group_node_db.SubGroupOperationTypeAdd)
-		Expect(err).To(MatchError("node is not in the group"))
+		Expect(err).To(MatchError(HavePrefix("node is not in the group")))
 
 		awscommon.SetDynamoDBClient(mockDB)
 		entry, err := group_node_db.NewGroupNodeDB(ctx).GetGroupNodeByNodeID("node-01")

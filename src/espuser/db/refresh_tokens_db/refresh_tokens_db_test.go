@@ -68,7 +68,7 @@ var _ = Describe("RefreshTokensDB", func() {
 			create("u1", "c1", "f1", "sid-1")
 
 			err := db.CreateFamily(&refresh_tokens_db.FamilyEntry{UserID: "u1", ClientID: "c1", FamilyID: "f1", SID: "sid-2"})
-			Expect(err).To(MatchError("failed to create refresh token family"))
+			Expect(err).To(MatchError(HavePrefix("failed to create refresh token family")))
 			Expect(ddbu.IsConditionFailed(err)).To(BeTrue())
 
 			got, err := db.GetFamily("u1", "c1", "f1")
@@ -86,7 +86,7 @@ var _ = Describe("RefreshTokensDB", func() {
 			backend.DBMock.NextGetItemError = boom
 
 			_, err := db.GetFamily("u1", "c1", "f1")
-			Expect(err).To(MatchError("failed to get refresh token family"))
+			Expect(err).To(MatchError(HavePrefix("failed to get refresh token family")))
 			Expect(errors.Is(err, boom)).To(BeTrue())
 		})
 	})
@@ -111,7 +111,7 @@ var _ = Describe("RefreshTokensDB", func() {
 			Expect(db.AdvanceCounter("u1", "c1", "f1", 0, now+7200, now)).To(Succeed())
 
 			err := db.AdvanceCounter("u1", "c1", "f1", 0, now+9000, now+1)
-			Expect(err).To(MatchError("failed to advance refresh token counter"))
+			Expect(err).To(MatchError(HavePrefix("failed to advance refresh token counter")))
 			Expect(ddbu.IsConditionFailed(err)).To(BeTrue())
 
 			got, err := db.GetFamily("u1", "c1", "f1")
@@ -122,7 +122,7 @@ var _ = Describe("RefreshTokensDB", func() {
 
 		It("fails and creates nothing for an unknown family", func() {
 			err := db.AdvanceCounter("u1", "c1", "missing", 0, now+7200, now)
-			Expect(err).To(MatchError("failed to advance refresh token counter"))
+			Expect(err).To(MatchError(HavePrefix("failed to advance refresh token counter")))
 			Expect(ddbu.IsConditionFailed(err)).To(BeTrue())
 
 			_, err = db.GetFamily("u1", "c1", "missing")
@@ -142,7 +142,7 @@ var _ = Describe("RefreshTokensDB", func() {
 
 		It("fails on an unknown family", func() {
 			err := db.DeleteFamily("u1", "c1", "missing")
-			Expect(err).To(MatchError("failed to delete refresh token family"))
+			Expect(err).To(MatchError(HavePrefix("failed to delete refresh token family")))
 			Expect(ddbu.IsConditionFailed(err)).To(BeTrue())
 		})
 	})

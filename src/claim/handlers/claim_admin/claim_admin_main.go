@@ -36,6 +36,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngrequest"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -105,13 +106,13 @@ func handleConfig(ctx context.Context, request events.APIGatewayProxyRequest) (i
 			return http.StatusBadRequest, utils.NewAPIStatus("invalid configuration"), nil
 		}
 		if err := cfg.Validate(); err != nil {
-			return http.StatusBadRequest, utils.NewAPIStatus(err.Error()), nil
+			return http.StatusBadRequest, utils.NewAPIStatus(rmerror.TopMessage(err)), nil
 		}
 		// Mode is validated in the claim package, which owns the Variant type
 		// (ca_bootstrap must not import claim). An empty mode is allowed and
 		// leaves claiming configured off.
 		if err := claim.ValidateConfiguredMode(cfg.Mode); err != nil {
-			return http.StatusBadRequest, utils.NewAPIStatus(err.Error()), nil
+			return http.StatusBadRequest, utils.NewAPIStatus(rmerror.TopMessage(err)), nil
 		}
 		if err := ca_bootstrap.StoreClaimingConfig(ctx, ca_bootstrap.ParamConfig, cfg); err != nil {
 			return http.StatusInternalServerError, utils.NewAPIStatus("failed to store configuration"), err

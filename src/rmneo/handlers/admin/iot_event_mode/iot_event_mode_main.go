@@ -13,6 +13,7 @@ import (
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/admin_config_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/aws/aws-lambda-go/events"
 	awslambda "github.com/aws/aws-lambda-go/lambda"
@@ -202,17 +203,17 @@ func handleGet(ctx context.Context) (events.APIGatewayProxyResponse, error) {
 	presence, err := detectMode(ctx, presenceRuleName)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Str("rule", presenceRuleName).Msg("Failed to read rule mode")
-		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
+		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 	}
 	publishInput, err := detectMode(ctx, publishInputRuleName)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Str("rule", publishInputRuleName).Msg("Failed to read rule mode")
-		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
+		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 	}
 	timeseries, err := detectMode(ctx, timeseriesRuleName)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Str("rule", timeseriesRuleName).Msg("Failed to read rule mode")
-		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
+		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 	}
 	return utils.APIGwRespJSON(http.StatusOK, modeResponse{
 		Presence:     presence,
@@ -244,14 +245,14 @@ func handlePut(ctx context.Context, request events.APIGatewayProxyRequest, updat
 	adminDB := admin_config_db.NewAdminConfigDB(systemContext(ctx))
 	if err := adminDB.SetIoTEventMode(req.Mode, req.Mode, req.Mode, updatedBy); err != nil {
 		rlog.Error(ctx).Err(err).Msg("Failed to persist runtime IoT event mode")
-		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
+		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 	}
 
 	for _, cfg := range []ruleConfig{presenceConfig(), publishInputConfig(), timeseriesConfig()} {
 		if err := flipRule(ctx, cfg, req.Mode); err != nil {
 			rlog.Error(ctx).Err(err).Str("rule", cfg.name).Str("mode", req.Mode).Msg("Failed to flip IoT rule mode")
 			// DB row is already committed; the next reapply will retry the flip.
-			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
+			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 		}
 	}
 

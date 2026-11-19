@@ -19,6 +19,7 @@ var _ = Describe("FormatErrorChain", func() {
 
 	It("returns the layer message for a single RMError", func() {
 		Expect(FormatErrorChain(NewRMError(nil, "boom"))).To(Equal("boom"))
+		Expect(FormatErrorChain(NewRMError(nil, "boom").WithClientStatus(400, "Bad input"))).To(Equal("boom"))
 	})
 
 	It("joins RMError layers with ': ' and skips empty middle layers", func() {
@@ -42,5 +43,33 @@ var _ = Describe("FormatErrorChain", func() {
 
 	It("returns the plain message for a non-wrapped non-RMError", func() {
 		Expect(FormatErrorChain(errors.New("just text"))).To(Equal("just text"))
+	})
+})
+
+var _ = Describe("Layers", func() {
+	It("yields every layer outermost first", func() {
+		dbErr := errors.New("db")
+		inner := NewRMError(dbErr, "a")
+		outer := NewRMError(inner, "b")
+		var got []error
+		for layer := range Layers(outer) {
+			got = append(got, layer)
+		}
+		Expect(got).To(Equal([]error{outer, inner, dbErr}))
+	})
+
+	It("yields nothing for nil", func() {
+		for range Layers(nil) {
+			Fail("nil must yield no layers")
+		}
+	})
+
+	It("stops when the loop breaks", func() {
+		count := 0
+		for range Layers(NewRMError(NewRMError(errors.New("db"), "a"), "b")) {
+			count++
+			break
+		}
+		Expect(count).To(Equal(1))
 	})
 })

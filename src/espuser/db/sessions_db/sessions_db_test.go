@@ -65,7 +65,7 @@ var _ = Describe("SessionsDB", func() {
 			Expect(db.CreateSession(session("h1", "u1", "s1", now, now+3600))).To(Succeed())
 
 			err := db.CreateSession(session("h1", "u2", "s2", now, now+3600))
-			Expect(err).To(MatchError("failed to put session"))
+			Expect(err).To(MatchError(HavePrefix("failed to put session")))
 			Expect(ddbu.IsConditionFailed(err)).To(BeTrue())
 
 			got, err := db.GetSession("h1")
@@ -97,7 +97,7 @@ var _ = Describe("SessionsDB", func() {
 			backend.DBMock.NextGetItemError = boom
 
 			_, err := db.GetSession("h1")
-			Expect(err).To(MatchError("failed to get session"))
+			Expect(err).To(MatchError(HavePrefix("failed to get session")))
 			Expect(errors.Is(err, boom)).To(BeTrue())
 		})
 	})
@@ -203,7 +203,7 @@ var _ = Describe("SessionsDB", func() {
 			backend.DBMock.NextGetItemError = errors.New("throttled")
 
 			_, err := db.TouchExpiryBySID("u1", "s1", now, 3600)
-			Expect(err).To(MatchError("failed to read session for retention bump"))
+			Expect(err).To(MatchError(HavePrefix("failed to read session for retention bump")))
 		})
 	})
 
@@ -219,7 +219,7 @@ var _ = Describe("SessionsDB", func() {
 
 		It("fails on an unknown hash", func() {
 			err := db.DeleteSession("missing")
-			Expect(err).To(MatchError("failed to delete session"))
+			Expect(err).To(MatchError(HavePrefix("failed to delete session")))
 			Expect(ddbu.IsConditionFailed(err)).To(BeTrue())
 		})
 	})

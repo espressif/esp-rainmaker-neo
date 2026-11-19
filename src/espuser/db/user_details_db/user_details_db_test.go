@@ -97,7 +97,7 @@ var _ = Describe("UserDetailsDB", func() {
 			backend.DBMock.NextGetItemError = boom
 
 			_, err := asAccessor("u-acc").GetUserDetails()
-			Expect(err).To(MatchError("failed to get user details"))
+			Expect(err).To(MatchError(HavePrefix("failed to get user details")))
 			Expect(errors.Is(err, boom)).To(BeTrue())
 		})
 	})
@@ -113,7 +113,7 @@ var _ = Describe("UserDetailsDB", func() {
 			backend.DBMock.NextGetItemError = boom
 
 			_, err := db.GetUserDetailsByUserID("u1")
-			Expect(err).To(MatchError("failed to get user details by user id"))
+			Expect(err).To(MatchError(HavePrefix("failed to get user details by user id")))
 			Expect(errors.Is(err, boom)).To(BeTrue())
 		})
 	})

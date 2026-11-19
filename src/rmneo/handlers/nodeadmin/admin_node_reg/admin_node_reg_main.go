@@ -187,7 +187,7 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		response, err = handleRegisterBulkNodes(rctx, request)
 		if err != nil {
 			rlog.Error(rctx).Err(err).Send()
-			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
+			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 		}
 		// Return 202 Accepted for async bulk registration
 		return utils.APIGwRespJSON(http.StatusAccepted, response), nil
@@ -196,7 +196,7 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		response, err = jobs_api.List(rctx, request, node_reg_req_db.NODE_REG_JOB_TYPE_REGISTER)
 		if err != nil {
 			rlog.Error(rctx).Err(err).Send()
-			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
+			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 		}
 		return utils.APIGwRespJSON(http.StatusOK, response), nil
 
@@ -223,7 +223,7 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 				return utils.APIGwRespJSON(http.StatusNotFound, utils.NewAPIStatus(notFoundMessage)), nil
 			}
 			rlog.Error(rctx).Err(err).Send()
-			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
+			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 		}
 		return utils.APIGwRespJSON(http.StatusOK, response), nil
 
@@ -236,11 +236,11 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		if err != nil {
 			if errors.Is(err, node.ErrNodeAlreadyRegistered) {
 				rlog.Warn(rctx).Err(err).Send()
-				return utils.APIGwRespJSON(http.StatusConflict, utils.NewAPIStatus(err.Error())), nil
+				return utils.APIGwRespJSON(http.StatusConflict, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 			}
 			if errors.Is(err, node.ErrInvalidNodeID) {
 				rlog.Warn(rctx).Err(err).Send()
-				return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(err.Error())), nil
+				return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 			}
 			var unavailable *nodelifecycle.CapabilityUnavailableError
 			if errors.As(err, &unavailable) {
@@ -248,7 +248,7 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 				return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(unavailable.Error())), nil
 			}
 			rlog.Error(rctx).Err(err).Send()
-			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
+			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 		}
 		return utils.APIGwRespJSON(http.StatusCreated, response), nil
 

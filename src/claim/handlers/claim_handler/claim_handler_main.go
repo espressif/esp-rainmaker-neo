@@ -163,7 +163,7 @@ func initiate(ctx context.Context, request events.APIGatewayProxyRequest) (int, 
 			// deployment, not a bad request.
 			return http.StatusInternalServerError, utils.NewAPIStatus("Claiming is misconfigured"), err
 		}
-		return http.StatusBadRequest, utils.NewAPIStatus(err.Error()), nil
+		return http.StatusBadRequest, utils.NewAPIStatus(rmerror.TopMessage(err)), nil
 	}
 
 	// Scoped, not "*": initiate reserves and reads this one device's reservation
@@ -303,12 +303,12 @@ func verify(ctx context.Context, request events.APIGatewayProxyRequest) (int, in
 		if errors.Is(err, claim.ErrUnknownVariant) {
 			return http.StatusInternalServerError, utils.NewAPIStatus("Claiming is misconfigured"), err
 		}
-		return http.StatusBadRequest, utils.NewAPIStatus(err.Error()), nil
+		return http.StatusBadRequest, utils.NewAPIStatus(rmerror.TopMessage(err)), nil
 	}
 
 	pub, err := parseCSRPublicKey(req.CSR)
 	if err != nil {
-		return http.StatusBadRequest, utils.NewAPIStatus(err.Error()), nil
+		return http.StatusBadRequest, utils.NewAPIStatus(rmerror.TopMessage(err)), nil
 	}
 
 	// Reservation-table access is keyed on the caller's own MAC, so scope these

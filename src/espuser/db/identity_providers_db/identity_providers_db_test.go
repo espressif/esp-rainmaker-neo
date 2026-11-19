@@ -76,7 +76,7 @@ var _ = Describe("IdentityProvidersDB", func() {
 			clash := newProvider("idp_dup", utils.Ptr(false))
 			clash.DisplayName = "Clobber"
 			err := db.CreateProvider(clash)
-			Expect(err).To(MatchError("failed to create identity provider"))
+			Expect(err).To(MatchError(HavePrefix("failed to create identity provider")))
 			var ccf *types.ConditionalCheckFailedException
 			Expect(errors.As(err, &ccf)).To(BeTrue(), "error should wrap ConditionalCheckFailedException")
 

@@ -15,6 +15,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/oauth_clients_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngrequest"
 
@@ -91,7 +92,7 @@ func handleCreate(ctx context.Context, request events.APIGatewayProxyRequest) (e
 	if err != nil {
 		// A validation failure or a duplicate client_id is a 400 (client's fault).
 		rlog.Error(ctx).Err(err).Msg("Failed to create client")
-		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(err.Error())), nil
+		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 	}
 	return utils.APIGwRespJSON(http.StatusCreated, result), nil
 }
@@ -134,7 +135,7 @@ func handlePut(ctx context.Context, request events.APIGatewayProxyRequest) (even
 		if errors.Is(err, oauth_clients_db.ErrOAuthClientNotFound) {
 			return utils.APIGwRespJSON(http.StatusNotFound, utils.NewAPIStatus("Not found")), nil
 		}
-		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(err.Error())), nil
+		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 	}
 	return utils.APIGwRespJSON(http.StatusOK, client), nil
 }
