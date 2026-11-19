@@ -25,7 +25,7 @@ from urllib.parse import parse_qs, urljoin, urlparse
 import pytest
 import requests
 
-from py_sdk.espuser_oauth import Browser, WebClient, client_ids_under, sids_in
+from py_sdk.espuser_oauth import Browser, WebClient, client_ids_under, held_for_consent, sids_in
 from test.itest.conftest import (
     API_GATEWAY_URL,
     ESPUSER_RESOURCE,
@@ -655,3 +655,33 @@ def test_sso_logout_a_hint_naming_someone_else_ends_nothing(apps, espuser_person
         "a hint naming another subject must end nothing, not end mine"
     assert first.still_signed_in(their_tokens["refresh_token"]), \
         "and certainly not end theirs -- I hold no credential of theirs"
+
+
+# ── offline_access: a grant no sign-out ends (OIDC Core 1.0 s11) ──────────────────
+
+OFFLINE_SCOPE = f"openid email {SESSIONS_SCOPE} offline_access"
+
+
+def offline_client(register_espuser_client, name):
+    """A first-party product registered for offline_access, asking for it on every sign-in."""
+    uri = CALLBACK.format(name)
+    client = register_espuser_client(redirect_uris=[uri],
+                                      scopes=["openid", "email", "profile", SESSIONS_SCOPE, "offline_access"])
+    return WebClient(client.client_id, uri, scope=OFFLINE_SCOPE)
+
+
+def test_sso_offline_access_always_asks_for_consent(register_espuser_client, espuser_person):
+    """Even an app we ship must ask for consent before an offline grant (OIDC Core 1.0 s11), so prompt=none gets consent_required."""
+    offline = offline_client(register_espuser_client, "offline-consent")
+    ordinary = WebClient(offline.client_id, offline.redirect_uri)
+    browser = Browser()
+    signed_in(ordinary, browser, espuser_person)
+
+    assert ordinary.authorize(browser).code, "without offline_access the session answers with a code"
+
+    held = offline.authorize(browser)
+    assert held_for_consent(held), f"offline_access goes to the consent screen: {held!r}"
+    assert held.code is None
+
+    silent = offline.authorize(browser, prompt="none")
+    assert silent.error == "consent_required", f"{silent!r}"

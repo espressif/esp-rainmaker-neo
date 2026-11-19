@@ -58,7 +58,8 @@ const (
 	// rather than a free rider on openid: being able to sign somebody in is not a reason to
 	// be able to enumerate every device they use, and a device list is exactly the shape of
 	// data that should require asking for it by name.
-	scopeSessions = "account:sessions"
+	scopeSessions      = "account:sessions"
+	scopeOfflineAccess = "offline_access"
 
 	TokenAuthNone  = "none"
 	TokenAuthBasic = "client_secret_basic"
@@ -77,7 +78,7 @@ var (
 
 	SupportedRevocationEndpointAuthMethods = []string{TokenAuthBasic}
 
-	SupportedScopes = []string{scopeOpenID, scopeEmail, scopeProfile, scopePhone, scopeSessions}
+	SupportedScopes = []string{scopeOpenID, scopeEmail, scopeProfile, scopePhone, scopeSessions, scopeOfflineAccess}
 
 	SupportedClaims = []string{"sub", "email", "phone_number", "name", "locale", "picture"}
 )

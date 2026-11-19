@@ -15,6 +15,8 @@ import (
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/auth_flows_db"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/sessions_db"
+	scopepkg "github.com/espressif/esp-rainmaker-neo/src/espuser/scope"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/session"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/otputil"
@@ -102,7 +104,7 @@ func (s *OAuthUserAuthService) StartAuthFlow(ctx context.Context, req AuthorizeR
 	if err != nil {
 		return "", nil, false, err
 	}
-	skipConsent = SkipsConsent(client, req.Prompt)
+	skipConsent = SkipsConsent(client, req.Prompt, req.Scope)
 	if err := auth_flows_db.NewAuthFlowsDB(rmngCtx).CreateFlow(&auth_flows_db.AuthFlow{
 		FlowID:              flowID,
 		ClientID:            req.ClientID,
@@ -128,9 +130,9 @@ const ConsentPath = "login/consent"
 // ErrNotAwaitingConsent is a consent answer with no sign-in waiting for it: never signed in, already answered, or unknown.
 var ErrNotAwaitingConsent = errors.New("no sign-in is waiting for consent")
 
-// SkipsConsent is true only for a client we ship that did not send prompt=consent; RFC 6749 s10.2 and RFC 8252 s8.6 have the person approve any other client.
-func SkipsConsent(client *clients.ClientResponse, prompt string) bool {
-	return client.FirstParty && !slices.Contains(strings.Fields(prompt), "consent")
+// SkipsConsent is true only for a client we ship that did not send prompt=consent; RFC 6749 s10.2 and RFC 8252 s8.6 have the person approve any other client, and OIDC Core 1.0 s11 requires consent for offline_access from every client.
+func SkipsConsent(client *clients.ClientResponse, prompt, requestedScope string) bool {
+	return client.FirstParty && !slices.Contains(strings.Fields(prompt), "consent") && !scopepkg.HasOfflineAccess(requestedScope)
 }
 
 // CompleteAuthFlowInput is an authentication that has just finished a flow's login step.
@@ -344,7 +346,9 @@ func (s *OAuthUserAuthService) MintTokenSetForClient(ctx context.Context, userID
 		return nil, err
 	}
 	sid, _ := establishFirstPartyUserAgent(rmngCtx, userID, login)
-	return s.mintTokenSet(rmngCtx, userID, client.ClientID, scope, resources, audience, sid, time.Now().Unix())
+	// OIDC Core 1.0 s11: offline_access is ignored unless a code is returned, and this channel returns none and shows no consent.
+	grantedScope := scopepkg.Without(scope, scopepkg.OfflineAccess)
+	return s.mintTokenSet(rmngCtx, userID, client.ClientID, grantedScope, resources, audience, sid, time.Now().Unix())
 }
 
 // establishFirstPartyUserAgent degrades a failed session write to sid "" and no cookie, because a lost single sign-on must never block the login.
@@ -374,7 +378,7 @@ func establishFirstPartyUserAgent(rmngCtx *rmngctx.RmngContext, userID string, l
 	return sid, setCookie
 }
 
-// ExchangeAuthCode redeems a code: verify client/redirect/PKCE, pick the access token's resource, consume (single-use), mint. Every failure but the resource's is ErrInvalidGrant (no oracle).
+// ExchangeAuthCode redeems a code: verify client/redirect/PKCE, pick the access token's resource, consume (single-use), mint. Every failure but the resource's and a storage failure is ErrInvalidGrant (no oracle).
 func (s *OAuthUserAuthService) ExchangeAuthCode(ctx context.Context, client *clients.ClientResponse, code, verifier, redirectURI, resource string) (*UserTokens, error) {
 	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, nil)
 	flowsDB := auth_flows_db.NewAuthFlowsDB(rmngCtx)
@@ -401,11 +405,33 @@ func (s *OAuthUserAuthService) ExchangeAuthCode(ctx context.Context, client *cli
 	if err != nil {
 		return nil, err
 	}
+	scope := strings.Join(flow.GrantedScope, " ")
+	// An offline grant will not hang off the browser session that approved it, so nothing would later end one redeemed after that session ended.
+	if scopepkg.HasOfflineAccess(scope) && flow.SID != "" {
+		if _, err := liveSession(rmngCtx, flow.Subject, flow.SID); err != nil {
+			return nil, err
+		}
+	}
 	// Single-use: a lost race or a replay fails the conditional consume — reuse is theft.
 	if err := flowsDB.ConsumeCode(flow.FlowID); err != nil {
 		return nil, ErrInvalidGrant
 	}
-	return s.mintTokenSet(rmngCtx, flow.Subject, flow.ClientID, strings.Join(flow.GrantedScope, " "), flow.Resources, audience, flow.SID, flow.AuthTime)
+	return s.mintTokenSet(rmngCtx, flow.Subject, flow.ClientID, scope, flow.Resources, audience, flow.SID, flow.AuthTime)
+}
+
+// liveSession returns the user's session named sid, or ErrInvalidGrant when it has ended.
+func liveSession(rmngCtx *rmngctx.RmngContext, userID, sid string) (*sessions_db.SessionEntry, error) {
+	row, err := session.NewService(rmngCtx).FindBySID(userID, sid)
+	if errors.Is(err, sessions_db.ErrSessionNotFound) {
+		return nil, ErrInvalidGrant
+	}
+	if err != nil {
+		return nil, err
+	}
+	if row.ExpiresAt != 0 && time.Now().Unix() >= row.ExpiresAt {
+		return nil, ErrInvalidGrant
+	}
+	return row, nil
 }
 
 // appendCodeToRedirect adds code+state as query params, preserving any query the client already set (RFC 6749 §4.1.2).

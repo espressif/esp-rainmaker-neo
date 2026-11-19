@@ -306,7 +306,9 @@ that costs the extension and nothing else — the login still succeeds.
 ### User agents and refresh families
 
 A refresh family created through a user agent carries that user agent's `sid` and keeps it across every
-rotation, so the families opened from one origin share a name.
+rotation, so the families opened from one origin share a name. This is a **session family**. An
+offline grant is the exception: it carries no `sid` and none of this section applies to it (see
+[Offline grants](#offline-grants)).
 
 The rule that makes the user agent list trustworthy:
 
@@ -316,7 +318,7 @@ Maintained by two things together:
 
 1. minting or rotating a family bumps the user agent's `expires_at`, so both clocks are reset by the
    same events; and
-2. **a family's expiry is clamped to its user agent's retention** —
+2. **a session family's expiry is clamped to its user agent's retention** —
    `family.expires_on = min(now + RefreshTokenTTL, user agent.expires_at)`.
 
 The clamp is what makes the invariant hold *by construction, for every provider*, rather than by the
@@ -327,10 +329,34 @@ orphan this design exists to remove. With the clamp, a provider cap also becomes
 capping a provider's user agents at 30 days genuinely ends the app logins opened through them at 30 days.
 
 Consequently a live family has its user agent row, so `GET /v1/user/sessions` cannot report a
-signed-in application it has no way to sign out. The one exception is a family minted from a code redeemed after sign-out, which is refused with `invalid_grant` and deleted at its first rotation. A rotation refuses and deletes a family the same way whenever its session has ended: the by-user index lists no row for its `sid`, or every listed row is past `expires_at`. A listed row that cannot be read yet, as while a re-sign-in replaces it, does not count as ended, and the family rotates at `now + RefreshTokenTTL`. A family with no `sid` — pre-feature rows only — is
-unclamped and is the only thing `unattached_products` can ever contain.
+signed-in application it has no way to sign out. The one exception is a family minted from a code redeemed after sign-out, which is refused with `invalid_grant` and deleted at its first rotation. A rotation refuses and deletes a family the same way whenever its session has ended: the by-user index lists no row for its `sid`, or every listed row is past `expires_at`. A listed row that cannot be read yet, as while a re-sign-in replaces it, does not count as ended, and the family rotates at `now + RefreshTokenTTL`. A family with no `sid` — an offline grant, or a
+session family minted before sessions existed or after a failed session write — is unclamped.
 
 **Constraint for implementers:** `RefreshTokenTTL` must stay `≤ RETAIN_TTL`.
+
+### Offline grants
+
+A client that asks for `offline_access` (OIDC Core 1.0 §11) gets a refresh family that no sign-out
+ends: refresh tokens issued with `offline_access` are normally not revoked at logout (OIDC
+Back-Channel Logout 1.0 §2.7). An assistant link or a connector acts while the person is away, and
+a sign-out in a browser must not unlink it.
+
+- **What makes a family offline:** its stored `scope` contains `offline_access`. There is no other
+  attribute.
+- **Who can get one:** a client whose `scopes` row lists `offline_access`. Any other client asking
+  for it is redirected with `error=invalid_scope`.
+- **Consent, always:** asking for `offline_access` shows the consent screen, even for a client we
+  ship (OIDC Core 1.0 §11), so `prompt=none` with it returns `consent_required`.
+- **Code flow only:** the native and legacy password sign-ins return no code and show no consent, so
+  they drop `offline_access` from the scope and mint an ordinary session family.
+- **Minted with no `sid`:** the family has none, and neither its access tokens nor its ID tokens carry
+  a `sid` claim. Nothing that deletes by `sid` reaches it, and the clamp never applies.
+- **Lifetime:** `RefreshTokenTTL` (365 days), rolling on every rotation, and not bounded by any user
+  agent.
+- **Redeemed only while its approving session lives:** a code with `offline_access` whose browser row has ended is refused, since the grant would outlive the sign-out.
+- **Renewed only while its client may hold it:** a client whose registration no longer allows `offline_access` gets `invalid_grant` on the next refresh, and the grant is not spent.
+- **What ends one:** revoking its own token (`POST /oauth2/revoke`), reuse detection on rotation, and
+  expiry. Signing out of a browser and ending a user agent from the list do not; sign out everywhere still does.
 
 ### Step-up: re-proving identity for sensitive actions
 
@@ -367,7 +393,7 @@ fails closed when it is gone.
 | Constant | Value | Meaning |
 |---|---|---|
 | `RETAIN_TTL` | 400 d | The row's retention and the cookie's `Max-Age`; a rolling inactivity window. |
-| `RefreshTokenTTL` | 365 d | Refresh family lifetime, rolling, clamped to its user agent's `expires_at`. Must stay `≤ RETAIN_TTL` |
+| `RefreshTokenTTL` | 365 d | Refresh family lifetime, rolling. A session family is clamped to its user agent's `expires_at`; an offline grant is not. Must stay `≤ RETAIN_TTL` |
 | `AccessTokenTTL` | 1 h | Access token lifetime, absolute, unrevocable |
 | `IDTokenTTL` | 1 h | ID token lifetime |
 
@@ -665,7 +691,7 @@ Absent means no hop: a deployment that never fills these behaves exactly as it d
 - **Back-channel logout is not implemented.** Ending a user agent deletes the families under it, which is
   complete for an application holding its own tokens. It does not tell a product's *server* to drop a
   session it already holds, so the first product that runs a BFF is what makes the fan-out necessary.
-  `backchannel_logout_uri` is already a client-registry field, so adding it later is not a migration.
+  Adding it needs a `backchannel_logout_uri` field on the client registry, which does not exist yet.
 - **A user agent ended elsewhere is not pushed to open tabs.** A tab keeps its access token until it
   expires and its refresh fails; nothing notifies it sooner.
 - **Access tokens outlive revocation.** They are verified by signature, so a user agent ended now does
@@ -685,5 +711,5 @@ Provider-side session lifetime, which is the provider's own policy and is not di
 OpenID Connect — hence `session_max_ttl_seconds` being an operator's assertion on the provider row.
 Back-channel logout to product BFFs; push-to-open-tabs on remote sign-out; risk-based
 re-authentication; wiring specific endpoints to step-up; a first-party `acr` vocabulary; renaming a
-user agent from the dashboard; the user agent authorization grant (RFC 8628), which is what a keyboard-less
+user agent from the dashboard; the device authorization grant (RFC 8628), which is what a keyboard-less
 user agent needs and is not what a phone app needs.

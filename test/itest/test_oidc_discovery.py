@@ -99,6 +99,9 @@ def test_openid_configuration():
     # discover it will never ask.
     assert SESSIONS_SCOPE in doc.get("scopes_supported", []), \
         f"{OIDC_DOC} advertises {doc.get('scopes_supported')}. {STALE_DOC_HINT}"
+    # OIDC Core 1.0 s11: a client discovers here that it may ask for a grant no sign-out ends.
+    assert "offline_access" in doc.get("scopes_supported", []), \
+        f"{OIDC_DOC} advertises {doc.get('scopes_supported')}. {STALE_DOC_HINT}"
 
     # Every grant the server implements must be advertised, client_credentials included -- the
     # assertion the old test_client_credentials.py used to make about this document.

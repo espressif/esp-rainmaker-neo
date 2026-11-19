@@ -329,6 +329,26 @@ var _ = Describe("session service", func() {
 		})
 	})
 
+	Describe("FindBySID", func() {
+		var svc *session.Service
+
+		BeforeEach(func() {
+			svc = session.NewService(rmngCtx())
+		})
+
+		It("finds the user's own session by sid and nobody else's (negative, cross-user)", func() {
+			_, sid, err := svc.Establish(session.EstablishInput{UserID: "u1", Provider: "up", AuthTime: time.Now().Unix()})
+			Expect(err).NotTo(HaveOccurred())
+
+			row, err := svc.FindBySID("u1", sid)
+			Expect(err).NotTo(HaveOccurred())
+			Expect([]string{row.UserID, row.SID, row.Provider}).To(Equal([]string{"u1", sid, "up"}))
+
+			_, err = svc.FindBySID("u2", sid)
+			Expect(err).To(MatchError(sessions_db.ErrSessionNotFound))
+		})
+	})
+
 	Describe("re-authentication rotates the session (never adds one)", func() {
 		var svc *session.Service
 

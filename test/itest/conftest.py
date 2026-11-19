@@ -2056,11 +2056,7 @@ def allow_if_asked(session, location):
     from urllib.parse import urlparse
     if not urlparse(location).path.endswith("/user/login/consent"):
         return location
-    # The page answers for the sign-in it was drawn for, which is the one the flow cookie names.
-    allowed = session.post(f"{USER_API_GATEWAY_URL}/user/login/consent",
-                           json={"decision": "allow", "flow_id": session.cookies.get(FLOW_COOKIE)})
-    assert allowed.status_code == 200, f"consent: {allowed.status_code} {allowed.text[:300]}"
-    return allowed.json()["redirect_to"]
+    return espuser_oauth.allow_consent(session)
 
 
 def sign_in_on_our_page(session, username, password, provider=None):

@@ -269,6 +269,7 @@ var _ = Describe("GET /oauth2/authorize", func() {
 		},
 		Entry("an unregistered resource", map[string]string{"resource": "https://api.someone-else.example.com"}, oidc.OAuthErrInvalidTarget),
 		Entry("a scope outside the client's allowed set", map[string]string{"scope": "openid admin"}, oidc.OAuthErrInvalidScope),
+		Entry("offline_access from a client not registered for it", map[string]string{"scope": "openid offline_access"}, oidc.OAuthErrInvalidScope),
 	)
 
 	It("lets one sign-in cover several resources (RFC 8707 s2.1)", func() {
@@ -1358,7 +1359,7 @@ var _ = Describe("consent for a client we do not ship", func() {
 		clientsDB := oauth_clients_db.NewOAuthClientsDB(rmngCtx)
 		Expect(clientsDB.CreateClient(&oauth_clients_db.OAuthClientEntry{
 			ClientID: testClientID, ClientType: oauth_clients_db.ClientTypePublic, FirstParty: true,
-			RedirectURIs: []string{redirectURI}, Scopes: []string{"openid", "email"}, RequirePKCE: utils.Ptr(true),
+			RedirectURIs: []string{redirectURI}, Scopes: []string{"openid", "email", "offline_access"}, RequirePKCE: utils.Ptr(true),
 			AllowedResources: []string{testResource, testAccountResource}, DefaultResource: testResource,
 		})).To(Succeed())
 		Expect(clientsDB.CreateClient(&oauth_clients_db.OAuthClientEntry{
@@ -1462,6 +1463,7 @@ var _ = Describe("consent for a client we do not ship", func() {
 		Entry("a client we ship skips it", validQuery(nil), true),
 		Entry("a client we do not ship asks", thirdPartyQuery(nil), false),
 		Entry("a client we ship that sent prompt=consent asks", validQuery(map[string]string{"prompt": "consent"}), false),
+		Entry("a client we ship asking for offline_access asks (OIDC Core 1.0 s11)", validQuery(map[string]string{"scope": "openid email offline_access"}), false),
 	)
 
 	DescribeTable("on an existing session, answers a client we ship at once and holds any other for consent",
@@ -1475,6 +1477,9 @@ var _ = Describe("consent for a client we do not ship", func() {
 		Entry("a client we ship that sent prompt=consent", validQuery(map[string]string{"prompt": "consent"}), Equal(pathConsent)),
 		Entry("prompt=none for a client we do not ship, which cannot show a screen (negative)",
 			thirdPartyQuery(map[string]string{"prompt": "none"}), Equal(thirdPartyCB+"?error=consent_required&state=xyz")),
+		Entry("a client we ship asking for offline_access", validQuery(map[string]string{"scope": "openid email offline_access"}), Equal(pathConsent)),
+		Entry("prompt=none from a client we ship asking for offline_access (negative)",
+			validQuery(map[string]string{"scope": "openid email offline_access", "prompt": "none"}), Equal(redirectURI+"?error=consent_required&state=xyz")),
 	)
 
 	It("describes the app, the account and what is asked for on the consent screen", func() {

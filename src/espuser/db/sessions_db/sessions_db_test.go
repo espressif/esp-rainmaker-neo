@@ -252,6 +252,46 @@ var _ = Describe("SessionsDB", func() {
 		})
 	})
 
+	Describe("GetByUserAndSID", func() {
+		BeforeEach(func() {
+			Expect(db.CreateSession(session("h1", "u1", "s1", now, now+60))).To(Succeed())
+			Expect(db.CreateSession(session("h2", "u1", "s2", now, now-1))).To(Succeed())
+			Expect(db.CreateSession(session("h3", "u2", "s3", now, now+60))).To(Succeed())
+		})
+
+		It("returns the user's row by sid", func() {
+			got, err := db.GetByUserAndSID("u1", "s1")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got.SessionHash).To(Equal("h1"))
+			Expect(got.UserID).To(Equal("u1"))
+		})
+
+		It("returns a row past expires_at", func() {
+			got, err := db.GetByUserAndSID("u1", "s2")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got.SessionHash).To(Equal("h2"))
+		})
+
+		DescribeTable("returns ErrSessionNotFound when the user has no row by that sid (negative)",
+			func(sid string) {
+				_, err := db.GetByUserAndSID("u1", sid)
+				Expect(err).To(MatchError(sessions_db.ErrSessionNotFound))
+			},
+			Entry("an empty sid", ""),
+			Entry("another user's sid", "s3"),
+		)
+
+		It("reports a failed read as an error, not as not-found", func() {
+			boom := errors.New("throttled")
+			backend.DBMock.NextGetItemError = boom
+
+			_, err := db.GetByUserAndSID("u1", "s1")
+			Expect(err).To(MatchError(HavePrefix("failed to read session")))
+			Expect(errors.Is(err, boom)).To(BeTrue())
+			Expect(errors.Is(err, sessions_db.ErrSessionNotFound)).To(BeFalse())
+		})
+	})
+
 	Describe("DeleteByUserAndSID", func() {
 		BeforeEach(func() {
 			Expect(db.CreateSession(session("h1", "u1", "s1", now, now+60))).To(Succeed())

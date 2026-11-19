@@ -97,7 +97,7 @@ Starts the flow. Validates the request, writes a `LOGIN` flow record, and redire
 | `response_type` | yes | Must be `code`. Anything else → `unsupported_response_type`. |
 | `client_id` | yes | Must be a registered client. |
 | `redirect_uri` | yes | Exact match against the client's registered URIs. |
-| `scope` | no | Optional (RFC 6749 §4.1.1); space-delimited; include `openid` for an id_token. Each requested scope must be within the client's allowed scopes. |
+| `scope` | no | Optional (RFC 6749 §4.1.1); space-delimited; include `openid` for an id_token. Each requested scope must be within the client's allowed scopes. `offline_access` asks for a refresh token that no sign-out ends, and always asks for consent (see [Consent](#consent--clients-we-do-not-ship)). |
 | `state` | recommended | Opaque; echoed back on the redirect (client CSRF token). |
 | `code_challenge` | conditional | PKCE (RFC 7636). Required when the client is registered with `require_pkce` (always true for public clients — RFC 9700 §2.1.1); optional otherwise. |
 | `code_challenge_method` | conditional | Must be `S256` when a `code_challenge` is present. |
@@ -110,7 +110,7 @@ Starts the flow. Validates the request, writes a `LOGIN` flow record, and redire
 1. Validate `response_type=code` and that `client_id` is a registered client. A structural failure here renders the **service error page** (we cannot safely redirect yet).
 2. Validate `redirect_uri` is an exact registered URI for the client. Mismatch → error page (never redirect).
 3. PKCE: if the client's `require_pkce` is set, a `code_challenge` MUST be present (RFC 7636 §4.4.1, else `invalid_request`); if a challenge is present its method MUST be `S256`.
-4. Validate requested `scope` ⊆ client's allowed scopes. An over-broad scope → redirect the client with `invalid_scope` (redirect is now safe, the URI is validated).
+4. Validate requested `scope` ⊆ client's allowed scopes (the `scopes` list on its row, `offline_access` included only when listed). An over-broad scope → redirect the client with `invalid_scope` (redirect is now safe, the URI is validated).
 5. Write a `LOGIN` record to [espuser-auth-flows](#espuser-auth-flows): fresh `flow_id`, `client_id`, `requested_scope`, `code_challenge`, `code_challenge_method`, `redirect_uri`, `state`, TTL'd `expires_on`.
 5. Set the `flow_id` in a short-lived `HttpOnly` `Secure` `SameSite=Lax` cookie and `302` to `/user/login`, which carries only `login_hint` and `idp`; or, when the only enabled provider is an `oidc` row, straight to `/user/login/federation/start` for it ([federation.md](federation.md#provider-selection-at-oauth2authorize)).
 
@@ -137,8 +137,10 @@ A client whose row has `first_party` is one we ship (the RainMaker app, the ESP 
 | Sign-in (password, code, Google, or an existing session) | code issued | sign-in held; browser sent to `/user/login/consent` |
 | `prompt=consent` | sign-in held | sign-in held |
 | `prompt=none` with a session | code issued | `error=consent_required` |
+| `offline_access` requested | sign-in held | sign-in held |
 
-- `/oauth2/authorize` makes the decision once, from the client and `prompt` it has just validated, and stores it on the flow as `skip_consent`; every sign-in that finishes the flow (password, code, federation, the session shortcut) reads it from there. An absent `skip_consent` means the person is asked.
+- `offline_access` always asks, whoever the client is: OIDC Core 1.0 §11 requires consent before returning a refresh token that works while the person is away. With `prompt=none` it is `error=consent_required`.
+- `/oauth2/authorize` makes the decision once, from the client, `prompt` and `scope` it has just validated, and stores it on the flow as `skip_consent`; every sign-in that finishes the flow (password, code, federation, the session shortcut) reads it from there. An absent `skip_consent` means the person is asked.
 - **Held** means the flow records the person (`subject`, `sid`, `auth_time`, `granted_scope`) but no `code`, so nothing can be exchanged. The flow keeps its own expiry; an unanswered consent lapses with it.
 - `GET /user/login/consent` draws the screen from the held flow: the client's name (its `client_id` when it has none) and `logo_uri` (a generic app icon when it has none), the signed-in account, and the requested scopes.
 - `POST /user/login/consent` with `{"decision":"allow","flow_id":…}` issues the code, but only to the browser session that signed in: the held flow outlives a sign-out by minutes, so the flow cookie alone does not allow it; `{"decision":"deny","flow_id":…}` deletes the flow and returns `error=access_denied` to the client (RFC 6749 §4.1.2.1). Both answer `{ "redirect_to" }` with `Cache-Control: no-store`; an Allow or Cancel with no sign-in waiting, a repeated one included, and an Allow from a browser without that session, answers `400 expired_flow`.
@@ -228,7 +230,7 @@ The flow record threading a request from `/oauth2/authorize` through OTP login t
 | `code_challenge` / `code_challenge_method` | String | PKCE (`S256`). |
 | `resources` | List<String> | The RFC 8707 resources this sign-in covers; read at the code exchange and carried onto the refresh family. |
 | `sid` | String | The browser session this login ran under; ties the refresh family to its parent session. |
-| `skip_consent` | Bool | Set at `/oauth2/authorize` for a first-party client without `prompt=consent`; absent means the person is asked. |
+| `skip_consent` | Bool | Set at `/oauth2/authorize` for a first-party client without `prompt=consent` or `offline_access`; absent means the person is asked. |
 | `subject` | String | Resolved `user_id`, bound once at sign-in. A `subject` with no `code` is a sign-in held for consent. |
 | `granted_scope` | List<String> | Stamped when the person is bound (= requested). |
 | `code` | String | The single-use authorization code; minted when the record becomes `CODE`. Looked up by a `by-code` GSI. |

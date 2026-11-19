@@ -69,8 +69,7 @@ type Rotation struct {
 	Scope  string
 	// Resources are the sign-in's RFC 8707 resources, from which the renewed access token takes its one audience.
 	Resources []string
-	// SID is the parent browser session carried on the family (empty on families minted
-	// before sessions existed).
+	// SID is the parent browser session carried on the family; empty for an offline_access grant, or when the session write failed or the family predates sessions.
 	SID string
 	// AuthTime is the login's authentication time; zero on families minted before the field existed.
 	AuthTime int64
@@ -161,7 +160,7 @@ func expiresOn() int64 {
 // and returns min(now + TokenTTL, expires_at). The bump and the clamp together hold
 // expires_at >= every live family's expires_on by construction, for every provider -- a
 // provider cap that shortens expires_at genuinely ends the app logins opened through it,
-// instead of orphaning them. A family with no sid (pre-feature) stays unclamped.
+// instead of orphaning them. A family with no sid (an offline_access grant, or a session family minted after a failed session write or before sessions) stays unclamped.
 //
 // A bump error degrades to the plain TTL rather than failing the mint: a login must never be
 // blocked by the session layer. It is logged because a persistent failure (an IAM misgrant on

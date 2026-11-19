@@ -257,8 +257,9 @@ paths:
           required: false
           description:
             Optional (RFC 6749 §4.1.1), space-delimited; include `openid` for an
-            id_token. Each requested scope must be within the client's allowed
-            scopes.
+            id_token. A scope outside the client's allowed scopes returns
+            `error=invalid_scope`. `offline_access` asks for a refresh token no sign-out
+            ends and always shows the consent screen (OIDC Core 1.0 §11).
           schema:
             type: string
             example: "openid email"
@@ -568,6 +569,7 @@ paths:
                     expires_in: 3600
                     refresh_token: "<refresh-token>"
                     id_token: "<id-token>"
+                    scope: "openid email offline_access"
                 clientCredentials:
                   summary: client_credentials
                   value:
@@ -722,6 +724,7 @@ paths:
         - Must be a top-level navigation; a `fetch` does not carry the `SameSite=Lax` session cookie.
         - `post_logout_redirect_uri` must match one registered for the client; otherwise the browser lands on `/user/logout`.
         - Access tokens already issued stay valid until they expire (up to an hour).
+        - Refresh tokens granted with `offline_access` are not under any session, so they stay valid (OIDC Back-Channel Logout 1.0 §2.7).
       tags:
         - OAuth2 / OIDC Core
       security: []
@@ -2026,6 +2029,10 @@ components:
         id_token:
           type: string
           description: Present only if `openid` was requested.
+        scope:
+          type: string
+          description: The granted scope, space-delimited, which can be narrower than the request (RFC 6749 §5.1). Absent for `client_credentials`.
+          example: "openid email offline_access"
 
     OAuthError:
       type: object
@@ -2323,7 +2330,7 @@ components:
           type: array
           items:
             type: string
-            enum: ["openid", "email", "profile", "phone", "account:sessions"]
+            enum: ["openid", "email", "profile", "phone", "account:sessions", "offline_access"]
           example: ["openid", "profile", "email", "phone"]
         require_pkce:
           type: boolean
@@ -2433,7 +2440,7 @@ components:
             effect today.
           items:
             type: string
-            enum: ["openid", "email", "profile", "phone", "account:sessions"]
+            enum: ["openid", "email", "profile", "phone", "account:sessions", "offline_access"]
           default: []
         require_pkce:
           type: boolean
@@ -2521,7 +2528,7 @@ components:
           type: array
           items:
             type: string
-            enum: ["openid", "email", "profile", "phone", "account:sessions"]
+            enum: ["openid", "email", "profile", "phone", "account:sessions", "offline_access"]
         require_pkce:
           type: boolean
         first_party:

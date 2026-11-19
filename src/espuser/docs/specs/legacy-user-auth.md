@@ -30,7 +30,7 @@ needs no change:
 Every route that reaches a Cognito pool (sign-in, signup, signup verify, password recovery and its confirmation, password change) takes an optional `provider` naming the pool, so an account in any password pool can be created, signed in, recovered and changed; the sign-in page sends it, and a main-era client omits it. Refresh and signout touch only our own tokens and take none.
 
 Token response fields (RFC 6749 §5.1 names): `access_token`, `refresh_token`,
-`id_token`, `token_type` (`Bearer`), `expires_in`, `must_change_password`.
+`id_token`, `token_type` (`Bearer`), `expires_in`, `scope` (the granted scope, never `offline_access`), `must_change_password`.
 
 ## The flow, end to end
 

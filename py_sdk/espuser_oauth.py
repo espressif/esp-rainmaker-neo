@@ -74,6 +74,15 @@ def submit_password(session, username, password, provider=None):
     return signed_in, urljoin(f"{API_BASE}/user/login", signed_in.json()["redirect_to"])
 
 
+def allow_consent(session):
+    """Answer Allow on our consent screen for the sign-in the session's flow cookie names, and return where the browser goes next."""
+    allowed = session.post(f"{API_BASE}/user/login/consent", json={
+        "decision": "allow", "flow_id": session.cookies.get(FLOW_COOKIE),
+    }, allow_redirects=False, timeout=30)
+    assert allowed.status_code == 200, f"consent: {allowed.status_code} {allowed.text[:300]}"
+    return allowed.json()["redirect_to"]
+
+
 DEFAULT_SCOPE = "openid email account:sessions"
 
 
@@ -231,7 +240,18 @@ class WebClient:
             authz.used_upstream = False
             return authz
         assert authz.needs_login, f"expected a login page or a code, got {authz!r}"
+        return self._submit_password(browser, person, provider, authz)
 
+    def sign_in_allowing(self, browser, person, *, provider=None, **extra):
+        """sign_in for a sign-in that may be held for consent (a third-party client, or offline_access): answers Allow as the person would."""
+        authz = self.authorize(browser, **extra)
+        if authz.needs_login and not held_for_consent(authz):
+            authz = self._submit_password(browser, person, provider, authz)
+        if not held_for_consent(authz):
+            return authz
+        return Authorization(self, authz.response, authz.verifier, authz.state, allow_consent(browser.session))
+
+    def _submit_password(self, browser, person, provider, authz):
         signed_in, location = submit_password(browser.session, person.email, person.password, provider)
         browser._remember_session_cookie(signed_in)
         done = Authorization(self, signed_in, authz.verifier, authz.state, location)
@@ -311,6 +331,11 @@ class WebClient:
                                    allow_redirects=False)
         browser._remember_session_cookie(resp)
         return resp
+
+
+def held_for_consent(authz):
+    """True when the sign-in stopped at our consent screen instead of returning to the client."""
+    return not authz.returned_to_client and urlparse(authz.location).path.endswith("/user/login/consent")
 
 
 def sids_in(listing):

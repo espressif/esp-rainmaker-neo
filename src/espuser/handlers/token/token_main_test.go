@@ -60,6 +60,21 @@ func seedPublicClient(clientID string) {
 	})).To(Succeed())
 }
 
+func seedClient(entry *oauth_clients_db.OAuthClientEntry) {
+	Expect(oauth_clients_db.NewOAuthClientsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).CreateClient(entry)).To(Succeed())
+}
+
+// offlineClient is testClientID registered for offline_access, or for scopes when given.
+func offlineClient(scopes []string) *oauth_clients_db.OAuthClientEntry {
+	if scopes == nil {
+		scopes = []string{"openid", "email", "offline_access"}
+	}
+	return &oauth_clients_db.OAuthClientEntry{
+		ClientID: testClientID, ClientType: oauth_clients_db.ClientTypePublic, RequirePKCE: utils.Ptr(true),
+		Scopes: scopes, AllowedResources: []string{testResource}, DefaultResource: testResource,
+	}
+}
+
 // mintRefreshToken seeds a live refresh-token family covering testResource and returns its opaque token.
 func mintRefreshToken(userID, scope string, resources ...string) string {
 	if len(resources) == 0 {

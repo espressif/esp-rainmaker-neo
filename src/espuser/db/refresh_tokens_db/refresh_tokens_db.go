@@ -11,6 +11,7 @@ import (
 	"errors"
 
 	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/scope"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
@@ -62,7 +63,7 @@ type FamilyEntry struct {
 	Scope        string `dynamodbav:"scope,omitempty"`
 	// Resources are the RFC 8707 resources the sign-in covers; every renewal mints its one audience from among them.
 	Resources []string `dynamodbav:"resources,omitempty"`
-	// SID names the browser session this login ran under (the sessions table's public id), so ending a session can end the refresh families created through it. Empty when the session write failed or the family predates sessions.
+	// SID names the browser session this login ran under (the sessions table's public id), so ending a session can end the refresh families created through it. Empty for an offline_access grant, or when the session write failed or the family predates sessions.
 	SID string `dynamodbav:"sid,omitempty"`
 	// AuthTime is the login's authentication time, so a refreshed ID token never claims a fresh sign-in; zero on older families.
 	AuthTime  int64 `dynamodbav:"auth_time,omitempty"`
@@ -72,6 +73,11 @@ type FamilyEntry struct {
 	// CreatedAt is when this application first got a token under this login. A sessions
 	// screen reads it as "connected since"; rotated_at is the "last used" beside it.
 	CreatedAt int64 `dynamodbav:"created_at,omitempty"`
+}
+
+// IsOffline reports whether the family is an offline_access grant, the kind no sign-out ends (OIDC Core 1.0 s11).
+func (e *FamilyEntry) IsOffline() bool {
+	return scope.HasOfflineAccess(e.Scope)
 }
 
 // SetKey composes the SK from client_id + family_id.

@@ -47,7 +47,7 @@ const (
 // SessionView is one browser. Clients are nested under it rather than listed beside it because that is the shape of the thing: you do not sign out of an application, you sign out of a browser, and every application opened in it goes with it.
 type SessionView struct {
 	SID string `json:"session_id"`
-	// Current marks the session this request's own token was minted under, so a UI can label it and warn before ending it. False when the token carries no sid: it predates sessions, or the session write failed.
+	// Current marks the session this request's own token was minted under, so a UI can label it and warn before ending it. False when the token carries no sid: it is an offline_access grant, it predates sessions, or the session write failed.
 	Current bool `json:"current"`
 	// UserAgentType is the readable rendering of UserAgent, derived at render time rather than stored so the parser can improve without a migration.
 	UserAgentType string `json:"user_agent_type"`

@@ -89,6 +89,7 @@ var _ = Describe("OAuth token endpoint (authorization_code grant)", func() {
 		Expect(tokens["access_token"]).NotTo(BeEmpty())
 		Expect(tokens["refresh_token"]).NotTo(BeEmpty())
 		Expect(tokens["id_token"]).NotTo(BeEmpty(), "openid was in scope")
+		Expect(tokens["scope"]).To(Equal("openid email"), "RFC 6749 s5.1: the response names the granted scope")
 
 		// Three reads and two writes per code exchange:
 		//

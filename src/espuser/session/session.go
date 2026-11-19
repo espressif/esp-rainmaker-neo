@@ -247,7 +247,7 @@ func (s *Service) Find(cookieValue string) (*Session, error) {
 
 // BumpRetentionBySID rolls a user agent's expires_at forward from a BACK-channel token event and
 // returns the new expires_at so the token path can clamp the refresh family's expiry to it.
-// Returns sessions_db.ErrSessionNotFound when the session has ended, and (0, nil) when sid is empty (a pre-feature family) or the session cannot be confirmed either way; cookie_expires_at is never touched here.
+// Returns sessions_db.ErrSessionNotFound when the session has ended, and (0, nil) when sid is empty (an offline_access grant, or a family minted after a failed session write or before sessions) or the session cannot be confirmed either way; cookie_expires_at is never touched here.
 func (s *Service) BumpRetentionBySID(userID, sid string) (expiresAt int64, err error) {
 	if sid == "" {
 		return 0, nil
@@ -269,6 +269,11 @@ func (s *Service) MaxAge() int64 { return int64(SessionTTLSeconds) }
 // ListSessions returns every live session the user has, newest first, for the user agent list.
 func (s *Service) ListSessions(userID string) ([]sessions_db.SessionEntry, error) {
 	return sessions_db.NewSessionsDB(s.ctx).ListByUser(userID)
+}
+
+// FindBySID reads the user's session named sid; sessions_db.ErrSessionNotFound when there is none, the cross-user case included.
+func (s *Service) FindBySID(userID, sid string) (*sessions_db.SessionEntry, error) {
+	return sessions_db.NewSessionsDB(s.ctx).GetByUserAndSID(userID, sid)
 }
 
 // DeleteSessionBySID ends one session the user owns. sessions_db.ErrSessionNotFound when no

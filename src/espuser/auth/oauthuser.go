@@ -79,6 +79,10 @@ func NewOAuthUserAuthService(ctx context.Context) (*OAuthUserAuthService, error)
 // family (via refreshtoken). The two service packages compose symmetrically here.
 // sid ties the family to the browser session the login ran under; empty means none.
 func (s *OAuthUserAuthService) mintTokenSet(rmngCtx *rmngctx.RmngContext, userID, clientID, scope string, resources []string, audience, sid string, authTime int64) (*UserTokens, error) {
+	// OIDC Back-Channel Logout 1.0 s2.7: an offline_access grant is not ended by logout, so it belongs to no session.
+	if scopepkg.HasOfflineAccess(scope) {
+		sid = ""
+	}
 	refreshToken, err := refreshtoken.NewService(rmngCtx).MintRefreshtoken(userID, clientID, scope, resources, sid, authTime)
 	if err != nil {
 		return nil, err
@@ -144,6 +148,7 @@ func (s *OAuthUserAuthService) signTokens(ctx context.Context, userID, clientID,
 		RefreshToken: refreshToken,
 		TokenType:    oidc.TokenTypeBearer,
 		ExpiresIn:    int(jwtutil.AccessTokenTTL.Seconds()),
+		Scope:        scope,
 	}, nil
 }
 
@@ -373,6 +378,10 @@ func (s *OAuthUserAuthService) RefreshToken(ctx context.Context, client *clients
 	// Rotate's precheck runs before the counter advances, so a refused audience leaves the login usable.
 	var audience string
 	rotation, err := refresh.Rotate(client.ClientID, refreshToken, func(family *refresh_tokens_db.FamilyEntry) error {
+		// Taking offline_access from a client stops its grants at their next renewal instead of a year later.
+		if family.IsOffline() && !client.AllowsScopes(scopepkg.OfflineAccess) {
+			return ErrInvalidGrant
+		}
 		// A family minted before resources were recorded has no audience to renew into, so that login starts over.
 		if len(family.Resources) == 0 {
 			return ErrInvalidGrant
