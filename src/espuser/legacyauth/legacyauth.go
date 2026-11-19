@@ -23,7 +23,6 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/identity_providers_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/user_details_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/idp"
-	"github.com/espressif/esp-rainmaker-neo/src/espuser/refreshtoken"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/session"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/signout"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
@@ -387,7 +386,7 @@ func (s *Service) Signout(ctx context.Context, refreshToken string) error {
 	if refreshToken == "" {
 		return nil
 	}
-	return refreshtoken.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil)).RevokeFamily(refreshToken)
+	return signout.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil)).RevokeFamily(legacyClientID, refreshToken)
 }
 
 // Read unverified because we obtained this token ourselves

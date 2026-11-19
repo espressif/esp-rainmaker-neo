@@ -6,12 +6,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/refresh_tokens_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
@@ -21,7 +23,7 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 )
 
-// RFC 7009 revoke endpoint: revokes only the one presented refresh token (D13); an access token is a no-op. Spec: espuser/docs/en/specs/auth-flows.md.
+// RFC 7009 revoke endpoint: ends the presented refresh token's whole family, for the client it was issued to; an access token is a no-op. Spec: espuser/docs/en/specs/auth-flows.md.
 const pathRevoke = "/oauth2/revoke"
 
 type RevokeRequest struct {
@@ -49,22 +51,30 @@ func handleRevoke(ctx context.Context, request events.APIGatewayProxyRequest) (e
 		return oidc.OAuthErrorResp(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "client_id is required."), nil
 	}
 	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, nil)
-	if _, errCode, internal := clients.NewService(rmngCtx).AuthenticateForOAuth(clientID, clientSecret); errCode != "" {
-		status := http.StatusUnauthorized
+	client, errCode, internal := clients.NewService(rmngCtx).AuthenticateForOAuth(clientID, clientSecret)
+	if errCode != "" {
 		if internal {
-			status = http.StatusInternalServerError
+			return oidc.OAuthErrorResp(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
 		}
-		return oidc.OAuthErrorResp(status, errCode, "client authentication failed."), nil
+		return oidc.OAuthErrorResp(http.StatusUnauthorized, errCode, "client authentication failed."), nil
 	}
 
 	svc, err := auth.NewOAuthUserAuthService(ctx)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Msg("Failed to build auth service")
-		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Internal server error")), nil
+		return oidc.OAuthErrorResp(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
 	}
 
-	// Uniform 200 (RFC 7009 §2.2): unknown/malformed tokens are swallowed so the endpoint is no oracle.
-	_ = svc.RevokeRefreshToken(ctx, req.Token)
+	// RFC 7009 s2.1 and RFC 6749 s5.2: another client's token is refused; unknown or malformed tokens still get the uniform 200 (s2.2).
+	err = svc.RevokeRefreshToken(ctx, client.ClientID, req.Token)
+	if errors.Is(err, refresh_tokens_db.ErrRefreshClientMismatch) {
+		return oidc.OAuthErrorResp(http.StatusBadRequest, oidc.OAuthErrInvalidGrant, "The token was not issued to this client."), nil
+	}
+	if err != nil {
+		// RFC 7009 s2.2.1: a 503 tells the client the token still exists and the revocation should be retried.
+		rlog.Error(ctx).Err(err).Msg("Failed to revoke refresh token")
+		return oidc.OAuthErrorResp(http.StatusServiceUnavailable, oidc.OAuthErrTemporarilyUnavailable, "The token could not be revoked; retry later."), nil
+	}
 
 	return utils.APIGwRespText(http.StatusOK, ""), nil
 }

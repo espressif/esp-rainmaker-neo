@@ -187,7 +187,8 @@ var _ = Describe("refreshtoken.Service", func() {
 			// Minted then the family deleted out from under it via RevokeFamily.
 			token, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, "", 0)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(svc.RevokeFamily(token)).To(Succeed())
+			_, err = svc.RevokeFamily(clientID, token)
+			Expect(err).NotTo(HaveOccurred())
 
 			_, err = svc.Rotate(clientID, token)
 			Expect(err).To(HaveOccurred())
@@ -261,30 +262,48 @@ var _ = Describe("refreshtoken.Service", func() {
 	})
 
 	Describe("RevokeFamily", func() {
-		It("kills a live token's family so it can no longer rotate", func() {
+		DescribeTable("binds the revocation to the presenting client",
+			func(presenter string, rotateFirst bool, revokeErr error, familyDead bool) {
+				token, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, "", 0)
+				Expect(err).NotTo(HaveOccurred())
+				if rotateFirst {
+					rotated, err := svc.Rotate(clientID, token)
+					Expect(err).NotTo(HaveOccurred())
+					token = rotated.Token
+				}
+
+				revoked, err := svc.RevokeFamily(presenter, token)
+				if revokeErr != nil {
+					Expect(err).To(MatchError(revokeErr))
+					Expect(revoked).To(BeNil())
+				} else {
+					Expect(err).NotTo(HaveOccurred())
+					Expect([]string{revoked.UserID, revoked.ClientID}).To(Equal([]string{"user-123", clientID}))
+				}
+
+				_, err = svc.Rotate(clientID, token)
+				Expect(err != nil).To(Equal(familyDead))
+			},
+			Entry("its own client revokes the login", clientID, false, nil, true),
+			Entry("its own client revokes the login through the current rotated token", clientID, true, nil, true),
+			Entry("another client is refused and the login keeps working (negative)", otherClient, false, refresh_tokens_db.ErrRefreshClientMismatch, false),
+		)
+
+		It("returns no family for a token whose family is already revoked", func() {
 			token, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, "", 0)
 			Expect(err).NotTo(HaveOccurred())
+			_, err = svc.RevokeFamily(clientID, token)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(svc.RevokeFamily(clientID, token)).To(BeNil())
+		})
 
-			Expect(svc.RevokeFamily(token)).To(Succeed())
-
+		It("refuses a forged token and revokes nothing (negative)", func() {
+			token, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, "", 0)
+			Expect(err).NotTo(HaveOccurred())
+			_, err = svc.RevokeFamily(clientID, tamper(token))
+			Expect(err).To(MatchError(refresh_tokens_db.ErrRefreshInvalid))
 			_, err = svc.Rotate(clientID, token)
-			Expect(err).To(HaveOccurred())
-		})
-
-		It("kills the whole login when a rotated (current) token is revoked", func() {
-			original, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, "", 0)
 			Expect(err).NotTo(HaveOccurred())
-			rotated, err := svc.Rotate(clientID, original)
-			Expect(err).NotTo(HaveOccurred())
-
-			Expect(svc.RevokeFamily(rotated.Token)).To(Succeed())
-
-			_, err = svc.Rotate(clientID, rotated.Token)
-			Expect(err).To(HaveOccurred())
-		})
-
-		It("rejects revoking a malformed token (negative)", func() {
-			Expect(svc.RevokeFamily("no-dot-here")).NotTo(Succeed())
 		})
 	})
 

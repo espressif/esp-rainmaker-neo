@@ -30,6 +30,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/user_details_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/refreshtoken"
 	scopepkg "github.com/espressif/esp-rainmaker-neo/src/espuser/scope"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/signout"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/jwtutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
@@ -634,17 +635,16 @@ func (s *OAuthUserAuthService) VerifyIDToken(token string) (TokenClaims, error) 
 	return s.verifyOwnToken(token, jwtutil.TokenUseID)
 }
 
-// RevokeRefreshToken revokes the presented token's whole family (RFC 7009 §2.1: revoking a
-// token MAY revoke the underlying grant — here the login's family), which also ends the session.
-// Errors are swallowed so the endpoint stays a non-oracle 200 (§2.2). Access tokens are stateless
-// RS256 JWTs and cannot be revoked server-side, so the §2.2 SHOULD for access tokens does not apply.
-func (s *OAuthUserAuthService) RevokeRefreshToken(ctx context.Context, refreshToken string) error {
+// RevokeRefreshToken revokes the presented token's whole family (RFC 7009 s2.1) and returns refresh_tokens_db.ErrRefreshClientMismatch for a token issued to another client.
+// An invalid token is a no-op so the endpoint stays a non-oracle 200 (RFC 7009 s2.2); a storage failure is returned so the client keeps the token and retries (s2.2.1).
+func (s *OAuthUserAuthService) RevokeRefreshToken(ctx context.Context, clientID, refreshToken string) error {
 	if refreshToken == "" {
 		return nil
 	}
-	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, nil)
-	if err := refreshtoken.NewService(rmngCtx).RevokeFamily(refreshToken); err != nil {
-		rlog.Info(ctx).Err(err).Msg("Revoke no-op (token unknown or malformed)")
+	err := signout.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil)).RevokeFamily(clientID, refreshToken)
+	if errors.Is(err, refresh_tokens_db.ErrRefreshInvalid) {
+		rlog.Warn(ctx).Err(err).Msg("Revoke no-op for an invalid refresh token")
+		return nil
 	}
-	return nil
+	return err
 }

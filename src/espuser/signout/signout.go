@@ -31,6 +31,16 @@ func NewService(rmngCtx *rmngctx.RmngContext) *Service {
 	return &Service{ctx: rmngCtx, refreshTokens: refreshtoken.NewService(rmngCtx), sessions: session.NewService(rmngCtx)}
 }
 
+// RevokeFamily is an app ending its own login (RFC 7009); the errors are refreshtoken.Service.RevokeFamily's. An app session left with no login goes too, so the signed-in list stops showing an app that cannot renew.
+func (s *Service) RevokeFamily(clientID, refreshToken string) error {
+	revoked, err := s.refreshTokens.RevokeFamily(clientID, refreshToken)
+	if err != nil || revoked == nil {
+		return err
+	}
+	s.endEmptyAppSessions(revoked.UserID, []refresh_tokens_db.FamilyEntry{*revoked})
+	return nil
+}
+
 // EndSession ends one session and every login opened through it; sessions_db.ErrSessionNotFound when the user has no session by that sid.
 func (s *Service) EndSession(userID, sid string) error {
 	if _, err := s.refreshTokens.DeleteFamiliesBySID(userID, sid); err != nil {

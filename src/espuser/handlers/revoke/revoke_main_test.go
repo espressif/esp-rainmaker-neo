@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"net/url"
 	"testing"
 	"time"
@@ -14,8 +15,10 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/sessions_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/refreshtoken"
+	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -56,11 +59,17 @@ func basicReq(clientID, clientSecret, body string) events.APIGatewayProxyRequest
 	return req
 }
 
+// The refresh-tokens table as the test backend names it.
+const refreshTokensTable = "espuser-refresh-tokens"
+
 var _ = Describe("RFC 7009 revoke endpoint", func() {
-	var svc *refreshtoken.Service
+	var (
+		svc     *refreshtoken.Service
+		backend *test_utils.EspUserBackend
+	)
 
 	BeforeEach(func() {
-		test_utils.SetupEspUserBackend(context.Background())
+		backend = test_utils.SetupEspUserBackend(context.Background())
 		svc = refreshtoken.NewService(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
 
 		// Register the public client that presents tokens for revocation.
@@ -135,12 +144,81 @@ var _ = Describe("RFC 7009 revoke endpoint", func() {
 		Expect(rotErr).To(HaveOccurred(), "the login's current token must be rejected after its family is revoked")
 	})
 
+	It("lets a client end its own offline_access grant, which no sign-out reaches (RFC 7009 s2.1)", func() {
+		token, err := svc.MintRefreshtoken("user-123", testClientID, "openid offline_access", nil, "", 0)
+		Expect(err).NotTo(HaveOccurred())
+
+		resp, err := handleRevokeRequest(context.Background(), basicReq(testClientID, "", form(map[string]string{"token": token})))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.StatusCode).To(Equal(200))
+
+		_, rotErr := svc.Rotate(testClientID, token)
+		Expect(rotErr).To(HaveOccurred(), "a disconnected assistant or connector must not refresh again")
+	})
+
+	It("answers 500 server_error when the client registry cannot be read, and revokes nothing (negative)", func() {
+		token, err := svc.MintRefreshtoken("user-123", testClientID, "openid", nil, "", 0)
+		Expect(err).NotTo(HaveOccurred())
+
+		backend.DBMock.NextGetItemError = errors.New("throttled")
+		resp, err := handleRevokeRequest(context.Background(), basicReq(testClientID, "", form(map[string]string{"token": token})))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.StatusCode).To(Equal(500))
+		Expect(resp.Body).To(ContainSubstring(`"error":"server_error"`))
+		Expect(resp.Body).To(ContainSubstring(`"error_description":"Internal server error."`))
+
+		_, rotErr := svc.Rotate(testClientID, token)
+		Expect(rotErr).NotTo(HaveOccurred(), "a revocation that failed on our side must not have ended the login")
+	})
+
+	It("refuses another client's token with 400 invalid_grant and leaves the login working (RFC 7009 s2.1, negative)", func() {
+		const otherClientID = "rm_dashboard"
+		_, err := clients.NewService(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).Create(clients.CreateInput{
+			ClientID: otherClientID, ClientName: "Dashboard", ClientType: "public",
+			GrantTypes: []string{"authorization_code", "refresh_token"}, RequirePKCE: utils.Ptr(true),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		token, err := svc.MintRefreshtoken("user-123", testClientID, "openid", nil, "", 0)
+		Expect(err).NotTo(HaveOccurred())
+
+		resp, err := handleRevokeRequest(context.Background(), basicReq(otherClientID, "", form(map[string]string{"token": token})))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.StatusCode).To(Equal(400))
+		Expect(resp.Body).To(ContainSubstring("invalid_grant"))
+
+		_, rotErr := svc.Rotate(testClientID, token)
+		Expect(rotErr).NotTo(HaveOccurred(), "a client must not be able to end a login it was never issued")
+	})
+
 	It("returns 200 for an unknown token without revealing it never existed (no oracle)", func() {
 		resp, err := handleRevokeRequest(context.Background(), basicReq(testClientID, "", form(map[string]string{"token": "deadbeef.cafef00d"})))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.StatusCode).To(Equal(200))
 		Expect(resp.Body).To(BeEmpty())
 	})
+
+	DescribeTable("answers 503 temporarily_unavailable when storage fails and leaves the login working (RFC 7009 s2.2.1, negative)",
+		func(fault func(*mock.DynamoDBMock) awscommon.DynamoDBClientInterface) {
+			token, err := svc.MintRefreshtoken("user-123", testClientID, "openid", nil, "", 0)
+			Expect(err).NotTo(HaveOccurred())
+
+			awscommon.SetDynamoDBClient(fault(backend.DBMock))
+			resp, err := handleRevokeRequest(context.Background(), basicReq(testClientID, "", form(map[string]string{"token": token})))
+			awscommon.SetDynamoDBClient(backend.DBMock)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(503))
+			Expect(resp.Body).To(ContainSubstring("temporarily_unavailable"))
+
+			_, rotErr := svc.Rotate(testClientID, token)
+			Expect(rotErr).NotTo(HaveOccurred(), "a revocation that answered 503 must not have ended the login")
+		},
+		Entry("the family read fails", func(db *mock.DynamoDBMock) awscommon.DynamoDBClientInterface {
+			return &mock.FailingGetItem{DynamoDBMock: db, TableName: refreshTokensTable}
+		}),
+		Entry("the family delete fails", func(db *mock.DynamoDBMock) awscommon.DynamoDBClientInterface {
+			return &mock.FailingDeleteItem{DynamoDBMock: db, TableName: refreshTokensTable}
+		}),
+	)
 
 	It("returns 200 for a malformed token (negative, still a no-op)", func() {
 		resp, err := handleRevokeRequest(context.Background(), basicReq(testClientID, "", form(map[string]string{"token": "not-a-token"})))

@@ -152,6 +152,11 @@ var _ = Describe("signout.Service", func() {
 			Expect(families(asha)).To(Equal(ashaFamilies))
 			Expect(sessionSIDs(asha)).To(Equal([]string{"ashaBrowser"}))
 		},
+		Entry("1. App 1 signs itself out: its login and its app session, nothing else",
+			func(s *signout.Service) error {
+				return s.RevokeFamily(homeApp, tokens[ravi+"/"+homeApp+"@appSession1"])
+			},
+			[]string{homeApp + "@appSession1"}, []string{"appSession1"}, [2]int{8, 2}),
 		Entry("2. One browser session signs out: that browser's web login; both apps and the connected apps stay",
 			func(s *signout.Service) error { return s.EndSession(ravi, "browserSession1") },
 			[]string{webApp + "@browserSession1"}, []string{"browserSession1"}, [2]int{7, 2}),
@@ -168,6 +173,40 @@ var _ = Describe("signout.Service", func() {
 			func(s *signout.Service) error { return s.EndAllSessionsAndConnectedApps(ravi) },
 			raviFamilies, raviSessions, [2]int{10, 10}),
 	)
+
+	Describe("RevokeFamily", func() {
+		It("keeps an app session while another login still carries its sid", func() {
+			mint(ravi, appB, sessionful, "appSession1")
+			Expect(signout.NewService(rmngCtx).RevokeFamily(homeApp, tokens[ravi+"/"+homeApp+"@appSession1"])).To(Succeed())
+			Expect(sessionSIDs(ravi)).To(ContainElement("appSession1"))
+		})
+
+		It("never removes a browser session, whose cookie can still sign in", func() {
+			Expect(signout.NewService(rmngCtx).RevokeFamily(webApp, tokens[ravi+"/"+webApp+"@browserSession1"])).To(Succeed())
+			Expect(families(ravi)).To(Equal(without(raviFamilies, webApp+"@browserSession1")))
+			Expect(sessionSIDs(ravi)).To(Equal(raviSessions))
+		})
+
+		It("refuses another client's token and ends nothing (negative)", func() {
+			err := signout.NewService(rmngCtx).RevokeFamily(appB, tokens[ravi+"/"+homeApp+"@appSession1"])
+			Expect(err).To(MatchError(refresh_tokens_db.ErrRefreshClientMismatch))
+			Expect(families(ravi)).To(Equal(raviFamilies))
+			Expect(sessionSIDs(ravi)).To(Equal(raviSessions))
+		})
+
+		It("succeeds for a login already revoked", func() {
+			svc := signout.NewService(rmngCtx)
+			Expect(svc.RevokeFamily(homeApp, tokens[ravi+"/"+homeApp+"@appSession1"])).To(Succeed())
+			Expect(svc.RevokeFamily(homeApp, tokens[ravi+"/"+homeApp+"@appSession1"])).To(Succeed())
+		})
+
+		It("still ends the login when the app session cannot be read", func() {
+			awscommon.SetDynamoDBClient(&mock.FailingIndexQuery{DynamoDBMock: backend.DBMock, IndexName: sessions_db.SessionsByUserIndex})
+			Expect(signout.NewService(rmngCtx).RevokeFamily(homeApp, tokens[ravi+"/"+homeApp+"@appSession1"])).To(Succeed())
+			awscommon.SetDynamoDBClient(backend.DBMock)
+			Expect(families(ravi)).To(Equal(without(raviFamilies, homeApp+"@appSession1")))
+		})
+	})
 
 	Describe("EndSession", func() {
 		It("answers ErrSessionNotFound for another person's session and ends nothing of theirs (negative, cross-user)", func() {

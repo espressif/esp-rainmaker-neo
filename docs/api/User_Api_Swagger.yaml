@@ -670,7 +670,7 @@ paths:
     post:
       summary: OAuth token revocation endpoint
       description: |
-        Ends the login the refresh token belongs to: its whole refresh family, for that application only. An access token is accepted and ignored. Always `200`, even for an unknown token.
+        Ends the refresh token's whole login; only the client it was issued to may revoke it (RFC 7009 §2.1), and an access token or an unknown or already revoked token gets `200` (§2.2).
 
         The client identifies itself with HTTP Basic (confidential) or the `client_id` form field (public). Neither returns `400 invalid_request`; a bad secret or unknown client returns `401 invalid_client`.
       tags:
@@ -690,11 +690,21 @@ paths:
         "400":
           description:
             invalid_request — the `token` is missing, or neither Basic nor
-            `client_id` was supplied.
+            `client_id` was supplied. invalid_grant — the refresh token was
+            issued to another client (RFC 6749 §5.2).
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/OAuthError"
+              examples:
+                missingToken:
+                  value:
+                    error: invalid_request
+                    error_description: token is required.
+                anotherClientsToken:
+                  value:
+                    error: invalid_grant
+                    error_description: The token was not issued to this client.
         "401":
           description:
             invalid_client — unknown client, or a confidential client with a
@@ -703,6 +713,28 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/OAuthError"
+              example:
+                error: invalid_client
+                error_description: client authentication failed.
+        "503":
+          description:
+            temporarily_unavailable — the token may still work; retry later (RFC 7009 §2.2.1).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: temporarily_unavailable
+                error_description: The token could not be revoked; retry later.
+        "500":
+          description: server_error — the client could not be checked; nothing was revoked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: server_error
+                error_description: Internal server error.
 
   # ==========================================
   # GROUP 4: Authenticated User Profile
@@ -1718,7 +1750,7 @@ paths:
     post:
       summary: Sign out
       description: |
-        Ends the login the refresh token belongs to (its refresh family), the same as `/oauth2/revoke`. `global: "true"` is refused with `400`; sign out each login with its own refresh token.
+        Ends the login the refresh token belongs to, as `/oauth2/revoke` does for the RainMaker Home app client; a login that has already ended also answers `200`. `global: "true"` is refused with `400`.
       tags:
         - User Auth
       security: []
@@ -1738,16 +1770,50 @@ paths:
                     Accepted for compatibility; `"true"` is rejected with `400`.
       responses:
         "200":
-          description: Signed out.
-        "400":
-          description:
-            Refresh token missing, or a global signout was requested.
+          description: Signed out, or the login had already ended.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+              example:
+                message: Successfully signed out
+        "400":
+          description: The body cannot be parsed, the refresh token is missing, or a global sign-out was requested.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                missingToken:
+                  value:
+                    message: Refresh token is required
+                global:
+                  value:
+                    message: Global signout is not supported; sign out each session with its refresh token
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: The refresh token is forged or malformed, or was issued to another client.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: Invalid refresh token
+        "500":
+          description: The service could not start; nothing was signed out.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: Internal server error
+        "503":
+          description: The sign-out could not be recorded; the token still works, so retry.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: Sign-out failed; try again
 
   /v1/users/{userId}:
     parameters:

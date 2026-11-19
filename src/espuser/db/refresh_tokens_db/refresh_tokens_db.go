@@ -34,6 +34,10 @@ var (
 	// Presented counter is below the family's current counter: a spent/replayed token (reuse=theft).
 	ErrRefreshReuse   = errors.New("refresh token reuse detected")
 	ErrRefreshExpired = errors.New("refresh token expired")
+	// The token was issued to a different client than the one presenting it (RFC 6749 s6, RFC 7009 s2.1).
+	ErrRefreshClientMismatch = errors.New("refresh token client mismatch")
+	// The token is empty, malformed or not signed by us, so it names no family (RFC 7009 s2.2: revoking it is a no-op).
+	ErrRefreshInvalid = errors.New("invalid refresh token")
 )
 
 type RefreshTokensDB struct {

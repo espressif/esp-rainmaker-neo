@@ -289,14 +289,14 @@ func (s *Service) Rotate(clientID, refreshToken string, precheck ...func(*refres
 // client-mismatch errors are already framed.
 func (s *Service) parseTokenForClient(clientID, refreshToken string) (claims, *refresh_tokens_db.FamilyEntry, error) {
 	if refreshToken == "" || clientID == "" {
-		return claims{}, nil, rmerror.NewRMError(nil, "client id and refresh token are required")
+		return claims{}, nil, rmerror.NewRMError(refresh_tokens_db.ErrRefreshInvalid, "client id and refresh token are required")
 	}
 	c, err := s.parseToken(refreshToken)
 	if err != nil {
-		return claims{}, nil, rmerror.NewRMError(err, "invalid refresh token")
+		return claims{}, nil, rmerror.NewRMError(errors.Join(refresh_tokens_db.ErrRefreshInvalid, err), "invalid refresh token")
 	}
 	if c.ClientID != clientID {
-		return claims{}, nil, rmerror.NewRMError(nil, "refresh token client mismatch")
+		return claims{}, nil, rmerror.NewRMError(refresh_tokens_db.ErrRefreshClientMismatch, "refresh token client mismatch")
 	}
 	family, err := s.db.GetFamily(c.UserID, c.ClientID, c.FamilyID)
 	if err != nil {
@@ -305,18 +305,20 @@ func (s *Service) parseTokenForClient(clientID, refreshToken string) (claims, *r
 	return c, family, nil
 }
 
-// RevokeFamily terminates the whole family a token belongs to — the /oauth2/revoke endpoint
-// (RFC 7009 §2.1: revoking a token MAY revoke the underlying grant), sign-out, and detected
-// theft all end the login by deleting its family row. An unparseable token is a no-op error.
-func (s *Service) RevokeFamily(refreshToken string) error {
-	c, err := s.parseToken(refreshToken)
+// RevokeFamily ends the family a token belongs to (RFC 7009 s2.1: revoking a token MAY revoke the underlying grant) and returns it, or nil when it was already gone.
+// A token issued to another client is refused with ErrRefreshClientMismatch and an empty or forged one with ErrRefreshInvalid; any other error is a storage failure.
+func (s *Service) RevokeFamily(clientID, refreshToken string) (*refresh_tokens_db.FamilyEntry, error) {
+	c, family, err := s.parseTokenForClient(clientID, refreshToken)
+	if errors.Is(err, refresh_tokens_db.ErrRefreshNotFound) {
+		return nil, nil
+	}
 	if err != nil {
-		return rmerror.NewRMError(err, "invalid refresh token")
+		return nil, rmerror.NewRMError(err, "failed to revoke refresh token family")
 	}
 	if err := s.db.DeleteFamily(c.UserID, c.ClientID, c.FamilyID); err != nil {
-		return rmerror.NewRMError(err, "failed to revoke refresh token family")
+		return nil, rmerror.NewRMError(err, "failed to revoke refresh token family")
 	}
-	return nil
+	return family, nil
 }
 
 // ListFamilies returns every refresh family the user holds -- one per application per login --

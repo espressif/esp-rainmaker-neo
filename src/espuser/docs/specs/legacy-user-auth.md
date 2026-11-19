@@ -145,7 +145,7 @@ Cognito answers some correct passwords with a challenge rather than tokens; thos
 - **signup / verify / password-recovery / password**: operate directly on the
   Cognito pool (`SignUp`, `ConfirmSignUp`, `ForgotPassword`, `ConfirmForgotPassword`,
   `ChangePassword`), exactly as `main`. These do not mint tokens.
-- **signout**: revokes **our** refresh token / family (our revoke path). A missing refresh token is
+- **signout**: revokes **our** refresh token / family through our revoke path as the Home app client, so a token issued to another client is refused with `401`. A missing refresh token is
   rejected rather than reported as success, and a global signout request is refused: our sessions are
   refresh families of ours, which a provider-side sign-out does not touch, so a success there would
   mean nothing was ended.

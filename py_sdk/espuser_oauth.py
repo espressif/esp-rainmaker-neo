@@ -343,6 +343,11 @@ class WebClient:
         return resp
 
 
+def revoke_refresh_token(client_id, refresh_token):
+    """RFC 7009 revocation of a refresh token by the public client it was issued to."""
+    return requests.post(f"{API_BASE}/oauth2/revoke", data={"token": refresh_token, "client_id": client_id}, timeout=30)
+
+
 def held_for_consent(authz):
     """True when the sign-in stopped at our consent screen instead of returning to the client."""
     return not authz.returned_to_client and urlparse(authz.location).path.endswith("/user/login/consent")

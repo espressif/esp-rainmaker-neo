@@ -15,6 +15,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/oauth_clients_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/sessions_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/legacyauth"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/refreshtoken"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/session"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
@@ -139,6 +140,63 @@ var _ = Describe("legacy token responses (RFC 6749 s5.1)", func() {
 		refresh := post(pathRefresh, map[string]any{"refresh_token": earlier.RefreshToken})
 		Expect(refresh.StatusCode).To(Equal(http.StatusUnauthorized), refresh.Body)
 		Expect(refresh.Body).To(ContainSubstring("Invalid refresh token"))
+	})
+
+	It("signs out its own login and removes the app's session from the signed-in list", func() {
+		signin := tokenSet(post(pathToken, map[string]any{"username": email, "password": password}))
+		userID := claimsOf(signin["access_token"])["sub"].(string)
+		sessionSvc := session.NewService(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
+		Expect(sessionSvc.ListSessions(userID)).To(HaveLen(1))
+
+		signout := post(pathSignout, map[string]any{"refresh_token": signin["refresh_token"]})
+		Expect(signout.StatusCode).To(Equal(http.StatusOK), signout.Body)
+		Expect(sessionSvc.ListSessions(userID)).To(BeEmpty())
+		Expect(post(pathRefresh, map[string]any{"refresh_token": signin["refresh_token"]}).StatusCode).To(Equal(http.StatusUnauthorized))
+	})
+
+	It("refuses to sign out a refresh token issued to another client and leaves it working (negative)", func() {
+		refresh := refreshtoken.NewService(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
+		other, err := refresh.MintRefreshtoken("user-123", "another-app", "openid", nil, "", 0)
+		Expect(err).NotTo(HaveOccurred())
+
+		signout := post(pathSignout, map[string]any{"refresh_token": other})
+		Expect(signout.StatusCode).To(Equal(http.StatusUnauthorized), signout.Body)
+		_, err = refresh.Rotate("another-app", other)
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("answers a forged refresh token with 401 Invalid refresh token (negative)", func() {
+		signout := post(pathSignout, map[string]any{"refresh_token": "not-a-token"})
+		Expect(signout.StatusCode).To(Equal(http.StatusUnauthorized), signout.Body)
+		Expect(signout.Body).To(MatchJSON(`{"message":"Invalid refresh token"}`))
+	})
+
+	It("answers a second sign-out of the same login with 200, since the login has already ended", func() {
+		signin := tokenSet(post(pathToken, map[string]any{"username": email, "password": password}))
+		Expect(post(pathSignout, map[string]any{"refresh_token": signin["refresh_token"]}).StatusCode).To(Equal(http.StatusOK))
+
+		again := post(pathSignout, map[string]any{"refresh_token": signin["refresh_token"]})
+		Expect(again.StatusCode).To(Equal(http.StatusOK), again.Body)
+	})
+
+	It("refuses a global sign-out with 400 and ends nothing (negative)", func() {
+		signin := tokenSet(post(pathToken, map[string]any{"username": email, "password": password}))
+		resp := post(pathSignout, map[string]any{"refresh_token": signin["refresh_token"], "global": "true"})
+		Expect(resp.StatusCode).To(Equal(http.StatusBadRequest), resp.Body)
+		Expect(post(pathRefresh, map[string]any{"refresh_token": signin["refresh_token"]}).StatusCode).To(Equal(http.StatusOK))
+	})
+
+	It("answers a sign-out storage could not record with 503, and the login keeps working (negative)", func() {
+		signin := tokenSet(post(pathToken, map[string]any{"username": email, "password": password}))
+		healthy := awscommon.GetDynamoDBClient()
+		awscommon.SetDynamoDBClient(&mock.FailingDeleteItem{DynamoDBMock: healthy.(*mock.DynamoDBMock), TableName: "espuser-refresh-tokens"})
+
+		signout := post(pathSignout, map[string]any{"refresh_token": signin["refresh_token"]})
+		Expect(signout.StatusCode).To(Equal(http.StatusServiceUnavailable), signout.Body)
+		Expect(signout.Body).To(MatchJSON(`{"message":"Sign-out failed; try again"}`))
+
+		awscommon.SetDynamoDBClient(healthy)
+		Expect(post(pathRefresh, map[string]any{"refresh_token": signin["refresh_token"]}).StatusCode).To(Equal(http.StatusOK))
 	})
 
 	It("marks the signin and refresh token sets uncacheable", func() {

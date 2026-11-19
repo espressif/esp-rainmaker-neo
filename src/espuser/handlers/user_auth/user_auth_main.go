@@ -12,9 +12,9 @@ import (
 	"net/http"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/refresh_tokens_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/legacyauth"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
@@ -298,8 +298,14 @@ func handleSignout(ctx context.Context, request events.APIGatewayProxyRequest, s
 	if req.RefreshToken == "" {
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Refresh token is required")), nil
 	}
-	if err := svc.Signout(ctx, req.RefreshToken); err != nil {
-		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
+	err := svc.Signout(ctx, req.RefreshToken)
+	switch {
+	case errors.Is(err, refresh_tokens_db.ErrRefreshInvalid), errors.Is(err, refresh_tokens_db.ErrRefreshClientMismatch):
+		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Invalid refresh token")), nil
+	// The login is still alive, so the app keeps its token and retries rather than treat it as ended.
+	case err != nil:
+		rlog.Error(ctx).Err(err).Msg("signout: the refresh family could not be revoked")
+		return utils.APIGwRespJSON(http.StatusServiceUnavailable, utils.NewAPIStatus("Sign-out failed; try again")), nil
 	}
 	return utils.APIGwRespJSON(http.StatusOK, utils.NewAPIStatus("Successfully signed out")), nil
 }

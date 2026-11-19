@@ -528,6 +528,7 @@ never by a passive clock.
 | Password change | every row of the user, after the families |
 | Password reset | every row of the account the pool's verified contacts name, after the families |
 | Retention expiry | `expires_at` passes — total silence, no browser and no app. By the invariant every family under it expired earlier, so the user agent is genuinely gone |
+| An app's last login ended | `POST /oauth2/revoke`, `POST /v1/user/auth/signout` or a disconnect deletes a family and no other family of the person carries its `sid`: an `app` row goes with it, since nothing can sign in through it again; a `browser` row stays, because its cookie still can. A failure here is logged and the revocation still succeeds |
 
 **Not a trigger:** a lapsed cookie. The cookie is a browser credential, not the row.
 
@@ -542,8 +543,8 @@ Each exists because none of the others can do its job: only a browser navigation
 | `DELETE /v1/user/sessions/{sessionId}` | — | a signed-in user agent list | `sid` | one user agent and its families, from anywhere |
 | `DELETE /v1/user/sessions` | — | "sign out everywhere" | the access token's subject | every user agent and session family of the person; offline grants stay |
 | `DELETE /v1/user/connected-apps/{clientId}` | — | a connected apps list | the access token's subject and the client id | every login of that client |
-| `POST /oauth2/revoke` | RFC 7009 | any OAuth client | a refresh token | that token's family: one application's login |
-| `POST /v1/user/auth/signout` | — (legacy) | pre-OIDC RainMaker apps | a refresh token | that token's family, the same path as `/oauth2/revoke`; `global` is refused |
+| `POST /oauth2/revoke` | RFC 7009 | the OAuth client the token was issued to; another client gets `400 invalid_grant` (§2.1), and a storage failure gets `503` with the family left in place (§2.2.1) | a refresh token | that token's family: one application's login, and the app's cookie-less user agent row when no other family carries its `sid` |
+| `POST /v1/user/auth/signout` | — (legacy) | pre-OIDC RainMaker apps | a refresh token issued to the Home app client; any other gets `401` | the same as `/oauth2/revoke` called as the Home app client; `global` is refused |
 
 Which to call:
 
@@ -697,8 +698,7 @@ Absent means no hop: a deployment that never fills these behaves exactly as it d
   arguably wrong for a phone. Three options remain open: accept it; register mobile clients so their
   families carry no `sid`; or give the app its own row. Decide before the first native app ships on
   that path — the cookie-less rows this spec adds are the mechanism for the third option.
-- **Re-installing an app creates a second cookie-less row.** The old one lingers until its retention
-  passes or the person deletes it; `user_agent_name`, `user_agent_type` and `signed_in_at` are what tell them apart.
+- **Re-installing an app without signing out creates a second cookie-less row.** An app that revokes its login first removes its row; otherwise the old one lingers until its retention passes or the person deletes it, and `user_agent_name`, `user_agent_type` and `signed_in_at` are what tell them apart.
 - **`amr`/`acr` are recorded and nothing consumes them yet.** Reserved with a named consumer
   (step-up), not dead fields.
 - **Step-up is specified but not wired to any endpoint.** Until it is, a long-lived user agent is

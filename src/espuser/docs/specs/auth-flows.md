@@ -128,7 +128,7 @@ The RFC 7009 token-revocation endpoint. RFC 7009 §2.1 permits revoking a token 
 
 The one cascade RFC 7009 §2.1 endorses — a refresh token additionally invalidating the access tokens minted from it — does not apply here: access tokens are short-lived RS256 JWTs we do not track (D13), so there is nothing to revoke; they expire on their own within the hour. A presented *access* token is therefore accepted and ignored. There is no introspection.
 
-**The client must identify itself** (RFC 7009 §2.1/§5 → RFC 6749 §3.2.1). A **confidential** client authenticates with its secret via HTTP Basic (`Authorization: Basic base64(client_id:secret)`); a **public** client identifies with `client_id` — either the Basic username or the `client_id` form parameter — and presents no secret (RFC 6749 §3.2.1: a public client is identified, not authenticated). The request-body secret method (`client_secret_post`) is not accepted (§2.3.1 NOT RECOMMENDED). A request with neither Basic nor `client_id` is `400 invalid_request`; a bad/unknown client or a confidential client with a wrong secret is `401 invalid_client`. `client_id` is not used to locate the token (the token alone identifies its row).
+**The client must identify itself** (RFC 7009 §2.1/§5 → RFC 6749 §3.2.1). A **confidential** client authenticates with its secret via HTTP Basic (`Authorization: Basic base64(client_id:secret)`); a **public** client identifies with `client_id` — either the Basic username or the `client_id` form parameter — and presents no secret (RFC 6749 §3.2.1: a public client is identified, not authenticated). The request-body secret method (`client_secret_post`) is not accepted (§2.3.1 NOT RECOMMENDED). A request with neither Basic nor `client_id` is `400 invalid_request`; a bad/unknown client or a confidential client with a wrong secret is `401 invalid_client`. The token alone locates its family; the authenticated `client_id` must be the client the token was issued to (RFC 7009 §2.1: the server verifies that the token was issued to the requesting client).
 
 **Request** (form-encoded body + Basic header):
 
@@ -142,8 +142,9 @@ token_type_hint=refresh_token   (optional)
 
 1. Authenticate the client from the Basic header against the registry: an unknown client or a confidential client with a missing/wrong secret is `401 invalid_client` (uniform — no oracle for which clients exist). A registered public client passes with an empty secret; a public client that presents a non-empty secret is rejected.
 2. Parse the form body; require `token`. `token_type_hint` is advisory and may be ignored.
-3. If `token` parses as one of our refresh tokens, revoke **its whole family** — the login the token belongs to (RFC 7009 §2.1: revoking a token MAY revoke the underlying grant). This ends the session on every user agent fed by that family. A malformed token or an access token is a no-op (access tokens are stateless RS256 JWTs, not revocable server-side).
-4. Always return `200` regardless of whether the token existed (RFC 7009 §2.2 — no oracle; an attacker learns nothing about validity). Only a truly malformed *request* (missing `token`) is `400 invalid_request`.
+3. If `token` parses as one of our refresh tokens issued to the authenticated client, revoke **its whole family** — the login the token belongs to (RFC 7009 §2.1: revoking a token MAY revoke the underlying grant). A refresh token issued to another client is refused with `400 invalid_grant` and its family is untouched. A malformed token or an access token is a no-op (access tokens are stateless RS256 JWTs, not revocable server-side).
+4. If the family carried a `sid` and no other family of the person still does, delete that user agent row when it is a cookie-less `app` row; a `browser` row stays, because its cookie can still sign in ([sso-sessions.md](sso-sessions.md#when-the-user-agent-row-is-deleted)). A failure here is logged and does not fail the revocation.
+5. Otherwise return `200` whether or not the token existed (RFC 7009 §2.2 — no oracle; an attacker learns nothing about validity). Only a malformed *request* (missing `token`) is `400 invalid_request`. A storage failure while reading or deleting the family is `503 temporarily_unavailable` (§2.2.1), so the client keeps the token and retries.
 
 **Response**: `200` with an empty body (RFC 7009 §2.2).
 
@@ -152,6 +153,8 @@ token_type_hint=refresh_token   (optional)
 - `400 invalid_request` — neither Basic credentials nor a `client_id` parameter was supplied.
 - `401 invalid_client` — an unknown client, or a confidential client that fails its auth.
 - `400 invalid_request` — the `token` parameter is missing.
+- `400 invalid_grant` — the refresh token was issued to another client (RFC 7009 §2.1, RFC 6749 §5.2).
+- `503 temporarily_unavailable` — storage failed while reading or deleting the family; the token may still work (RFC 7009 §2.2.1).
 - Unknown, malformed, expired, or already-revoked tokens are **not** errors — they return `200`.
 
 ## Standards reference
