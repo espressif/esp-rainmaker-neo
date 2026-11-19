@@ -164,6 +164,9 @@ var _ = Describe("signout.Service", func() {
 		Entry("5 and 7. Sign out everywhere or a password reset: every session and its logins; connected apps stay",
 			func(s *signout.Service) error { return s.EndAllSessions(ravi) },
 			without(raviFamilies, alexa+"@offline", mcp+"@offline"), raviSessions, [2]int{10, 8}),
+		Entry("6. A password change: everything, connected apps included",
+			func(s *signout.Service) error { return s.EndAllSessionsAndConnectedApps(ravi) },
+			raviFamilies, raviSessions, [2]int{10, 10}),
 	)
 
 	Describe("EndSession", func() {
@@ -223,14 +226,14 @@ var _ = Describe("signout.Service", func() {
 
 		It("deletes no session when the logins cannot be read (negative)", func() {
 			awscommon.SetDynamoDBClient(&mock.FailingIndexQuery{DynamoDBMock: backend.DBMock})
-			Expect(signout.NewService(rmngCtx).EndAllSessions(ravi)).NotTo(Succeed())
+			Expect(signout.NewService(rmngCtx).EndAllSessionsAndConnectedApps(ravi)).NotTo(Succeed())
 			awscommon.SetDynamoDBClient(backend.DBMock)
 			Expect(families(ravi)).To(Equal(raviFamilies))
 			Expect(sessionSIDs(ravi)).To(Equal(raviSessions))
 		})
 
 		It("succeeds for a person with nothing to end", func() {
-			Expect(signout.NewService(rmngCtx).EndAllSessions("nobody")).To(Succeed())
+			Expect(signout.NewService(rmngCtx).EndAllSessionsAndConnectedApps("nobody")).To(Succeed())
 		})
 	})
 

@@ -20,6 +20,7 @@ Spec: espuser/docs/specs/sso-sessions.md, authorize-code-flow.md.
 """
 import time
 import uuid
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import pytest
@@ -34,7 +35,12 @@ from test.itest.conftest import (
     SESSIONS_SCOPE,
     USER_API_GATEWAY_URL,
     decode_jwt_claims,
+    generate_test_password,
     requires_espuser,
+)
+from test.itest.email_utils import (
+    generate_mailosaur_email,
+    get_verification_code_from_server,
 )
 
 pytestmark = [pytest.mark.espuser, requires_espuser]
@@ -763,3 +769,61 @@ def test_sso_connected_apps_refuse_other_people_and_tokens_without_the_scope(
         assert SESSIONS_SCOPE in bearer_challenge(refused), f"the challenge names the scope: {bearer_challenge(refused)!r}"
 
     assert offline.still_signed_in(offline_tokens["refresh_token"]), "neither refusal ended the grant"
+
+
+def test_sso_a_password_change_ends_every_session_and_connected_app(apps, register_espuser_client, espuser_person):
+    """A changed password signs out everywhere, the session that changed it included, and disconnects every connected app, so the person signs in again with the new password."""
+    plain, _ = apps
+    offline = offline_client(register_espuser_client, "offline-password")
+    caller = requests.post(f"{USER_API_GATEWAY_URL}/v1/user/auth/token", timeout=30,
+                           json={"username": espuser_person.email, "password": espuser_person.password})
+    assert caller.status_code == 200, f"{caller.status_code} {caller.text[:200]}"
+    browser = Browser()
+    browser_tokens = signed_in(plain, browser, espuser_person)
+    offline_tokens = offline.tokens(offline.sign_in_allowing(browser, espuser_person))
+
+    new_password = generate_test_password()
+    changed = requests.post(f"{USER_API_GATEWAY_URL}/v1/user/auth/password", timeout=30, json={
+        "access_token": caller.json()["access_token"], "old_password": espuser_person.password,
+        "new_password": new_password,
+    })
+    assert changed.status_code == 200, f"{changed.status_code} {changed.text[:200]}"
+
+    renewed = requests.post(f"{USER_API_GATEWAY_URL}/v1/user/auth/token/refresh", timeout=30,
+                            json={"refresh_token": caller.json()["refresh_token"]})
+    assert renewed.status_code != 200, f"the caller is signed out too: {renewed.status_code} {renewed.text[:200]}"
+    assert not plain.still_signed_in(browser_tokens["refresh_token"]), "the browser's login is signed out"
+    assert plain.authorize(browser).needs_login, "and the browser's session is gone, so it must sign in again"
+    assert not offline.still_signed_in(offline_tokens["refresh_token"]), "the connected app is disconnected"
+    again = requests.post(f"{USER_API_GATEWAY_URL}/v1/user/auth/token", timeout=30,
+                          json={"username": espuser_person.email, "password": new_password})
+    assert again.status_code == 200, f"the new password signs in: {again.status_code} {again.text[:200]}"
+
+
+@pytest.mark.cognito_mail
+def test_sso_a_password_reset_ends_every_session_and_keeps_connected_apps(
+        apps, register_espuser_client, provision_end_user, require_mailosaur):
+    """A reset signs out every browser and app, and a connected app stays, because forgetting a password says nothing about who else holds it."""
+    email = generate_mailosaur_email()
+    if not email:
+        pytest.skip("Mailosaur address unavailable")
+    password = generate_test_password()
+    provision_end_user(email, {"email": email, "email_verified": "true"}, password)
+    person = SimpleNamespace(email=email, password=password)
+    plain, _ = apps
+    offline = offline_client(register_espuser_client, "offline-reset")
+    browser = Browser()
+    browser_tokens = signed_in(plain, browser, person)
+    offline_tokens = offline.tokens(offline.sign_in_allowing(browser, person))
+
+    started = time.time()
+    asked = requests.post(f"{USER_API_GATEWAY_URL}/v1/user/auth/password-recovery", timeout=30, json={"username": email})
+    assert asked.status_code == 200, f"{asked.status_code} {asked.text[:200]}"
+    code = get_verification_code_from_server(recipient_email=email, since_timestamp=started)
+    assert code, "no recovery code arrived"
+    reset = requests.post(f"{USER_API_GATEWAY_URL}/v1/user/auth/password-recovery/confirmation", timeout=30,
+                          json={"username": email, "code": code, "new_password": generate_test_password()})
+    assert reset.status_code == 200, f"{reset.status_code} {reset.text[:200]}"
+
+    assert not plain.still_signed_in(browser_tokens["refresh_token"]), "the browser's login is signed out"
+    assert offline.still_signed_in(offline_tokens["refresh_token"]), "the connected app stays"

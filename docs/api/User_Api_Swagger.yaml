@@ -1620,6 +1620,8 @@ paths:
   /v1/user/auth/password-recovery/confirmation:
     post:
       summary: Confirm password recovery
+      description: |
+        Resets the password with the mailed code, then signs out every session of the account; `offline_access` grants stay. An account whose sign-in asks for a second step such as MFA is reset with no session ended.
       tags:
         - User Auth
       security: []
@@ -1654,12 +1656,20 @@ paths:
                 $ref: "#/components/schemas/Error"
               example:
                 message: Password does not meet the password requirements
+        "500":
+          description: The password was reset, but the sessions could not be signed out; the new password works.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: Password reset, but sessions could not be signed out
 
   /v1/user/auth/password:
     post:
       summary: Change password
       description: |
-        Changes the caller's password. Requires an access token from this issuer, addressed to any of its APIs, and the current password. Other sessions stay signed in.
+        Changes the caller's password with the current one, then signs out every session, the caller's included, and disconnects every connected app, so the person signs in again with the new password. Requires an access token from this issuer for any of its APIs.
       tags:
         - User Auth
       security: []
@@ -1695,6 +1705,14 @@ paths:
                 $ref: "#/components/schemas/Error"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          description: The password was changed, but the sessions could not be signed out; the new password works.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: Password changed, but sessions could not be signed out
 
   /v1/user/auth/signout:
     post:

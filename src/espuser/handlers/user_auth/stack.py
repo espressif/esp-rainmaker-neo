@@ -92,8 +92,9 @@ class UserAuthAPI(Construct):
         # Legacy sign-in establishes a cookie-less app user agent (PutItem) and the grant clamp then
         # bumps its retention (Query the by-user index, GetItem the ceiling, UpdateItem expires_at),
         # so a legacy login is listed on the user agent screen and its refresh families stay clamped to it.
+        # A password change or reset signs every user agent out (DeleteItem).
         role.add_to_policy(iam.PolicyStatement(
-            actions=["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:UpdateItem"],
+            actions=["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem"],
             resources=[get_table_arn(USER_TABLE_NAMES['SESSIONS'], region)],
         ))
         role.add_to_policy(iam.PolicyStatement(

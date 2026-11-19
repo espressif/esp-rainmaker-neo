@@ -53,6 +53,11 @@ const (
 // passwordRefusedMessage answers signup and recovery confirmation with a password the pool's policy refused; Cognito's own reason is its text, not ours to echo, and the sign-in page shows the rules beside the field.
 const passwordRefusedMessage = "Password does not meet the password requirements"
 
+// changeSessionsNotEndedMessage is a server failure after the password changed, so the person knows the new password works and can sign out everywhere themselves.
+const changeSessionsNotEndedMessage = "Password changed, but sessions could not be signed out"
+
+const resetSessionsNotEndedMessage = "Password reset, but sessions could not be signed out"
+
 func signupMessage(rainmaker bool) string {
 	if rainmaker {
 		return rainmakerSignupMessage
@@ -268,6 +273,10 @@ func handleRecoveryConfirm(ctx context.Context, request events.APIGatewayProxyRe
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Invalid request body")), nil
 	}
 	if err := svc.ConfirmForgotPassword(ctx, req.Username, req.Code, req.NewPassword); err != nil {
+		if errors.Is(err, legacyauth.ErrSessionsNotEnded) {
+			rlog.Error(ctx).Err(err).Msg("password reset: sessions not signed out")
+			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(resetSessionsNotEndedMessage)), nil
+		}
 		if errors.Is(err, legacyauth.ErrPasswordRefused) {
 			return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(passwordRefusedMessage)), nil
 		}
@@ -301,6 +310,10 @@ func handlePassword(ctx context.Context, request events.APIGatewayProxyRequest, 
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Invalid request body")), nil
 	}
 	if err := svc.ChangePassword(ctx, req.AccessToken, req.OldPassword, req.NewPassword); err != nil {
+		if errors.Is(err, legacyauth.ErrSessionsNotEnded) {
+			rlog.Error(ctx).Err(err).Msg("password change: sessions not signed out")
+			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(changeSessionsNotEndedMessage)), nil
+		}
 		rlog.Error(ctx).Err(err).Msg("legacy password change failed")
 		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Password change failed")), nil
 	}

@@ -25,6 +25,8 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/idp"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/refreshtoken"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/session"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/signout"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
 	cognitotypes "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
@@ -85,6 +87,9 @@ var ErrAuthenticationFailed = errors.New("legacyauth: authentication failed")
 
 // ErrPasswordRefused means the pool's password policy refused a new password, which the caller can fix, unlike the failures each route answers with one sentence.
 var ErrPasswordRefused = errors.New("legacyauth: the password does not meet the pool's policy")
+
+// ErrSessionsNotEnded means the provider changed the password but the account's sessions could not all be signed out, so the caller must not report the change as failed.
+var ErrSessionsNotEnded = errors.New("legacyauth: password changed but the sessions were not signed out")
 
 // ErrAccountAlreadyUsable means a duplicate signup authenticated an existing confirmed account, so
 // the caller owns it and should sign in rather than wait for a verification code. Not a failure —
@@ -294,6 +299,7 @@ func (s *Service) ForgotPassword(ctx context.Context, username string) error {
 	return nil
 }
 
+// ConfirmForgotPassword resets the password, then signs out every session of the account the pool's verified contacts name, which is the account sign-in reaches and not whichever account holds the typed username.
 func (s *Service) ConfirmForgotPassword(ctx context.Context, username, code, newPassword string) error {
 	if err := s.cognito.ConfirmForgotPassword(ctx, username, code, newPassword); err != nil {
 		if auth.IsPasswordPolicyError(err) {
@@ -301,7 +307,27 @@ func (s *Service) ConfirmForgotPassword(ctx context.Context, username, code, new
 		}
 		return rmerror.NewRMError(err, "password recovery confirmation failed")
 	}
-	return nil
+	login, err := s.cognito.InitiateAuth(ctx, &cognitoutil.LoginRequest{Username: username, Password: newPassword})
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrSessionsNotEnded, rmerror.NewRMError(err, "legacyauth: sign-in with the new password failed"))
+	}
+	if login.IDToken == "" {
+		rlog.Warn(ctx).Str("challenge", login.ChallengeName).Msg("password reset: the pool answered the new password with a challenge, so the account could not be confirmed and no sessions were ended")
+		return nil
+	}
+	email, phone, err := verifiedContacts(login.IDToken)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrSessionsNotEnded, err)
+	}
+	userID, err := s.oauth.UserIDByVerifiedContacts(ctx, email, phone)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrSessionsNotEnded, err)
+	}
+	if userID == "" {
+		// A pool user who never signed in has no account and so no sessions.
+		return nil
+	}
+	return endSessions(ctx, userID)
 }
 
 // ChangePassword re-authenticates with the old password to obtain a provider access token, because
@@ -332,6 +358,22 @@ func (s *Service) ChangePassword(ctx context.Context, accessToken, oldPassword, 
 	}
 	if err := s.cognito.ChangePassword(ctx, login.AccessToken, oldPassword, newPassword); err != nil {
 		return rmerror.NewRMError(err, "legacyauth: password change rejected")
+	}
+	return endSessionsAndConnectedApps(ctx, claims.Subject)
+}
+
+// endSessions signs the person out of every browser and app after a password reset; their connected apps stay, because forgetting a password says nothing about who else holds it.
+func endSessions(ctx context.Context, userID string) error {
+	if err := signout.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil)).EndAllSessions(userID); err != nil {
+		return fmt.Errorf("%w: %w", ErrSessionsNotEnded, err)
+	}
+	return nil
+}
+
+// endSessionsAndConnectedApps signs the person out everywhere and disconnects every connected app after a password change, which they make when they think someone else knows the old one.
+func endSessionsAndConnectedApps(ctx context.Context, userID string) error {
+	if err := signout.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil)).EndAllSessionsAndConnectedApps(userID); err != nil {
+		return fmt.Errorf("%w: %w", ErrSessionsNotEnded, err)
 	}
 	return nil
 }

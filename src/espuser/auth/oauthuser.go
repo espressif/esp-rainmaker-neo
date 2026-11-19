@@ -270,24 +270,13 @@ func (s *OAuthUserAuthService) ResolveOrCreateUserByContacts(rmngCtx *rmngctx.Rm
 		return "", rmerror.NewRMError(nil, "a verified email or phone is required")
 	}
 
-	var byEmail, byPhone *user_details_db.UserContactEntry
-	if email != "" {
-		byEmail = s.lookupContact(rmngCtx.Context, email)
-	}
-	if phone != "" {
-		byPhone = s.lookupContact(rmngCtx.Context, phone)
+	match, err := s.accountForContacts(rmngCtx.Context, email, phone)
+	// A failed read is not an unheld contact: creating an account on it would split one person into two.
+	if err != nil {
+		return "", err
 	}
 
-	switch {
-	// Picking either account would hand one person's account to the other.
-	case byEmail != nil && byPhone != nil && byEmail.UserID != byPhone.UserID:
-		return "", ErrContactsOnDifferentUsers
-	case byEmail != nil || byPhone != nil:
-		// Both hits are the same account here, so whichever lookup matched names it.
-		match := byEmail
-		if match == nil {
-			match = byPhone
-		}
+	if match != nil {
 		// Only what the account is missing: the write is conditioned on those attributes being absent,
 		// so naming one it already has would fail the whole update.
 		addEmail, addPhone := "", ""
@@ -397,12 +386,43 @@ func (s *OAuthUserAuthService) RefreshToken(ctx context.Context, client *clients
 	return s.signTokens(ctx, rotation.UserID, client.ClientID, rotation.Scope, audience, rotation.Token, rotation.SID, rotation.AuthTime)
 }
 
-// lookupContact resolves an email/phone to the account holding it, or nil when no account does — a
-// contact nobody owns is an ordinary outcome of a first login, not a failure.
-func (s *OAuthUserAuthService) lookupContact(ctx context.Context, emailOrPhone string) *user_details_db.UserContactEntry {
-	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, nil)
-	userDetailsDB := user_details_db.NewUserDetailsDB(rmngCtx)
+// accountForContacts returns the account the verified contacts name, nil when no account holds either, and ErrContactsOnDifferentUsers when they name two; sign-in and a password reset both resolve through it, so they always reach the same account.
+func (s *OAuthUserAuthService) accountForContacts(ctx context.Context, email, phone string) (*user_details_db.UserContactEntry, error) {
+	var byEmail, byPhone *user_details_db.UserContactEntry
+	var err error
+	if email != "" {
+		// ValidateEmail reads a mixed-case address as a phone, so it is lowercased before findContact picks the index.
+		if byEmail, err = s.findContact(ctx, ids.FormatUsername(email)); err != nil {
+			return nil, err
+		}
+	}
+	if phone != "" {
+		if byPhone, err = s.findContact(ctx, phone); err != nil {
+			return nil, err
+		}
+	}
+	if byEmail != nil && byPhone != nil && byEmail.UserID != byPhone.UserID {
+		// Picking either account would hand one person's account to the other.
+		return nil, ErrContactsOnDifferentUsers
+	}
+	if byEmail != nil {
+		return byEmail, nil
+	}
+	return byPhone, nil
+}
 
+// UserIDByVerifiedContacts resolves contacts as ResolveOrCreateUserByContacts does but never creates an account: "" with a nil error when no account holds either contact.
+func (s *OAuthUserAuthService) UserIDByVerifiedContacts(ctx context.Context, email, phone string) (string, error) {
+	owner, err := s.accountForContacts(ctx, email, phone)
+	if err != nil || owner == nil {
+		return "", err
+	}
+	return owner.UserID, nil
+}
+
+// findContact reads the contact index the value belongs to; (nil, nil) means no account holds it.
+func (s *OAuthUserAuthService) findContact(ctx context.Context, emailOrPhone string) (*user_details_db.UserContactEntry, error) {
+	userDetailsDB := user_details_db.NewUserDetailsDB(rmngctx.NewRmngContextWithCtx(ctx, nil))
 	var entry *user_details_db.UserContactEntry
 	var err error
 	if validation.ValidateEmail(emailOrPhone) {
@@ -410,10 +430,16 @@ func (s *OAuthUserAuthService) lookupContact(ctx context.Context, emailOrPhone s
 	} else {
 		entry, err = userDetailsDB.LookupContactByPhoneNumber(emailOrPhone)
 	}
-	if err != nil || entry == nil || entry.UserID == "" {
-		return nil
+	if errors.Is(err, user_details_db.ErrUserNotFound) {
+		return nil, nil
 	}
-	return entry
+	if err != nil {
+		return nil, rmerror.NewRMError(err, "failed to look up the account holding a contact")
+	}
+	if entry == nil || entry.UserID == "" {
+		return nil, nil
+	}
+	return entry, nil
 }
 
 // lookupUserByID resolves a UserInfo from a user_id (the token subject).

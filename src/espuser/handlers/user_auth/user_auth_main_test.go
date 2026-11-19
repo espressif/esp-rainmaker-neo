@@ -13,6 +13,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/identity_providers_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/oauth_clients_db"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/sessions_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/legacyauth"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/session"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
@@ -50,6 +51,7 @@ var _ = Describe("legacy token responses (RFC 6749 s5.1)", func() {
 		secondProvider = "second"
 		secondPassword = "Second#123"
 	)
+	resetCode := mock.NewCognitoProviderMock().DefaultResetCode
 
 	BeforeEach(func() {
 		backend := test_utils.SetupEspUserBackend(context.Background())
@@ -217,6 +219,44 @@ var _ = Describe("legacy token responses (RFC 6749 s5.1)", func() {
 		Expect(refresh.StatusCode).To(Equal(http.StatusBadRequest))
 		Expect(refresh.Body).To(MatchJSON(`{"message":"Only one resource may be requested; a token is never issued for two audiences."}`))
 	})
+
+	It("signs every session out on a password change, the caller's included, so the person signs in again", func() {
+		caller := tokenSet(post(pathToken, map[string]any{"username": email, "password": password}))
+		other := tokenSet(post(pathToken, map[string]any{"username": email, "password": password}))
+
+		changed := post(pathPassword, map[string]any{"access_token": caller["access_token"], "old_password": password, "new_password": "NewPass#123"})
+		Expect(changed.StatusCode).To(Equal(http.StatusOK), changed.Body)
+
+		Expect(post(pathRefresh, map[string]any{"refresh_token": other["refresh_token"]}).StatusCode).To(Equal(http.StatusUnauthorized))
+		Expect(post(pathRefresh, map[string]any{"refresh_token": caller["refresh_token"]}).StatusCode).To(Equal(http.StatusUnauthorized))
+		tokenSet(post(pathToken, map[string]any{"username": email, "password": "NewPass#123"}))
+	})
+
+	It("signs every session out on a password reset", func() {
+		signin := tokenSet(post(pathToken, map[string]any{"username": email, "password": password}))
+
+		reset := post(pathRecoveryConfirm, map[string]any{"username": email, "code": resetCode, "new_password": "NewPass#123"})
+		Expect(reset.StatusCode).To(Equal(http.StatusOK), reset.Body)
+
+		Expect(post(pathRefresh, map[string]any{"refresh_token": signin["refresh_token"]}).StatusCode).To(Equal(http.StatusUnauthorized))
+	})
+
+	DescribeTable("answers a password that changed while the sessions could not be signed out with 500, saying the password did change (negative)",
+		func(path, message string, body func(signin map[string]any) map[string]any) {
+			signin := tokenSet(post(pathToken, map[string]any{"username": email, "password": password}))
+			awscommon.SetDynamoDBClient(&mock.FailingIndexQuery{DynamoDBMock: awscommon.GetDynamoDBClient().(*mock.DynamoDBMock), IndexName: sessions_db.SessionsByUserIndex})
+
+			resp := post(path, body(signin))
+			Expect(resp.StatusCode).To(Equal(http.StatusInternalServerError))
+			Expect(resp.Body).To(MatchJSON(`{"message":"` + message + `"}`))
+		},
+		Entry("a change", pathPassword, "Password changed, but sessions could not be signed out", func(signin map[string]any) map[string]any {
+			return map[string]any{"access_token": signin["access_token"], "old_password": password, "new_password": "NewPass#123"}
+		}),
+		Entry("a reset", pathRecoveryConfirm, "Password reset, but sessions could not be signed out", func(map[string]any) map[string]any {
+			return map[string]any{"username": email, "code": resetCode, "new_password": "NewPass#123"}
+		}),
+	)
 })
 
 var _ = Describe("resource refusals (RFC 8707 s2)", func() {

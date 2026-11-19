@@ -13,7 +13,10 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/identity_providers_db"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/refresh_tokens_db"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/sessions_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/user_details_db"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/refreshtoken"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
@@ -382,6 +385,170 @@ var _ = Describe("SigninWithPassword", func() {
 
 		Expect(svc.Signup(context.Background(), "new@example.com", "", "Password1")).To(MatchError(ErrPasswordRefused))
 		Expect(svc.ConfirmForgotPassword(context.Background(), "u@example.com", mockConfirmationCode, "Password1")).To(MatchError(ErrPasswordRefused))
+	})
+
+	Describe("password events sign the account out", func() {
+		const newPassword = "NewPass#123"
+		var (
+			svc    *Service
+			cog    *mock.CognitoProviderMock
+			caller *auth.UserTokens
+			userID string
+		)
+		rmngCtx := rmngctx.NewRmngContextWithCtx(context.Background(), nil)
+		// familiesOf describes each family as scope|sid, so a spec names exactly which logins survive.
+		familiesOf := func(owner string) []string {
+			rows, err := refresh_tokens_db.NewRefreshTokensDB(rmngCtx).ListByUser(owner)
+			Expect(err).NotTo(HaveOccurred())
+			described := make([]string, 0, len(rows))
+			for i := range rows {
+				described = append(described, rows[i].Scope+"|"+rows[i].SID)
+			}
+			return described
+		}
+		families := func() []string { return familiesOf(userID) }
+		sessionSIDs := func() []string {
+			rows, err := sessions_db.NewSessionsDB(rmngCtx).ListByUser(userID)
+			Expect(err).NotTo(HaveOccurred())
+			sids := make([]string, 0, len(rows))
+			for i := range rows {
+				sids = append(sids, rows[i].SID)
+			}
+			return sids
+		}
+		sidOf := func(accessToken string) string {
+			parsed, _, err := jwt.NewParser().ParseUnverified(accessToken, jwt.MapClaims{})
+			Expect(err).NotTo(HaveOccurred())
+			return parsed.Claims.(jwt.MapClaims)["sid"].(string)
+		}
+
+		var callerSID, otherSID, resetCode string
+		BeforeEach(func() {
+			backend.DBMock.MaxPageItems = 1
+			svc = newService("u@example.com", true)
+			cog = awscommon.GetCognitoProviderClient().(*mock.CognitoProviderMock)
+			// The ID token carries the pool user's own contacts, so a spec sets which of them the pool vouches for.
+			cog.IDTokenMinter = func(user *mock.UserState) string {
+				claims := jwt.MapClaims{"email": user.Email, "email_verified": user.Attributes["email_verified"] != "false"}
+				if user.PhoneNumber != "" {
+					claims["phone_number"] = user.PhoneNumber
+					claims["phone_number_verified"] = user.Attributes["phone_number_verified"] == "true"
+				}
+				tok, err := jwtutil.SignRS256(claims, backend.SigningKey, oidc.SigningKeyID)
+				Expect(err).NotTo(HaveOccurred())
+				return tok
+			}
+			resetCode = cog.DefaultResetCode
+			var err error
+			caller, err = svc.SigninWithPassword(context.Background(), "u@example.com", testPassword)
+			Expect(err).NotTo(HaveOccurred())
+			other, err := svc.SigninWithPassword(context.Background(), "u@example.com", testPassword)
+			Expect(err).NotTo(HaveOccurred())
+			userID, callerSID, otherSID = subjectOf(caller.AccessToken), sidOf(caller.AccessToken), sidOf(other.AccessToken)
+			tokens := refreshtoken.NewService(rmngCtx)
+			_, err = tokens.MintRefreshtoken(userID, legacyClientID, "openid", nil, "", 0)
+			Expect(err).NotTo(HaveOccurred())
+			_, err = tokens.MintRefreshtoken(userID, "assistant-client", "openid offline_access", nil, "", 0)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(sessionSIDs()).To(ConsistOf(callerSID, otherSID))
+		})
+
+		It("ends every session, the caller's included, and every connected app on a change, so the person signs in again", func() {
+			Expect(svc.ChangePassword(context.Background(), caller.AccessToken, testPassword, newPassword)).To(Succeed())
+
+			Expect(families()).To(BeEmpty())
+			Expect(sessionSIDs()).To(BeEmpty())
+		})
+
+		It("ends every session and its logins on a reset, keeping the offline grant", func() {
+			Expect(svc.ConfirmForgotPassword(context.Background(), "u@example.com", resetCode, newPassword)).To(Succeed())
+
+			Expect(families()).To(ConsistOf("openid offline_access|"))
+			Expect(sessionSIDs()).To(BeEmpty())
+		})
+
+		// secondAccount opens another ESP User account holding phone, with one session family, and gives the pool user u@example.com that phone, verified.
+		secondAccount := func(phone string) string {
+			otherID, err := svc.oauth.ResolveOrCreateUserByContacts(rmngCtx, "", phone, nil)
+			Expect(err).NotTo(HaveOccurred())
+			_, err = refreshtoken.NewService(rmngCtx).MintRefreshtoken(otherID, legacyClientID, "openid", nil, "", 0)
+			Expect(err).NotTo(HaveOccurred())
+			poolUser := cog.GetUserByUsername(testPoolID, "u@example.com")
+			poolUser.PhoneNumber = phone
+			poolUser.Attributes["phone_number_verified"] = "true"
+			return otherID
+		}
+
+		It("ends the sessions of the account the verified phone names, never those of the account holding the unverified email typed (negative)", func() {
+			otherID := secondAccount("+15550123")
+			cog.GetUserByUsername(testPoolID, "u@example.com").Attributes["email_verified"] = "false"
+
+			Expect(svc.ConfirmForgotPassword(context.Background(), "u@example.com", resetCode, newPassword)).To(Succeed())
+
+			Expect(families()).To(HaveLen(4))
+			Expect(sessionSIDs()).To(ConsistOf(callerSID, otherSID))
+			Expect(familiesOf(otherID)).To(BeEmpty())
+		})
+
+		It("ends nothing when the verified contacts belong to two accounts, as sign-in refuses them (negative)", func() {
+			otherID := secondAccount("+15550123")
+
+			err := svc.ConfirmForgotPassword(context.Background(), "u@example.com", resetCode, newPassword)
+			Expect(err).To(MatchError(ErrSessionsNotEnded))
+			Expect(err).To(MatchError(auth.ErrContactsOnDifferentUsers))
+
+			Expect(families()).To(HaveLen(4))
+			Expect(sessionSIDs()).To(ConsistOf(callerSID, otherSID))
+			Expect(familiesOf(otherID)).To(HaveLen(1))
+		})
+
+		It("resets the password but ends nothing when the new password's sign-in asks for a second step (negative)", func() {
+			cog.ChallengeOnAuth = "SOFTWARE_TOKEN_MFA"
+
+			Expect(svc.ConfirmForgotPassword(context.Background(), "u@example.com", resetCode, newPassword)).To(Succeed())
+
+			Expect(cog.GetUserByUsername(testPoolID, "u@example.com").Password).To(Equal(newPassword))
+			Expect(families()).To(HaveLen(4))
+			Expect(sessionSIDs()).To(ConsistOf(callerSID, otherSID))
+		})
+
+		It("reports a reset whose sign-in with the new password fails as sessions not ended (negative)", func() {
+			cog.InitiateAuthError = &cognitotypes.InternalErrorException{Message: aws.String("unavailable")}
+
+			Expect(svc.ConfirmForgotPassword(context.Background(), "u@example.com", resetCode, newPassword)).To(MatchError(ErrSessionsNotEnded))
+
+			Expect(families()).To(HaveLen(4))
+			Expect(sessionSIDs()).To(ConsistOf(callerSID, otherSID))
+		})
+
+		It("resets the password of a pool user no account holds yet and ends nobody's sessions (negative)", func() {
+			cog.AddTestUserDirect(testPoolID, "fresh@example.com", "fresh@example.com", testPassword, true)
+
+			Expect(svc.ConfirmForgotPassword(context.Background(), "fresh@example.com", resetCode, newPassword)).To(Succeed())
+
+			Expect(families()).To(HaveLen(4))
+			Expect(sessionSIDs()).To(ConsistOf(callerSID, otherSID))
+		})
+
+		It("ends nothing when the reset itself is refused (negative)", func() {
+			Expect(svc.ConfirmForgotPassword(context.Background(), "u@example.com", "000000", newPassword)).NotTo(Succeed())
+
+			Expect(families()).To(HaveLen(4))
+			Expect(sessionSIDs()).To(ConsistOf(callerSID, otherSID))
+		})
+
+		DescribeTable("reports a password that changed while the sessions could not be signed out, not a refused change (negative)",
+			func(failingIndexName string, event func() error) {
+				awscommon.SetDynamoDBClient(&mock.FailingIndexQuery{DynamoDBMock: backend.DBMock, IndexName: failingIndexName})
+				Expect(event()).To(MatchError(ErrSessionsNotEnded))
+			},
+			Entry("a change, the session rows unreachable", sessions_db.SessionsByUserIndex, func() error {
+				return svc.ChangePassword(context.Background(), caller.AccessToken, testPassword, newPassword)
+			}),
+			Entry("a reset, the account lookup unreachable", "espuser-user-details-by-email", func() error {
+				return svc.ConfirmForgotPassword(context.Background(), "u@example.com", resetCode, newPassword)
+			}),
+		)
 	})
 
 	Describe("enumeration resistance", func() {

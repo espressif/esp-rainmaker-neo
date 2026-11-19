@@ -357,9 +357,9 @@ a sign-out in a browser must not unlink it.
 - **Renewed only while its client may hold it:** a client whose registration no longer allows `offline_access` gets `invalid_grant` on the next refresh, and the grant is not spent.
 - **Where it is listed:** under its client in `GET /v1/user/connected-apps`, never under a user agent.
 - **What ends one:** being disconnected from the connected apps list
-  (`DELETE /v1/user/connected-apps/{clientId}`), revoking its own token (`POST /oauth2/revoke`), reuse
-  detection on rotation, and expiry. Signing out of a browser, ending a user agent from the list and
-  sign out everywhere do not.
+  (`DELETE /v1/user/connected-apps/{clientId}`), a password change, revoking its own token
+  (`POST /oauth2/revoke`), reuse detection on rotation, and expiry. Signing out of a browser, ending a
+  user agent from the list, sign out everywhere and a password reset do not.
 
 ### Step-up: re-proving identity for sensitive actions
 
@@ -508,6 +508,8 @@ own expiry. It is **never** deleted by a user agent timing out, a cookie lapsing
 | Sign-out — one user agent | every family with that `sid` | `GET /oauth2/logout` · `DELETE /v1/user/sessions/{sessionId}` |
 | Sign-out — everywhere | every session family for the user, with or without a `sid`; offline grants stay | `DELETE /v1/user/sessions` |
 | Disconnect a connected app | every family of that client for the user | `DELETE /v1/user/connected-apps/{clientId}` |
+| Password change | every family for the user, offline grants included | `POST /v1/user/auth/password` |
+| Password reset | every session family of the account the pool's verified contacts name; offline grants stay; nothing when the new password's sign-in asks for a second step | `POST /v1/user/auth/password-recovery/confirmation` |
 | Token revocation | the presented token's family | `POST /oauth2/revoke` (RFC 7009) |
 | Reuse / theft detected | that one family | rotation sees a replayed or stale counter |
 | Natural expiry | that one family | `expires_on` passes with no rotation |
@@ -523,6 +525,8 @@ never by a passive clock.
 | Trigger | Path |
 |---|---|
 | Sign-out (either scope) | after the families, deliberately in that order |
+| Password change | every row of the user, after the families |
+| Password reset | every row of the account the pool's verified contacts name, after the families |
 | Retention expiry | `expires_at` passes — total silence, no browser and no app. By the invariant every family under it expired earlier, so the user agent is genuinely gone |
 
 **Not a trigger:** a lapsed cookie. The cookie is a browser credential, not the row.

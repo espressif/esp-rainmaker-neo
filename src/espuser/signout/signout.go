@@ -68,6 +68,18 @@ func (s *Service) EndAllSessions(userID string) error {
 	return s.sessions.DeleteAllSessions(userID)
 }
 
+// EndAllSessionsAndConnectedApps signs the person out of every browser and app and disconnects every connected app.
+func (s *Service) EndAllSessionsAndConnectedApps(userID string) error {
+	families, err := s.refreshTokens.ListFamilies(userID)
+	if err != nil {
+		return err
+	}
+	if err := s.refreshTokens.DeleteFamilies(families); err != nil {
+		return err
+	}
+	return s.sessions.DeleteAllSessions(userID)
+}
+
 // endEmptyAppSessions removes each app session the ended logins hung off once no login of the user carries its sid; a browser session stays, because its cookie can still sign in. Failures are logged, not returned: the logins are already gone.
 func (s *Service) endEmptyAppSessions(userID string, ended []refresh_tokens_db.FamilyEntry) {
 	sids := map[string]bool{}
