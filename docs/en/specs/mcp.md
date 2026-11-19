@@ -237,6 +237,11 @@ the DB layer applies exactly as it does for the REST API. Authorization is not r
 here: `authorizeNodeForUser` is the single chokepoint that checks both group access and node
 membership, and every node-scoped tool goes through it.
 
+The `mcp-oauth-client` registry client is seeded with `offline_access` (OIDC Core 1.0 §11), so
+a connector's grant is not tied to the browser session the person signed in with: a connector
+acts while the person is away, and signing out of that browser leaves it working until it is
+revoked or expires.
+
 ## 6. Tool catalogue
 
 [docs/mcp/rainmaker-mcp.json](../../../docs/mcp/rainmaker-mcp.json) is a machine-readable

@@ -26,7 +26,7 @@ Two Lambda functions serve the GVA integration:
 
 Account linking runs against the ESP User OIDC identity provider, not Cognito. A confidential OAuth 2.1 client of its own, `rainmaker-neo-gva-client`, is created in the ESP User client registry (`espuser-oauth-clients`) by the `rmng-gva-core` stack for Google Home account linking, so a deployment without Google Home carries none and a leaked or rotated secret touches Google Home alone:
 - **OAuth flow**: Authorization Code Grant (`grant_types`: `authorization_code`, `refresh_token`)
-- **Scopes**: `openid`, `email`, `phone`, `profile`
+- **Scopes**: `openid`, `email`, `phone`, `profile`, `offline_access`. `offline_access` (OIDC Core 1.0 §11) keeps the link working after the person signs out of the browser they linked in; without it, that sign-out unlinks the assistant.
 - **Redirect URIs**: registered by the config API on `rainmaker-neo-gva-client`. Each POST adds its URIs to the client's set, and each URI must pass the same checks as a registration.
 - **Client ID**: `rainmaker-neo-gva-client` — the registry client id (`rmng-gva-core` output `EspGvaClientId`)
 - **Client Secret**: the generated secret for `rainmaker-neo-gva-client`, retrievable via the admin clients API (`GET /v1/admin/clients?get_secret=true`) or the SecureString SSM `/rmng/gva/esp-user-client-secret`; it is never a stack output
@@ -54,7 +54,7 @@ This must be done before calling the Store Configuration API.
    - **Authorization URL**: the discovery document's `authorization_endpoint` (`<api-url>/oauth2/authorize`)
    - **Token URL**: the discovery document's `token_endpoint` (`<api-url>/oauth2/token`)
    - **Fulfillment URL**: `https://<api_gateway_url>/v1/integrations/gva` where api_gateway_url is from rmng-outputs.json (ApiGatewayUrl)
-   - **Scopes**: `openid`, `email`, `phone`, `profile`
+   - **Scopes**: `openid`, `email`, `phone`, `profile`, `offline_access`
 
 #### Step 3: Enable HomeGraph API (for Report State)
 

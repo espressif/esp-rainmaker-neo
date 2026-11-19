@@ -72,6 +72,9 @@ def first_party_client_ids(esp_user_client_id: str) -> list:
     return [esp_user_client_id]
 
 
+# The scopes of a client that acts while the person is away (an assistant link, an MCP connector); offline_access keeps its grant through every sign-out (OIDC Core 1.0 s11).
+OFFLINE_CLIENT_SCOPES = ['openid', 'email', 'phone', 'profile', 'offline_access']
+
 # First-party OIDC clients seeded into espuser-oauth-clients (single source of truth). The seed
 # custom resource injects these definitions into its handler and derives its re-invoke trigger
 # from them, so the resource re-fires whenever a client's config changes. The config is ours
@@ -80,7 +83,7 @@ SEEDED_OAUTH_CLIENTS = [
     # MCP OAuth proxy: confidential client (secret-authenticated at the token endpoint). Its callback
     # (<MCP_BASE_URL>/oauth2/callback) is only known after rmng deploys, so redirect_uris is set then.
     {'client_id': 'mcp-oauth-client', 'client_name': 'MCP OAuth Proxy', 'client_type': 'confidential',
-     'grant_types': ['authorization_code', 'refresh_token']},
+     'grant_types': ['authorization_code', 'refresh_token'], 'scopes': OFFLINE_CLIENT_SCOPES},
     # The Espressif RainMaker Home app, and the client the password API issues to; an app with its own scheme adds its redirect through the admin API, and the seed never removes it.
     {'client_id': HOME_APP_CLIENT_ID, 'client_name': 'RainMaker Home', 'client_type': 'public',
      'grant_types': ['authorization_code', 'refresh_token'], 'require_pkce': True, 'first_party': True,

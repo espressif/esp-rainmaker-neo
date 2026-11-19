@@ -238,11 +238,77 @@ def test_the_seed_fills_a_field_an_existing_client_lacks(seed):
 
 def test_the_seed_never_overwrites_what_an_operator_set(seed):
     edited = {"client_id": "mcp-oauth-client", "client_name": "MCP only", "client_type": "confidential", "secret": "kept",
-              "scopes": ["openid"], "redirect_uris": {"https://mcp.example.com/oauth2/callback"},
+              "redirect_uris": {"https://mcp.example.com/oauth2/callback"},
               "allowed_resources": [NEO], "default_resource": NEO}
     table = FakeClientsTable(dict(edited))
     assert seed(table) == "SUCCESS"
     assert {k: table.rows["mcp-oauth-client"][k] for k in edited} == edited
+
+
+def test_the_seed_never_puts_back_scopes_an_operator_removed_from_a_client_that_declares_none(seed):
+    """Negative: the Home app declares no scopes, so its narrowed list and updated_at stay as the operator left them."""
+    edited = {"client_id": "rainmaker-neo-home-app-client", "client_type": "public", "client_name": "RainMaker Home", "scopes": ["openid"], "updated_at": 1}
+    table = FakeClientsTable(dict(edited), {"client_id": "mcp-oauth-client", "secret": "s2"})
+    assert seed(table) == "SUCCESS"
+    row = table.rows["rainmaker-neo-home-app-client"]
+    assert (row["scopes"], row["updated_at"]) == (["openid"], 1)
+
+
+MCP_SCOPES = ["openid", "email", "phone", "profile", "offline_access"]
+
+
+def test_an_existing_client_gains_the_declared_scopes_it_lacks(seed):
+    table = FakeClientsTable({"client_id": "mcp-oauth-client", "secret": "s2", "scopes": ["openid", "email", "phone", "profile"], "updated_at": 1})
+    assert seed(table) == "SUCCESS"
+    row = table.rows["mcp-oauth-client"]
+    assert row["scopes"] == MCP_SCOPES
+    assert row["updated_at"] > 1
+
+
+def test_an_operators_extra_scope_is_never_removed(seed):
+    """Negative: the seed only adds, keeping the stored order."""
+    table = FakeClientsTable({"client_id": "mcp-oauth-client", "secret": "s2", "scopes": ["account:sessions", "openid"], "updated_at": 1})
+    assert seed(table) == "SUCCESS"
+    assert table.rows["mcp-oauth-client"]["scopes"] == ["account:sessions", "openid", "email", "phone", "profile", "offline_access"]
+
+
+def test_a_row_without_scopes_gets_the_declared_list(seed):
+    table = FakeClientsTable({"client_id": "mcp-oauth-client", "secret": "s2"})
+    assert seed(table) == "SUCCESS"
+    assert table.rows["mcp-oauth-client"]["scopes"] == MCP_SCOPES
+
+
+def test_a_row_with_an_empty_scope_list_gets_the_declared_list(seed):
+    table = FakeClientsTable({"client_id": "mcp-oauth-client", "secret": "s2", "scopes": [], "updated_at": 1})
+    assert seed(table) == "SUCCESS"
+    assert table.rows["mcp-oauth-client"]["scopes"] == MCP_SCOPES
+
+
+def test_a_row_holding_every_declared_scope_is_not_rewritten(seed):
+    table = FakeClientsTable({"client_id": "mcp-oauth-client", "secret": "s2", "scopes": MCP_SCOPES + ["account:sessions"], "updated_at": 1})
+    assert seed(table) == "SUCCESS"
+    assert (table.rows["mcp-oauth-client"]["scopes"], table.rows["mcp-oauth-client"]["updated_at"]) == (MCP_SCOPES + ["account:sessions"], 1)
+
+
+def test_scopes_changed_while_the_seed_runs_fail_the_deploy_rather_than_dropping_the_change(seed):
+    """Negative: the scopes are rewritten only if no registry write landed since the seed read them."""
+    def edit(row):
+        row["scopes"].append("account:sessions")
+        row["updated_at"] += 1
+    table = FakeClientsTable({"client_id": "mcp-oauth-client", "secret": "s2", "scopes": ["openid"], "updated_at": 1}, before_update=edit)
+    assert seed(table) == "FAILED"
+    assert table.rows["mcp-oauth-client"]["scopes"] == ["openid", "account:sessions"]
+
+
+def test_only_the_assistants_and_mcp_are_declared_with_offline_access():
+    """Negative: the Home app signs in through a browser session, so its grants end with that session."""
+    from src.espuser.stacks.base_res_constants import (
+        HOME_APP_CLIENT_ID,
+        SEEDED_OAUTH_CLIENTS,
+    )
+    from src.rmneo.stacks import base_res_constants as rmng
+    declared = {c["client_id"]: c.get("scopes", []) for c in SEEDED_OAUTH_CLIENTS + [rmng.ALEXA_OAUTH_CLIENT, rmng.GVA_OAUTH_CLIENT, rmng.SMART_THINGS_OAUTH_CLIENT]}
+    assert {cid for cid, scopes in declared.items() if "offline_access" in scopes} == set(declared) - {HOME_APP_CLIENT_ID}
 
 
 def test_the_seed_fails_on_a_confidential_client_with_no_secret(seed):

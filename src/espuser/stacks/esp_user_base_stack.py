@@ -213,9 +213,10 @@ class CreateUserTables(Construct):
         self._seed_oauth_clients()
 
     def _seed_oauth_clients(self) -> None:
-        """Seed the ESP-User OIDC client registry (espuser-oauth-clients) for the current
-        first-party apps. A missing client is created; an existing one only gains the declared
-        fields it lacks, so a re-deploy never clobbers admin edits."""
+        """Seed the ESP-User OIDC client registry (espuser-oauth-clients) for the clients this deployment ships.
+
+        A missing client is created; an existing one only gains the declared fields and redirects it lacks. A client that declares scopes regains its declared scopes on every seed run, so an operator may add scopes to it but not remove them; any other client's scopes are never touched.
+        """
         self.seed_oauth_clients_cr = seed_oauth_clients(
             self, "SeedOAuthClients",
             name="espuser-oauth-clients-seed",

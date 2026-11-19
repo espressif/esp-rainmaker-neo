@@ -71,7 +71,7 @@ func seedVAClient(ctx context.Context) {
 		ClientName: "Voice Assistant",
 		ClientType: "confidential",
 		GrantTypes: []string{"authorization_code", "refresh_token"},
-		Scopes:     []string{"openid", "email", "phone", "profile"},
+		Scopes:     []string{"openid", "email", "phone", "profile", "offline_access"},
 	})
 	Expect(err).To(BeNil())
 }

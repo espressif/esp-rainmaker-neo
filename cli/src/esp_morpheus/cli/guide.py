@@ -60,7 +60,7 @@ def print_alexa_instructions(settings):
     output.plain(f'   - Access Token URI: {token_url}')
     output.plain(f'   - Your Client Id: {ALEXA_CLIENT_ID}')
     output.plain(f'   - Your Secret: {_secret_hint(ALEXA_CLIENT_ID)}')
-    output.plain('   - Scope: add openid email phone profile')
+    output.plain('   - Scope: add openid email phone profile offline_access')
     output.plain('3. Store the credentials: esp-morpheus admin integrations alexa setup '
                  '<config_file>')
 
@@ -86,7 +86,7 @@ def print_smartthings_instructions(settings):
     output.plain(f'   - Client Secret: {_secret_hint(SMART_THINGS_CLIENT_ID)}')
     output.plain(f'   - OAuth URL: {authorize_url}')
     output.plain(f'   - Token URL: {token_url}')
-    output.plain('   - OAuth Scope: openid email phone profile')
+    output.plain('   - OAuth Scope: openid email phone profile offline_access')
     output.plain('4. Save. SmartThings then issues its OWN Client ID and Secret. Note the '
                  'direction: these differ from the credentials in step 3.')
     output.plain('5. Store them: esp-morpheus admin integrations smartthings setup '
@@ -109,7 +109,7 @@ def print_gva_instructions(settings):
     output.plain(f'   - Authorization URL: {authorize_url}')
     output.plain(f'   - Token URL: {token_url}')
     output.plain(f'   - Fulfillment URL: {fulfillment_url}')
-    output.plain('   - Scopes: openid, email, phone, profile')
+    output.plain('   - Scopes: openid, email, phone, profile, offline_access')
     output.plain('   - App icon: the logo at assets/gva_logo.png')
     output.plain('3. Enable the HomeGraph API at')
     output.plain('   https://console.cloud.google.com/apis/library/homegraph.googleapis.com')

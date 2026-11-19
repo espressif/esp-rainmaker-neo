@@ -26,7 +26,9 @@ Two Lambda functions serve the Alexa integration:
 
 Account linking runs against the ESP User OIDC identity provider, not Cognito. A confidential OAuth 2.1 client of its own, `rainmaker-neo-alexa-client`, is created in the ESP User client registry (`espuser-oauth-clients`) by the `rmng-alexa-cfg-core` stack for Alexa account linking, so a deployment without Alexa carries none and a leaked or rotated secret touches Alexa alone:
 - **OAuth flow**: Authorization Code Grant (`grant_types`: `authorization_code`, `refresh_token`)
-- **Scopes**: `openid`, `email`, `phone`, `profile`
+- **Scopes**: `openid`, `email`, `phone`, `profile`, `offline_access`. `offline_access` (OIDC Core 1.0 §11) keeps the link working after the person signs out of the browser they linked in; without it, that sign-out unlinks the assistant.
+- **What ends a link**: disconnecting Amazon Alexa from the person's connected apps (`DELETE /v1/user/connected-apps/rainmaker-neo-alexa-client`), a password change, or Alexa revoking its own token. A browser sign-out, sign out everywhere and a password reset leave it. Alexa reads the next refresh's `invalid_grant` as an unlink.
+- **A skill set up before `offline_access`**: add `offline_access` to the skill's **Scope** list (or rerun automatic setup, which writes it), then each person relinks once in the Alexa app; a link made before keeps its old grant, which a browser sign-out still ends.
 - **Redirect URIs**: registered by the config API on `rainmaker-neo-alexa-client`. Each POST adds its URIs to the client's set, and each URI must pass the same checks as a registration.
 - **Client ID**: `rainmaker-neo-alexa-client` — the registry client id (`rmng-alexa-cfg-core` output `EspAlexaClientId`)
 - **Client Secret**: the generated secret for `rainmaker-neo-alexa-client`, retrievable via the admin clients API (`GET /v1/admin/clients?get_secret=true`) or the SecureString SSM `/rmng/alexa/esp-user-client-secret`; it is never a stack output
@@ -135,7 +137,7 @@ The brand advertised in discovery is the optional `manufacturer_name` above; man
 
 #### Account-linking scopes
 
-The skill requests `openid email phone profile`, and every one of them must be in `rainmaker-neo-alexa-client`'s allowed scopes: the ESP User authorize endpoint rejects the whole request with `invalid_scope` if a single requested scope is outside that set, which the Alexa app reports only as "Unable to link the skill at this time".
+The skill requests `openid email phone profile offline_access`, and every one of them must be in `rainmaker-neo-alexa-client`'s allowed scopes: the ESP User authorize endpoint rejects the whole request with `invalid_scope` if a single requested scope is outside that set, which the Alexa app reports only as "Unable to link the skill at this time".
 
 The scopes are written onto the skill when it is configured, so changing them in the backend affects **new** skills only. A skill created by an earlier build keeps its original list until its Account Linking is edited in the Alexa console or the skill is recreated.
 
@@ -157,7 +159,7 @@ done before calling the Store Configuration API.
    - **Access Token URI**: the discovery document's `token_endpoint` (`<api-url>/oauth2/token`)
    - **Client ID**: `rainmaker-neo-alexa-client` (the OIDC client id)
    - **Client Secret**: the `rainmaker-neo-alexa-client` secret from the admin clients API (`GET /v1/admin/clients?get_secret=true`) or the SecureString SSM `/rmng/alexa/esp-user-client-secret`
-   - **Scope**: `openid`, `email`, `phone`, `profile`
+   - **Scope**: `openid`, `email`, `phone`, `profile`, `offline_access`
    - **Alexa Redirect URLs**: Copy the redirect URLs shown by Amazon (e.g., `https://pitangui.amazon.com/api/skill/link/...`, `https://layla.amazon.com/api/skill/link/...`, `https://alexa.amazon.co.jp/api/skill/link/...`)
 
 #### Step 2: Get Alexa Client Credentials

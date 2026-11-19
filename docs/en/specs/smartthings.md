@@ -29,7 +29,7 @@ The Schema App is deployed multi-region by the standalone CDK app `cdk/apps/smar
 
 Account linking runs against the ESP User OIDC identity provider, not Cognito. A confidential OAuth 2.1 client of its own, `rainmaker-neo-smartthings-client`, is created in the ESP User client registry (`espuser-oauth-clients`) by the `rmng-st-cfg-core` stack for SmartThings account linking, so a deployment without SmartThings carries none and a leaked or rotated secret touches SmartThings alone:
 - **OAuth flow**: Authorization Code Grant (`grant_types`: `authorization_code`, `refresh_token`)
-- **Scopes**: `openid`, `email`, `phone`, `profile`
+- **Scopes**: `openid`, `email`, `phone`, `profile`, `offline_access`. `offline_access` (OIDC Core 1.0 §11) keeps the link working after the person signs out of the browser they linked in; without it, that sign-out unlinks the assistant.
 - **Redirect URIs**: registered by the config API on `rainmaker-neo-smartthings-client`. Each POST adds its URIs to the client's set, and each URI must pass the same checks as a registration. The SmartThings config API registers the three fixed SmartThings callback URLs (`https://c2c-us.smartthings.com/oauth/callback`, `https://c2c-eu.smartthings.com/oauth/callback`, `https://c2c-ap.smartthings.com/oauth/callback`) — they are not part of the request body.
 - **Client ID**: `rainmaker-neo-smartthings-client` — the registry client id (`rmng-st-cfg-core` output `EspSmartThingsClientId`)
 - **Client Secret**: the generated secret for `rainmaker-neo-smartthings-client`, retrievable via the admin clients API (`GET /v1/admin/clients?get_secret=true`) or the SecureString SSM `/rmng/smartthings/esp-user-client-secret`; it is never a stack output
@@ -72,7 +72,7 @@ At least one region is required.
 | Client ID | `rainmaker-neo-smartthings-client` | The OIDC client id |
 | Client Secret | The `rainmaker-neo-smartthings-client` secret | Admin clients API (`GET /v1/admin/clients?get_secret=true`) or the SecureString SSM `/rmng/smartthings/esp-user-client-secret` |
 | OAuth URL | `<api-url>/oauth2/authorize` | The discovery document's `authorization_endpoint` |
-| OAuth Scope | `openid email phone profile` | — |
+| OAuth Scope | `openid email phone profile offline_access` | — |
 | Token URL | `<api-url>/oauth2/token` | The discovery document's `token_endpoint` |
 | Alert Notification Email | Your platform operator email | — |
 

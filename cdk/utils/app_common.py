@@ -1563,7 +1563,7 @@ def grant_client_resources(scope: Construct, id: str, *, name: str, table_name: 
     return resource
 
 
-# Creates each client in SEEDED_CLIENTS, and on an existing one fills in only the declared fields it lacks.
+# Creates each client in SEEDED_CLIENTS, and on an existing one fills in only the declared fields, redirects and scopes it lacks.
 _SEED_OAUTH_CLIENTS_CODE = """
 import json, os, time, secrets, boto3, urllib3
 from botocore.exceptions import ClientError
@@ -1591,21 +1591,27 @@ def send(event, context, status, data=None):
     }).encode("utf-8")
     http.request("PUT", event["ResponseURL"], body=body, headers={"content-type": ""})
 
-def _fill_in(table, declared):
-    # if_not_exists: a value already on the row, whoever set it, is never replaced. Redirects are a set the seed only adds to.
-    fields = [f for f in declared if f != "client_id" and f not in SET_FIELDS]
+def _fill_in(table, declared, declares_scopes):
+    # if_not_exists: a value already on the row, whoever set it, is never replaced. Redirects are a set and scopes a list the seed only adds to.
     sets = [f for f in SET_FIELDS if declared.get(f)]
-    row = table.get_item(Key={"client_id": declared["client_id"]}, ConsistentRead=True).get("Item", {}) if sets else {}
+    row = table.get_item(Key={"client_id": declared["client_id"]}, ConsistentRead=True).get("Item", {})
     # A row written outside the registry API can hold these as a list, which ADD cannot extend; it gets the union back as a set, if no registry write moved updated_at since the read.
     listed = [f for f in sets if isinstance(row.get(f), list)]
     added = [f for f in sets if f not in listed]
-    assignments = [f"#{f} = if_not_exists(#{f}, :{f})" for f in fields] + [f"#{f} = :{f}" for f in listed]
-    names = {"#" + f: f for f in fields + sets}
+    # A client that declares its scopes gets back the ones it lacks after its stored list, under the same updated_at guard; a defaulted client's scopes stay if_not_exists.
+    stored_scopes = list(row.get("scopes") or [])
+    missing_scopes = [s for s in declared["scopes"] if s not in stored_scopes]
+    rewritten = listed + (["scopes"] if declares_scopes and "scopes" in row and missing_scopes else [])
+    fields = [f for f in declared if f != "client_id" and f not in SET_FIELDS and f not in rewritten]
+    assignments = [f"#{f} = if_not_exists(#{f}, :{f})" for f in fields] + [f"#{f} = :{f}" for f in rewritten]
+    names = {"#" + f: f for f in fields + sets + rewritten}
     values = {":" + f: declared[f] for f in fields}
     values.update({":" + f: set(row[f]) | set(declared[f]) for f in listed})
     values.update({":" + f: set(declared[f]) for f in added})
+    if "scopes" in rewritten:
+        values[":scopes"] = stored_scopes + missing_scopes
     condition = "attribute_exists(client_id)"
-    if listed:
+    if rewritten:
         names["#updated_at"] = "updated_at"
         assignments.append("#updated_at = :now")
         values[":now"] = int(time.time())
@@ -1635,6 +1641,7 @@ def handler(event, context):
             now = int(time.time())
             for c in CLIENTS:
                 declared = dict(c)
+                declares_scopes = "scopes" in declared
                 declared.setdefault("scopes", ["openid", "email", "phone", "profile"])
                 item = dict(declared, created_at=now, updated_at=now)
                 for f in SET_FIELDS:
@@ -1648,7 +1655,7 @@ def handler(event, context):
                 except ClientError as e:
                     if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
                         raise
-                    _fill_in(table, declared)
+                    _fill_in(table, declared, declares_scopes)
             # Return the current confidential-client secrets (minted above or from a prior deploy)
             # so the stack can surface them; read them back rather than trust the local values. A
             # confidential client with no secret means a stale row predating its confidential config
@@ -1675,7 +1682,9 @@ def handler(event, context):
 
 def seed_oauth_clients(scope: Construct, id: str, *, name: str, table_name: str, clients: list,
                        secret_params: dict | None = None, secret_attributes: dict | None = None) -> CustomResource:
-    """Create the OAuth clients a stack owns in the ESP User registry; an existing client only gains the declared fields it lacks, so a re-deploy never clobbers admin edits.
+    """Create the OAuth clients a stack owns in the ESP User registry; an existing client only gains the declared fields and redirects it lacks, so a re-deploy never replaces an admin's value.
+
+    A client that declares scopes regains its declared scopes on every seed run, so an operator may add scopes to it but not remove them; any other client's scopes are never touched.
 
     ``secret_params`` names the SecureString each confidential client's secret is handed over in, and ``secret_attributes`` the custom-resource attribute that returns it: {"mcp-oauth-client": "McpClientSecret"}. Re-runs whenever a declared client changes.
     """
@@ -1720,7 +1729,7 @@ def seed_oauth_clients(scope: Construct, id: str, *, name: str, table_name: str,
         properties={
             "ClientsHash": hashlib.sha256(clients_json.encode()).hexdigest(),
             # Bump when the handler changes, so deployments whose clients are unchanged re-run it.
-            "SeedVersion": 3,
+            "SeedVersion": 4,
         },
     )
     resource.node.default_child.override_logical_id(stable_logical_id("CustomResource", name))
