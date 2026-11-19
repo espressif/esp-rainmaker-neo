@@ -16,9 +16,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
+	scopepkg "github.com/espressif/esp-rainmaker-neo/src/espuser/scope"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils/httpclient"
@@ -277,7 +279,7 @@ func handleProtectedResourceMetadata() events.APIGatewayV2HTTPResponse {
 		"resource":                 baseURL + "/v1/mcp",
 		"authorization_servers":    []string{baseURL},
 		"bearer_methods_supported": []string{"header"},
-		"scopes_supported":         []string{"openid", "email"},
+		"scopes_supported":         proxyScopesSupported,
 	}
 
 	body, _ := json.Marshal(metadata)
@@ -296,16 +298,18 @@ func handleAuthServerMetadata() events.APIGatewayV2HTTPResponse {
 	baseURL := os.Getenv("MCP_BASE_URL")
 
 	metadata := map[string]interface{}{
-		"issuer":                                baseURL,
-		"authorization_endpoint":                baseURL + "/oauth2/authorize",
-		"token_endpoint":                        baseURL + "/oauth2/token",
-		"response_types_supported":              []string{"code"},
-		"grant_types_supported":                 proxyGrantTypesSupported,
-		"code_challenge_methods_supported":      []string{"S256"},
-		"client_id_metadata_document_supported": true,
+		"issuer":                 baseURL,
+		"authorization_endpoint": baseURL + "/oauth2/authorize",
+		"token_endpoint":         baseURL + "/oauth2/token",
+		"revocation_endpoint":    baseURL + "/oauth2/revoke",
+		"revocation_endpoint_auth_methods_supported": []string{"none"},
+		"response_types_supported":                   []string{"code"},
+		"grant_types_supported":                      proxyGrantTypesSupported,
+		"code_challenge_methods_supported":           []string{"S256"},
+		"client_id_metadata_document_supported":      true,
 		// MCP clients are public (PKCE, no secret). Without "none" here RFC 8414 implies client_secret_basic, and Claude's hosted apps then skip CIMD and ask for a client ID.
 		"token_endpoint_auth_methods_supported": []string{"none"},
-		"scopes_supported":                      []string{"openid", "email"},
+		"scopes_supported":                      proxyScopesSupported,
 	}
 
 	body, _ := json.Marshal(metadata)
@@ -324,6 +328,16 @@ func handleAuthServerMetadata() events.APIGatewayV2HTTPResponse {
 // espuser authorization server, which also issues client_credentials -- advertising that
 // here would publish a grant this endpoint rejects.
 var proxyGrantTypesSupported = []string{oidc.GrantAuthorizationCode, oidc.GrantRefreshToken}
+
+var proxyScopesSupported = []string{scopepkg.OpenID, scopepkg.Email, scopepkg.OfflineAccess}
+
+func withOfflineAccess(requested string) string {
+	scopes := strings.Fields(requested)
+	if !slices.Contains(scopes, scopepkg.OfflineAccess) {
+		scopes = append(scopes, scopepkg.OfflineAccess)
+	}
+	return strings.Join(scopes, " ")
+}
 
 func errorResponse(statusCode int, errMsg string) events.APIGatewayV2HTTPResponse {
 	body, _ := json.Marshal(map[string]string{"error": errMsg})
@@ -422,9 +436,8 @@ func handleAuthorize(ctx context.Context, request events.APIGatewayV2HTTPRequest
 	params.Set("code_challenge_method", codeChallengeMethod)
 	// RFC 8707: the token is for this server, by the same name its protected-resource metadata advertises.
 	params.Set("resource", baseURL+"/v1/mcp")
-	if scope != "" {
-		params.Set("scope", scope)
-	}
+	// A connector acts while the person is away, so its grant must outlive their browser sign-out (OIDC Core 1.0 s11).
+	params.Set("scope", withOfflineAccess(scope))
 
 	return events.APIGatewayV2HTTPResponse{
 		StatusCode: http.StatusFound,
@@ -506,25 +519,50 @@ func handleCallback(request events.APIGatewayV2HTTPRequest) events.APIGatewayV2H
 	}
 }
 
-func handleToken(ctx context.Context, request events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
-	// HTTP API Gateway v2 base64-encodes non-text bodies (including form-urlencoded)
+// parseFormBody reads a form-urlencoded body, which HTTP API Gateway v2 base64-encodes.
+func parseFormBody(request events.APIGatewayV2HTTPRequest) (url.Values, *events.APIGatewayV2HTTPResponse) {
 	body := request.Body
 	if request.IsBase64Encoded {
 		decoded, err := base64.StdEncoding.DecodeString(body)
 		if err != nil {
-			return errorResponse(http.StatusBadRequest, "invalid body encoding"), nil
+			resp := errorResponse(http.StatusBadRequest, oidc.OAuthErrInvalidRequest)
+			return nil, &resp
 		}
 		body = string(decoded)
 	}
-
 	formValues, err := url.ParseQuery(body)
 	if err != nil {
-		return errorResponse(http.StatusBadRequest, "invalid form body"), nil
+		resp := errorResponse(http.StatusBadRequest, oidc.OAuthErrInvalidRequest)
+		return nil, &resp
+	}
+	return formValues, nil
+}
+
+// postToESPUser posts a form to an ESP User endpoint as the proxy's own client: HTTP Basic when it has a secret (RFC 6749 s2.3.1), otherwise client_id in the body.
+func postToESPUser(ctx context.Context, endpointURL string, params url.Values) (*http.Response, error) {
+	serverClientID := os.Getenv("MCP_OIDC_CLIENT_ID")
+	clientSecret := os.Getenv("MCP_OIDC_CLIENT_SECRET")
+	if clientSecret == "" {
+		params.Set("client_id", serverClientID)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, strings.NewReader(params.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if clientSecret != "" {
+		req.SetBasicAuth(serverClientID, clientSecret)
+	}
+	return httpclient.Get().Do(req)
+}
+
+func handleToken(ctx context.Context, request events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
+	formValues, errResp := parseFormBody(request)
+	if errResp != nil {
+		return *errResp, nil
 	}
 
 	grantType := formValues.Get("grant_type")
-	serverClientID := os.Getenv("MCP_OIDC_CLIENT_ID")
-	clientSecret := os.Getenv("MCP_OIDC_CLIENT_SECRET")
 	baseURL := os.Getenv("MCP_BASE_URL")
 
 	endpoints, err := resolveOIDCEndpoints()
@@ -538,13 +576,8 @@ func handleToken(ctx context.Context, request events.APIGatewayV2HTTPRequest) (e
 	// code or refresh token issued to a different client.
 	clientID := formValues.Get("client_id")
 
-	// Broker to the ESP User OIDC token endpoint. A confidential client authenticates with
-	// HTTP Basic client credentials (RFC 6749 §2.3.1); a public client sends only client_id.
 	tokenParams := url.Values{}
 	tokenParams.Set("grant_type", grantType)
-	if clientSecret == "" {
-		tokenParams.Set("client_id", serverClientID)
-	}
 
 	switch grantType {
 	case oidc.GrantAuthorizationCode:
@@ -582,19 +615,10 @@ func handleToken(ctx context.Context, request events.APIGatewayV2HTTPRequest) (e
 		}
 		tokenParams.Set("refresh_token", wr.ESPRefresh)
 	default:
-		return errorResponse(http.StatusBadRequest, "unsupported grant_type"), nil
+		return errorResponse(http.StatusBadRequest, "unsupported_grant_type"), nil
 	}
 
-	tokenReq, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(tokenParams.Encode()))
-	if err != nil {
-		return errorResponse(http.StatusInternalServerError, "failed to build token request"), nil
-	}
-	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	if clientSecret != "" {
-		tokenReq.SetBasicAuth(serverClientID, clientSecret)
-	}
-
-	resp, err := httpclient.Get().Do(tokenReq)
+	resp, err := postToESPUser(ctx, tokenURL, tokenParams)
 	if err != nil {
 		return errorResponse(http.StatusBadGateway, "failed to reach token endpoint"), nil
 	}
@@ -619,6 +643,57 @@ func handleToken(ctx context.Context, request events.APIGatewayV2HTTPRequest) (e
 		},
 		Body: string(respBody),
 	}, nil
+}
+
+// handleRevoke is RFC 7009 revocation of the refresh tokens this proxy wraps, forwarded to ESP User.
+func handleRevoke(ctx context.Context, request events.APIGatewayV2HTTPRequest) events.APIGatewayV2HTTPResponse {
+	formValues, errResp := parseFormBody(request)
+	if errResp != nil {
+		return *errResp
+	}
+	token := formValues.Get("token")
+	clientID := formValues.Get("client_id")
+	if token == "" || clientID == "" {
+		return errorResponse(http.StatusBadRequest, oidc.OAuthErrInvalidRequest)
+	}
+
+	var wr wrappedRefresh
+	if err := openBlob(token, &wr); err != nil || wr.ESPRefresh == "" {
+		// RFC 7009 s2.2: a token the server did not issue as a refresh token is answered as revoked.
+		return revokedResponse()
+	}
+	// RFC 7009 s2.1: a token issued to another client is refused and stays valid.
+	if clientID != wr.ClientID {
+		return errorResponse(http.StatusBadRequest, oidc.OAuthErrInvalidGrant)
+	}
+
+	endpoints, err := resolveOIDCEndpoints()
+	if err != nil || endpoints.RevocationURL == "" {
+		return errorResponse(http.StatusServiceUnavailable, oidc.OAuthErrTemporarilyUnavailable)
+	}
+	resp, err := postToESPUser(ctx, endpoints.RevocationURL, url.Values{
+		"token":           {wr.ESPRefresh},
+		"token_type_hint": {"refresh_token"},
+	})
+	if err != nil {
+		return errorResponse(http.StatusServiceUnavailable, oidc.OAuthErrTemporarilyUnavailable)
+	}
+	defer resp.Body.Close()
+	// RFC 7009 s2.2.1: the client must then assume the token still exists and retry later.
+	if resp.StatusCode != http.StatusOK {
+		return errorResponse(http.StatusServiceUnavailable, oidc.OAuthErrTemporarilyUnavailable)
+	}
+	return revokedResponse()
+}
+
+func revokedResponse() events.APIGatewayV2HTTPResponse {
+	return events.APIGatewayV2HTTPResponse{
+		StatusCode: http.StatusOK,
+		Headers: map[string]string{
+			"Cache-Control":               "no-store",
+			"Access-Control-Allow-Origin": "*",
+		},
+	}
 }
 
 func corsResponse() events.APIGatewayV2HTTPResponse {
@@ -688,6 +763,8 @@ func handleRequest(ctx context.Context, request events.APIGatewayV2HTTPRequest) 
 		return handleCallback(request), nil
 	case path == "/oauth2/token" && method == "POST":
 		return handleToken(ctx, request)
+	case path == "/oauth2/revoke" && method == "POST":
+		return handleRevoke(ctx, request), nil
 	default:
 		return events.APIGatewayV2HTTPResponse{
 			StatusCode: http.StatusNotFound,

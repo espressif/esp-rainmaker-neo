@@ -305,10 +305,11 @@ func AppendQuery(uri string, params url.Values) string {
 const discoveryMaxBodyBytes = 1 << 20
 
 type DiscoveredEndpoints struct {
-	AuthorizeURL string `json:"authorization_endpoint"`
-	TokenURL     string `json:"token_endpoint"`
-	UserinfoURL  string `json:"userinfo_endpoint"`
-	JWKSURI      string `json:"jwks_uri"`
+	AuthorizeURL  string `json:"authorization_endpoint"`
+	TokenURL      string `json:"token_endpoint"`
+	UserinfoURL   string `json:"userinfo_endpoint"`
+	JWKSURI       string `json:"jwks_uri"`
+	RevocationURL string `json:"revocation_endpoint"`
 }
 
 var (

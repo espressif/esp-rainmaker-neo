@@ -176,6 +176,7 @@ class McpOAuthConstruct(Construct):
             ("/oauth2/authorize", [apigwv2.HttpMethod.GET]),
             ("/oauth2/callback", [apigwv2.HttpMethod.GET]),
             ("/oauth2/token", [apigwv2.HttpMethod.POST]),
+            ("/oauth2/revoke", [apigwv2.HttpMethod.POST]),
         ]
         for path, methods in oauth_proxy_route_specs:
             add_http_api_routes(

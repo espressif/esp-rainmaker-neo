@@ -52,6 +52,7 @@ paths:
                   scopes_supported:
                     type: array
                     items: { type: string }
+                    example: [openid, email, offline_access]
 
   /.well-known/oauth-authorization-server:
     get:
@@ -73,6 +74,14 @@ paths:
                     type: string
                   token_endpoint:
                     type: string
+                  revocation_endpoint:
+                    type: string
+                    example: https://api.example.com/oauth2/revoke
+                  revocation_endpoint_auth_methods_supported:
+                    type: array
+                    items: { type: string }
+                    description: CIMD clients are public, so revocation takes no client authentication.
+                    example: ["none"]
                   response_types_supported:
                     type: array
                     items: { type: string }
@@ -91,6 +100,7 @@ paths:
                   scopes_supported:
                     type: array
                     items: { type: string }
+                    example: [openid, email, offline_access]
 
   /.well-known/test-cimd.json:
     get:
@@ -145,7 +155,11 @@ paths:
           schema: { type: string }
         - name: scope
           in: query
+          description: |
+            Space-delimited scopes. The proxy always adds `offline_access`, so ESP User shows its
+            consent screen (OIDC Core 1.0 §11).
           schema: { type: string }
+          example: openid email
       responses:
         "302":
           description: Redirect to Cognito login
@@ -221,8 +235,73 @@ paths:
                   refresh_token: { type: string }
                   token_type: { type: string }
                   expires_in: { type: integer }
+                  scope:
+                    type: string
+                    description: The granted scope, which includes the `offline_access` the proxy adds (RFC 6749 §3.3).
         "400":
-          description: Invalid grant or Cognito error
+          description: |
+            `invalid_request`, `invalid_grant` (a code or refresh token that is invalid or another
+            client's) or `unsupported_grant_type`.
+        "502":
+          description: ESP User could not be reached.
+        default:
+          description: ESP User's error response, passed through with its status.
+
+  /oauth2/revoke:
+    post:
+      summary: Token revocation (RFC 7009)
+      description: |
+        Revokes a refresh token this proxy issued, ending the whole grant at ESP User. Only the
+        client the token was issued to may revoke it; an unknown token gets `200` (RFC 7009 §2.2).
+      tags: [OAuth]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [token, client_id]
+              properties:
+                token:
+                  type: string
+                  description: The refresh token the proxy's token endpoint returned.
+                token_type_hint:
+                  type: string
+                  description: Accepted and ignored; only refresh tokens can be revoked.
+                  example: refresh_token
+                client_id:
+                  type: string
+                  format: uri
+                  description: The CIMD client the token was issued to.
+                  example: https://client.example.com/cimd.json
+      responses:
+        "200":
+          description: The token is revoked, or was not one the proxy issued. Empty body.
+        "400":
+          description: |
+            `invalid_request` when the body cannot be parsed or `token` or `client_id` is missing; `invalid_grant` when the
+            token was issued to another client (RFC 7009 §2.1), which leaves it valid.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+              examples:
+                missingToken:
+                  value: { error: invalid_request }
+                otherClient:
+                  value: { error: invalid_grant }
+        "503":
+          description: |
+            ESP User could not revoke it; the token may still work, so retry later (RFC 7009 §2.2.1).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+              example: { error: temporarily_unavailable }
 
   # ── MCP (Streamable HTTP) ───────────────────────────────────
   /v1/mcp:

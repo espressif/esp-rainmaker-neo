@@ -54,6 +54,7 @@ def test_protected_resource_metadata():
     assert len(data["authorization_servers"]) >= 1, "Should have at least one authorization server"
     assert "bearer_methods_supported" in data, "Response should contain 'bearer_methods_supported'"
     assert "header" in data["bearer_methods_supported"]
+    assert data.get("scopes_supported") == ["openid", "email", "offline_access"]
 
 
 def test_auth_server_metadata():
@@ -75,6 +76,10 @@ def test_auth_server_metadata():
         "Should support S256 code challenge method"
     assert "authorization_code" in data.get("grant_types_supported", [])
     assert "refresh_token" in data.get("grant_types_supported", [])
+    assert data.get("scopes_supported") == ["openid", "email", "offline_access"]
+    assert data.get("revocation_endpoint", "").endswith("/oauth2/revoke"), \
+        f"revocation_endpoint should end with /oauth2/revoke, got: {data.get('revocation_endpoint')}"
+    assert data.get("revocation_endpoint_auth_methods_supported") == ["none"]
 
 
 def test_authorize_requires_pkce():
@@ -231,7 +236,8 @@ def test_authorize_with_real_cimd(enable_test_cimd):
     assert params.get("code_challenge_method") == ["S256"], \
         f"code_challenge_method should be S256, got: {params.get('code_challenge_method')}"
     assert "state" in params, "Redirect should include state"
-    assert "scope" in params, "Redirect should include scope"
+    assert params.get("scope") == ["openid email offline_access"], \
+        f"the proxy should add offline_access once to the client's scope, got: {params.get('scope')}"
     redirect_uri_values = params.get("redirect_uri", [""])
     assert redirect_uri_values[0].endswith("/oauth2/callback"), \
         f"redirect_uri should end with /oauth2/callback, got: {redirect_uri_values}"
@@ -321,6 +327,8 @@ def test_full_oauth_flow_with_real_cimd(enable_test_cimd, request):
     assert params.get("response_type") == ["code"]
     assert params.get("redirect_uri", [""])[0].endswith("/oauth2/callback"), \
         f"redirect_uri should be the proxy callback, got: {params.get('redirect_uri')}"
+    assert params.get("scope") == ["openid email offline_access"], \
+        f"the proxy should ask ESP User for offline_access, got: {params.get('scope')}"
 
     email = generate_random_email()
     password = generate_test_password()
@@ -360,6 +368,29 @@ def test_full_oauth_flow_with_real_cimd(enable_test_cimd, request):
     # committed catalogue — a tool rename then lands in one place instead of breaking it here.
     assert_matches_catalogue(tool_names)
     print(f"[5/5] MCP tools/list succeeded with the OTP-minted token; tools: {tool_names}")
+
+    # Revoking through the proxy ends the grant at ESP User, so the next refresh through the proxy fails.
+    refreshed = _refresh_through_proxy(tokens["refresh_token"], client_id)
+    assert refreshed.status_code == 200, f"refresh through the proxy failed ({refreshed.status_code}): {refreshed.text}"
+    refresh_token = refreshed.json()["refresh_token"]
+    revoked = requests.post(f"{MCP_API_URL}/oauth2/revoke", data={
+        "token": refresh_token,
+        "token_type_hint": "refresh_token",
+        "client_id": client_id,
+    })
+    assert revoked.status_code == 200, f"revoke through the proxy failed ({revoked.status_code}): {revoked.text}"
+    assert revoked.headers.get("Cache-Control") == "no-store"
+    after = _refresh_through_proxy(refresh_token, client_id)
+    assert after.status_code == 400 and after.json().get("error") == "invalid_grant", \
+        f"a revoked grant must not refresh, got ({after.status_code}): {after.text}"
+
+
+def _refresh_through_proxy(refresh_token, client_id):
+    return requests.post(f"{MCP_API_URL}/oauth2/token", data={
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": client_id,
+    })
 
 
 # ============================================================================
@@ -445,6 +476,8 @@ def test_fastmcp_client_oauth_interop(enable_test_cimd, request):
         assert brokered.get("code_challenge") == sent.get("code_challenge"), \
             "SDK-generated PKCE challenge must pass through unchanged"
         assert brokered.get("code_challenge_method") == ["S256"]
+        assert "offline_access" in brokered.get("scope", [""])[0].split(), \
+            f"the proxy should ask ESP User for offline_access, got: {brokered.get('scope')}"
 
         proxy_callback_url = _complete_federation_at_authorize(session, oidc_authorize_url, email, password)
         cb = session.get(proxy_callback_url, allow_redirects=False)
