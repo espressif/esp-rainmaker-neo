@@ -15,6 +15,7 @@ from test.itest.conftest import (
     IOT_USER_ROLE_ARN,
     REGION,
     USER_API_GATEWAY_URL,
+    accept_sharing_request_for,
 )
 
 
@@ -64,7 +65,7 @@ def test_ensure_privilege_escalation_not_possible(test_user1):
 
 def test_admin_assume_role_with_group(admin_user, test_user1):
     """
-    Test that admin users can use assume_role_admin to get access to any group.
+    Test that admin users can use assume_role_scoped to get access to any group.
 
     This test validates:
     1. Admin can call assume_role with a group parameter
@@ -79,7 +80,7 @@ def test_admin_assume_role_with_group(admin_user, test_user1):
     user_log(f"Created test group: {group_id}")
 
     # Admin should be able to assume role for this group
-    assumed_credentials = admin_user.assume_role_admin(group_id)
+    assumed_credentials = admin_user.assume_role_scoped(group_id)
     assert assumed_credentials is not None, "Admin assume_role should succeed for admin"
     assert "access_key" in assumed_credentials, "Response should contain access_key"
     assert "secret_key" in assumed_credentials, "Response should contain secret_key"
@@ -93,7 +94,7 @@ def test_admin_assume_role_with_group(admin_user, test_user1):
 
 def test_admin_assume_role_with_subgroup(admin_user, test_user1):
     """
-    Test that admin users can use assume_role_admin to get access to a specific subgroup.
+    Test that admin users can use assume_role_scoped to get access to a specific subgroup.
 
     This test validates:
     1. Admin can call assume_role with both group and subgroup parameters
@@ -112,39 +113,13 @@ def test_admin_assume_role_with_subgroup(admin_user, test_user1):
     user_log(f"Created test subgroup: {subgroup_id}")
 
     # Admin should be able to assume role for this specific subgroup
-    assumed_credentials = admin_user.assume_role_admin(group_id, subgroup_id)
+    assumed_credentials = admin_user.assume_role_scoped(group_id, subgroup_id)
     assert assumed_credentials is not None, "Admin assume_role with subgroup should succeed for admin"
     assert "access_key" in assumed_credentials, "Response should contain access_key"
     assert "secret_key" in assumed_credentials, "Response should contain secret_key"
     assert "session_token" in assumed_credentials, "Response should contain session_token"
 
     user_log("✅ Admin assume_role with subgroup succeeded")
-
-    # Cleanup
-    user1_group_api.delete_group(group_id)
-
-
-def test_admin_assume_role_denied_for_non_admin(test_user1, test_user2):
-    """
-    Test that non-admin users cannot use assume_role with group parameter.
-
-    This is a negative test that validates:
-    1. Regular users cannot use the admin assume_role functionality
-    2. The API returns an appropriate error (403 Forbidden)
-    """
-    user_log("🔒 Testing that non-admin users cannot use admin assume_role...")
-
-    # Create a group using test_user1
-    user1_group_api = Group(test_user1)
-    group_id = user1_group_api.create_group("Test Group for Admin Denial")
-    assert group_id is not None, "Failed to create test group"
-    user_log(f"Created test group: {group_id}")
-
-    # test_user2 (not a admin) should NOT be able to use admin assume_role
-    assumed_credentials = test_user2.assume_role_admin(group_id)
-    assert assumed_credentials is None, "Non-admin user should not be able to use admin assume_role"
-
-    user_log("✅ Admin assume_role correctly denied for non-admin user")
 
     # Cleanup
     user1_group_api.delete_group(group_id)
@@ -162,7 +137,7 @@ def test_admin_assume_role_nonexistent_group(admin_user):
 
     # Try to assume role for a non-existent group
     nonexistent_group = "nonexistent-group-" + str(uuid.uuid4())[:8]
-    assumed_credentials = admin_user.assume_role_admin(nonexistent_group)
+    assumed_credentials = admin_user.assume_role_scoped(nonexistent_group)
     assert assumed_credentials is None, "Admin assume_role should fail for non-existent group"
 
     user_log("✅ Admin assume_role correctly fails for non-existent group")
@@ -186,7 +161,7 @@ def test_admin_assume_role_nonexistent_subgroup(admin_user, test_user1):
 
     # Try to assume role for a non-existent subgroup within the existing group
     nonexistent_subgroup = "nonexistent-subgroup-" + str(uuid.uuid4())[:8]
-    assumed_credentials = admin_user.assume_role_admin(group_id, nonexistent_subgroup)
+    assumed_credentials = admin_user.assume_role_scoped(group_id, nonexistent_subgroup)
     assert assumed_credentials is None, "Admin assume_role should fail for non-existent subgroup"
 
     user_log("✅ Admin assume_role correctly fails for non-existent subgroup")
@@ -215,7 +190,7 @@ def test_admin_assume_role_group_mqtt_access(admin_user, associated_device):
     device.update_named_shadow(shadow_name, {"status": device.node_thing_name})
 
     # Admin assumes role for this group
-    assumed_credentials = admin_user.assume_role_admin(group_id)
+    assumed_credentials = admin_user.assume_role_scoped(group_id)
     assert assumed_credentials is not None, "Admin assume_role should succeed"
 
     # Admin connects to MQTT with assumed credentials and verifies shadow access
@@ -268,7 +243,7 @@ def test_admin_assume_role_subgroup_mqtt_access(admin_user, device_with_2_subgro
     device.update_named_shadow(shadow_ab, {"status": f"{device.node_thing_name}-ab"})
 
     # Admin assumes role for first subgroup only
-    assumed_credentials = admin_user.assume_role_admin(group_id, subgroup_aa_id)
+    assumed_credentials = admin_user.assume_role_scoped(group_id, subgroup_aa_id)
     assert assumed_credentials is not None, "Admin assume_role with subgroup should succeed"
 
     # Positive test: admin CAN access the shadow for first subgroup
@@ -307,6 +282,106 @@ def test_admin_assume_role_subgroup_mqtt_access(admin_user, device_with_2_subgro
 
     admin_user.mqtt_disconnect_and_wait()
     admin_user.disable_reconnect = False
+
+
+# --- Scoped assume-role as a regular user ---------------------------------
+#
+# The two group-scoped routes are open to any caller, not just admins:
+#
+#     POST /v1/groups/{groupId}/assumed-roles
+#     POST /v1/groups/{groupId}/subgroups/{subGroupId}/assumed-roles
+#
+# A regular member is confined to the scope its own user-group grant carries,
+# so these cover the grant boundary (owner, shared-subgroup member, outsider)
+# and the reason the routes matter to clients: one group encodes at a constant
+# size, so a caller with more groups than the unscoped /v1/assumed-roles route
+# can encode can still get credentials.
+
+
+def test_group_scoped_assume_role_for_owner(test_user1):
+    """The group owner gets credentials for its own group and any of its subgroups."""
+    group_api = Group(test_user1)
+    group_id = group_api.create_group("scoped-assume-role-owner")
+    try:
+        subgroup_id = group_api.create_subgroup(group_id, "scoped-sub")
+
+        assert test_user1.assume_role_scoped(group_id) is not None, \
+            "Owner should get credentials for its own group"
+        assert test_user1.assume_role_scoped(group_id, subgroup_id) is not None, \
+            "Owner should get credentials for its own subgroup"
+        user_log("Group- and subgroup-scoped assume-role work for the owner")
+    finally:
+        group_api.delete_group(group_id, warn_error=True)
+
+
+def test_group_scoped_assume_role_denied_for_outsider(test_user1, test_user2):
+    """A caller with no grant on the group is refused, as is an unknown group.
+
+    Complements test_admin_assume_role_nonexistent_group: an admin naming a
+    missing group is rejected on existence, a non-admin on the absent mapping row.
+    """
+    group_api = Group(test_user1)
+    group_id = group_api.create_group("scoped-assume-role-outsider")
+    try:
+        assert test_user2.assume_role_scoped(group_id) is None, \
+            "A user with no access to the group must be refused"
+        assert test_user2.assume_role_scoped(group_id, "nonexistent-subgroup") is None, \
+            "A user with no access to the group must be refused for its subgroups too"
+        unknown_group = "nonexistent-group-" + str(uuid.uuid4())[:8]
+        assert test_user1.assume_role_scoped(unknown_group) is None, \
+            "A group the caller holds no mapping for must be refused"
+        user_log("Scoped assume-role denied outside the caller's grant")
+    finally:
+        group_api.delete_group(group_id, warn_error=True)
+
+
+def test_group_scoped_assume_role_for_shared_subgroup_member(test_user1, test_user2):
+    """A subgroup-only member is confined to the subgroup shared with it.
+
+    Asking for the group is allowed — it resolves to that member's shared
+    subgroups rather than the whole group — but a sibling subgroup is refused.
+    """
+    group_api = Group(test_user1)
+    group_id = group_api.create_group("scoped-assume-role-shared")
+    try:
+        shared_subgroup_id = group_api.create_subgroup(group_id, "shared-sub")
+        sibling_subgroup_id = group_api.create_subgroup(group_id, "sibling-sub")
+
+        group_api.share_subgroup(group_id, shared_subgroup_id, test_user2.username)
+        accept_sharing_request_for(test_user2, group_id, shared_subgroup_id)
+
+        assert test_user2.assume_role_scoped(group_id, shared_subgroup_id) is not None, \
+            "Member should get credentials for the subgroup shared with it"
+        assert test_user2.assume_role_scoped(group_id) is not None, \
+            "Member should get credentials for the group, narrowed to its shared subgroups"
+        assert test_user2.assume_role_scoped(group_id, sibling_subgroup_id) is None, \
+            "Member must not get credentials for a subgroup that was not shared with it"
+        user_log("Scoped assume-role honours a subgroup-only grant")
+    finally:
+        group_api.delete_group(group_id, warn_error=True)
+
+
+def test_group_scoped_assume_role_past_the_unscoped_ceiling(test_user1):
+    """The scoped route still issues credentials once the unscoped one cannot.
+
+    /v1/assumed-roles encodes every accessible group into one 2048-char STS
+    session policy and fails as a whole beyond roughly four groups; the scoped
+    route encodes one group, so it keeps working.
+    """
+    group_api = Group(test_user1)
+    group_ids = []
+    try:
+        for i in range(6):
+            group_ids.append(group_api.create_group(f"scoped-assume-role-ceiling-{i}"))
+
+        assert test_user1.assume_role() is None, \
+            "Unscoped assume-role should fail once the group count exceeds the policy budget"
+        assert test_user1.assume_role_scoped(group_ids[0]) is not None, \
+            "Scoped assume-role must still issue credentials past the unscoped ceiling"
+        user_log("Scoped assume-role works past the unscoped session-policy ceiling")
+    finally:
+        for group_id in group_ids:
+            group_api.delete_group(group_id, warn_error=True)
 
 
 def test_admin_get_node_groups(admin_user, associated_device):

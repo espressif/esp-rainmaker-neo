@@ -70,6 +70,21 @@ var _ = Describe("Admin Node Groups Main", func() {
 			Expect(body.SubGroups).To(BeEmpty())
 		})
 
+		It("should return group info for a node in a group the admin does not belong to", func() {
+			_, ownerContext := test_utils.SetupTestUser(ctx, "owner-user-id", "owner-user@example.com")
+			ownerGroup, err := group.CreateGroupForUser(ownerContext, "Owner Group")
+			Expect(err).To(BeNil())
+			nodeID := "owner-node-1"
+			test_utils.ManuallyAddNodeToGroup(ctx, ownerGroup.GroupID, nodeID)
+
+			response := CallNodeGroupsHandler(ctx, adminUser.GetID(), nodeID)
+
+			Expect(response.StatusCode).To(Equal(http.StatusOK))
+			var body NodeGroupsResponse
+			Expect(json.Unmarshal([]byte(response.Body), &body)).To(Succeed())
+			Expect(body).To(Equal(NodeGroupsResponse{Group: ownerGroup.GroupID, SubGroups: []string{}}))
+		})
+
 		It("should return group info with subgroups for a node in subgroups", func() {
 			nodeID := "test-node-2"
 			subGroup1, err := group.CreateSubGroup(adminContext, testGroup.GroupID, "Sub Group 1")

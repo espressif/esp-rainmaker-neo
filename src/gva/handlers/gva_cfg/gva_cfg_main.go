@@ -75,7 +75,7 @@ func handleStoreConfig(ctx context.Context, request events.APIGatewayProxyReques
 	var configRequest gva.ServiceAccount
 	if err := rmngrequest.ExtractRequestStruct(request, &configRequest); err != nil {
 		rlog.Error(ctx).Err(err).Msg("failed to parse/validate config request")
-		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(err.Error()))
+		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(rmerror.TopMessage(err)))
 	}
 
 	// Calculate redirect URI from project ID

@@ -16,6 +16,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngrequest"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -99,7 +100,7 @@ func handleAlexaCfg(ctx context.Context, request events.APIGatewayProxyRequest) 
 	}
 	if err := alexa_skill.AddAlexaTriggerAllRegions(ctx, rmngRegion, req.SkillID); err != nil {
 		rlog.Error(ctx).Err(err).Send()
-		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Failed to add Alexa trigger: "+err.Error())), nil
+		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Failed to add Alexa trigger: "+rmerror.TopMessage(err))), nil
 	}
 
 	alexa_skill.ClearSetupStatus(ctx)

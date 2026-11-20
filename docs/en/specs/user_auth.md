@@ -269,8 +269,8 @@ selected by whether a `nodeId` path parameter is present:
 | Route | Mode | Who | Session policy |
 |---|---|---|---|
 | `POST /v1/assumed-roles` | MQTT | any authenticated user | MQTT topics for **all groups/subgroups the caller can access** |
-| `POST /v1/groups/{groupId}/assumed-roles` | MQTT | super-admin only | MQTT topics scoped to that **one group** |
-| `POST /v1/groups/{groupId}/subgroups/{subGroupId}/assumed-roles` | MQTT | super-admin only | MQTT topics scoped to that **one subgroup** |
+| `POST /v1/groups/{groupId}/assumed-roles` | MQTT | any caller with access to the group | MQTT topics scoped to that **one group** |
+| `POST /v1/groups/{groupId}/subgroups/{subGroupId}/assumed-roles` | MQTT | any caller with access to the subgroup | MQTT topics scoped to that **one subgroup** |
 | `POST /v1/groups/{groupId}/nodes/{nodeId}/assumed-roles` | **services** | user (or admin) with access to the node | **S3/KVS** for that **one node** — no IoT statements |
 
 Common path (both modes):
@@ -326,10 +326,7 @@ The set of groups/subgroups the caller may access is resolved as follows:
 
 - **No `groupId` (the `/v1/assumed-roles` route):** the caller's full access
   map is returned. This is the normal per-user MQTT-credential path.
-- **With `groupId` (admin routes):** the caller must be a super-admin (else
-  403). The group (and subgroup, if given) is validated to exist, and the
-  access map is set to exactly that group or subgroup. This lets an admin mint
-  credentials scoped to a specific group/subgroup without belonging to it.
+- **With `groupId` (the group-scoped routes):** an admin is granted the whole requested group through a system actor, so it can mint credentials for a group it does not belong to. Every other caller is narrowed to the scope its own user-group grant carries — a subgroup-only member gets exactly its shared subgroups, never the group's wildcards — and is refused with 403 if it has no grant on that group. Only one group is encoded, so the policy stays a constant ~850 characters for an admin, a full-group member, and any caller on the per-subgroup route. A subgroup-only member asking for the whole group still gets three ARNs per shared subgroup; past roughly 5 the policy overruns the STS cap and the route returns 422 `"... request per subgroup"`, pointing the client at `POST /v1/groups/{groupId}/subgroups/{subGroupId}/assumed-roles`.
 
 The resulting credentials, used to connect to IoT Core, can publish/subscribe
 only within the caller's entitled topic space — the enforcement point for the
@@ -520,9 +517,10 @@ The response echoes the `endpoint_id`; callers **must persist it** to later
    a client is the *intersection* of that role and an inline policy scoped to
    the caller's groups/subgroups (MQTT) or a single node's S3/KVS (services).
    A client cannot widen its own scope.
-3. **Admin routes double-gate.** The admin assume-role routes require a
-   super-admin check in code (§3.3), and admin identities are already the only
-   ones the Identity Pool maps to the admin role (§2.2). Node services-mode
+3. **Group-scoped routes narrow, they do not widen.** An admin is granted the
+   whole requested group (§3.3); every other caller is confined to its own
+   user-group grant and refused outright without one. Admin identities remain the
+   only ones the Identity Pool maps to the admin role (§2.2). Node services-mode
    authorization independently verifies group/subgroup membership per node
    (§3.4).
 4. **Token verification boundary.** `/v1/user/credentials` carries no gateway

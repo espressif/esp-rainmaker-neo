@@ -308,7 +308,7 @@ func handlePostIntegration(ctx context.Context, request events.APIGatewayProxyRe
 
 	snsPlatform, err := integrationTypeToSNSPlatform(integrationType)
 	if err != nil {
-		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(err.Error())), nil
+		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 	}
 
 	var req RegisterIntegrationRequest
@@ -328,12 +328,12 @@ func handlePostIntegration(ctx context.Context, request events.APIGatewayProxyRe
 	)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Send()
-		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
+		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 	}
 
 	if _, err := push.CreatePlatformApplication(ctx, appName, snsPlatform, attrs); err != nil {
 		rlog.Error(ctx).Err(err).Send()
-		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
+		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 	}
 
 	return utils.APIGwRespJSON(http.StatusCreated, RegisterIntegrationResponse{
@@ -457,7 +457,7 @@ func handleGetIntegration(ctx context.Context, request events.APIGatewayProxyReq
 
 	integrationType, platformAppName, err := parseIntegrationID(integrationID)
 	if err != nil {
-		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(err.Error())), nil
+		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 	}
 
 	snsPlatform, err := integrationTypeToSNSPlatform(integrationType)
@@ -486,7 +486,7 @@ func handlePutIntegration(ctx context.Context, request events.APIGatewayProxyReq
 
 	integrationType, platformAppName, err := parseIntegrationID(integrationID)
 	if err != nil {
-		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(err.Error())), nil
+		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 	}
 
 	snsPlatform, err := integrationTypeToSNSPlatform(integrationType)
@@ -506,12 +506,12 @@ func handlePutIntegration(ctx context.Context, request events.APIGatewayProxyReq
 	attributes, err := buildAttributesForUpdate(snsPlatform, platformAppName, body)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Send()
-		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
+		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 	}
 
 	if err := push.UpdatePlatformApplication(ctx, snsPlatform, platformAppName, attributes); err != nil {
 		rlog.Error(ctx).Err(err).Send()
-		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
+		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 	}
 
 	return utils.APIGwRespJSON(http.StatusOK, utils.NewAPIStatus("success")), nil
@@ -526,7 +526,7 @@ func handleDeleteIntegration(ctx context.Context, request events.APIGatewayProxy
 
 	integrationType, platformAppName, err := parseIntegrationID(integrationID)
 	if err != nil {
-		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(err.Error())), nil
+		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 	}
 
 	snsPlatform, err := integrationTypeToSNSPlatform(integrationType)
@@ -540,7 +540,7 @@ func handleDeleteIntegration(ctx context.Context, request events.APIGatewayProxy
 
 	if err := push.DeletePlatformApplication(ctx, snsPlatform, platformAppName); err != nil {
 		rlog.Error(ctx).Err(err).Send()
-		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
+		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 	}
 
 	return utils.APIGwRespJSON(http.StatusOK, utils.NewAPIStatus("success")), nil

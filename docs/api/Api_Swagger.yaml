@@ -502,20 +502,44 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AssumeRoleResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "409":
-          description:
-            The user has no group yet, so there is nothing to scope MQTT
-            credentials to.
+        "400":
+          description: The body does not parse, or it names services, which only the per-node route accepts.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-              example:
-                message: "User has no groups"
+              examples:
+                invalidBody:
+                  value:
+                    message: "Invalid request body"
+                servicesNotAllowed:
+                  value:
+                    message: "services requires the /v1/groups/{group_id}/nodes/{node_id}/assumed-roles route"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: The user has no group yet, so there is nothing to scope MQTT credentials to.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                noGroups:
+                  value:
+                    message: "User has no groups"
         "500":
-          $ref: "#/components/responses/InternalServerError"
+          description: Server-side failure (DynamoDB, STS or policy building). The cause is logged, not returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                internal:
+                  value:
+                    message: "Internal Server Error"
+                tooManyGroups:
+                  value:
+                    message: "Unable to issue credentials: too many accessible groups to encode in a session policy"
 
   /v1/groups/{groupId}/assumed-roles:
     post:
@@ -551,25 +575,53 @@ paths:
               schema:
                 $ref: "#/components/schemas/AssumeRoleResponse"
         "400":
-          description: Bad request - group not found
+          description: The body does not parse or names services, or (admin caller) the group does not exist.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-              example:
-                message: "Group not found"
+              examples:
+                invalidBody:
+                  value:
+                    message: "Invalid request body"
+                servicesNotAllowed:
+                  value:
+                    message: "services requires the /v1/groups/{group_id}/nodes/{node_id}/assumed-roles route"
+                groupNotFound:
+                  value:
+                    message: "Group not found"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
-          description: Forbidden - the caller has no access to this group
+          description: The caller has no grant on this group, or its grant no longer covers any subgroup.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-              example:
-                message: "User does not have access to this group"
+              examples:
+                noGroupAccess:
+                  value:
+                    message: "User does not have access to this group"
+        "422":
+          description: The caller holds too many shared subgroups of this group to encode in one session policy; request credentials per subgroup instead.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                tooManySubgroups:
+                  value:
+                    message: "Unable to issue credentials: too many shared subgroups to encode in a session policy; request per subgroup"
         "500":
-          $ref: "#/components/responses/InternalServerError"
+          description: Server-side failure (DynamoDB, STS or policy building). The cause is logged, not returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                internal:
+                  value:
+                    message: "Internal Server Error"
 
   /v1/groups/{groupId}/subgroups/{subGroupId}/assumed-roles:
     post:
@@ -603,12 +655,18 @@ paths:
               schema:
                 $ref: "#/components/schemas/AssumeRoleResponse"
         "400":
-          description: Bad request - group not found or subgroup not found
+          description: The body does not parse or names services, the group does not exist (admin caller), or the subgroup does not exist (caller with full-group access).
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
               examples:
+                invalidBody:
+                  value:
+                    message: "Invalid request body"
+                servicesNotAllowed:
+                  value:
+                    message: "services requires the /v1/groups/{group_id}/nodes/{node_id}/assumed-roles route"
                 groupNotFound:
                   value:
                     message: "Group not found"
@@ -618,9 +676,7 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
-          description:
-            Forbidden - the caller has no access to this group, or the subgroup
-            was not shared with it
+          description: The caller has no grant on this group, or holds only shared subgroups and this subgroup is not one of them.
           content:
             application/json:
               schema:
@@ -633,7 +689,15 @@ paths:
                   value:
                     message: "User does not have access to this subgroup"
         "500":
-          $ref: "#/components/responses/InternalServerError"
+          description: Server-side failure (DynamoDB, STS or policy building). The cause is logged, not returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                internal:
+                  value:
+                    message: "Internal Server Error"
 
   /v1/groups/{groupId}/nodes/{nodeId}/assumed-roles:
     post:
@@ -682,13 +746,15 @@ paths:
               schema:
                 $ref: "#/components/schemas/AssumeRoleResponse"
         "400":
-          description:
-            Bad request - missing/invalid services or unsupported service value
+          description: The body does not parse, services is missing, or it names an unsupported service.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
               examples:
+                invalidBody:
+                  value:
+                    message: "Invalid request body"
                 servicesRequired:
                   value:
                     message: "services is required"
@@ -698,15 +764,25 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
-          description: Forbidden - caller does not have access to this node
+          description: The node is not in this group, or the caller cannot reach it (no grant on the group, or only shared subgroups the node is not in).
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-              example:
-                message: "User does not have access to this node"
+              examples:
+                noNodeAccess:
+                  value:
+                    message: "User does not have access to this node"
         "500":
-          $ref: "#/components/responses/InternalServerError"
+          description: Server-side failure (DynamoDB, STS or policy building). The cause is logged, not returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                internal:
+                  value:
+                    message: "Internal Server Error"
 
   /v1/user/credentials:
     post:

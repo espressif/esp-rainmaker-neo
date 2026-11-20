@@ -149,3 +149,13 @@ const (
 func (a AdminConfigActions) String() string {
 	return string(a)
 }
+
+// GetAdminPermissions lists what an admin caller holds on every resource. It names each action rather than an *All wildcard; the claim-flow reservation actions are left out because they belong to the claimant, not the admin.
+func GetAdminPermissions() []string {
+	return []string{
+		GroupGet.String(), GroupListSubEntities.String(),
+		NodeGet.String(), NodeWriteShadow.String(),
+		NodeAdminAdd.String(), NodeAdminRegisterStatus.String(),
+		AdminConfigGet.String(), AdminConfigSet.String(),
+	}
+}

@@ -137,7 +137,7 @@ var _ = Describe("NodeRegRequestsDB", func() {
 
 		It("rejects a start_key that is not a token", func() {
 			_, err := nodeRegRequestDB.ListNodeRegRequests(2, "not-a-valid-base64-token!!!", "", "")
-			Expect(err).To(MatchError("invalid start_key"))
+			Expect(err).To(MatchError(HavePrefix("invalid start_key")))
 		})
 
 		It("should paginate with start_key", func() {

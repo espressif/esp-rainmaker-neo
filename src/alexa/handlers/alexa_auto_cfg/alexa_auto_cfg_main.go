@@ -140,10 +140,10 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		// A refusal by LWA or SMAPI is the admin's to fix (reconnect, fix the profile), so it must not page as a server error.
 		if errors.Is(err, errInvalidRequest) || errors.Is(err, alexa_skill.ErrLWANotConnected) || smapi.IsCallerError(err) {
 			rlog.Warn(ctx).Err(err).Send()
-			return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(err.Error())), nil
+			return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 		}
 		rlog.Error(ctx).Err(err).Send()
-		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
+		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 	}
 	return utils.APIGwRespJSON(http.StatusOK, response), nil
 }

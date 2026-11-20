@@ -187,7 +187,7 @@ var _ = Describe("NodeRegFailedNodesDB", func() {
 
 		It("rejects an invalid start_key", func() {
 			_, err := db.ListFailures(testRequestID, 100, "not-a-valid-base64-token!!!")
-			Expect(err).To(MatchError("invalid start_key"))
+			Expect(err).To(MatchError(HavePrefix("invalid start_key")))
 		})
 	})
 

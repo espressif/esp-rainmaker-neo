@@ -6,7 +6,9 @@ package group
 
 import (
 	"errors"
+	"net/http"
 	"os"
+	"slices"
 	"strings"
 
 	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
@@ -243,6 +245,54 @@ func GetUserSubGroupAccess(ctx *rmngctx.RmngContext, parentGroupID, subGroupID s
 		return utils.GroupAccessType(""), err
 	}
 	return userGroupEntry.AccessType, nil
+}
+
+// GetUserGroupSubgroupAccessWithData returns the caller's grant on groupID and populates their permissions. Unlike GetUserGroupAccess it succeeds for subentity access. Only GroupID, AccessType and the shared SubGroups' IDs are filled: {access: subentity, sub_entity_ids: ["s1"]} -> Group{AccessType: subentity, SubGroups: [{SubGroupID: "s1"}]}.
+func GetUserGroupSubgroupAccessWithData(ctx *rmngctx.RmngContext, groupID string) (Group, error) {
+	entries, err := user_group_db.NewUserGroupDB(ctx).ListGroupsForUser(groupID)
+	if err != nil {
+		return Group{}, rmerror.NewRMError(err, "failed to get user group")
+	}
+	if len(entries) == 0 {
+		return Group{}, rmerror.NewRMError(ErrGroupAccessDenied, "caller has no grant on the group").WithClientStatus(http.StatusForbidden, "User does not have access to this group")
+	}
+	g := Group{GroupID: entries[0].GroupID, AccessType: entries[0].AccessType}
+	for _, subGroupID := range entries[0].SubEntityIDs {
+		g.SubGroups = append(g.SubGroups, SubGroup{SubGroupID: subGroupID})
+	}
+	// A subentity grant whose shared subgroups are all gone reaches nothing, so it is no access rather than the whole group.
+	if !g.HasWholeGroupAccess() && len(g.SubGroups) == 0 {
+		return Group{}, rmerror.NewRMError(ErrGroupAccessDenied, "grant covers no subgroup").WithClientStatus(http.StatusForbidden, "User does not have access to this group")
+	}
+	return g, nil
+}
+
+// NarrowToSubGroup limits g to one subgroup: a subentity grant must already share it, a whole-group grant reaches any subgroup that exists. An empty subGroupID returns g unchanged. Group{AccessType: primary} narrowed to "s1" -> Group{AccessType: subentity, SubGroups: [{SubGroupID: "s1"}]}.
+func (g Group) NarrowToSubGroup(ctx *rmngctx.RmngContext, subGroupID string) (Group, error) {
+	if subGroupID == "" {
+		return g, nil
+	}
+
+	narrowed := Group{GroupID: g.GroupID, AccessType: utils.GroupSubEntityAccess, SubGroups: []SubGroup{{SubGroupID: subGroupID}}}
+	if !g.HasWholeGroupAccess() {
+		if !slices.ContainsFunc(g.SubGroups, func(sg SubGroup) bool { return sg.SubGroupID == subGroupID }) {
+			return Group{}, rmerror.NewRMError(ErrSubGroupAccessDenied, "subgroup is not shared with the caller").WithClientStatus(http.StatusForbidden, "User does not have access to this subgroup")
+		}
+		return narrowed, nil
+	}
+	isSubGroup, err := group_db.NewGroupDB(ctx).IsSubGroup(g.GroupID, subGroupID)
+	if err != nil {
+		return Group{}, rmerror.NewRMError(err, "failed to check subgroup")
+	}
+	if !isSubGroup {
+		return Group{}, rmerror.NewRMError(ErrSubGroupAccessDenied, "subgroup does not exist").WithClientStatus(http.StatusBadRequest, "Subgroup not found")
+	}
+	return narrowed, nil
+}
+
+// HasWholeGroupAccess decides by access type, not by an empty subgroup list, so a subentity member whose shared subgroups are all gone covers nothing. A Group loaded without its access type is not whole access.
+func (g Group) HasWholeGroupAccess() bool {
+	return g.AccessType == utils.GroupPrimaryAccess || g.AccessType == utils.GroupSecondaryAccess
 }
 
 // CreateSubGroup creates a new subgroup within the given parent group.

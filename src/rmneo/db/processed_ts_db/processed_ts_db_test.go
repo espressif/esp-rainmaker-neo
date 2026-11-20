@@ -80,7 +80,7 @@ var _ = Describe("GetWindowEntries across more than one DynamoDB page", func() {
 
 	It("rejects a pagination token that does not decode", func() {
 		_, err := db.GetWindowEntriesWithPagination(nodeID, dataKey, dataType, windowType, time.Time{}, time.Time{}, pageSize, "not-a-valid-base64-token!!!")
-		Expect(err).To(MatchError("invalid pagination token"))
+		Expect(err).To(MatchError(HavePrefix("invalid pagination token")))
 	})
 
 	It("still returns one page and a token when a limit is given", func() {

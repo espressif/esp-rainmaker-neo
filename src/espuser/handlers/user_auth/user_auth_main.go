@@ -12,6 +12,7 @@ import (
 	"net/http"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/legacyauth"
@@ -247,7 +248,7 @@ func handleSignout(ctx context.Context, request events.APIGatewayProxyRequest, s
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Refresh token is required")), nil
 	}
 	if err := svc.Signout(ctx, req.RefreshToken); err != nil {
-		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus(err.Error())), nil
+		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 	}
 	return utils.APIGwRespJSON(http.StatusOK, utils.NewAPIStatus("Successfully signed out")), nil
 }

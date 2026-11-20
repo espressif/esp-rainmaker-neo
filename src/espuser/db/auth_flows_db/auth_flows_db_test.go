@@ -60,7 +60,7 @@ var _ = Describe("AuthFlowsDB", func() {
 			dup := flow("fl1", now+600)
 			dup.ClientID = "client-2"
 			err := db.CreateFlow(dup)
-			Expect(err).To(MatchError("failed to put auth flow"))
+			Expect(err).To(MatchError(HavePrefix("failed to put auth flow")))
 			Expect(ddbu.IsConditionFailed(err)).To(BeTrue())
 
 			got, err := db.GetFlow("fl1")
@@ -92,7 +92,7 @@ var _ = Describe("AuthFlowsDB", func() {
 			backend.DBMock.NextGetItemError = boom
 
 			_, err := db.GetFlow("fl1")
-			Expect(err).To(MatchError("failed to get auth flow"))
+			Expect(err).To(MatchError(HavePrefix("failed to get auth flow")))
 			Expect(errors.Is(err, boom)).To(BeTrue())
 		})
 	})
@@ -162,13 +162,13 @@ var _ = Describe("AuthFlowsDB", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			err = db.SetUpstreamLeg("fl1", "google", "st", "nonce", "verifier")
-			Expect(err).To(MatchError("failed to set upstream federation leg"))
+			Expect(err).To(MatchError(HavePrefix("failed to set upstream federation leg")))
 			Expect(ddbu.IsConditionFailed(err)).To(BeTrue())
 		})
 
 		It("fails and creates nothing for an unknown flow", func() {
 			err := db.SetUpstreamLeg("missing", "google", "st", "nonce", "verifier")
-			Expect(err).To(MatchError("failed to set upstream federation leg"))
+			Expect(err).To(MatchError(HavePrefix("failed to set upstream federation leg")))
 			Expect(ddbu.IsConditionFailed(err)).To(BeTrue())
 
 			_, err = db.GetFlow("missing")
@@ -211,7 +211,7 @@ var _ = Describe("AuthFlowsDB", func() {
 			Expect(db.ConsumeCode("fl1")).To(Succeed())
 
 			err := db.ConsumeCode("fl1")
-			Expect(err).To(MatchError("failed to consume authorization code"))
+			Expect(err).To(MatchError(HavePrefix("failed to consume authorization code")))
 			Expect(ddbu.IsConditionFailed(err)).To(BeTrue())
 		})
 	})

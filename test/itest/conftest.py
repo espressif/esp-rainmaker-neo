@@ -95,8 +95,10 @@ def _get_alexa_region_arns():
     Keyed off the region inside each ARN rather than the outputs layout, so this reads both the
     flat and the per-region-nested shapes and does not assume the Alexa stacks are published under
     RMNG's own region."""
+    # One account can host several RMNG homes, each with its own rmng-alexa-core-<home>; read this home's, as test_smartthings does, or another home's skill rejects our tokens.
+    home_outputs = rmng_outputs.get(f"rmng-alexa-core-{REGION}", rmng_outputs)
     by_region = {}
-    for arn in find_outputs(rmng_outputs, "AlexaSkillFunctionArn"):
+    for arn in find_outputs(home_outputs, "AlexaSkillFunctionArn"):
         parts = arn.split(":")
         if len(parts) > 3:
             by_region[parts[3]] = arn

@@ -52,7 +52,7 @@ var _ = Describe("OAuthClientsDB", func() {
 	}
 
 	expectConditionFailed := func(err error, message string) {
-		Expect(err).To(MatchError(message))
+		Expect(err).To(MatchError(HavePrefix(message)))
 		var ccf *types.ConditionalCheckFailedException
 		Expect(errors.As(err, &ccf)).To(BeTrue(), "error should wrap ConditionalCheckFailedException")
 	}

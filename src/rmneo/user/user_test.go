@@ -5,6 +5,8 @@
 package user_test
 
 import (
+	"errors"
+	"net/http"
 	"testing"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
@@ -12,6 +14,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/node"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -140,6 +143,12 @@ var _ = Describe("User", func() {
 			// caller supplied a groupID the user happens to own.
 			err := user.LoadNodePermissions(tfo.UserCtx["main-user-id"], tfo.Groups["main-group"].GroupID, "foreign-node-id")
 			Expect(err).To(HaveOccurred())
+
+			var rmErr *rmerror.RMError
+			Expect(errors.As(err, &rmErr)).To(BeTrue())
+			status, message := rmErr.ClientError()
+			Expect(status).To(Equal(http.StatusForbidden))
+			Expect(message).To(Equal("User does not have access to this node"))
 		})
 
 		It("should not let a caller write to a foreign node by pairing it with an owned groupID (end-to-end, security)", func() {

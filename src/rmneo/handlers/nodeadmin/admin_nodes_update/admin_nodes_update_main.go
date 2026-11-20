@@ -135,7 +135,7 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		response, err = jobs_api.List(rctx, request, node_reg_req_db.NODE_REG_JOB_TYPE_UPDATE)
 		if err != nil {
 			rlog.Error(rctx).Err(err).Send()
-			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
+			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 		}
 		return utils.APIGwRespJSON(http.StatusOK, response), nil
 

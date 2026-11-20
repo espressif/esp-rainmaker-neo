@@ -10,18 +10,17 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"slices"
+	"strings"
 
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_db"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/group_node_db"
-	"github.com/espressif/esp-rainmaker-neo/src/rmneo/db/user_group_db"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
-
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/group"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/principal"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngrequest"
 
@@ -35,8 +34,7 @@ import (
 
 type Request struct {
 	Tags map[string]string `json:"tags"`
-	// Services selects which per-node services to include. Required on the
-	// per-node route. Supported values: "s3", "kvs".
+	// Services selects the per-node services to grant; required on the per-node route.
 	Services []string `json:"services,omitempty"`
 }
 
@@ -47,47 +45,36 @@ type Response struct {
 	Expiration   *int   `json:"expiration"`
 }
 
-// maxSessionPolicyChars is STS's hard cap on the AssumeRole Policy parameter.
-// Verified against live STS: a 2238-char document is rejected with
-// "at 'policy' failed to satisfy constraint: Member must have length less than
-// or equal to 2048" — before the trust policy is even evaluated. The AWS API
-// model does not declare this max, so nothing catches it client-side.
+// maxSessionPolicyChars is STS's cap on the AssumeRole Policy parameter. The AWS API model does not declare it, so nothing catches an overrun client-side; live STS rejects a 2238-char document before evaluating the trust policy.
 const maxSessionPolicyChars = 2048
 
-// supportedGroupsPerSession is the largest number of full-access groups whose
-// ARNs still fit the budget: ~343 chars per group on ~503 of fixed overhead.
-// A caller above this cannot be issued MQTT credentials at all.
-const supportedGroupsPerSession = 4
+const (
+	iamPolicyVersion = "2012-10-17"
+	serviceS3        = "s3"
+	serviceKVS       = "kvs"
+	noNodeAccessMsg  = "User does not have access to this node"
+	noGroupAccessMsg = "User does not have access to this group"
+)
 
-// supportedSharedSubgroupsPerSession is the same budget for a caller holding
-// only shared subgroups: ~271 chars per subgroup (shadow filter, unicast and
-// subgroup control ARNs).
-const supportedSharedSubgroupsPerSession = 5
+var supportedServices = []string{serviceS3, serviceKVS}
 
-// groupAccess is the set of groups (full access) and per-group subgroups the
-// caller may reach, used to scope the MQTT session policy.
-type groupAccess struct {
-	Groups    []string
-	Subgroups map[string][]string
+// route is the path the request arrived on: no ids for every group the caller can reach, groupID (and optionally subGroupID) for one group or subgroup, groupID and nodeID for per-node services.
+type route struct {
+	groupID    string
+	subGroupID string
+	nodeID     string
 }
 
-// mqttClientIdentity holds the caller's own identifiers that may appear in its
-// MQTT client id ("user:<id>"). Every value is the caller's own, so scoping
-// iot:Connect to these keeps the session confined to the caller.
-type mqttClientIdentity struct {
-	Email string
-	Phone string
+func (r route) isPerNode() bool {
+	return r.nodeID != ""
 }
 
-// iamPolicyDocument / iamStatement model an inline session policy so it can be
-// built with typed fields and json.Marshal instead of a map[string]interface{}
-// mutated through unchecked assertions. Action/Resource/Condition are `any`
-// because IAM accepts either a scalar or a list in those positions.
 type iamPolicyDocument struct {
 	Version   string         `json:"Version"`
 	Statement []iamStatement `json:"Statement"`
 }
 
+// iamStatement fields are `any` because IAM accepts either a scalar or a list for Action, Resource and Condition.
 type iamStatement struct {
 	Effect    string `json:"Effect"`
 	Action    any    `json:"Action"`
@@ -96,310 +83,276 @@ type iamStatement struct {
 }
 
 func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	var req Request
-	if err := rmngrequest.ExtractRequestStruct(request, &req); err != nil {
-		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Invalid request body")), nil
+	rctx := principal.FromAPIRequest(ctx, request)
+	if rctx == nil {
+		rlog.Error(ctx).Str("auth_provider", request.RequestContext.Identity.CognitoAuthenticationProvider).Str("identity_id", request.RequestContext.Identity.CognitoIdentityID).Msg("Failed to create request context")
+		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Unauthorized")), nil
 	}
 
-	pathGroupID := request.PathParameters["groupId"]
-	pathSubGroupID := request.PathParameters["subGroupId"]
-	pathNodeID := request.PathParameters["nodeId"]
-	servicesMode := pathNodeID != ""
-
-	if errResp := validateRequest(req, servicesMode, pathGroupID, pathNodeID); errResp != nil {
-		return *errResp, nil
+	r := route{
+		groupID:    request.PathParameters["groupId"],
+		subGroupID: request.PathParameters["subGroupId"],
+		nodeID:     request.PathParameters["nodeId"],
 	}
-
-	rmng_context := principal.FromAPIRequest(ctx, request)
-
-	lambdaCfg, err := config.LoadDefaultConfig(ctx)
+	creds, err := issueCredentials(rctx, request, r)
 	if err != nil {
-		rlog.Error(rmng_context).Err(err).Msg("Error loading default config")
-		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Error loading Lambda credentials")), nil
+		rlog.Error(rctx).Err(err).Str("group_id", r.groupID).Str("subgroup_id", r.subGroupID).Str("node_id", r.nodeID).Msg("Unable to issue credentials")
+		return utils.APIErrorRespJSON(err), nil
 	}
-
-	stsClient := awscommon.GetSTSClient()
-	if stsClient == nil {
-		stsClient = sts.NewFromConfig(lambdaCfg)
-	}
-
-	callerIdentity, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
-	if err != nil {
-		rlog.Error(rmng_context).Err(err).Msg("Error getting caller identity")
-		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Error getting caller identity")), nil
-	}
-
-	// Scope iot:Connect to the caller's own per-session client ids only, so a
-	// user cannot connect as another id and force its holder off (MQTT enforces
-	// unique client ids per endpoint). Clients connect as
-	// "user:<email|phone>:<session>"; the bare form is not granted (see
-	// createMQTTPolicyDocument), so every session is isolated.
-	var clientIdentity mqttClientIdentity
-	if accessor, ok := rmng_context.GetAccessor().(*user.User); ok && accessor != nil {
-		clientIdentity = mqttClientIdentity{
-			Email: accessor.UserInfo.Email,
-			Phone: accessor.UserInfo.PhoneNumber,
-		}
-	}
-
-	var policyDocument string
-	if servicesMode {
-		errResp := authorizeNodeAccess(ctx, rmng_context, pathGroupID, pathNodeID)
-		if errResp != nil {
-			return *errResp, nil
-		}
-		policyDocument, err = createServicesPolicyDocument(*callerIdentity.Account, pathNodeID, req.Services)
-	} else {
-		access, errResp := resolveAssumeRoleGroupAccess(ctx, rmng_context, request, pathGroupID, pathSubGroupID)
-		if errResp != nil {
-			return *errResp, nil
-		}
-		policyDocument, err = createMQTTPolicyDocument(*callerIdentity.Account, clientIdentity, access)
-	}
-	if err != nil {
-		rlog.Error(rmng_context).Err(err).Msg("Error building session policy document")
-		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Error building policy document")), nil
-	}
-
-	// The document grows ~343 chars per full-access group, so a caller with 5+
-	// groups overruns the STS cap and AssumeRole fails. Reject here instead:
-	// STS's ValidationError is indistinguishable from a transient fault in the
-	// logs, which is why this went unnoticed. See the MR for the structural fix.
-	if len(policyDocument) > maxSessionPolicyChars {
-		rlog.Error(rmng_context).
-			Int("policy_chars", len(policyDocument)).
-			Int("limit", maxSessionPolicyChars).
-			Msg("Session policy exceeds the STS size limit; caller has too many accessible groups to encode")
-		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Unable to issue credentials: too many accessible groups to encode in a session policy")), nil
-	}
-
-	tags := make([]sts_types.Tag, 0, len(req.Tags))
-	for key, value := range req.Tags {
-		tags = append(tags, sts_types.Tag{Key: aws.String(key), Value: aws.String(value)})
-	}
-
-	iotUserRoleArn := os.Getenv("IOT_USER_ROLE_ARN")
-	if iotUserRoleArn == "" {
-		rlog.Error(rmng_context).Msg("IOT_USER_ROLE_ARN environment variable is not set")
-		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Internal server error")), nil
-	}
-
-	assumeRoleInput := &sts.AssumeRoleInput{
-		RoleArn:         aws.String(iotUserRoleArn),
-		RoleSessionName: aws.String("AssumeIoTRoleSession"),
-		Tags:            tags,
-		Policy:          aws.String(policyDocument),
-	}
-
-	assumeRoleOutput, err := stsClient.AssumeRole(ctx, assumeRoleInput)
-	if err != nil {
-		rlog.Error(rmng_context).Err(err).Msg("Error assuming role")
-		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Error assuming role")), nil
-	}
-
-	var expirationInt *int
-	if assumeRoleOutput.Credentials.Expiration != nil {
-		expirationUnix := int(assumeRoleOutput.Credentials.Expiration.Unix())
-		expirationInt = &expirationUnix
-	}
-	resp := Response{
-		AccessKey:    *assumeRoleOutput.Credentials.AccessKeyId,
-		SecretKey:    *assumeRoleOutput.Credentials.SecretAccessKey,
-		SessionToken: *assumeRoleOutput.Credentials.SessionToken,
-		Expiration:   expirationInt,
-	}
-
-	return utils.APIGwRespJSON(http.StatusOK, resp), nil
+	return utils.APIGwRespJSON(http.StatusOK, creds), nil
 }
 
-func validateRequest(req Request, servicesMode bool, pathGroupID, pathNodeID string) *events.APIGatewayProxyResponse {
-	if !servicesMode {
+func issueCredentials(rctx *rmngctx.RmngContext, request events.APIGatewayProxyRequest, r route) (Response, error) {
+	var req Request
+	if err := rmngrequest.ExtractRequestStruct(request, &req); err != nil {
+		return Response{}, rmerror.NewRMError(err, "failed to read request")
+	}
+	if err := validateRequest(req, r); err != nil {
+		return Response{}, rmerror.NewRMError(err, "invalid request for this route").WithClientStatus(http.StatusBadRequest, err.Error())
+	}
+
+	roleARN := os.Getenv("IOT_USER_ROLE_ARN")
+	if roleARN == "" {
+		return Response{}, rmerror.NewRMError(nil, "IOT_USER_ROLE_ARN is not set")
+	}
+
+	stsClient, err := newSTSClient(rctx)
+	if err != nil {
+		return Response{}, err
+	}
+	identity, err := stsClient.GetCallerIdentity(rctx, &sts.GetCallerIdentityInput{})
+	if err != nil {
+		return Response{}, rmerror.NewRMError(err, "Error getting caller identity")
+	}
+
+	policy, err := buildSessionPolicy(rctx, aws.ToString(identity.Account), req, r)
+	if err != nil {
+		return Response{}, err
+	}
+	return assumeIoTRole(rctx, stsClient, roleARN, policy, req.Tags)
+}
+
+func validateRequest(req Request, r route) error {
+	if !r.isPerNode() {
 		if len(req.Services) > 0 {
-			resp := utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("services requires the /v1/groups/{group_id}/nodes/{node_id}/assumed-roles route"))
-			return &resp
+			return rmerror.NewRMError(nil, "services requires the /v1/groups/{group_id}/nodes/{node_id}/assumed-roles route")
 		}
 		return nil
 	}
-	if pathGroupID == "" || pathNodeID == "" {
-		resp := utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("group_id and node_id are required"))
-		return &resp
+	if r.groupID == "" {
+		return rmerror.NewRMError(nil, "group_id and node_id are required")
 	}
 	if len(req.Services) == 0 {
-		resp := utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("services is required"))
-		return &resp
+		return rmerror.NewRMError(nil, "services is required")
 	}
-	for _, s := range req.Services {
-		if s != "s3" && s != "kvs" {
-			resp := utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(fmt.Sprintf("unsupported service: %s", s)))
-			return &resp
+	for _, service := range req.Services {
+		if !slices.Contains(supportedServices, service) {
+			return rmerror.NewRMError(nil, fmt.Sprintf("unsupported service: %s", service))
 		}
 	}
 	return nil
 }
 
-// authorizeNodeAccess verifies the requesting user (or admin) has access to
-// nodeID via groupID. Lookups are O(1):
-//   - one GetItem on group_device_mapping to confirm node belongs to group,
-//   - one point Query on user_group_mapping for the user's row on this group.
-func authorizeNodeAccess(ctx context.Context, rmng_context *rmngctx.RmngContext, groupID, nodeID string) *events.APIGatewayProxyResponse {
-	systemActor := utils.NewSystemActor()
-	systemContext := rmngctx.NewRmngContextWithCtx(ctx, systemActor)
-
-	groupNode, err := group_node_db.NewGroupNodeDB(systemContext).GetGroupNode(groupID, nodeID)
-	if err != nil || groupNode == nil {
-		rlog.Error(rmng_context).Err(err).Str("node_id", nodeID).Str("group_id", groupID).Msg("Node not found in group")
-		resp := utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("User does not have access to this node"))
-		return &resp
+func newSTSClient(ctx context.Context) (awscommon.STSClientInterface, error) {
+	if client := awscommon.GetSTSClient(); client != nil {
+		return client, nil
 	}
-
-	// Admins are allowed to assume role for any node.
-	if accessor, ok := rmng_context.GetAccessor().(*user.User); ok && accessor != nil && accessor.IsAdmin(rmng_context) {
-		return nil
-	}
-
-	userGroupEntries, err := user_group_db.NewUserGroupDB(rmng_context).ListGroupsForUser(groupID)
+	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
-		rlog.Error(rmng_context).Err(err).Str("group_id", groupID).Msg("Error fetching user-group entry")
-		resp := utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Error fetching user groups"))
-		return &resp
+		return nil, rmerror.NewRMError(err, "Error loading Lambda credentials")
 	}
-	if len(userGroupEntries) == 0 {
-		resp := utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("User does not have access to this node"))
-		return &resp
-	}
-
-	entry := userGroupEntries[0]
-	// Decide on access_type before falling back to sub_entity_ids: a subentity row with an empty list must deny, not be read as full-group access.
-	if entry.AccessType != utils.GroupSubEntityAccess && len(entry.SubEntityIDs) == 0 {
-		// Full-group access — covers every node in the group.
-		return nil
-	}
-	if nodeInSharedSubgroups(groupNode, entry.SubEntityIDs) {
-		return nil
-	}
-	resp := utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("User does not have access to this node"))
-	return &resp
+	return sts.NewFromConfig(cfg), nil
 }
 
-// nodeInSharedSubgroups returns true when at least one of the node's
-// subgroup tags is in the set of subgroups shared with the user.
-func nodeInSharedSubgroups(groupNode *group_node_db.GroupNode, sharedSubgroups []string) bool {
-	nodeSubgroups := []string{groupNode.SubGrp1, groupNode.SubGrp2, groupNode.SubGrp3}
-	for _, ns := range nodeSubgroups {
-		if ns == "" {
-			continue
-		}
-		for _, ss := range sharedSubgroups {
-			if ns == ss {
-				return true
-			}
-		}
+func buildSessionPolicy(rctx *rmngctx.RmngContext, accountID string, req Request, r route) (string, error) {
+	switch {
+	case r.isPerNode():
+		return nodePolicy(rctx, accountID, r, req.Services)
+	case r.groupID == "":
+		return allGroupsPolicy(rctx, accountID)
+	default:
+		return scopedPolicy(rctx, accountID, r)
 	}
-	return false
 }
 
-// createMQTTPolicyDocument builds the IoT/MQTT-only session policy for the user's groups.
-func createMQTTPolicyDocument(accountId string, clientIdentity mqttClientIdentity, access groupAccess) (string, error) {
+func nodePolicy(rctx *rmngctx.RmngContext, accountID string, r route, services []string) (string, error) {
+	if err := user.LoadNodePermissions(rctx, r.groupID, r.nodeID); err != nil {
+		return "", rmerror.NewRMError(err, "failed to authorize node access")
+	}
+	return servicesPolicy(accountID, r.nodeID, services)
+}
+
+func allGroupsPolicy(rctx *rmngctx.RmngContext, accountID string) (string, error) {
+	groups, err := group.ListGroupsForUser(rctx, false)
+	if err != nil {
+		return "", rmerror.NewRMError(err, "Error fetching user groups")
+	}
+	// STS rejects a statement with an empty Resource list, so a caller with no group gets no MQTT credentials until it joins or creates one.
+	if !coversAny(groups...) {
+		return "", rmerror.NewRMError(nil, "User has no groups").WithClientStatus(http.StatusConflict, "User has no groups")
+	}
+	policy, err := mqttPolicy(accountID, callerClientIDs(rctx), groups)
+	if err != nil {
+		return "", err
+	}
+	return policy, checkPolicySize(policy, http.StatusInternalServerError, "Unable to issue credentials: too many accessible groups to encode in a session policy")
+}
+
+// scopedPolicy covers one group, or one subgroup when the path names it. Only a subentity member asking for the whole group can overrun, and the per-subgroup route always fits, so the overrun points the client there.
+func scopedPolicy(rctx *rmngctx.RmngContext, accountID string, r route) (string, error) {
+	groupDB := group_db.NewGroupDB(rctx)
+	g, err := callerGroup(rctx, groupDB, r.groupID)
+	if err != nil {
+		return "", err
+	}
+	if g, err = g.NarrowToSubGroup(rctx, r.subGroupID); err != nil {
+		return "", rmerror.NewRMError(err, "failed to narrow to subgroup")
+	}
+	policy, err := mqttPolicy(accountID, callerClientIDs(rctx), []group.Group{g})
+	if err != nil {
+		return "", err
+	}
+	return policy, checkPolicySize(policy, http.StatusUnprocessableEntity, "Unable to issue credentials: too many shared subgroups to encode in a session policy; request per subgroup")
+}
+
+// checkPolicySize rejects an oversized policy here, because STS fails it with a ValidationError that reads like a transient fault.
+func checkPolicySize(policy string, status int, message string) error {
+	if len(policy) <= maxSessionPolicyChars {
+		return nil
+	}
+	return rmerror.NewRMError(nil, fmt.Sprintf("session policy is %d chars, STS allows %d", len(policy), maxSessionPolicyChars)).WithClientStatus(status, message)
+}
+
+func assumeIoTRole(ctx context.Context, stsClient awscommon.STSClientInterface, roleARN, policy string, tags map[string]string) (Response, error) {
+	stsTags := make([]sts_types.Tag, 0, len(tags))
+	for key, value := range tags {
+		stsTags = append(stsTags, sts_types.Tag{Key: aws.String(key), Value: aws.String(value)})
+	}
+
+	out, err := stsClient.AssumeRole(ctx, &sts.AssumeRoleInput{
+		RoleArn:         aws.String(roleARN),
+		RoleSessionName: aws.String("AssumeIoTRoleSession"),
+		Tags:            stsTags,
+		Policy:          aws.String(policy),
+	})
+	if err != nil {
+		return Response{}, rmerror.NewRMError(err, "Error assuming role")
+	}
+
+	creds := out.Credentials
+	resp := Response{
+		AccessKey:    aws.ToString(creds.AccessKeyId),
+		SecretKey:    aws.ToString(creds.SecretAccessKey),
+		SessionToken: aws.ToString(creds.SessionToken),
+	}
+	if creds.Expiration != nil {
+		expiration := int(creds.Expiration.Unix())
+		resp.Expiration = &expiration
+	}
+	return resp, nil
+}
+
+// callerGroup is the caller's access on groupID: any existing group for an admin, otherwise only the caller's own grant.
+func callerGroup(rctx *rmngctx.RmngContext, groupDB *group_db.GroupDB, groupID string) (group.Group, error) {
+	if isAdmin(rctx) {
+		if _, err := groupDB.GetGroupByID(groupID); err != nil {
+			return group.Group{}, rmerror.NewRMError(err, "failed to load group for admin")
+		}
+		return group.Group{GroupID: groupID, AccessType: utils.GroupPrimaryAccess}, nil
+	}
+
+	g, err := group.GetUserGroupSubgroupAccessWithData(rctx, groupID)
+	if err != nil {
+		return group.Group{}, rmerror.NewRMError(err, "failed to read caller's grant")
+	}
+	return g, nil
+}
+
+func coversAny(groups ...group.Group) bool {
+	return slices.ContainsFunc(groups, func(g group.Group) bool {
+		return g.HasWholeGroupAccess() || len(g.SubGroups) > 0
+	})
+}
+
+func isAdmin(rctx *rmngctx.RmngContext) bool {
+	caller, ok := rctx.GetAccessor().(*user.User)
+	return ok && caller.IsAdmin(rctx)
+}
+
+// callerClientIDs are the caller's own ids that may appear in its MQTT client id, so scoping iot:Connect to them confines the session to the caller.
+func callerClientIDs(rctx *rmngctx.RmngContext) []string {
+	caller, ok := rctx.GetAccessor().(*user.User)
+	if !ok {
+		return nil
+	}
+	return slices.DeleteFunc([]string{caller.UserInfo.Email, caller.UserInfo.PhoneNumber}, func(id string) bool { return id == "" })
+}
+
+// mqttPolicy builds the IoT-only session policy: whole-group wildcards for each whole group, per-subgroup ARNs for each subentity group.
+func mqttPolicy(accountID string, clientIDs []string, groups []group.Group) (string, error) {
 	region := os.Getenv("AWS_REGION")
+	iotARN := fmt.Sprintf("arn:aws:iot:%s:%s:", region, accountID)
 
-	// iot:Connect is allowed only for the caller's own per-session client ids
-	// "user:<email|phone>:<session>". The bare "user:<email|phone>" form is
-	// deliberately NOT granted: every client must append a per-session suffix so
-	// a user's own sessions (phone, dashboard) never collide, and no client can
-	// claim the canonical bare id. The ':' delimiter cannot appear in an email
-	// or phone number, so the wildcard only ever matches the caller's own
-	// sessions. Kept minimal for the 2048-char inline session-policy limit.
-	connectResources := make([]string, 0, 2)
-	for _, clientID := range []string{clientIdentity.Email, clientIdentity.Phone} {
-		if clientID == "" {
+	// Only per-session ids "user:<email|phone>:<session>" are granted, never the bare "user:<id>": a user's own sessions never collide and no client can claim the canonical id. ':' cannot appear in an email or phone number, so the wildcard matches only the caller's sessions.
+	connectResources := make([]string, 0, len(clientIDs))
+	for _, clientID := range clientIDs {
+		connectResources = append(connectResources, iotARN+"client/user:"+clientID+":*")
+	}
+
+	publishResources := []string{}
+	shadowResources := []string{}
+	for _, g := range groups {
+		if !g.HasWholeGroupAccess() {
 			continue
 		}
-		connectResources = append(connectResources,
-			fmt.Sprintf("arn:aws:iot:%s:%s:client/user:%s:*", region, accountId, clientID),
+		publishResources = append(publishResources,
+			iotARN+"topic/rainmaker/nodes/*/user/params-"+g.GroupID+"*/*",
+			iotARN+"topic/rainmaker/nodes/groups/"+g.GroupID+"/control",
+			iotARN+"topic/rainmaker/nodes/groups/"+g.GroupID+"/subgroups/*/control",
+		)
+		shadowResources = append(shadowResources, iotARN+"*/$aws/things/*/shadow/name/params-"+g.GroupID+"*/*")
+	}
+	subGroupScoped := slices.DeleteFunc(slices.Clone(groups), func(g group.Group) bool { return g.HasWholeGroupAccess() })
+	slices.SortFunc(subGroupScoped, func(a, b group.Group) int { return strings.Compare(a.GroupID, b.GroupID) })
+	for _, g := range subGroupScoped {
+		for _, sg := range g.SubGroups {
+			publishResources = append(publishResources,
+				iotARN+"topic/rainmaker/nodes/*/user/params-"+g.GroupID+"*"+sg.SubGroupID+"*/*",
+				iotARN+"topic/rainmaker/nodes/groups/"+g.GroupID+"/subgroups/"+sg.SubGroupID+"/control",
+			)
+			shadowResources = append(shadowResources, iotARN+"*/$aws/things/*/shadow/name/params-"+g.GroupID+"*"+sg.SubGroupID+"*/*")
+		}
+	}
+
+	return marshalPolicy([]iamStatement{
+		{Effect: "Allow", Action: []string{"iot:Publish"}, Resource: publishResources},
+		{Effect: "Allow", Action: []string{"iot:Subscribe", "iot:Receive", "iot:Publish"}, Resource: shadowResources},
+		{Effect: "Allow", Action: []string{"cognito-identity:GetCredentialsForIdentity"}, Resource: []string{fmt.Sprintf("arn:aws:cognito-identity:%s:%s::identitypool/*:identity/${cognito-identity.amazonaws.com:sub}", region, accountID)}},
+		{Effect: "Allow", Action: []string{"iot:Connect"}, Resource: connectResources},
+	})
+}
+
+// servicesPolicy builds the S3/KVS-only session policy for one node; it carries no IoT statements.
+func servicesPolicy(accountID, nodeID string, services []string) (string, error) {
+	statements := []iamStatement{}
+
+	if bucket := os.Getenv("FILES_BUCKET_NAME"); bucket != "" && slices.Contains(services, serviceS3) {
+		statements = append(statements,
+			iamStatement{
+				Effect:    "Allow",
+				Action:    "s3:ListBucket",
+				Resource:  "arn:aws:s3:::" + bucket,
+				Condition: map[string]any{"StringLike": map[string]any{"s3:prefix": []string{"node-data/" + nodeID + "/*"}}},
+			},
+			iamStatement{
+				Effect:   "Allow",
+				Action:   []string{"s3:GetObject", "s3:DeleteObject"},
+				Resource: []string{"arn:aws:s3:::" + bucket + "/node-data/" + nodeID + "/*"},
+			},
 		)
 	}
 
-	topicResources := []string{}
-	topicFilterResources := []string{}
-
-	// Per-group wildcards already cover every subgroup of that group, so we skip
-	// per-subgroup ARNs for groups the user has full access to.
-	fullGroups := make(map[string]struct{}, len(access.Groups))
-	for _, grp := range access.Groups {
-		fullGroups[grp] = struct{}{}
-		shadowFilterResource := fmt.Sprintf("arn:aws:iot:%s:%s:*/$aws/things/*/shadow/name/params-%s*/*", region, accountId, grp)
-		unicastPublishResource := fmt.Sprintf("arn:aws:iot:%s:%s:topic/rainmaker/nodes/*/user/params-%s*/*", region, accountId, grp)
-		groupControlResource := fmt.Sprintf("arn:aws:iot:%s:%s:topic/rainmaker/nodes/groups/%s/control", region, accountId, grp)
-		subgroupControlResource := fmt.Sprintf("arn:aws:iot:%s:%s:topic/rainmaker/nodes/groups/%s/subgroups/*/control", region, accountId, grp)
-
-		topicResources = append(topicResources, unicastPublishResource, groupControlResource, subgroupControlResource)
-		topicFilterResources = append(topicFilterResources, shadowFilterResource)
-	}
-
-	for grp, subgroups := range access.Subgroups {
-		if _, ok := fullGroups[grp]; ok {
-			continue
-		}
-		for _, subgroup := range subgroups {
-			shadowFilterResource := fmt.Sprintf("arn:aws:iot:%s:%s:*/$aws/things/*/shadow/name/params-%s*%s*/*", region, accountId, grp, subgroup)
-			unicastPublishResource := fmt.Sprintf("arn:aws:iot:%s:%s:topic/rainmaker/nodes/*/user/params-%s*%s*/*", region, accountId, grp, subgroup)
-			subgroupControlResource := fmt.Sprintf("arn:aws:iot:%s:%s:topic/rainmaker/nodes/groups/%s/subgroups/%s/control", region, accountId, grp, subgroup)
-
-			topicResources = append(topicResources, unicastPublishResource, subgroupControlResource)
-			topicFilterResources = append(topicFilterResources, shadowFilterResource)
-		}
-	}
-
-	policyDocument := iamPolicyDocument{
-		Version: "2012-10-17",
-		Statement: []iamStatement{
-			{Effect: "Allow", Action: []string{"iot:Publish"}, Resource: topicResources},
-			{Effect: "Allow", Action: []string{"iot:Subscribe", "iot:Receive", "iot:Publish"}, Resource: topicFilterResources},
-			{Effect: "Allow", Action: []string{"cognito-identity:GetCredentialsForIdentity"}, Resource: []string{fmt.Sprintf("arn:aws:cognito-identity:%s:%s::identitypool/*:identity/${cognito-identity.amazonaws.com:sub}", region, accountId)}},
-			{Effect: "Allow", Action: []string{"iot:Connect"}, Resource: connectResources},
-		},
-	}
-
-	jsonPolicy, err := json.Marshal(policyDocument)
-	if err != nil {
-		return "", rmerror.NewRMError(err, "failed to marshal MQTT policy document")
-	}
-	return string(jsonPolicy), nil
-}
-
-// createServicesPolicyDocument builds an S3/KVS-only session policy scoped to a single node.
-// No IoT/MQTT statements are emitted; the IoT base policy lives in createMQTTPolicyDocument.
-func createServicesPolicyDocument(accountId string, nodeID string, services []string) (string, error) {
-	region := os.Getenv("AWS_REGION")
-	statements := []iamStatement{}
-
-	if includesService(services, "s3") {
-		if filesBucketName := os.Getenv("FILES_BUCKET_NAME"); filesBucketName != "" {
-			prefix := fmt.Sprintf("node-data/%s/*", nodeID)
-			objectArn := fmt.Sprintf("arn:aws:s3:::%s/node-data/%s/*", filesBucketName, nodeID)
-
-			statements = append(statements,
-				iamStatement{
-					Effect:   "Allow",
-					Action:   "s3:ListBucket",
-					Resource: fmt.Sprintf("arn:aws:s3:::%s", filesBucketName),
-					Condition: map[string]any{
-						"StringLike": map[string]any{
-							"s3:prefix": []string{prefix},
-						},
-					},
-				},
-				iamStatement{
-					Effect:   "Allow",
-					Action:   []string{"s3:GetObject", "s3:DeleteObject"},
-					Resource: []string{objectArn},
-				},
-			)
-		}
-	}
-
-	if includesService(services, "kvs") {
-		kvsArn := fmt.Sprintf("arn:aws:kinesisvideo:%s:%s:channel/rmng-v1-%s/*", region, accountId, nodeID)
+	if slices.Contains(services, serviceKVS) {
 		statements = append(statements, iamStatement{
 			Effect: "Allow",
 			Action: []string{
@@ -408,106 +361,19 @@ func createServicesPolicyDocument(accountId string, nodeID string, services []st
 				"kinesisvideo:DescribeSignalingChannel",
 				"kinesisvideo:GetIceServerConfig",
 			},
-			Resource: []string{kvsArn},
+			Resource: []string{fmt.Sprintf("arn:aws:kinesisvideo:%s:%s:channel/rmng-v1-%s/*", os.Getenv("AWS_REGION"), accountID, nodeID)},
 		})
 	}
 
-	policyDocument := iamPolicyDocument{
-		Version:   "2012-10-17",
-		Statement: statements,
-	}
-	jsonPolicy, err := json.Marshal(policyDocument)
+	return marshalPolicy(statements)
+}
+
+func marshalPolicy(statements []iamStatement) (string, error) {
+	policy, err := json.Marshal(iamPolicyDocument{Version: iamPolicyVersion, Statement: statements})
 	if err != nil {
-		return "", rmerror.NewRMError(err, "failed to marshal services policy document")
+		return "", rmerror.NewRMError(err, "Error building policy document")
 	}
-	return string(jsonPolicy), nil
-}
-
-func resolveAssumeRoleGroupAccess(ctx context.Context, rmng_context *rmngctx.RmngContext, request events.APIGatewayProxyRequest, groupID, subGroupID string) (groupAccess, *events.APIGatewayProxyResponse) {
-	if groupID != "" {
-		accessor := rmng_context.GetAccessor()
-		adminUser, ok := accessor.(*user.User)
-		if !ok || adminUser == nil {
-			rlog.Error(rmng_context).Str("auth_provider", request.RequestContext.Identity.CognitoAuthenticationProvider).Str("identity_id", request.RequestContext.Identity.CognitoIdentityID).Msg("Admin assume_role request missing user context")
-			resp := utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("Admin privileges required"))
-			return groupAccess{}, &resp
-		}
-
-		if !adminUser.IsAdmin(rmng_context) {
-			rlog.Error(rmng_context).Str("user_id", adminUser.GetID()).Msg("Non-admin tried to use admin assume_role")
-			resp := utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("Admin privileges required"))
-			return groupAccess{}, &resp
-		}
-
-		systemActor := utils.NewSystemActor()
-		systemContext := rmngctx.NewRmngContextWithCtx(ctx, systemActor)
-
-		groupDB := group_db.NewGroupDB(systemContext)
-		_, err := groupDB.GetGroupByID(groupID)
-		if err != nil {
-			rlog.Error(rmng_context).Err(err).Str("group_id", groupID).Msg("Group not found")
-			resp := utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Group not found"))
-			return groupAccess{}, &resp
-		}
-
-		if subGroupID != "" {
-			isSubGroup, err := groupDB.IsSubGroup(groupID, subGroupID)
-			if err != nil || !isSubGroup {
-				rlog.Error(rmng_context).Err(err).Str("subgroup_id", subGroupID).Str("group_id", groupID).Msg("Subgroup not found in group")
-				resp := utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Subgroup not found"))
-				return groupAccess{}, &resp
-			}
-
-			return groupAccess{
-				Groups:    []string{},
-				Subgroups: map[string][]string{groupID: {subGroupID}},
-			}, nil
-		}
-
-		return groupAccess{
-			Groups:    []string{groupID},
-			Subgroups: map[string][]string{},
-		}, nil
-	}
-
-	rawAccess, err := group.ListUserAccessibleGroups(rmng_context)
-	if err != nil {
-		rlog.Error(rmng_context).Err(err).Msg("Error fetching groups for user")
-		resp := utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Error fetching user groups"))
-		return groupAccess{}, &resp
-	}
-
-	access := toGroupAccess(rawAccess)
-
-	// No group means no topic to scope the policy to (STS rejects an empty Resource list), so no MQTT credentials until the user joins or creates one.
-	if len(access.Groups) == 0 && len(access.Subgroups) == 0 {
-		resp := utils.APIGwRespJSON(http.StatusConflict, utils.NewAPIStatus("User has no groups"))
-		return groupAccess{}, &resp
-	}
-	return access, nil
-}
-
-// toGroupAccess converts the untyped map returned by group.ListUserAccessibleGroups
-// into the typed groupAccess. Comma-ok guards each field so a malformed map yields
-// empty slices/maps instead of panicking.
-func toGroupAccess(raw map[string]interface{}) groupAccess {
-	access := groupAccess{Groups: []string{}, Subgroups: map[string][]string{}}
-	if groups, ok := raw["groups"].([]string); ok {
-		access.Groups = groups
-	}
-	if subgroups, ok := raw["subgroups"].(map[string][]string); ok {
-		access.Subgroups = subgroups
-	}
-	return access
-}
-
-func includesService(services []string, target string) bool {
-	for _, s := range services {
-		if s == target {
-			return true
-		}
-	}
-	return false
+	return string(policy), nil
 }
 
 func main() {

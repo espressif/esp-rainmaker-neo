@@ -6,6 +6,7 @@ package rmerror
 
 import (
 	"errors"
+	"iter"
 	"strings"
 )
 
@@ -28,25 +29,30 @@ func IsS3PermanentRedirectError(err error) bool {
 // layer is included as-is and traversal stops there to avoid double-printing
 // stdlib errors that already embed their inner text.
 func FormatErrorChain(err error) string {
-	if err == nil {
-		return ""
-	}
 	var parts []string
-	cur := err
-	for cur != nil {
-		if rm, ok := cur.(*RMError); ok { //nolint:errorlint // inspects one layer at a time; errors.As would match a deeper RMError
-			if rm.Message != "" {
-				parts = append(parts, rm.Message)
+	for cur := range Layers(err) {
+		rm, ok := cur.(*RMError) //nolint:errorlint // inspects one layer at a time; errors.As would match a deeper RMError
+		if !ok {
+			// Standard wrappers like fmt.Errorf("%w") already render the inner chain themselves.
+			if msg := cur.Error(); msg != "" {
+				parts = append(parts, msg)
 			}
-			cur = errors.Unwrap(cur)
-			continue
+			break
 		}
-		// Non-RMError: include its own text and stop. Standard wrappers like
-		// fmt.Errorf("%w") already render the inner chain themselves.
-		if msg := cur.Error(); msg != "" {
-			parts = append(parts, msg)
+		if rm.Message != "" {
+			parts = append(parts, rm.Message)
 		}
-		break
 	}
 	return strings.Join(parts, ": ")
+}
+
+// Layers yields err and every error it wraps, outermost first: NewRMError(NewRMError(dbErr, "a"), "b") -> the "b" RMError, the "a" RMError, dbErr. A nil err yields nothing.
+func Layers(err error) iter.Seq[error] {
+	return func(yield func(error) bool) {
+		for cur := err; cur != nil; cur = errors.Unwrap(cur) {
+			if !yield(cur) {
+				return
+			}
+		}
+	}
 }

@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -93,6 +94,11 @@ func NewUserFromRequest(userID string, userInfo auth.UserInfo, claims auth.Token
 	}
 
 	u.Permissions.SetAllow(string(utils.GroupCreate), "*")
+	if userInfo.IsAdmin {
+		for _, action := range utils.GetAdminPermissions() {
+			u.Permissions.SetAllow(action, "*")
+		}
+	}
 	return u
 }
 
@@ -196,14 +202,14 @@ func LoadNodePermissions(ctx *rmngctx.RmngContext, groupID string, nodeID string
 	// including replacing grpNodes with the sub-group-accessible set when access is sub-group-only.
 	grpNodes, _, err := group.GetGroupNodes(ctx, groupID)
 	if err != nil {
-		return err
+		return rmerror.NewRMError(err, "failed to list the group's nodes").WithClientStatus(http.StatusForbidden, "User does not have access to this node")
 	}
 
 	if _, ok := grpNodes[nodeID]; ok {
 		return nil
 	}
 
-	return rmerror.NewRMError(nil, fmt.Sprintf("node %s is not a member of group %s", nodeID, groupID))
+	return rmerror.NewRMError(nil, fmt.Sprintf("node %s is not a member of group %s", nodeID, groupID)).WithClientStatus(http.StatusForbidden, "User does not have access to this node")
 }
 
 // GetUserIDFromToken resolves the user_id from a bearer access token via the token-owning

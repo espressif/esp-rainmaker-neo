@@ -7,7 +7,11 @@ package rmngrequest
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"net/http"
 	"testing"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/aws/aws-lambda-go/events"
 	. "github.com/onsi/ginkgo/v2"
@@ -110,6 +114,21 @@ var _ = Describe("rmng request", func() {
 		err = ExtractRequestStruct(request, &inputRequest)
 		Expect(err).ToNot(BeNil())
 		Expect(err.Error()).To(ContainSubstring("failed to validate request"))
+
+		var rmErr *rmerror.RMError
+		Expect(errors.As(err, &rmErr)).To(BeTrue())
+		status, _ := rmErr.ClientError()
+		Expect(status).To(Equal(http.StatusBadRequest))
+	})
+
+	It("marks an unparsable body as a 400 Invalid request body", func() {
+		var target TestRequest
+		err := ExtractRequestStruct(events.APIGatewayProxyRequest{Body: "{not json"}, &target)
+		var rmErr *rmerror.RMError
+		Expect(errors.As(err, &rmErr)).To(BeTrue())
+		status, message := rmErr.ClientError()
+		Expect(status).To(Equal(http.StatusBadRequest))
+		Expect(message).To(Equal("Invalid request body"))
 	})
 })
 

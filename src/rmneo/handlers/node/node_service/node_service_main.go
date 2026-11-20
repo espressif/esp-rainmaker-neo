@@ -19,6 +19,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/service/trigger"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -107,7 +108,7 @@ func HandleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 
 	svc, err := service.Registry().GetService(serviceName)
 	if err != nil {
-		return utils.APIGwRespJSON(http.StatusNotFound, utils.NewAPIStatus(err.Error())), nil
+		return utils.APIGwRespJSON(http.StatusNotFound, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 	}
 
 	nodeSvc, ok := svc.(service.NodeService)
@@ -120,7 +121,7 @@ func HandleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 	case "GET":
 		data, err := nodeSvc.Get(userCtx, nodeID)
 		if err != nil {
-			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
+			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 		}
 		return utils.APIGwRespJSON(http.StatusOK, data), nil
 
@@ -135,13 +136,13 @@ func HandleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 			if errors.Is(err, config.ErrNotPureMatter) {
 				status = http.StatusForbidden
 			}
-			return utils.APIGwRespJSON(status, utils.NewAPIStatus(err.Error())), nil
+			return utils.APIGwRespJSON(status, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 		}
 		return utils.APIGwRespJSON(http.StatusOK, utils.NewAPIStatus("success")), nil
 
 	case "DELETE":
 		if err := nodeSvc.Delete(userCtx, nodeID); err != nil {
-			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(err.Error())), nil
+			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
 		}
 		return utils.APIGwRespJSON(http.StatusOK, utils.NewAPIStatus("success")), nil
 

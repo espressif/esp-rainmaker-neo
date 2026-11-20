@@ -6,7 +6,10 @@ package utils
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/aws/aws-lambda-go/events"
 )
@@ -17,6 +20,20 @@ type APIStatus struct {
 
 func NewAPIStatus(message string) *APIStatus {
 	return &APIStatus{Message: message}
+}
+
+// APIErrorRespJSON is the API Gateway response a client sees for err: rmerror.NewRMError(nil, "x").WithClientStatus(403, "No access") -> 403 {"message":"No access"}; any other error -> 500 {"message":"Internal Server Error"}, so internal text never reaches the client.
+func APIErrorRespJSON(err error) events.APIGatewayProxyResponse {
+	return APIGwRespJSON(apiStatusFromError(err))
+}
+
+func apiStatusFromError(err error) (int, *APIStatus) {
+	var rmErr *rmerror.RMError
+	if !errors.As(err, &rmErr) {
+		return http.StatusInternalServerError, NewAPIStatus(http.StatusText(http.StatusInternalServerError))
+	}
+	status, message := rmErr.ClientError()
+	return status, NewAPIStatus(message)
 }
 
 // CreateAPIGatewayResponse creates a standardized API Gateway response

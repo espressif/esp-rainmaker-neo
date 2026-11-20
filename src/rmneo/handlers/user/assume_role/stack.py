@@ -46,12 +46,12 @@ class AssumeRoleAPI(Construct):
             actions=["dynamodb:Query"],
             resources=[get_table_arn(TABLE_NAMES['USER_GROUP_MAPPING'], region)]
         ))
-        # Admin assume_role needs access to groups table
+        # Group-scoped assume_role reads the groups table to confirm the group (admin callers) or the named subgroup exists
         assume_role_lambda_role.add_to_policy(iam.PolicyStatement(
             actions=["dynamodb:GetItem", "dynamodb:Query"],
             resources=[get_table_arn(TABLE_NAMES['GROUPS'], region)]
         ))
-        # Admin assume_role needs access to user_details table for super admin check
+        # Admin assume_role needs access to user_details table for the admin check
         assume_role_lambda_role.add_to_policy(iam.PolicyStatement(
             actions=["dynamodb:GetItem", "dynamodb:DescribeTable"],
             resources=[get_table_arn(TABLE_NAMES['USER_DETAILS'], region)]
@@ -99,11 +99,7 @@ class AssumeRoleAPI(Construct):
             assumed_roles_resource_id, allowed_methods=["POST"]
         )
 
-        # Admin-scoped assume-role endpoints carry the target group/subgroup as
-        # path params, mirroring the existing group/subgroup API convention.
-        # The /v1/groups, /{groupId}, /subgroups, /{subGroupId} resources are
-        # shared via the common_resources cache with GroupAPI (same stack), so
-        # get_or_create reuses them rather than creating duplicates.
+        # The /v1/groups, /{groupId}, /subgroups, /{subGroupId} resources are shared via the common_resources cache with GroupAPI (same stack), so get_or_create reuses them rather than creating duplicates.
         groups_resource_id = get_or_create_api_resource(
             self, "GroupsResource", common_resources,
             parent_id, "groups"
@@ -113,7 +109,7 @@ class AssumeRoleAPI(Construct):
             groups_resource_id, "{groupId}"
         )
 
-        # /v1/groups/{groupId}/assumed-roles (admin: scope to a specific group)
+        # /v1/groups/{groupId}/assumed-roles (any caller with access, narrowed to its own grant)
         group_assumed_roles_resource_id = get_or_create_api_resource(
             self, "GroupAssumedRolesResource", common_resources,
             group_id_resource_id, "assumed-roles"
@@ -151,7 +147,7 @@ class AssumeRoleAPI(Construct):
             node_assumed_roles_resource_id, allowed_methods=["POST"]
         )
 
-        # /v1/groups/{groupId}/subgroups/{subGroupId}/assumed-roles (admin: scope to a subgroup)
+        # /v1/groups/{groupId}/subgroups/{subGroupId}/assumed-roles (one subgroup the caller can reach)
         subgroups_resource_id = get_or_create_api_resource(
             self, "SubgroupsResource", common_resources,
             group_id_resource_id, "subgroups"

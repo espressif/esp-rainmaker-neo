@@ -6,7 +6,9 @@ package group_db_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -19,6 +21,7 @@ import (
 	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -29,6 +32,19 @@ func TestGroupDB(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "GroupDB Suite")
 }
+
+var _ = Describe("GetGroupByID", func() {
+	It("marks a missing group as a 400 Group not found", func() {
+		test_utils.TestSetup()
+		ctx := rmngctx.NewRmngContext(utils.NewSystemActor())
+		_, err := group_db.NewGroupDB(ctx).GetGroupByID("missing-group")
+		var rmErr *rmerror.RMError
+		Expect(errors.As(err, &rmErr)).To(BeTrue())
+		status, message := rmErr.ClientError()
+		Expect(status).To(Equal(http.StatusBadRequest))
+		Expect(message).To(Equal("Group not found"))
+	})
+})
 
 var _ = Describe("GroupDB", func() {
 	const (
