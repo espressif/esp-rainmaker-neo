@@ -11,21 +11,22 @@ the same way. Cognito is one such row.
 | --- | --- |
 | `provider_name` | Key; the value `/user/login/federation/start?provider=` takes. Providers are listed, and a default among them is picked, in `provider_name` order |
 | `type` | `oidc` or `otp`. An `otp` row is a one-time code on our page; an `oidc` row signs in as its `password_verifier` says. A Cognito pool can be either: an `oidc` row with `password_verifier` `cognito` takes the password on our page, one without it is a button to the pool's own hosted UI |
+| `password_verifier` | On an `oidc` row, who checks a password typed on our page: `cognito` (Cognito `InitiateAuth` against the row's pool; needs a `client_id`). Unset, the row is a button to the provider's own page. Any other value, or the field on an `otp` row, offers neither |
 | `enabled` | Whether `/oauth2/authorize` offers it. Unset counts as disabled |
-| `display_name` | The label on this provider's button. Names the credential or the brand, never the vendor: nobody signing in knows what Cognito is |
-| `logo` | The image on this provider's button: a `data:image/png`, `jpeg` or `webp` base64 URI of at most 4 KiB, the same rule as a client's `logo_uri`, drawn as `<img>`. A row named `google`, `apple` or `github` gets that brand's own button instead and ignores it; any other value is ignored and the button shows a plain shield |
-| `issuer` | The provider's OIDC issuer; endpoints and keys are discovered from it |
-| `authorize_url` | Where a login begins: the upstream authorize endpoint of an `oidc` row naming no `password_verifier`. Neither a row naming one nor an `otp` row reads it |
-| `password_verifier` | Who checks a password typed on our page for this `oidc` row: `cognito` (Cognito `InitiateAuth` against the row's pool). Unset, the row is a button to the provider's own page. Any other value, or the field on an `otp` row, offers neither |
-| `client_id` | The one app client we hold for this provider. A row whose `password_verifier` is `cognito` takes no password without one |
+| `display_name` | The label of this provider's "Continue with" button or password form. Names the credential or the brand, never the vendor: nobody signing in knows what Cognito is |
+| `logo` | The image on this provider's button: a `data:image/png`, `jpeg` or `webp` base64 URI of at most 4 KiB, the same rule as a client's `logo_uri`, drawn as `<img>`. A row named `google`, `apple` or `github` gets that brand's own "Sign in with" button instead and ignores it; any other value is ignored and the button shows a plain shield |
+| `issuer` | The provider's OIDC issuer: the discovery base and the ID token `iss` check |
+| `authorize_url` | Where a login begins on an `oidc` row naming no `password_verifier`; absent, it comes from discovery. A row naming one, and an `otp` row, do not read it |
+| `client_id` | The one app client we hold for this provider |
 | `client_secret` | That client's secret |
-| `scopes` | Space-separated, requested on the upstream authorize |
-| `token_endpoint_auth` | How the client authenticates at the token endpoint: `client_secret_basic` or `client_secret_post` |
+| `scopes` | Space-separated, requested on the upstream authorize (default `openid email phone`) |
+| `token_endpoint_auth` | How the client authenticates at the token endpoint: `client_secret_basic` (default) or `client_secret_post` |
 | `attribute_mapping` | Our claim name → the provider's claim name; see [Attribute mapping](federation.md#attribute-mapping) |
-| `session_max_ttl_seconds` | Optional cap on OUR session's absolute lifetime for logins this provider authenticated — the operator's assertion of what the upstream sanctions (not discoverable over OIDC). Combined as `min(global, this)`, so a row can only shorten the deployment cap, never extend it. Unset ⇒ the global cap applies |
-| `end_session_url` | The provider's sign-out endpoint. Unset ⇒ the upstream hop is skipped entirely and only OUR session ends. See **Sign-out** below |
+| `session_max_ttl_seconds` | Optional cap on our session's retention for federated logins this provider authenticated: retention becomes `min(now + session.SessionTTLSeconds, auth_time + this)`. It is the operator's assertion of what the upstream sanctions (not discoverable over OIDC), and can only shorten retention |
+| `end_session_url` | The provider's sign-out endpoint. Unset ⇒ the upstream hop is skipped and only our session ends. See **Sign-out** below |
 | `end_session_redirect_param` | The query parameter that provider uses for "come back here afterwards". Defaults to `post_logout_redirect_uri`; Cognito names it `logout_uri` |
-| `token_url`, `userinfo_url`, `jwks_url` | Optional pins that override discovery |
+| `token_url`, `jwks_url` | Optional pins; absent, they come from discovery |
+| `userinfo_url` | Stored on the row; nothing reads it |
 
 Nothing else about a provider exists anywhere: no SSM parameters, no Lambda environment variables, no
 IAM grant naming it, no deploy step. Adding a provider is one write to this table.

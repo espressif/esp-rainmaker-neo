@@ -4,15 +4,8 @@
 > `/oauth2/authorize` request itself, and [federation.md](federation.md), which specifies the
 > upstream leg a user agent is created from. Audience scoping is in
 > [resource-indicators.md](resource-indicators.md); the legacy password surface is
-> [legacy-user-auth.md](legacy-user-auth.md). The enterprise OTP addon's own surface is
-> `addon_modules/espuser_pro/docs/specs/otp-login.md`.
->
-> **Status.** Built. The session cookie, the `/oauth2/authorize` shortcut, `prompt`/`max_age`/
-> `id_token_hint`, the session API and `GET /oauth2/logout`; the **two clocks** (`expires_at` +
-> `cookie_expires_at`); a **user agent row for every first-party login** — federation, the sign-in page's password form, browser and
-> native OTP, and the legacy password surface; and the **grant clamp** that keeps a refresh
-> family from outliving the user agent it belongs to. The one-time data backfill for a deployment that
-> already has rows under the old schema is in [Migration](#migration).
+> [legacy-user-auth.md](legacy-user-auth.md); the sign-in and sign-out pages are
+> [hosted-ui.md](hosted-ui.md).
 
 ## Overview
 
@@ -27,11 +20,17 @@ The record is stored server-side in `espuser-sessions`; a browser holds only an 
 points at it. A native app holds nothing at all — its user agent row exists so the app can be listed
 and signed out remotely, and it is reachable only by `sid`.
 
+Every refresh family is one of two kinds of grant, and the kind decides what ends it:
+
+| Grant | Held by | Carries | Ended by |
+|---|---|---|---|
+| **Session grant** | Web apps and phone apps the person uses themselves | the `sid` of the user agent it was minted under, and its expiry is clamped to that user agent | signing out of that browser or app, removing it from the signed-in list, sign out everywhere, a password change or reset, revocation, reuse, expiry |
+| **Offline grant** (`offline_access`) | Services acting while the person is away: voice assistants, MCP connectors | no `sid` | disconnecting the client from the connected apps list, the client revoking its own token, reuse, expiry — never a sign-out ([Offline grants](#offline-grants)) |
+
 ### Key design decisions
 
 **The session cookie is not where tokens live.** Each layer below answers a different question and
-has a lifetime of its own; conflating any two of them is the usual mistake, and fusing the middle
-three into one row that died on the shortest of them is the defect this design removes:
+has a lifetime of its own; conflating any two of them is the usual mistake:
 
 | Layer | Scope | Answers | Lifetime |
 |---|---|---|---|
@@ -45,8 +44,8 @@ three into one row that died on the shortest of them is the defect this design r
 
 | Clock | Question it answers | Bumped by | Consequence when it passes |
 |---|---|---|---|
-| `expires_at` | is this user agent still known? | **any** activity — a browser `/oauth2/authorize` *or* an app's token refresh | the row is swept; the user agent is gone |
-| `cookie_expires_at` | can this browser still skip the login page? | **only** a response that actually carries `Set-Cookie` — every `/oauth2/authorize`, and a first-party verify | the browser drops the cookie; SSO is lost, the user agent is not |
+| `expires_at` | is this user agent still known? | **any** activity — a browser `/oauth2/authorize` that reads the session *or* an app's token refresh | the row is swept; the user agent is gone |
+| `cookie_expires_at` | can this browser still skip the login page? | a browser sign-in, and every `/oauth2/authorize` that reads the session (any `prompt` other than `login` or `select_account`) | the browser drops the cookie; SSO is lost, the user agent is not |
 
 They diverge for exactly one reason: `Set-Cookie` reaches a browser only on a response a browser
 processes, while `expires_at` is a server-side write that any back-channel call can make. A user agent
@@ -54,22 +53,25 @@ used only through an app therefore stays *known* indefinitely while its browser 
 state is a value we can read, so `GET /v1/user/sessions` can say "signed in, but this browser must
 sign in again" instead of guessing.
 
-`cookie_expires_at` is a **record of what we told the browser, never a control.** The browser
-enforces `Max-Age` itself; we cannot. So a cookie presented after `cookie_expires_at` has passed —
-clock skew, a client that ignores `Max-Age` — is still resolved by its hash and still works, because
-the row is the authority. Gating the shortcut on it would enforce a client-side value twice and
-refuse legitimate sessions. Its only jobs are an honest user agent list and a diagnosable seam.
+`cookie_expires_at` is a **record, never a control.** The browser enforces `Max-Age` itself; we
+cannot. So a cookie presented after `cookie_expires_at` has passed — clock skew, a client that
+ignores `Max-Age` — is still resolved by its hash and still works, because the row is the authority.
+Gating the shortcut on it would enforce a client-side value twice and refuse legitimate sessions.
+Its only jobs are an honest user agent list and a diagnosable seam. Reading the session at
+`/oauth2/authorize` moves it even when the shortcut is then refused and no cookie is sent, and
+under a provider cap it is stored capped while the cookie is still sent with `Max-Age` of `session.SessionTTLSeconds`.
 
-By construction `cookie_expires_at ≤ expires_at`: both are `now + RETAIN_TTL` from their last
-bump, and cookie bumps are a strict subset of retain bumps.
+By construction `cookie_expires_at ≤ expires_at`: both are `now + session.SessionTTLSeconds` from their last
+bump (capped at `max_expires_at` when the provider sets a cap), and cookie bumps are a subset of
+retain bumps.
 
 **A user agent is a sign-in origin, not a browser.** The row records where a login
 came from; a cookie is only how a *browser* re-presents it. Two kinds of row, one schema:
 
 | Kind | `session_hash` | Cookie | SSO possible | Created by |
 |---|---|---|---|---|
-| Cookie-bearing | `SHA-256(cookie value)` | issued | yes | federation callback · password sign-in on the page · browser OTP verify |
-| Cookie-less | `SHA-256(a random value that is then discarded)` | none | **no, by construction** | native OTP verify · legacy password sign-in · a native app's code exchange |
+| Cookie-bearing | `SHA-256(cookie value)` | issued | yes | federation callback · password sign-in on the page · one-time code on the page |
+| Cookie-less | `SHA-256(a random value that is then discarded)` | none | **no, by construction** | one-time code in a native app · legacy password sign-in · a native app's code exchange |
 
 A cookie-less row is keyed by the hash of a secret **nobody holds** — generated, hashed, dropped.
 Nothing can present it, so the shortcut can never take it, with no extra branch in the authorize
@@ -79,8 +81,7 @@ path and no nullable key. The row is reachable only the way the user agent list 
 **Every first-party login establishes a user agent, not only federation.** A login
 with no user agent row is not merely missing from a screen: it gets no SSO, its refresh families carry
 no `sid` so `DELETE /v1/user/sessions/{sessionId}` cannot reach them, and `GET /oauth2/logout` — which
-deletes families *by* `sid` — does nothing at all. For a deployment whose default login is a
-one-time code, wiring only federation covers the minority path. See
+deletes families *by* `sid` — does nothing at all. See
 [Which surfaces establish what](#which-surfaces-establish-what).
 
 **The cookie is opaque and the record is server-side.** The cookie carries a random identifier and
@@ -101,7 +102,7 @@ Rolling either clock never touches it, so `max_age` and step-up cannot be satisf
 
 **Single sign-on is derived, not stored.** "May this browser skip the login page?" is answered by:
 the browser presented a cookie, the row exists, and `prompt`/`max_age`/`id_token_hint`/
-`allowed_providers` permit it. There is no `sso_expires_on` field.
+`allowed_providers` permit it.
 
 **A grant may not outlive its user agent.** See
 [User agents and refresh families](#user-agents-and-refresh-families). This is what keeps an orphaned
@@ -122,11 +123,11 @@ full login leg regardless of what user agent exists. A shortcut that could be ta
 ## Pre-requisites
 
 - The `espuser-sessions` table and its `espuser-sessions-by-user` index.
-- At least one login path that establishes a user agent: a federated provider, the password form of a row whose `password_verifier` is `cognito`, the enterprise OTP addon,
+- At least one login path that establishes a user agent: a federated provider, the password form of a row whose `password_verifier` is `cognito`, a one-time-code provider,
   or the legacy password surface. A deployment with none of them keeps no sessions and loses only
   single sign-on.
-- For a first-party user agent, the `identity_providers` row the login authenticated against (its `provider_name`, such as `otp` or `cognito`)
-  — it is where `session_max_ttl_seconds` lives.
+- For a federated user agent, the `identity_providers` row the login authenticated against — it is
+  where `session_max_ttl_seconds` lives. Password and one-time-code logins do not apply it.
 
 ## Architecture
 
@@ -145,9 +146,9 @@ full login leg regardless of what user agent exists. A shortcut that could be ta
                                      ▼
                               browser holds the cookie
 
-  FIRST LOGIN — the same browser, one-time code instead of a provider
+  FIRST LOGIN — the same browser, a password or one-time code on our page
   browser ──▶ /oauth2/authorize ──▶ login page (same origin)
-  page    ──▶ POST /v1/auth/otp/verify   (same-origin fetch, carries any prior cookie)
+  page    ──▶ POST /user/login/password, or the code's verify   (same-origin fetch, carries any prior cookie)
                                      │
                    writes espuser-sessions row (auth_time = now)
                                      │
@@ -166,7 +167,7 @@ full login leg regardless of what user agent exists. A shortcut that could be ta
         + Set-Cookie (rolled)
 
   A NATIVE APP — no browser anywhere in the call
-  app ──▶ POST /v1/auth/otp/verify  or  POST /v1/user/auth/token
+  app ──▶ POST /v1/user/auth/token, or a native one-time-code verify
                                      │
                    writes a COOKIE-LESS espuser-sessions row
                                      │
@@ -189,7 +190,8 @@ identity (`user_agent`, `ip_address`, optional `user_agent_name`), the authentic
 (`auth_time`/`amr`/`acr`/`provider`), `created_at = now`, and both clocks.
 
 For a **cookie-less** user agent the cookie value is generated, hashed and discarded; `cookie_expires_at`
-is not written.
+is not written. Each native sign-in creates its own row, so an app reinstalled without revoking its
+login leaves the old row until its retention passes or the person ends it from the list.
 
 **Re-authentication rotates rather than adds.** When the browser arrived holding a live user agent for
 the *same* user — a `prompt=login`, a `max_age` too tight, a step-up, or simply signing in again —
@@ -206,6 +208,8 @@ Both halves matter and they pull in different directions:
   signed in before the re-login, and one sign-out would stop reaching them.
 
 The user agent list stays honest as a consequence: one browser is one row, not one row per login.
+A browser that signs in again after its cookie lapsed has no cookie to match, so it gets a new row
+and a new `sid`; app logins opened under the old row stay under it.
 
 A prior user agent belonging to a **different** user is left alone. The cookie is being overwritten
 either way, so that row can never be presented again — but it is still the other account's record of
@@ -220,23 +224,24 @@ browser.
 Two channels decide what an event can touch. The **front channel** is a
 response a browser processes — a navigation to `/oauth2/authorize`, or the sign-in page's own
 same-origin `fetch`. The **back channel** is an app's HTTP client: `POST /oauth2/token`,
-`POST /v1/user/auth/token`, a native `verify`.
+`POST /v1/user/auth/token`, a native one-time-code verify.
 
 | Event | Channel | `expires_at` | `cookie_expires_at` | Cookie re-issued |
 |---|---|---|---|---|
 | First login — federation callback | front | set | set | yes |
 | First login — password sign-in on the page | front | set | set | yes |
-| First login — browser OTP verify | front | set | set | yes |
-| SSO shortcut / new-app login — `/oauth2/authorize` | front | **bumped** | **bumped** | **yes** |
+| First login — one-time code on the page | front | set | set | yes |
+| SSO shortcut / new-app login — `/oauth2/authorize` | front | **bumped** | **bumped** | **yes**, when the shortcut is taken |
 | App token refresh — `/oauth2/token` (`refresh_token`) | back | **bumped** | untouched | no |
 | App first exchange — `/oauth2/token` (`authorization_code`) | back | **bumped** | untouched | no |
-| Native OTP verify / legacy sign-in | back | set | never written | no |
+| Native one-time code / legacy sign-in | back | set | never written | no |
 
 `last_seen_at` is updated by every row in that table, and is what the user agent list renders as "last
 active".
 
-Bumping `expires_at` from a back-channel call is an `UpdateItem` keyed via the refresh token's
-`sid` — no browser required. Re-issuing the cookie is impossible there, and that asymmetry is the
+Bumping `expires_at` from a back-channel call finds the row through the
+`espuser-sessions-by-user` index by `user_id` and the refresh family's `sid`, reads it, and updates
+it with a conditional write — no browser required. Re-issuing the cookie is impossible there, and that asymmetry is the
 whole reason the second clock exists.
 
 ### Which surfaces establish what
@@ -245,14 +250,14 @@ whole reason the second clock exists.
 |---|---|---|---|---|---|
 | Federation callback | front | yes | issued | yes | yes |
 | Password sign-in on the page (`POST /user/login/password`) | front | yes | issued | yes | yes |
-| Browser OTP verify (sign-in page) | front | yes | issued | yes | yes |
-| Native OTP verify (`flow_type: native`) | back | yes, cookie-less | none | yes | no |
+| One-time code on the sign-in page | front | yes | issued | yes | yes |
+| One-time code in a native app | back | yes, cookie-less | none | yes | no |
 | Legacy `POST /v1/user/auth/token` | back | yes, cookie-less | none | yes | no |
 | `authorization_code` exchange | back | a cookie-less row for a native client; none for a web client (inherits the flow's `sid`) or an `offline_access` grant (no `sid`) | no | yes | — |
 | `refresh_token` rotation | back | none — bumps `expires_at` | no | inherits | — |
 | `client_credentials` | back | **never** — there is no human, and a machine token must carry no `sid` | none | no | — |
 
-`Set-Cookie` on the page's password sign-in and OTP verify works because those requests are **same-origin**: the sign-in page
+`Set-Cookie` on the page's password sign-in and one-time-code verify works because those requests are **same-origin**: the sign-in page
 is served by this issuer and posts to a relative path on the same API, so `fetch`'s default
 `credentials: "same-origin"` sends the existing cookie and the response's `Set-Cookie` is stored. It
 is a property of the deployment, not of the page. A login page hosted on **another** origin gets a
@@ -288,14 +293,15 @@ a code issued with no upstream round trip — only when all of the following hol
 - the client's `allowed_providers`, if set, admits the provider the row was authenticated with — the
   same check as at `/user/login/federation/start`, so a shortcut cannot bypass a provider restriction.
 
-A shortcut for a client without `first_party` holds the sign-in for consent instead of issuing a code (see [authorize-code-flow.md](authorize-code-flow.md#consent--clients-we-do-not-ship)). On a successful shortcut both clocks are bumped and the cookie is re-issued. A failure to record
-that costs the extension and nothing else — the login still succeeds.
+A shortcut for a client without `first_party` holds the sign-in for consent instead of issuing a code (see [authorize-code-flow.md](authorize-code-flow.md#consent--clients-we-do-not-ship)). Reading the session and bumping both clocks is one conditional write; when it fails, there is no
+shortcut and the ordinary login runs (or `login_required` with `prompt=none`). On a successful
+shortcut the cookie is re-issued.
 
 ### The request parameters that override a session
 
 | Parameter | Effect |
 |---|---|
-| `prompt=none` | Never shows a page. A usable user agent yields a code; anything else redirects with `login_required`, or `consent_required` for a client that needs consent |
+| `prompt=none` | Never shows a page. A usable user agent yields a code; anything else redirects with `login_required`, or `consent_required` for a client that needs consent. Combined with `login` or `select_account`, the login page is shown |
 | `prompt=login` | Always re-authenticates, whatever user agent exists |
 | `prompt=consent` | Keeps the shortcut and always shows the consent screen |
 | `prompt=select_account` | Disables the shortcut, so the ordinary login runs |
@@ -318,20 +324,21 @@ Maintained by two things together:
 1. minting or rotating a family bumps the user agent's `expires_at`, so both clocks are reset by the
    same events; and
 2. **a session family's expiry is clamped to its user agent's retention** —
-   `family.expires_on = min(now + RefreshTokenTTL, user agent.expires_at)`.
+   `family.expires_on = min(now + refreshtoken.TokenTTL, user agent.expires_at)`.
 
 The clamp is what makes the invariant hold *by construction, for every provider*, rather than by the
-constant relationship `RETAIN_TTL > RefreshTokenTTL` alone. That relationship is not enough on its
+constant relationship `session.SessionTTLSeconds > refreshtoken.TokenTTL` alone. That relationship is not enough on its
 own: a provider row's `session_max_ttl_seconds` shortens `expires_at` and would otherwise put the
 row *behind* the families minted under it — the row swept while its families are alive, exactly the
 orphan this design exists to remove. With the clamp, a provider cap also becomes *meaningful*:
 capping a provider's user agents at 30 days genuinely ends the app logins opened through them at 30 days.
 
 Consequently a live family has its user agent row, so `GET /v1/user/sessions` cannot report a
-signed-in application it has no way to sign out. The one exception is a family minted from a code redeemed after sign-out, which is refused with `invalid_grant` and deleted at its first rotation. A rotation refuses and deletes a family the same way whenever its session has ended: the by-user index lists no row for its `sid`, or every listed row is past `expires_at`. A listed row that cannot be read yet, as while a re-sign-in replaces it, does not count as ended, and the family rotates at `now + RefreshTokenTTL`. A family with no `sid` — an offline grant, or a
-session family minted before sessions existed or after a failed session write — is unclamped.
+signed-in application it has no way to sign out. The one exception is a family minted from a code redeemed after sign-out, which is refused with `invalid_grant` and deleted at its first rotation. A rotation refuses and deletes a family the same way whenever its session has ended: the by-user index lists no row for its `sid`, or every listed row is past `expires_at`. A listed row that cannot be read yet, as while a re-sign-in replaces it, does not count as ended, and the family rotates at `now + refreshtoken.TokenTTL`. A family with no `sid` — an offline grant, or a
+session family minted before sessions existed or after a failed session write — is unclamped, and
+so is a family whose session bump failed with a storage error: it keeps `now + refreshtoken.TokenTTL`.
 
-**Constraint for implementers:** `RefreshTokenTTL` must stay `≤ RETAIN_TTL`.
+**Constraint for implementers:** `refreshtoken.TokenTTL` must stay `≤ session.SessionTTLSeconds`.
 
 ### Offline grants
 
@@ -350,7 +357,7 @@ a sign-out in a browser must not unlink it.
   they drop `offline_access` from the scope and mint an ordinary session family.
 - **Minted with no `sid`:** the family has none, and neither its access tokens nor its ID tokens carry
   a `sid` claim. Nothing that deletes by `sid` reaches it, and the clamp never applies.
-- **Lifetime:** `RefreshTokenTTL` (365 days), rolling on every rotation, and not bounded by any user
+- **Lifetime:** `refreshtoken.TokenTTL` (365 days), rolling on every rotation, and not bounded by any user
   agent.
 - **Redeemed only while its approving session lives:** a code with `offline_access` whose browser row has ended is refused, since the grant would outlive the sign-out.
 - **Renewed only while its client may hold it:** a client whose registration no longer allows `offline_access` gets `invalid_grant` on the next refresh, and the grant is not spent.
@@ -358,7 +365,11 @@ a sign-out in a browser must not unlink it.
 - **What ends one:** being disconnected from the connected apps list
   (`DELETE /v1/user/connected-apps/{clientId}`), a password change, revoking its own token
   (`POST /oauth2/revoke`), reuse detection on rotation, and expiry. Signing out of a browser, ending a
-  user agent from the list, sign out everywhere and a password reset do not.
+  user agent from the list, sign out everywhere and a password reset do not. A voice assistant treats
+  `invalid_grant` on refresh as an unlink, so only these deliberate acts may produce one.
+- **MCP connectors share one client:** every connector reaches ESP User through the MCP OAuth proxy
+  as `mcp-oauth-client`, so disconnecting that client ends every connector at once. A connector's
+  own revocation at the proxy's `/oauth2/revoke` is forwarded to ESP User's.
 
 ### Step-up: re-proving identity for sensitive actions
 
@@ -367,14 +378,13 @@ rather than by expiring the user agent. A client guarding a sensitive operation 
 `max_age=0`) to `/oauth2/authorize`; that disables the shortcut unconditionally, and the fresh
 authentication updates `auth_time`/`amr`/`acr` on the *same* row (same `sid`, same `created_at`).
 
-This is where `amr`/`acr` earn their place: a step-up reads the fresh `amr` for a method ESP User checked itself (`pwd`, `otp`), and the upstream's `acr` for a federated sign-in, whose `amr` is not recorded.
-Wiring specific endpoints to demand step-up is out of scope here; the model is designed so that it
-is a per-endpoint change with no further session work.
+`amr`/`acr` are recorded on the row for a client that checks how the person authenticated: `amr` for a method ESP User checked itself (`pwd`, `otp`), and the upstream's `acr` for a federated sign-in, whose `amr` is not recorded. No ESP
+User endpoint demands a step-up itself.
 
 ## The cookie
 
 ```
-Set-Cookie: __Host-esp_session=<opaque>; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=<RETAIN_TTL>
+Set-Cookie: __Host-esp_session=<opaque>; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=<session.SessionTTLSeconds>
 ```
 
 | Attribute | Why |
@@ -394,14 +404,14 @@ fails closed when it is gone.
 
 | Constant | Value | Meaning |
 |---|---|---|
-| `RETAIN_TTL` | 400 d | The row's retention and the cookie's `Max-Age`; a rolling inactivity window. |
-| `RefreshTokenTTL` | 365 d | Refresh family lifetime, rolling. A session family is clamped to its user agent's `expires_at`; an offline grant is not. Must stay `≤ RETAIN_TTL` |
-| `AccessTokenTTL` | 1 h | Access token lifetime, absolute, unrevocable |
-| `IDTokenTTL` | 1 h | ID token lifetime |
+| `session.SessionTTLSeconds` | 400 d | The row's retention and the cookie's `Max-Age`; a rolling inactivity window. |
+| `refreshtoken.TokenTTL` | 365 d | Refresh family lifetime, rolling. A session family is clamped to its user agent's `expires_at`; an offline grant is not. Must stay `≤ session.SessionTTLSeconds` |
+| `jwtutil.AccessTokenTTL` | 1 h | Access token lifetime, absolute, unrevocable |
+| `jwtutil.IDTokenTTL` | 1 h | ID token lifetime |
 
 There is **no idle timeout and no absolute cap** by default. A provider row's optional
 `session_max_ttl_seconds` remains the one operator lever: when set, retention becomes
-`min(now + RETAIN_TTL, auth_time + session_max_ttl_seconds)`. It can only ever shorten, and the
+`min(now + session.SessionTTLSeconds, auth_time + session_max_ttl_seconds)`. It can only ever shorten, and the
 clamp above is what keeps a short value safe.
 
 ## Data model
@@ -413,18 +423,19 @@ clamp above is what keeps a short value safe.
 | `session_hash` | SHA-256 of the cookie value. The cookie itself is never stored. For a cookie-less user agent, the hash of a value that was discarded |
 | `sid` | The user agent's public identifier, carried on refresh families created through it |
 | `user_id` | Who the user agent belongs to |
-| `provider` | Which provider authenticated the most recent login: a federated row's name, `otp`, or the password row's name |
+| `provider` | Which provider authenticated the most recent login: a federated row's name, the one-time-code row's name, or the password row's name |
 | `auth_time` | When the person last actually authenticated. A fact — never moved by use |
 | `amr` | How ESP User authenticated them (RFC 8176): `pwd` or `otp` for a first-party login, none for a federated one (an upstream's `amr` is not recorded); a silent SSO answer stamps it, with `provider` as `idp`, on the tokens it issues |
 | `acr` | The authentication context the provider asserted. Empty for a first-party login: an ACR names a class a consumer must be able to interpret, and an invented value nothing reads is noise on a security-relevant field |
 | `origin` | `browser` or `app` — what kind of sign-in origin this row records, and therefore whether a cookie was ever issued for it. Absent reads as `browser` |
 | `expires_at` | The row's retention deadline and the DynamoDB TTL attribute. Bumped by any activity |
+| `max_expires_at` | `auth_time + session_max_ttl_seconds`, written at login when the provider sets a cap; no bump moves either clock past it |
 | `cookie_expires_at` | When the browser will drop the cookie. Bumped only when a `Set-Cookie` is issued; absent on a cookie-less row. A record, not a control |
 | `last_seen_at` | Most recent activity of any kind, rendered as "last active". Distinct from `created_at` |
-| `created_at` | When the user agent was first seen. Carried across re-authentication so "first signed in" does not reset |
-| `user_agent` | The browser's own claim about itself, captured at the login that created the row and never updated. A **hint so a human recognises a row**, never a security control: it is self-reported and browsers are actively reducing it, so absent is ordinary |
-| `ip_address` | The source address at that same moment. Same status: a hint, not a control |
-| `user_agent_name` | The label the person gave this login, supplied at the enterprise OTP initiate. Absent on every other path |
+| `created_at` | When the user agent was first seen. Carried across re-authentication |
+| `user_agent` | The browser's own claim about itself, captured at the login that created the row and never updated. A **hint so a human recognises a row**, never a security control: it is self-reported and browsers are actively reducing it, so absent is ordinary. The legacy password sign-in records none |
+| `ip_address` | The source address at that same moment. Same status: a hint, not a control. The legacy password sign-in records none |
+| `user_agent_name` | The label the person gave this login, supplied with a native one-time-code sign-in. Absent on every other path |
 
 Expiry is enforced when the row is read. The DynamoDB TTL sweep is a cleaner, not the gate: a
 swept-late row is unusable from the instant it expires, whatever remains on disk.
@@ -453,16 +464,22 @@ to sign somebody in is not a reason to enumerate every user agent they use.
 
 | Method | Path | Result |
 |---|---|---|
-| `GET` | `/v1/user/sessions` | Every live user agent, with the refresh families grouped under each by `sid`; each app carries its registered `client_name` and `logo_uri` when it has them |
+| `GET` | `/v1/user/sessions` | `{"sessions": [...]}`: every live user agent, with the clients of its refresh families grouped under it by `sid`; each app carries its registered `client_name` and `logo_uri` when it has them |
 | `DELETE` | `/v1/user/sessions/{sessionId}` | Ends one user agent and its families. `204`, or `404` when the caller has no such session |
 | `DELETE` | `/v1/user/sessions` | Ends every user agent, the caller's own included |
-| `GET` | `/v1/user/connected-apps` | Every client holding a live offline grant: `client_id`, its registered `client_name` and `logo_uri` when it has them, the earliest grant's `created_at` (its `rotated_at` when absent), the latest `last_used` and the sorted `scopes` granted across its grants, most recently used first; a grant past `expires_on` is left out; `[]` when none |
+| `GET` | `/v1/user/connected-apps` | `{"connected_apps": [...]}`: every client holding a live offline grant: `client_id`, its registered `client_name` and `logo_uri` when it has them, the earliest grant's `created_at` (its `rotated_at` when absent), the latest `last_used` and the sorted `scopes` granted across its grants, most recently used first; a grant past `expires_on` is left out; `[]` when none |
 | `DELETE` | `/v1/user/connected-apps/{clientId}` | Ends every login that client holds for the person, session logins included, and an app row left with none. `204`, or `404`, ending nothing, when the caller holds no offline grant for it |
 
 The response body names the session id `session_id`, matching the snake_case every other field on
 this surface uses. The path parameter stays `{sessionId}`, matching the camelCase every other path
 parameter in the API uses (`{nodeId}`, `{groupId}`). The token claim and the stored attribute keep
 the OIDC-standard name `sid`.
+
+Each entry of `sessions` carries `session_id`, `current`, `user_agent_type`, `origin`,
+`signed_in_at` (the row's `auth_time`, so it moves on re-authentication), `last_seen_at`,
+`expires_at`, `cookie_expires_at`, `clients` (each with `client_id`, `created_at` and `last_used`),
+and, when known, `user_agent_name`, `user_agent`, `ip_address` and `provider`. `created_at` is not
+returned.
 
 The list groups families under user agents by `sid`; `current` is true when the caller's access-token
 `sid` matches the row's. `origin` distinguishes a browser from an app: `user_agent_type` renders a browser as "Chrome on macOS" and an app as "Android app", because a native `User-Agent` names an SDK and only the OS in it is worth showing. `cookie_expires_at` in the past on a row still listed is what "this browser must sign in again" is read from — the client compares that one field, and an app row simply has none.
@@ -496,6 +513,8 @@ Ownership is enforced by the query itself — every read and delete is keyed on 
 
 A native app reaches this endpoint only if it asked for `account:sessions` when it began its login
 and its client row admits that scope; otherwise it holds a user agent row it can neither see nor delete.
+The legacy password sign-in always mints `openid email phone`, so an app signed in that way cannot
+reach it.
 
 ## When refresh families are deleted
 
@@ -516,8 +535,7 @@ own expiry. It is **never** deleted by a user agent timing out, a cookie lapsing
 **Not a trigger:** `expires_at` expiry (which cannot occur while a family is alive — the
 invariant), a lapsed cookie, `prompt=none` failing, or any period of inactivity. A family is the
 application's login; deleting it because a *browser* went quiet would sign a person out of an app
-they use daily, which is the coupling this design removes. Standing access is revoked deliberately,
-never by a passive clock.
+they use daily. Standing access is revoked deliberately, never by a passive clock.
 
 ## When the user agent row is deleted
 
@@ -556,7 +574,8 @@ Which to call:
 | A connected apps list | `DELETE /v1/user/connected-apps/{clientId}` |
 | The RainMaker app | `POST /v1/user/auth/signout`, until it moves to `/oauth2/revoke` |
 
-An access token already issued is never recalled by any of these; it lives out its hour.
+An access token already issued is never recalled by any of these; it lives out its hour. Nothing is
+pushed to an application's open tab: it learns of the sign-out when its next refresh fails.
 
 ## Ending a session: `GET`/`POST /oauth2/logout`
 
@@ -585,10 +604,46 @@ In order:
 5. Delete the row and clear the cookie.
 6. Redirect to the provider row's `end_session_url`, if it has one, and finally to the **validated** `post_logout_redirect_uri`. With no validated value, the final step is our own `/user/logout` with no query, whose page says the browser is signed out.
 
+```mermaid
+sequenceDiagram
+    title RP-Initiated Logout
+    participant App as "Web app"
+    participant Browser
+    participant Logout as "/oauth2/logout"
+    participant Page as "/user/logout (Sign out?)"
+    participant Confirm as "POST /user/logout"
+    participant Store as "espuser-sessions + refresh families"
+    participant IdP as "Upstream provider"
+    participant Done as "/oauth2/federation/logout/callback"
+
+    App->>Browser: navigate to /oauth2/logout (id_token_hint, post_logout_redirect_uri, state)
+    Browser->>Logout: GET (cookie: __Host-esp_session)
+    Logout->>Store: read the session row, without rolling it
+    alt no live session
+        Logout-->>Browser: clear the cookie, 302 to the validated destination
+    else hint verifies and names this session's sid and sub
+        Logout->>Store: delete every family with that sid, then the row
+        Logout-->>Browser: clear the cookie, set __Host-esp_logout_to, 302 to the provider's end_session_url
+    else no hint, or a hint for another session
+        Logout-->>Browser: 302 to /user/logout with the same parameters
+        Browser->>Page: GET, the page asks "Sign out?"
+        Browser->>Confirm: POST JSON: the same parameters and csrf_token (on the person's yes)
+        Confirm->>Store: delete every family with that sid, then the row
+        Confirm-->>Browser: clear the cookie, set __Host-esp_logout_to, redirect_to the provider's end_session_url
+    end
+    Browser->>IdP: the provider clears its own session
+    IdP-->>Browser: 302 to /oauth2/federation/logout/callback
+    Browser->>Done: GET (cookie: __Host-esp_logout_to)
+    Done-->>Browser: 302 to the app's post_logout_redirect_uri
+```
+
+A provider row without an `end_session_url` skips the provider hop and goes straight to the
+destination.
+
 This endpoint can only ever end a **cookie-bearing** user agent — it is the cookie that names the row.
 A cookie-less user agent is ended from the user agent list, which is correct: signing out of a browser must
-not sign out a phone. A first-party user agent has no upstream session to end, so its provider row
-carries no `end_session_url` and step 6 goes straight to the destination.
+not sign out a phone. The seeded `cognito` row sets an `end_session_url`, so a password sign-in on
+our page also ends the pool's own session; a row without one goes straight to the destination.
 
 `post_logout_redirect_uri` is matched exactly against the client's registered
 `post_logout_redirect_uris`, the same rule as `redirect_uri` and for the same reason: an endpoint
@@ -674,7 +729,7 @@ Two fields on the provider row, so a new upstream is a row and never a code chan
 | `end_session_url` | Where to send the browser. May already carry query parameters — a Cognito row bakes its `client_id` in here, because Cognito's logout endpoint is not the OIDC-standard shape |
 | `end_session_redirect_param` | The query parameter that upstream uses for "come back here". Defaults to `post_logout_redirect_uri`; a Cognito row sets `logout_uri` |
 
-Absent means no hop: a deployment that never fills these behaves exactly as it did before.
+Absent means no hop.
 
 ## Security analysis
 
@@ -684,53 +739,16 @@ Absent means no hop: a deployment that never fills these behaves exactly as it d
 | A planted cookie (session fixation) | The `__Host-` prefix makes a cookie set by a neighbouring host on the shared gateway domain unusable here, and the server never adopts a presented value — a matching row donates only its `sid` and `created_at`, and a new cookie is always minted. The flow cookie `__Host-esp_flow_id` carries the prefix for the same reason: a plantable flow id means a victim's login completes into the attacker's flow and the code is delivered to the attacker's registered `redirect_uri` |
 | A cookie still valid after the person signed in again | Re-authentication deletes the row the presented cookie named, so the value it replaced stops resolving |
 | A cookie-less row being presented for SSO | Its key is the hash of a discarded value: no cookie exists to present, and the lookup fails closed. `origin` makes the property auditable from the data as well as from the argument |
-| A long-lived user agent with no calendar cap | Accepted deliberately, and safe only because the cookie is revocable **and** sensitive actions step up. The cap is replaced by revocation plus per-action re-authentication, not by a short timeout |
-| A single one-time code buying a long-lived user agent | The code is the first factor, as it is today; what changes is retention, not assurance. Bounded by remote revocation — which first-party users gain here for the first time — and by step-up. `amr` records `otp` for a one-time code whatever channel delivered it, so capping or step-up-gating an SMS-authenticated user agent first needs the add-on to record the channel |
+| A long-lived user agent with no calendar cap | Accepted deliberately: the cookie is revocable, and a client guarding a sensitive action demands fresh authentication with `prompt=login` or `max_age` |
+| A single one-time code buying a long-lived user agent | The code is the first factor; what it buys is retention, not assurance, bounded by remote revocation and by a client's `prompt=login` or `max_age` |
 | A client's provider restriction bypassed via SSO | `allowed_providers` is checked at the shortcut as well as at `/user/login/federation/start` |
 | Script reading the session | `HttpOnly` |
 | A table read yielding a usable cookie | Only the hash is stored |
-| Keeping someone signed in past what the provider allowed | Retention is bounded by `auth_time` plus the lower of the deployment value and the provider's declared maximum |
+| Keeping someone signed in past what the provider allowed | For a federated login, retention is `min(now + session.SessionTTLSeconds, auth_time + session_max_ttl_seconds)` when the provider row declares a maximum |
 | Re-federation quietly extending recency | `auth_time` is set only by a real authentication; rolling either clock never touches it |
 | A capped provider orphaning live grants | The clamp: a family cannot be minted or rotated past its user agent's `expires_at` |
 | An orphaned family — a signed-in app with no user agent | Prevented by the invariant; the one minted from a code redeemed after sign-out is refused and deleted at its first rotation |
 | A browser timeout signing applications out | It cannot: families are deleted only by the deliberate acts listed above |
-| A third-party client minting a user agent | Only a human login establishes one; `client_credentials` never does, and the native path is gated on the client's `allow_direct_token` |
+| A third-party client minting a user agent | Only a human login establishes one; `client_credentials` never does, and the legacy password sign-in issues only to the Home app client |
 | A relying party unable to demand fresh authentication | `prompt=login` and `max_age` are honoured before any shortcut is considered |
 | Another site signing a person out (logout CSRF) | Only an `id_token_hint` minted under the cookie's own session ends it unasked; anything else is the person's decision on `/user/logout`, whose answer needs the cookie and its `csrf_token`. See [The sign-out question](#the-sign-out-question) |
-
-## Known limitations
-
-- **An app-only user agent loses its cookie while staying known.** Only a front-channel event re-issues
-  the cookie, so a user agent used solely through an app keeps its row, its app logins and its user-agent-list
-  entry, but the browser must sign in again. `cookie_expires_at` is what makes this state visible
-  rather than mysterious.
-- **A late browser re-login after the cookie lapsed creates a second row.** With no cookie to match,
-  the re-login mints a new `sid`; the app's still-live family stays under the old row. For genuinely
-  distinct contexts that is correct — two user agents — and for one browser it is a cosmetic duplicate a
-  client may avoid by revoking its old token first.
-- **Re-installing an app without signing out creates a second cookie-less row.** An app that revokes its login first removes its row; otherwise the old one lingers until its retention passes or the person deletes it, and `user_agent_name`, `user_agent_type` and `signed_in_at` are what tell them apart.
-- **`acr` is recorded and nothing consumes it yet.** Reserved with a named consumer (step-up), not a
-  dead field; `amr` reaches the tokens a silent SSO answer issues.
-- **Step-up is specified but not wired to any endpoint.** Until it is, a long-lived user agent is
-  bounded only by revocation and retention.
-- **Back-channel logout is not implemented.** Ending a user agent deletes the families under it, which is
-  complete for an application holding its own tokens. It does not tell a product's *server* to drop a
-  session it already holds, so the first product that runs a BFF is what makes the fan-out necessary.
-  Adding it needs a `backchannel_logout_uri` field on the client registry, which does not exist yet.
-- **A user agent ended elsewhere is not pushed to open tabs.** A tab keeps its access token until it
-  expires and its refresh fails; nothing notifies it sooner.
-- **Access tokens outlive revocation.** They are verified by signature, so a user agent ended now does
-  not invalidate an access token already issued; the window is that token's remaining lifetime.
-
-## Migration
-
-The model above is the current state of the code; this is the one-time data step for a deployment that already holds rows under the old schema. Existing session rows carry `expires_on` and no `origin`; reads enforce `expires_at`, so no stale row is ever *usable*, but a one-shot backfill copying `expires_on` → `expires_at` is recommended before the first deploy so pre-existing sessions are not swept early. Absent `origin` reads as `browser` (the federation callback was the only writer before this model). Refresh families with `sid == ""` stay unclamped; the offline grants among them are listed by `GET /v1/user/connected-apps`. No change to the `espuser-refresh-tokens` schema.
-
-## Out of scope
-
-Provider-side session lifetime, which is the provider's own policy and is not discoverable over
-OpenID Connect — hence `session_max_ttl_seconds` being an operator's assertion on the provider row.
-Back-channel logout to product BFFs; push-to-open-tabs on remote sign-out; risk-based
-re-authentication; wiring specific endpoints to step-up; a first-party `acr` vocabulary; renaming a
-user agent from the dashboard; the device authorization grant (RFC 8628), which is what a keyboard-less
-user agent needs and is not what a phone app needs.

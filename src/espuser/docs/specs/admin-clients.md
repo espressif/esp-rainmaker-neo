@@ -40,7 +40,7 @@ These OAuth 2.1 client invariants are enforced at create/patch so the admin UI f
 
 1. **Client secrets are stored in plaintext and are retrievable.** A confidential client's secret is stored as-is in the row and returned both at Create and by List when the caller passes `get_secret=true`. **This is a deliberate, weaker-than-hashing posture** (a table read exposes usable secrets) chosen so an admin can look a lost secret back up instead of rotating. It is acceptable here only because the table is admin-only and there is no dynamic/third-party client registration; if that changes, move to hashing (secret shown once) or encryption-at-rest. There is no rotate endpoint — to replace a secret, delete and recreate the client.
 2. **`redirect_uris` are exact-match strings** — no wildcards, no path-prefix matching (RFC 9700 / OAuth 2.1). Each is validated at write time: absolute, fragment-free, and no wildcards; `https` must carry a host; plain `http` only for loopback (`localhost`, `127.0.0.1`, `::1`) per RFC 8252 §7.3; a private-use scheme must actually address something; and `javascript:`, `data:`, `vbscript:`, `file:`, `blob:` and `about:` are refused outright — they name code or a local file, not a destination. The registry is the last place a mistake here is cheap; every one of those rejections would otherwise register happily and then either never match or send a browser somewhere it should not go.
-3. **`grant_types` may not contain `implicit` or `password`** (ROPC) — rejected. `response_types` is `["code"]` only.
+3. **`grant_types` may hold only `authorization_code`, `refresh_token` and `client_credentials`**; any other, `implicit` and `password` (ROPC) included, is rejected. `response_types` is `["code"]` only.
 4. **`public` clients** may not carry a secret and have `require_pkce` forced `true`. **`confidential`** clients get a generated secret. The `token_endpoint_auth_method` is **derived unless the row states one** — `none` for public, `client_secret_basic` for confidential; see rule 6. (M2M is not a distinct type: it is a confidential client holding the `client_credentials` grant. That grant is **rejected for public clients at write time** — a public client has no credentials to present, so the grant is meaningless for it.)
 5. **`allowed_providers` restricts which identity providers a client may be entered
    through.** Absent means **every** provider, not none -- the reverse of
@@ -63,10 +63,12 @@ These OAuth 2.1 client invariants are enforced at create/patch so the admin UI f
    outcome; refusing to *sign out* over a cosmetic problem would not be.
 7. **`token_endpoint_auth_method` is derived, not stored** — `none` for a public client,
    `client_secret_basic` for a confidential one. A row may state one to override the derived
-   value, which is how `private_key_jwt` will be expressed when it arrives.
+   value, which is how `private_key_jwt` will be expressed when it arrives. The token endpoint
+   accepts `client_secret_basic` and `client_secret_post` from any confidential client, whatever
+   this field says.
 
-   Nothing else is admitted "for later". Back-channel logout, RFC 8693 delegation, per-client
-   refresh caps and first-party consent-skipping are all planned and none has a column: DynamoDB
+   Nothing else is admitted "for later". Back-channel logout, RFC 8693 delegation and per-client
+   refresh caps are all planned and none has a column: DynamoDB
    is schemaless, so the step that needs a field adds it then, and a column nothing reads is a
    field reviewers must keep deciding about.
 
@@ -110,12 +112,17 @@ All requests carry the admin Cognito token in `Authorization`. Errors use the AP
 | `application_type` | `native` | `web` or `native` (OIDC Dynamic Client Registration 1.0 §2). A native app's code exchange gets a cookie-less session of its own, so a browser sign-out leaves it signed in ([sso-sessions.md](sso-sessions.md)). A native client must be `public` (RFC 8252 §8.4: an app cannot keep a secret), and each of its `redirect_uris` must be a private-use scheme or an `http` loopback address, never `https` (OIDC Dynamic Client Registration 1.0 §2); the rest of a native registration is rule 10. Optional, default `web`; a client registered before the field reads as `web` |
 | `first_party` | `true` | marks an app **we ship ourselves** (vs a delegated partner); a first-party client signs in with no consent screen and is the only kind that may call account-management endpoints such as `GET /v1/user/sessions`. Optional, default `false` |
 | `logo_uri` | `data:image/png;base64,…` | RFC 7591 §2 logo, shown on the consent screen. Must be a base64 `data:` URI of a PNG, JPEG or WebP image, at most 4 KiB decoded: inline because the sign-in page's CSP is `img-src 'self' data:`, and raster only because SVG can carry script. Optional; without it the screen shows a generic app icon |
-> **Scope of this slice.** The body carries only fields with a live consumer today. Reserved for later slices (not accepted yet): `jwks_uri`, `audiences`, `branding_id`, and `token_ttls` — (M2M/`private_key_jwt`, hosted-UI branding, and per-client TTLs are later slices). `allowed_resources`, `default_resource`, `allowed_providers`, `post_logout_redirect_uris` and `logo_uri` are accepted now: RFC 8707 resource indicators, RP-Initiated Logout and the consent screen have landed, and a field the logout endpoint validates against but no API can write is a check that can never pass. They will be added to the schema when their features land; adding fields is Native.
+| `post_logout_redirect_uris` | `["https://app.example.com/bye"]` | exact-match set, validated like `redirect_uris` (rule 6) |
+| `allowed_resources` | `["https://api.example.com"]` | RFC 8707 resources the client may request (rule 8) |
+| `default_resource` | `https://api.example.com` | one of `allowed_resources` (rule 8) |
+| `allowed_providers` | `["cognito"]` | identity providers the client may be entered through; absent means all (rule 5) |
+| `client_id` | `rm_mobile` | optional; generated when absent |
+> The body accepts exactly the fields above.
 
 **Process**:
 1. Authorize (token verified against the admin Cognito pool).
 2. Validate the Key Rules above; reject on the first violation with `400` and a specific message.
-3. Generate an opaque `client_id` (a caller-supplied `client_id` is honored for the seed path so `rm_mobile` etc. are stable — collision-checked with a conditional write).
+3. Use the caller's `client_id` when one is supplied, else generate an opaque one (`rm_` + a random id); the write is collision-checked with a conditional write.
 4. For `confidential`: generate a high-entropy secret and store it (plaintext) on the row.
 5. `PutItem` conditional on `attribute_not_exists(client_id)`; stamp `created_at`/`updated_at`.
 
@@ -130,7 +137,7 @@ All requests carry the admin Cognito token in `Authorization`. Errors use the AP
 
 **API**: `GET /v1/admin/clients`
 
-Returns every client. By default the `secret` is omitted; pass **`?get_secret=true`** to include each confidential client's plaintext `client_secret` in the rows (this is how a lost secret is recovered — there is no per-client Get and no rotate). Supports `page_size` / pagination like other list endpoints. Whether a client has a secret is implied by `client_type` (`confidential` ⇒ yes, `public` ⇒ no).
+Returns every client as `{"clients": [...]}`, in one response with no pagination. By default the `secret` is omitted; pass **`?get_secret=true`** to include each confidential client's plaintext `client_secret` in the rows (this is how a lost secret is recovered — there is no per-client Get and no rotate). Whether a client has a secret is implied by `client_type` (`confidential` ⇒ yes, `public` ⇒ no).
 
 ### Update Client
 
@@ -142,7 +149,7 @@ Returns every client. By default the `secret` is omitted; pass **`?get_secret=tr
 
 **API**: `DELETE /v1/admin/clients/{client_id}`
 
-**Hard delete**: permanently removes the client row. Any tokens already issued keep validating until they expire (they are self-contained JWTs), but the client can no longer authorize, exchange, or use OTP. Returns `200`.
+**Hard delete**: permanently removes the client row. Any tokens already issued keep validating until they expire (they are self-contained JWTs), but the client can no longer authorize, exchange, or use OTP. Returns `200`; an unknown `client_id` returns `500`.
 
 ## Seeding the current clients (deploy-time)
 
@@ -160,7 +167,7 @@ Seed set = ESP-User OIDC clients for the current first-party apps, with `client_
 | `rainmaker-neo-smartthings-client` | confidential | created by `rmng-st-cfg-core`; a plaintext `secret` is generated; redirects added by SmartThings' config API | neo |
 | `mcp-oauth-client` | confidential | `application_type=web`; a plaintext `secret` is generated; its callback is added by rmng-core | MCP server |
 
-> The registry accepts only `authorization_code`/`refresh_token` grants.
+> Every seeded client holds the `authorization_code` and `refresh_token` grants.
 
 ### Resources
 
@@ -168,19 +175,19 @@ An API's names are known only once its stack has deployed it (neo and MCP after 
 
 ## Consumers of the registry
 
-- **OTP direct-token** ([auth-flows.md](auth-flows.md)): `POST /v1/auth/otp/initiate` looks the client up in the registry and rejects an **unknown** client with `invalid_client`. **Any registered client may use direct-token OTP** — there is no per-client gate. This is safe because client registration is admin-only (there is no dynamic/third-party registration — RFC 7591 is deferred), so every registered client is one an admin vetted and placed here. (This is broader than the `first_party` flag: a delegated partner such as `rainmaker-neo-alexa-client` is registered-and-trusted for the paths it is granted, yet is *not* first-party, so it is still refused at account-management endpoints. Two different questions — "did we put this client here?" versus "is it our own app?") If third-party or dynamic registration is ever added, a per-client gate must be reintroduced before then.
-- **Token / authorize** (later slices): confidential-client auth against the stored `secret`, `redirect_uris`/`require_pkce` enforcement.
+- **Native one-time-code sign-in**: looks the client up in the registry and rejects an **unknown** client with `invalid_client`. **Any registered client may use direct-token OTP** — there is no per-client gate. This is safe because client registration is admin-only (there is no dynamic/third-party registration — RFC 7591 is deferred), so every registered client is one an admin vetted and placed here. (This is broader than the `first_party` flag: a delegated partner such as `rainmaker-neo-alexa-client` is registered-and-trusted for the paths it is granted, yet is *not* first-party, so it is still refused at account-management endpoints. Two different questions — "did we put this client here?" versus "is it our own app?") If third-party or dynamic registration is ever added, a per-client gate must be reintroduced before then.
+- **Token, authorize, revoke and logout**: confidential-client auth against the stored `secret`; `redirect_uris`, `require_pkce`, `scopes`, `allowed_resources`, `default_resource`, `allowed_providers`, `post_logout_redirect_uris`, `first_party` and `logo_uri` enforcement or display.
 
 ## Storage
 
 - TableName: `espuser-oauth-clients`
 - **Keys**: `client_id` (PK), no SK.
-- Attributes written by this slice: `client_name`, `client_type`, `secret` (plaintext), `redirect_uris`, `grant_types`, `scopes`, `require_pkce`, `first_party`, `created_at`, `updated_at`. `token_endpoint_auth_method` and `response_types` are derived at read time (`response_types` is always `["code"]`), not stored; there is no `status` (delete is a hard delete) and no `has_secret` (implied by `client_type`). The full design also reserves `jwks_uri`, `audiences`, `post_logout_redirect_uris`, `branding_id`, `token_ttls`, `allowed_providers` (federation), `skip_consent` (consent screen), and a per-client direct-token flag for later slices.
+- Attributes: `client_name`, `client_type`, `secret` (plaintext), `redirect_uris`, `post_logout_redirect_uris`, `grant_types`, `scopes`, `allowed_resources`, `default_resource`, `allowed_providers`, `require_pkce`, `first_party`, `logo_uri`, `token_endpoint_auth_method` (only when a row overrides the derived value), `created_at`, `updated_at`. `response_types` is derived at read time (always `["code"]`), not stored; there is no `status` (delete is a hard delete) and no `has_secret` (implied by `client_type`).
 - No GSI: keyed by `client_id`; List scans the table.
 
 ## Standards reference
 
-- **OAuth 2.1 / RFC 9700 (BCP 240)** — exact redirect match, code+PKCE, no implicit/ROPC. Client invariants enforced on write.
-- **RFC 6749 §2** — client types (`public`/`confidential`) and `token_endpoint_auth_method`.
-- **RFC 8252 (BCP 212)** — native apps: public clients, PKCE, private-use or loopback redirects (rule 10); **RFC 7009** — revocation, how a native app signs out.
-- **RFC 7591/7592 (Dynamic Client Registration)** — explicitly **deferred**; this API is admin-managed, not self-service DCR.
+- **[OAuth 2.1 (draft)](https://datatracker.ietf.org/doc/draft-ietf-oauth-v2-1/) / [RFC 9700 (BCP 240)](https://www.rfc-editor.org/rfc/rfc9700)** — exact redirect match, code+PKCE, no implicit/ROPC. Client invariants enforced on write.
+- **[RFC 6749 §2](https://www.rfc-editor.org/rfc/rfc6749#section-2)** — client types (`public`/`confidential`) and `token_endpoint_auth_method`.
+- **[RFC 8252 (BCP 212)](https://www.rfc-editor.org/rfc/rfc8252)** — native apps: public clients, PKCE, private-use or loopback redirects (rule 10); **[RFC 7009](https://www.rfc-editor.org/rfc/rfc7009)** — revocation, how a native app signs out.
+- **[RFC 7591](https://www.rfc-editor.org/rfc/rfc7591)/[7592](https://www.rfc-editor.org/rfc/rfc7592) (Dynamic Client Registration)** — not supported; this API is admin-managed, not self-service DCR.

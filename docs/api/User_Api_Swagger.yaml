@@ -644,7 +644,7 @@ paths:
     get:
       summary: OIDC UserInfo endpoint
       description: |
-        Returns the profile claims for the presented access token: `sub` always, `email` with the `email` or `profile` scope, `phone_number` with `phone`.
+        Returns the claims carried in the presented access token: `sub`, `user_id`, `is_admin` and `is_super_admin` always; `email` with the `email` or `profile` scope; `phone_number` with the `phone` or `profile` scope; `name`, `locale` and `picture` with the `profile` scope. A `client_credentials` token is refused with `401`.
       tags:
         - OAuth2 / OIDC Core
       security:
@@ -2705,23 +2705,51 @@ components:
     UserinfoResponse:
       type: object
       description: |
-        UserInfo claims. `sub` is always present; `email` / `phone_number`
-        appear only when the access token's scope allows them and the user has them set.
+        UserInfo claims, taken from the access token. `sub`, `user_id`, `is_admin`
+        and `is_super_admin` are always present; the profile claims appear only when
+        the access token's scope allows them and the user has them set.
       required:
         - sub
+        - user_id
+        - is_admin
+        - is_super_admin
       properties:
         sub:
           type: string
           description: The user's immutable user id (the token subject).
           example: "9aXb7cD..."
+        user_id:
+          type: string
+          description: The same value as `sub`.
+          example: "9aXb7cD..."
+        is_admin:
+          type: boolean
+          description: Always `false` for an ESP User access token.
+          example: false
+        is_super_admin:
+          type: boolean
+          description: Always `false` for an ESP User access token.
+          example: false
         email:
           type: string
           description: Present only with `email` / `profile` scope.
           example: "user@example.com"
         phone_number:
           type: string
-          description: Present only with `phone` scope.
+          description: Present only with `phone` / `profile` scope.
           example: "+15551234567"
+        name:
+          type: string
+          description: Present only with `profile` scope.
+          example: "Jane Doe"
+        locale:
+          type: string
+          description: Present only with `profile` scope.
+          example: "en-US"
+        picture:
+          type: string
+          description: Present only with `profile` scope.
+          example: "https://example.com/jane.png"
 
     RevokeRequest:
       type: object
@@ -2731,9 +2759,8 @@ components:
         token:
           type: string
           description:
-            The refresh token to revoke. Only this one token is invalidated, not
-            the other tokens from the same login. An access token here has no
-            effect.
+            The refresh token to revoke. Its whole refresh family, the login it
+            belongs to, is ended. An access token here has no effect.
           example: "a1b2c3d4.9f8e7d6c..."
         token_type_hint:
           type: string

@@ -8,9 +8,9 @@ static documents:
 
 | Endpoint                                  | Purpose                       | Standard             |
 | ----------------------------------------- | ----------------------------- | -------------------- |
-| `/.well-known/openid-configuration`       | OIDC provider metadata        | OpenID Discovery 1.0 |
-| `/.well-known/oauth-authorization-server` | OAuth 2.0 AS metadata         | RFC 8414             |
-| `/.well-known/jwks.json`                  | Public signing keys (JWK Set) | RFC 7517             |
+| `/.well-known/openid-configuration`       | OIDC provider metadata        | [OpenID Discovery 1.0](https://openid.net/specs/openid-connect-discovery-1_0.html) |
+| `/.well-known/oauth-authorization-server` | OAuth 2.0 AS metadata         | [RFC 8414](https://www.rfc-editor.org/rfc/rfc8414) |
+| `/.well-known/jwks.json`                  | Public signing keys (JWK Set) | [RFC 7517](https://www.rfc-editor.org/rfc/rfc7517) |
 
 ## Why it is needed
 
@@ -23,8 +23,7 @@ point at `jwks.json` for the public keys.
 
 - One RSA signing key exists as a **KMS asymmetric key** (`RSA_2048`,
   `SIGN_VERIFY`); the private half never leaves KMS. The public half is published
-  in JWKS. (A `SecureString` PEM in SSM Parameter Store remains a **local/dev
-  fallback**, used only when `ESPUSER_KMS_SIGNING_KEY_ARN` is unset.)
+  in JWKS. Tokens are minted only when `ESPUSER_KMS_SIGNING_KEY_ARN` names it.
 - The deployment `issuer` (public base URL) is known.
 
 ## Signing key (KMS)
@@ -40,14 +39,12 @@ point at `jwks.json` for the public keys.
   publisher both derive it from the same public key, so they agree without
   sharing state, and it changes **iff** the key changes — which is precisely
   when a rotation wants a new `kid`.
-- **Rotation.** A new KMS key yields a new thumbprint `kid`; publish an overlap
-  JWKS containing both keys for at least `max(access-token TTL, JWKS cache =
-  3600s)` before retiring the old key. Verifiers cache the JWKS without
-  refetching on an unknown `kid`, so a key **addition** needs a consumer refresh
-  (a redeploy does this); a key **removal** is only safe after the overlap.
-- **Provider parity.** `jwtutils.Minter` signs through a `crypto.Signer`, so the
-  KMS signer (production) and a local `*rsa.PrivateKey` (tests, dev fallback)
-  share one code path and produce identical RS256 output.
+- **One published key.** The JWKS holds the public half of the current signing
+  key. The minter reads the `kid` from that published JWKS rather than calling
+  `kms:GetPublicKey` on every mint.
+- **Provider parity.** `jwtutil.Minter` signs through a `crypto.Signer`, so the
+  KMS signer and a local `*rsa.PrivateKey` (unit tests) share one code path and
+  produce identical RS256 output.
 
 ## Key Rules
 
@@ -66,9 +63,9 @@ The two issued JWTs serve distinct purposes, per OpenID Connect Core 1.0 token
 semantics:
 
 - **The id token identifies the user.** It is the identification artifact,
-  consumed at the userinfo endpoint
-  ([auth-flows.md](auth-flows.md#userinfo-endpoint-get-oauth2userinfo)); it is
-  not an authorization credential for a resource server.
+  read by the client it was issued to (its `aud`); it is not an authorization
+  credential for a resource server. The userinfo endpoint takes the access
+  token ([auth-flows.md](auth-flows.md#userinfo-endpoint-get-oauth2userinfo)).
 - **The access token authorizes actions.** It is the RFC 6749 / RFC 6750
   bearer credential a relying party presents to act on the user's behalf — for
   example, to obtain short-lived AWS/IoT credentials. Keeping the two separate
@@ -89,7 +86,7 @@ Storage names the provider `provider` everywhere; `idp` is only the claim. The c
 > credentials via Cognito identity-pool OIDC federation; that mechanism (the
 > identity pool, the device-users role, STS `AssumeRoleWithWebIdentity`) is
 > owned by the ESP RainMaker Neo side — see
-> [user_auth.md](../user_auth.md).
+> [user_auth.md](../../../../docs/en/specs/user_auth.md).
 
 ## Design
 
@@ -123,7 +120,7 @@ into every token, so after the next deploy the access and ID tokens issued befor
 and users sign in again; refresh tokens do not carry the issuer, so a client renews into the new
 one. Attach the domain before going live.
 
-A **publisher** (deploy hook; later, key rotation) builds the JWKS from the key's public half and
+A **publisher** (a deploy hook) builds the JWKS from the key's public half and
 writes it to SSM, where the well-known Lambda serves it and every verifier reads it:
 
 ```mermaid
@@ -164,16 +161,26 @@ used by the publisher at deploy and by the well-known Lambda at request time.
 1. Build the document from the issuer and the API base.
 2. `Content-Type: application/json`, `Cache-Control: public, max-age=300, must-revalidate`, `ETag`; `304` on a matching `If-None-Match`.
 
-**Response** (fields REQUIRED by OpenID Discovery 1.0):
+**Response**:
 | field | example | notes |
 |---|---|---|
 | `issuer` | `https://auth.customer.com` |  |
 | `authorization_endpoint` | `https://auth.customer.com/oauth2/authorize` |  |
 | `token_endpoint` | `https://auth.customer.com/oauth2/token` |  |
+| `userinfo_endpoint` | `https://auth.customer.com/oauth2/userinfo` |  |
+| `revocation_endpoint` | `https://auth.customer.com/oauth2/revoke` |  |
+| `end_session_endpoint` | `https://auth.customer.com/oauth2/logout` |  |
 | `jwks_uri` | `https://auth.customer.com/.well-known/jwks.json` |  |
 | `response_types_supported` | `["code"]` |  |
+| `grant_types_supported` | `["authorization_code", "refresh_token", "client_credentials"]` |  |
+| `resource_indicators_supported` | `true` |  |
 | `subject_types_supported` | `["public"]` |  |
 | `id_token_signing_alg_values_supported` | `["RS256"]` |  |
+| `scopes_supported` | `["openid", "email", "profile", "phone", "account:sessions", "offline_access"]` |  |
+| `claims_supported` | `["sub", "email", "phone_number", "name", "locale", "picture"]` |  |
+| `code_challenge_methods_supported` | `["S256"]` |  |
+| `token_endpoint_auth_methods_supported` | `["client_secret_basic", "client_secret_post"]` |  |
+| `revocation_endpoint_auth_methods_supported` | `["client_secret_basic"]` |  |
 
 ### OAuth 2.0 Authorization Server Metadata
 
@@ -188,29 +195,32 @@ used by the publisher at deploy and by the well-known Lambda at request time.
 1. Build the document from the issuer and the API base.
 2. `Content-Type: application/json`, `Cache-Control: public, max-age=300, must-revalidate`, `ETag`; `304` on a matching `If-None-Match`.
 
-**Response** (fields required/recommended by RFC 8414):
+**Response**:
 | field | example | notes |
 |---|---|---|
 | `issuer` | `https://auth.customer.com` |  |
 | `authorization_endpoint` | `https://auth.customer.com/oauth2/authorize` |  |
 | `token_endpoint` | `https://auth.customer.com/oauth2/token` |  |
+| `revocation_endpoint` | `https://auth.customer.com/oauth2/revoke` |  |
+| `end_session_endpoint` | `https://auth.customer.com/oauth2/logout` |  |
 | `jwks_uri` | `https://auth.customer.com/.well-known/jwks.json` |  |
 | `response_types_supported` | `["code"]` |  |
-| `grant_types_supported` | `["authorization_code", "refresh_token"]` |  |
+| `grant_types_supported` | `["authorization_code", "refresh_token", "client_credentials"]` |  |
+| `resource_indicators_supported` | `true` |  |
+| `scopes_supported` | `["openid", "email", "profile", "phone", "account:sessions", "offline_access"]` |  |
 | `code_challenge_methods_supported` | `["S256"]` |  |
-> Same issuer and endpoints as OIDC discovery; RFC 8414 drops the OIDC-only
-> fields (`subject_types_supported`, `id_token_*`) and names PKCE/grants instead.
-> Only `issuer` and `response_types_supported` are strictly required (endpoints
-> are conditionally required); we also emit them. RFC 8414's
-> `*_auth_signing_alg_values_supported` fields become required only once we
-> advertise `private_key_jwt`/`client_secret_jwt` or a revocation/introspection
-> endpoint — none in this slice, so they appear in the token/M2M slice.
+| `token_endpoint_auth_methods_supported` | `["client_secret_basic", "client_secret_post"]` |  |
+| `revocation_endpoint_auth_methods_supported` | `["client_secret_basic"]` |  |
+> Same issuer and endpoints as OIDC discovery, without the OIDC-only fields
+> (`userinfo_endpoint`, `subject_types_supported`,
+> `id_token_signing_alg_values_supported`, `claims_supported`).
 
 ### JWKS — public signing keys
 
 #### External Flow
 - The client fetches `jwks_uri`, then verifies each token by matching the JWT
-  header `kid` to a key. On an unknown `kid` (rotation) it re-fetches once.
+  header `kid` to a key. ESP User's own verifiers refuse a token whose `kid` is not in the set
+  they loaded, and load the set again only on a cold start.
 
 #### Internal Flow
 
@@ -224,13 +234,8 @@ used by the publisher at deploy and by the well-known Lambda at request time.
 `kty`, `kid`, `use`, `alg`, `n`, `e`):
 | field | example | notes |
 |---|---|---|
-| `keys` | `[{"kty": "RSA", "use": "sig", "alg": "RS256", "kid": "2026-06-a", "n": "0vx7agoebGcQSuuPiLJXZptN...", "e": "AQAB"}]` |  |
-> v1 publishes one active key. Rotation (publish-next → flip-active → retire) is
-> deferred to the token-issuing slice.
->
-> **Rotation overlap must be ≥ the JWKS cache lifetime.** JWKS is cached for an
-> hour (`max-age=3600`), and this endpoint and the verifiers read SSM once per
-> container, so a key change reaches them only on a cold start. When rotation lands, publish the new key **before** it signs and
-> keep the old key in JWKS for **≥ 1 hour** after the new key becomes active —
-> otherwise tokens signed by the new key fail verification against caches that
-> predate it.
+| `keys` | `[{"kty": "RSA", "kid": "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs", "use": "sig", "alg": "RS256", "n": "0vx7agoebGcQSuuPiLJXZptN...", "e": "AQAB"}]` |  |
+> The set holds one key: the current signing key, whose `kid` is its RFC 7638
+> thumbprint. JWKS is cached for an hour (`max-age=3600`), and this endpoint and
+> the verifiers read SSM once per container, so a key change reaches them on a
+> cold start.

@@ -42,7 +42,8 @@ that was never valid.
 
 **Exact string equality.** A resource is matched literally, like a redirect URI and for the same
 reason: a prefix rule is an opening, and a normalisation rule is a second implementation to disagree
-with the first.
+with the first. `https://api.example.com` and `https://api.example.com/` are different resources,
+so a deployment uses one spelling in the registry and in every client.
 
 **A refresh can narrow, never widen.** The resources a sign-in covers are stored on its refresh
 family. A refresh may pick one of them, never add another, and every renewal re-checks the client's
@@ -109,8 +110,10 @@ POST /oauth2/token  grant_type=authorization_code ...                          -
 POST /oauth2/token  grant_type=refresh_token ... resource=https://account.example.com -> aud https://account.example.com + rotated refresh token
 ```
 
-Each refresh rotates the refresh token, so a client refreshes one request at a time: two concurrent
-refreshes with the same token read as reuse and revoke the family.
+Each refresh rotates the refresh token, so a client refreshes one request at a time. Of two
+concurrent refreshes with the same token, one rotates and the other gets `invalid_grant` while the
+family survives; that token, presented again within 60 seconds, returns the current one. An older
+token is reuse and revokes the family ([auth-flows.md](auth-flows.md#refresh-tokens)).
 
 ### What the caller receives
 
@@ -126,6 +129,9 @@ refreshes with the same token read as reuse and revoke the family.
 
 The id token is unaffected. Its audience is the client, by OpenID Connect Core definition: it
 identifies the user to the application that asked, and is not a credential for a resource server.
+
+Scope-gated profile claims (`email`, `phone_number`, `name`, `locale`, `picture`) are stamped on
+the access token as well as the id token, so the API named in `aud` receives them.
 
 ### Errors
 
@@ -211,9 +217,7 @@ SmartThings, an MCP client) would otherwise open the account: read the email and
 `/v1/users/me`, list the person's devices, sign them out of other devices. First-party clients are
 the apps we ship, registered with `first_party = true` (espuser-base seeds `rainmaker-neo-home-app-client` that
 way; an admin sets it on the others through the clients API); the flag lives on the client's registry row rather than in a token claim or an env var, so taking a client's
-standing away applies to its next call, not when its tokens expire. Scopes will replace this gate:
-an account scope per endpoint, granted at consent, will let a third party in only where the person
-allowed it.
+standing away applies to its next call, not when its tokens expire.
 
 The stack that creates each API also adds every name in its `…Audiences` to the seeded clients that
 call it, right after discovering it, with its `…Resource` as the default: `rainmaker-neo-home-app-client` gets neo's (its default) and
@@ -233,17 +237,6 @@ survive every deploy. See
 | One leaked credential good at several APIs | A sign-in may cover several, but each access token is for one |
 | A refresh widening what a login opens | A refresh can only pick among the resources the sign-in covered |
 | A withdrawn entitlement living on in a long login | Every renewal re-checks the client's `allowed_resources` |
-
-## Known limitations
-
-- **Resource values are compared literally.** `https://api.example.com` and
-  `https://api.example.com/` are different resources. A deployment must use one spelling in the
-  registry and in every client.
-- **Profile claims ride the access token.** Scope-gated contact claims are stamped on the access
-  token as well as the id token, so a resource server named in `aud` receives them whether or not
-  it asked.
-- **Refreshes are sequential per family.** A client holding one refresh token for several APIs
-  must not refresh two of them concurrently.
 
 ## FAQs
 

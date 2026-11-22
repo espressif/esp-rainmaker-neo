@@ -1,15 +1,12 @@
 # Native Auth
 
-> **Compatibility exception to the "users are passwordless" decision.**
-> Apps built against `main` call the native `/v1/user/auth/*` endpoints
-> (username+password login, signup, verify, password recovery/change). Those
-> endpoints are restored here **byte-compatibly** so existing apps keep working,
-> but they are converting proxies: authentication happens against the Cognito
-> end-user pool (the same pool the [federation broker](federation.md) uses), and
-> the tokens returned are **ESP User's own** — never Cognito's.
->
-> New clients should use the OIDC browser flow (`/oauth2/authorize`) or OTP; this
-> surface is legacy-only and slated for removal once main-era apps migrate.
+## What this is
+
+The `/v1/user/auth/*` routes: password sign-in, sign-up and its verification, password recovery and
+change, refresh and sign-out, byte-compatible with `main` so apps built against it keep working. The
+hosted sign-in page uses the sign-up, verification and recovery routes for its account screens. A
+password is checked by the Cognito pool of a password provider row ([Choosing a provider](#choosing-a-provider)),
+and the tokens returned are **ESP User's own**, never Cognito's.
 
 ## Contract (unchanged from `main`)
 
@@ -41,7 +38,7 @@ sequenceDiagram
     title Legacy password signin — converting proxy
     participant App as "Main-era app"
     participant API as "POST /v1/user/auth/token"
-    participant Pool as "End-user Cognito pool"
+    participant Pool as "Cognito pool (named by provider)"
     participant Users as "espuser-user-details"
     participant KMS as "KMS signing key"
 
@@ -61,7 +58,7 @@ A browser on the sign-in page is one leg of somebody else's authorization flow. 
 authorization code and a session, never a token set: tokens in the page would step over the
 client's PKCE binding, and the login would leave no device row for the session list or sign-out to
 reach. So the page's password form does not call `/v1/user/auth/token`; it posts to
-`POST /user/login/password`, which verifies the password against the same Cognito pool and finishes the browser's flow.
+`POST /user/login/password`, which verifies the password against the pool `provider` names and finishes the browser's flow.
 
 The `__Host-esp_flow_id` cookie names the flow, and the body's `flow_id` must name the same one, so a tab drawn for an older sign-in cannot finish a newer one.
 
@@ -129,7 +126,7 @@ Cognito answers some correct passwords with a challenge rather than tokens; thos
 
 ## Token conversion
 
-- **`/token`**: `InitiateAuth USER_PASSWORD_AUTH` against the Cognito end-user
+- **`/token`**: `InitiateAuth USER_PASSWORD_AUTH` against the provider's Cognito
   pool. On success, read the authenticated user's verified email/phone from the
   Cognito id token, run [identity resolution](federation.md#identity-resolution)
   (reading claims through the provider row's [attribute mapping](federation.md#attribute-mapping)), and mint **our** access/id/refresh tokens. The Cognito tokens
@@ -174,12 +171,13 @@ carrying a permanently weaker path for the one surface most likely to be attacke
 ## Enumeration resistance
 
 Every route answers the same whether or not the named account exists, so none of
-this surface can be used to probe which contacts are registered:
+this surface can be used to probe which contacts are registered. The answers that differ
+need the account's own password:
 
 | Operation | Account exists | Account does not exist |
 |---|---|---|
 | Sign-in (`/token`), wrong/any password | 401 `Authentication failed` | 401 `Authentication failed` |
-| Signup (`/signup`) | 201 `Code sent. Existing RainMaker users must signin or reset password.` — a code is re-sent **only** for an unconfirmed account retrying with its correct password; a confirmed account or a wrong password gets no mail (see below) | 201 same message — account created, code sent |
+| Signup (`/signup`) | 201 `Code sent. Existing RainMaker users must signin or reset password.` and the code re-sent; a confirmed account presenting its own password gets 409 `Account already exists. RainMaker users: signin or reset password.` instead (see below) | 201 same message — account created, code sent |
 | Signup verify (`/signup/verify`), wrong/any code | 400 `Invalid code or RainMaker account already exists. Try signin or reset password.` | 400 same message |
 | Password recovery (`/password-recovery`) | 200 `If your account exists, you will receive a code` — code sent | 200 same message — nothing sent |
 | Recovery confirmation (`/password-recovery/confirmation`) | 400 `Invalid verification code` without the mailed code | 400 `Invalid verification code` |
@@ -192,12 +190,13 @@ this surface can be used to probe which contacts are registered:
 `ConfirmSignUp`/`ResendConfirmationCode` cannot tell them apart either (measured against a real
 pool — Cognito validates the code before the account state, and the resend happily mails a
 confirmed account). The one call that separates the two with only an app client is
-`InitiateAuth` with the password the caller just submitted: `UserNotConfirmedException` is
-raised only for an unconfirmed account, and only after the password matched. So the code is
-re-sent exclusively on that signal; everything else — confirmed account, wrong password, MFA
-challenge — gets the same 201 and no mail.
+`InitiateAuth` with the password the caller just submitted: it succeeds only for a confirmed
+account whose password matched. That caller already owns the account, so signup answers 409 and
+points them to sign-in. Every other outcome — an unconfirmed account, a wrong password, an MFA
+challenge — re-sends the code and answers the same 201, so an owner who cannot supply the
+password can still finish verification.
 
-Sign-in names the account's state only after the **correct** password: an unconfirmed account gets
+Sign-in names the account's state, always with `401`, only after the **correct** password: an unconfirmed account gets
 `Signin failed. Account not verified — reset your password.`, one an administrator reset gets
 `Signin failed. Password reset required — reset your password.`, and one an administrator created
 gets `Signin failed. This account needs a new password — contact support.` Since Cognito checks the
@@ -215,9 +214,10 @@ with the masked 400 (`Failed to create user account`).
 
 ### Provider-specific wording
 
-Two messages name the product, and only when RainMaker's own pool backs the deployment:
+Three messages name the product, and only when the provider row answering the request is named
+`rainmaker`:
 
-| Message | Inbuilt (`provider_name = "cognito"`) | Registered external provider |
+| Message | Provider named `rainmaker` | Any other provider |
 |---|---|---|
 | signup 201 | `Code sent. Existing RainMaker users must signin or reset password.` | `Code sent. Existing users must signin or reset password.` |
 | account exists 409 | `Account already exists. RainMaker users: signin or reset password.` | `Account already exists. Signin or reset password.` |
