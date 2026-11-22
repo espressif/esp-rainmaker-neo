@@ -303,6 +303,8 @@ func handleAuthServerMetadata() events.APIGatewayV2HTTPResponse {
 		"grant_types_supported":                 proxyGrantTypesSupported,
 		"code_challenge_methods_supported":      []string{"S256"},
 		"client_id_metadata_document_supported": true,
+		// MCP clients are public (PKCE, no secret). Without "none" here RFC 8414 implies client_secret_basic, and Claude's hosted apps then skip CIMD and ask for a client ID.
+		"token_endpoint_auth_methods_supported": []string{"none"},
 		"scopes_supported":                      []string{"openid", "email"},
 	}
 

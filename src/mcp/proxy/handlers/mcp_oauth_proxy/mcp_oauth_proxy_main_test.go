@@ -154,6 +154,7 @@ var _ = Describe("OAuth Proxy", func() {
 			Expect(metadata["grant_types_supported"]).To(ConsistOf("authorization_code", "refresh_token"))
 			Expect(metadata["code_challenge_methods_supported"]).To(ConsistOf("S256"))
 			Expect(metadata["client_id_metadata_document_supported"]).To(BeTrue())
+			Expect(metadata["token_endpoint_auth_methods_supported"]).To(ConsistOf("none"))
 			Expect(metadata["scopes_supported"]).To(ConsistOf("openid", "email"))
 		})
 	})
