@@ -84,6 +84,10 @@ paths:
                     items: { type: string }
                   client_id_metadata_document_supported:
                     type: boolean
+                  token_endpoint_auth_methods_supported:
+                    type: array
+                    items: { type: string }
+                    example: ["none"]
                   scopes_supported:
                     type: array
                     items: { type: string }
