@@ -21,7 +21,7 @@ const t = ((
   return fallback.replace(/{{(\w+)}}/g, (_, name: string) =>
     String(vars[name] ?? ""),
   );
-}) as TFunction<"nodes">;
+}) as unknown as TFunction<"nodes">;
 
 const FAILED_FILE = "s3://bucket/system/node_certs/abc_failed_node_certs.csv";
 
