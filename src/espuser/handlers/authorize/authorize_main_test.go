@@ -1493,7 +1493,7 @@ var _ = Describe("consent for a client we do not ship", func() {
 		data := pageDataFrom(resp.Body)
 		Expect(data.FlowID).To(Equal(flowID), "the page sends it back with the answer")
 		Expect(data.Client).To(Equal(clientData{Name: "Third Party App", LogoURI: "data:image/png;base64,iVBORw0KGgo="}))
-		Expect(data.Consent).To(Equal(&consentData{Account: "person@example.com", Scopes: []string{"openid", "email"}}))
+		Expect(data.Consent).To(Equal(&consentData{Username: "person@example.com", Scopes: []string{"openid", "email"}}))
 	})
 
 	DescribeTable("gives the consent screen the restart link, stage prefix included, so the page never guesses one",
@@ -1663,6 +1663,68 @@ var _ = Describe("consent for a client we do not ship", func() {
 	})
 })
 
+var _ = Describe("GET /user/logout, the sign-out question", func() {
+	var backend *test_utils.EspUserBackend
+	logoutQuery := map[string]string{"client_id": testClientID, "post_logout_redirect_uri": "https://app.example/bye", "state": "s1"}
+
+	BeforeEach(func() {
+		backend = test_utils.SetupEspUserBackend(context.Background())
+		Expect(user_details_db.NewUserDetailsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).CreateUserDetails(&user_details_db.UserDetailsEntry{
+			UserID: "user-signout", Email: "person@example.com",
+		})).To(Succeed())
+	})
+
+	It("asks the signed-in person, naming their account, with a token bound to this browser's cookie, writing nothing", func() {
+		cookie := establishSession("user-signout", time.Now().Unix())
+		backend.DBMock.ProfileReset()
+		resp, err := handleAuthorizeRequest(context.Background(), withCookie(getRequest(pathSignOut, logoutQuery), cookie))
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
+		Expect(resp.Headers).To(Equal(hardenedPageHeaders), "no Set-Cookie, and framing refused so the person's click cannot be borrowed")
+		Expect(pageDataFrom(resp.Body).Logout).To(Equal(&logoutData{
+			Username:  "person@example.com",
+			CSRFToken: session.LogoutCSRFToken(strings.TrimPrefix(cookie, session.CookieName+"=")),
+		}))
+
+		// The session row and the account, read; asking rolls no retention, since the response re-issues no cookie.
+		profile := backend.DBMock.ProfileGet()
+		readCnt, writeCnt := profile.TotalCounts()
+		Expect(readCnt).To(Equal(2))
+		Expect(writeCnt).To(BeZero())
+	})
+
+	It("sends a browser with no session back to /oauth2/logout with the same query, since there is nothing to ask (negative)", func() {
+		resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathSignOut, logoutQuery))
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(resp.StatusCode).To(Equal(http.StatusFound))
+		loc, err := url.Parse(resp.Headers["Location"])
+		Expect(err).NotTo(HaveOccurred())
+		Expect(loc.Path).To(Equal("/oauth2/logout"))
+		Expect(loc.Query()).To(Equal(url.Values{"client_id": {testClientID}, "post_logout_redirect_uri": {"https://app.example/bye"}, "state": {"s1"}}))
+	})
+
+	It("answers a session it cannot read with an error page, never a redirect that /oauth2/logout would bounce back (negative)", func() {
+		cookie := establishSession("user-signout", time.Now().Unix())
+		backend.DBMock.NextGetItemError = errors.New("throttled")
+		resp, err := handleAuthorizeRequest(context.Background(), withCookie(getRequest(pathSignOut, logoutQuery), cookie))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.StatusCode).To(Equal(http.StatusInternalServerError))
+		Expect(resp.Headers).NotTo(HaveKey("Location"))
+		Expect(pageDataFrom(resp.Body).Error.Code).To(Equal(oidc.OAuthErrServerError))
+	})
+
+	It("does not ask on a cookie that resolves to no session, and says the browser is signed out (negative)", func() {
+		resp, err := handleAuthorizeRequest(context.Background(), withCookie(getRequest(pathSignOut, nil), session.CookieName+"=never-issued"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.StatusCode).To(Equal(http.StatusOK), "this is where /oauth2/logout sends a browser with nowhere else to go, so it must not hop back")
+		data := pageDataFrom(resp.Body)
+		Expect(data.SignedOut).To(BeTrue())
+		Expect(data.Logout).To(BeNil())
+	})
+})
+
 var _ = Describe("the footer links the operator configures", func() {
 	BeforeEach(func() {
 		test_utils.SetupEspUserBackend(context.Background())
@@ -1800,5 +1862,6 @@ var _ = Describe("a deployment built without the sign-in bundle", func() {
 		},
 		Entry("the sign-in page with no flow cookie", pathLogin),
 		Entry("authorize with no client", pathAuthorize),
+		Entry("the sign-out page with no session", pathSignOut),
 	)
 })

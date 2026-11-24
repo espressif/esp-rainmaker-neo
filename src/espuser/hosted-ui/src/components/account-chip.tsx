@@ -5,12 +5,12 @@
  */
 
 /** The signed-in account a question is about; nothing when the server could not read it. */
-export function AccountChip({ account }: { account?: string }) {
-  if (!account) return null
+export function AccountChip({ username }: { username?: string }) {
+  if (!username) return null
   return (
     <p class="consent-account">
-      <span class="consent-avatar" aria-hidden="true">{account.charAt(0).toUpperCase()}</span>
-      {account}
+      <span class="consent-avatar" aria-hidden="true">{username.charAt(0).toUpperCase()}</span>
+      {username}
     </p>
   )
 }

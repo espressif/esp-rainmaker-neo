@@ -28,6 +28,9 @@ async function finish(path: string, body: unknown): Promise<Result> {
   return result.ok && !result.data.redirect_to ? { ok: false, error: describeError(null) } : result
 }
 
+/** The RP-Initiated Logout 1.0 s2 parameters /oauth2/logout carries to the sign-out page. */
+const LOGOUT_PARAMS = ['id_token_hint', 'logout_hint', 'client_id', 'post_logout_redirect_uri', 'state']
+
 // Addresses go out normalized, as contactFields sends them: the server matches them exactly, and a pasted one often ends in a space or a typed phone number has spaces and dashes.
 export const api = {
   // flowID is the sign-in this page was drawn for, so the server can refuse a page that a newer sign-in replaced.
@@ -44,9 +47,12 @@ export const api = {
   answerConsent: (decision: 'allow' | 'deny', flowID?: string) =>
     finish('consent', { decision, flow_id: flowID }),
 
-  // The server resolves where to return from the query this page was opened with; an empty redirect_to means nowhere validated.
-  confirmLogout: (csrfToken: string) =>
-    post(`logout/confirm${window.location.search}`, { csrf_token: csrfToken }),
+  // Sends back the sign-out parameters this page was opened with, in the body so id_token_hint stays out of the request URL; an empty redirect_to means nowhere validated.
+  confirmLogout: (csrfToken: string) => {
+    const opened = new URLSearchParams(window.location.search)
+    const params = Object.fromEntries(LOGOUT_PARAMS.flatMap(name => opened.has(name) ? [[name, opened.get(name)]] : []))
+    return post('logout/confirm', { ...params, csrf_token: csrfToken })
+  },
 }
 
 export const account = {

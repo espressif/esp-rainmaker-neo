@@ -91,29 +91,40 @@ func (s *OAuthUserAuthService) mintTokenSet(rmngCtx *rmngctx.RmngContext, userID
 	return s.signTokens(rmngCtx.Context, userID, clientID, scope, audience, refreshToken, sid, authTime)
 }
 
-// VerifyIDTokenHint verifies one of OUR OWN id tokens presented as an id_token_hint and returns
-// its subject. Signature and issuer are checked; audience is not (the hint may have been issued
-// to any registered client).
+// IDTokenHint is what a verified id_token_hint says.
+type IDTokenHint struct {
+	Subject  string
+	Audience []string
+	// SID is the session the token was minted under; empty for a token minted without one.
+	SID string
+}
+
+// VerifyIDTokenHint verifies one of OUR OWN id tokens presented as an id_token_hint. Signature and issuer are checked; audience is not (the hint may have been issued to any registered client).
 //
 // EXPIRY IS DELIBERATELY NOT CHECKED. An RP sends the ID token it was last given, which by the
 // time anyone clicks "sign out" is routinely past its hour -- a tab left open over lunch is
 // enough -- and rejecting on exp made sign-out a silent no-op. Safe because a hint authorizes
 // nothing: the cookie is the credential, and the caller still refuses when the verified subject
 // is not its owner.
-func (s *OAuthUserAuthService) VerifyIDTokenHint(hint string) (sub string, aud []string, err error) {
+func (s *OAuthUserAuthService) VerifyIDTokenHint(hint string) (*IDTokenHint, error) {
 	claims, err := jwtutil.VerifyJWTExpiredOK(hint, s.jwks)
 	if err != nil {
-		return "", nil, rmerror.NewRMError(err, "id_token_hint verification failed")
+		return nil, rmerror.NewRMError(err, "id_token_hint verification failed")
 	}
 	if iss, _ := claims["iss"].(string); iss != s.issuer {
-		return "", nil, rmerror.NewRMError(nil, "id_token_hint issuer mismatch")
+		return nil, rmerror.NewRMError(nil, "id_token_hint issuer mismatch")
 	}
-	sub, _ = claims["sub"].(string)
+	// An access token carries the same sub and sid and reaches every API the app calls, so only the ID token, which stays with the app, may speak for the session.
+	if err := jwtutil.AssertTokenUse(claims, jwtutil.TokenUseID); err != nil {
+		return nil, rmerror.NewRMError(err, "id_token_hint is not an ID token")
+	}
+	sub, _ := claims["sub"].(string)
 	if sub == "" {
-		return "", nil, rmerror.NewRMError(nil, "id_token_hint has no subject")
+		return nil, rmerror.NewRMError(nil, "id_token_hint has no subject")
 	}
-	aud, _ = claims.GetAudience()
-	return sub, aud, nil
+	aud, _ := claims.GetAudience()
+	sid, _ := claims["sid"].(string)
+	return &IDTokenHint{Subject: sub, Audience: aud, SID: sid}, nil
 }
 
 // signTokens mints a signed access token and, when openid is in scope, an id token,

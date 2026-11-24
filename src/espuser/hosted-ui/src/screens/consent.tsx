@@ -13,10 +13,10 @@ import { AppMark, EspressifMark } from '../components/marks.tsx'
 import { describeScopes, OFFLINE_ACCESS, stayConnected, type Grant } from '../lib/scopes.ts'
 import { useRequest } from './use-request.ts'
 
-export function ConsentScreen({ appName, logoURI, account, scopes, flowID, onEnded }: {
+export function ConsentScreen({ appName, logoURI, username, scopes, flowID, onEnded }: {
   appName: string
   logoURI?: string
-  account?: string
+  username?: string
   scopes: string[]
   flowID?: string
   onEnded: (error: ShownError) => void
@@ -45,7 +45,7 @@ export function ConsentScreen({ appName, logoURI, account, scopes, flowID, onEnd
 
       <h1 class="consent-title">Authorize app</h1>
       <p class="consent-lede"><strong>{appName}</strong> wants to access your Espressif account.</p>
-      <AccountChip account={account} />
+      <AccountChip username={username} />
 
       <ul class="grants">
         {describeScopes(scopes).map(grant => (

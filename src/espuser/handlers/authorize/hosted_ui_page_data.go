@@ -24,8 +24,10 @@ type pageData struct {
 	IDP        string `json:"idp,omitempty"`
 	RestartURL string `json:"restart_url,omitempty"`
 	// Consent, Logout, SignedOut and Error each replace the sign-in form with another screen.
-	Consent *consentData `json:"consent,omitempty"`
-	Error   *errorData   `json:"error,omitempty"`
+	Consent   *consentData `json:"consent,omitempty"`
+	Logout    *logoutData  `json:"logout,omitempty"`
+	SignedOut bool         `json:"signed_out,omitempty"`
+	Error     *errorData   `json:"error,omitempty"`
 	// Links are the operator's footer pages; absent when none is configured, so the page never draws an empty link.
 	Links *linksData `json:"links,omitempty"`
 }
@@ -62,8 +64,14 @@ func httpsURL(raw string) string {
 
 // consentData is what the consent screen asks about: who is signed in and what the client requested.
 type consentData struct {
-	Account string   `json:"account,omitempty"`
-	Scopes  []string `json:"scopes"`
+	Username string   `json:"username,omitempty"`
+	Scopes   []string `json:"scopes"`
+}
+
+// logoutData is the sign-out question: whose session it ends, and the token the answer must carry back.
+type logoutData struct {
+	Username  string `json:"username,omitempty"`
+	CSRFToken string `json:"csrf_token"`
 }
 
 // errorData never names a client or echoes a redirect uri: anyone can reach this page.

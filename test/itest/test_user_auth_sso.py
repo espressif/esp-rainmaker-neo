@@ -26,7 +26,16 @@ from urllib.parse import parse_qs, urljoin, urlparse
 import pytest
 import requests
 
-from py_sdk.espuser_oauth import Browser, WebClient, client_ids_under, held_for_consent, sids_in
+from py_sdk.espuser_oauth import (
+    Browser,
+    WebClient,
+    asks_to_confirm,
+    client_ids_under,
+    held_for_consent,
+    page_data,
+    sids_in,
+    sign_out_destination,
+)
 from test.itest.conftest import (
     API_GATEWAY_URL,
     ESPUSER_RESOURCE,
@@ -248,7 +257,7 @@ def test_sso_a_session_cookie_the_attacker_controls_is_worthless(apps, espuser_p
         "the login adopted the attacker's value; whoever planted it now holds the victim's session"
 
     stolen = browser.session_cookie
-    first.logout(browser)
+    first.confirm_logout(browser, first.logout(browser))
     thief = Browser()
     thief.plant_session_cookie(stolen)
     assert first.authorize(thief, prompt="none").error == "login_required", \
@@ -623,44 +632,62 @@ def test_sso_logout_ignores_an_unregistered_landing_page_but_still_signs_out(app
     browser = Browser()
     tokens = signed_in(first, browser, espuser_person)
 
-    out = first.logout(browser, post_logout_redirect_uri="https://attacker.example/harvest")
+    out = first.logout(browser, id_token_hint=tokens["id_token"], post_logout_redirect_uri="https://attacker.example/harvest")
     assert "attacker.example" not in out.headers.get("Location", ""), \
         f"open redirect: {out.headers.get('Location')}"
     assert not first.still_signed_in(tokens["refresh_token"]), \
         "the sign-out itself must have happened regardless of the rejected return URL"
 
 
-def test_sso_logout_an_unverifiable_hint_does_not_block(apps, espuser_person):
-    """A hint that does not verify must not veto the sign-out. Refusing on an unverifiable hint buys
-    nothing -- a caller wanting no hint checked simply omits it -- and costs every genuine sign-out
-    whose id_token has merely aged past expiry. The cookie is the credential; the hint only narrows.
-    (Expiry tolerance is asserted in logout_test.go, which can control the clock; this is the
-    deployed endpoint's behaviour for a hint it cannot make sense of at all.)"""
-    first, _ = apps
+def test_sso_logout_without_a_hint_ends_nothing_until_the_person_confirms(apps, espuser_person):
+    """Any page can send a browser to /oauth2/logout and the cookie rides that navigation, so a request
+    without an id_token_hint from this session is a question, not an instruction (RP-Initiated Logout
+    1.0 s2, s6). The GET ends nothing; the person's yes on the sign-out page ends every product in the
+    browser and still returns them to the app that asked. The same yes POSTed without the cookie --
+    which is all another site's POST can carry -- ends nothing."""
+    first, second = apps
     browser = Browser()
-    tokens = signed_in(first, browser, espuser_person)
+    one = signed_in(first, browser, espuser_person)
+    two = signed_in(second, browser, espuser_person)
 
-    out = first.logout(browser, id_token_hint="not.a.valid.jwt")
-    assert out.status_code in (200, 302), f"{out.status_code} {out.text[:200]}"
-    assert not first.still_signed_in(tokens["refresh_token"]), \
-        "an unverifiable hint stopped the sign-out, making it a silent no-op for any aged id_token"
+    asked = first.logout(browser)
+    assert asks_to_confirm(asked), f"{asked.status_code} {asked.headers.get('Location')}"
+    assert SESSION_COOKIE not in asked.headers.get("Set-Cookie", ""), "the cookie must outlive the question"
+    assert browser.session_cookie, "and the jar must still hold it"
+    assert first.still_signed_in(one["refresh_token"]) and second.still_signed_in(two["refresh_token"]), \
+        "a sign-out nobody confirmed ended something"
+
+    page = browser.session.get(urljoin(asked.url, asked.headers["Location"]), allow_redirects=False)
+    token = page_data(page.text)["logout"]["csrf_token"]
+    forged = Browser("another site").session.post(f"{USER_API_GATEWAY_URL}/user/logout/confirm",
+                                                   json={"csrf_token": token}, allow_redirects=False)
+    assert "Set-Cookie" not in forged.headers, f"a cookie-less answer must touch no cookie: {forged.headers}"
+    assert first.still_signed_in(one["refresh_token"]), "a POST without the session cookie ended the session"
+
+    answer = first.confirm_logout(browser, asked)
+    assert answer.status_code == 200, f"{answer.status_code} {answer.text[:200]}"
+    assert SIGNED_OUT.format("one") in sign_out_destination(browser, answer), \
+        f"the app that asked must still get its person back: {answer.text[:200]}"
+    assert not first.still_signed_in(one["refresh_token"]) and not second.still_signed_in(two["refresh_token"]), \
+        "the person said yes; every product in this browser must be signed out"
+    assert browser.session_cookie is None, "the jar still holds a session cookie after the confirmed sign-out"
 
 
 def test_sso_logout_a_hint_naming_someone_else_ends_nothing(apps, espuser_person, second_espuser_person):
-    """The one case a veto is for. OIDC says the hint identifies the session to end; ending a
-    DIFFERENT person's session on a stranger's say-so is the outcome that must not happen. Their id
-    token, my cookie -- nothing may be destroyed."""
+    """Their id token, my cookie: the person holding the cookie is asked, and nothing of either person's
+    ends or is cleared before they answer."""
     first, _ = apps
     mine, theirs = Browser("mine"), Browser("theirs")
     my_tokens = signed_in(first, mine, espuser_person)
     their_tokens = signed_in(first, theirs, second_espuser_person)
 
     out = first.logout(mine, id_token_hint=their_tokens["id_token"])
-    assert out.status_code in (200, 302), f"{out.status_code} {out.text[:200]}"
+    assert asks_to_confirm(out), f"{out.status_code} {out.headers.get('Location')}"
     assert first.still_signed_in(my_tokens["refresh_token"]), \
         "a hint naming another subject must end nothing, not end mine"
     assert first.still_signed_in(their_tokens["refresh_token"]), \
         "and certainly not end theirs -- I hold no credential of theirs"
+    assert mine.session_cookie, "nor clear my cookie: that would let anyone's own id token sign this browser out"
 
 
 # ── offline_access: a grant no sign-out ends (OIDC Core 1.0 s11) ──────────────────
@@ -686,6 +713,7 @@ def test_sso_an_offline_grant_outlives_logout_and_sign_out_everywhere(apps, regi
     assert "sid" not in decode_jwt_claims(offline_tokens["id_token"]), "an offline grant belongs to no session"
 
     out = plain.logout(browser, id_token_hint=session_tokens["id_token"])
+    assert not asks_to_confirm(out), f"a matching hint ends the session at once: {out.status_code}"
     assert not plain.still_signed_in(session_tokens["refresh_token"]), "the session's own product is signed out"
 
     renewed = offline.refresh(offline_tokens["refresh_token"])

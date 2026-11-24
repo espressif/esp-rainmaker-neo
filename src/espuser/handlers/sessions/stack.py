@@ -35,6 +35,7 @@ class SessionsAPI(Construct):
         DELETE /v1/user/connected-apps/{clientId}    disconnect one of them
         GET    /oauth2/logout             RP-Initiated Logout 1.0, advertised in discovery
         POST   /oauth2/logout             the same, as a form; answered with a 303 to the GET
+        POST   /user/logout/confirm       the person's yes on the sign-out page
 
     One binary, two trees. They share every dependency: the same two tables, the same token
     verification, the same session-to-family join. Splitting them would be two cold starts
@@ -68,7 +69,7 @@ class SessionsAPI(Construct):
             ],
         ))
         sessions_lambda_role.add_to_policy(iam.PolicyStatement(
-            actions=["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem"],
+            actions=["dynamodb:GetItem", "dynamodb:DeleteItem"],
             resources=[sessions_table_arn],
         ))
         sessions_lambda_role.add_to_policy(iam.PolicyStatement(
@@ -181,6 +182,28 @@ class SessionsAPI(Construct):
         add_cors_options(
             self, "OAuth2LogoutOptionsMethod", common_resources,
             logout_id, allowed_methods=["GET", "POST"],
+            api_id=common_resources.esp_user_api_id,
+        )
+
+        # ── /user/logout/confirm ─────────────────────────────────────────────────────
+        # No CORS preflight: the only caller is the sign-out page's own same-origin fetch.
+        user_page_id = get_or_create_api_resource(
+            self, "UserResource", common_resources,
+            common_resources.esp_user_api_root_resource_id, "user",
+            api_id=common_resources.esp_user_api_id,
+        )
+        user_logout_id = get_or_create_api_resource(
+            self, "UserLogoutResource", common_resources, user_page_id, "logout",
+            api_id=common_resources.esp_user_api_id,
+        )
+        create_cfn_api_method(
+            self, "UserLogoutConfirmPostMethod", common_resources,
+            get_or_create_api_resource(
+                self, "UserLogoutConfirmResource", common_resources, user_logout_id, "confirm",
+                api_id=common_resources.esp_user_api_id,
+            ),
+            "POST", self.sessions_function,
+            authorization_type="NONE",  # the session cookie and the page's csrf_token are the credential
             api_id=common_resources.esp_user_api_id,
         )
 

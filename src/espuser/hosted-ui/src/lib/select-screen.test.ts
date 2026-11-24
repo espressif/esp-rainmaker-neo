@@ -62,7 +62,7 @@ describe('initialPool', () => {
 describe('screenFor', () => {
   it('shows an error first, then a question the server asks, then a finished sign-out, else signing in', () => {
     const error = { code: 'invalid_request', message: 'Bad request.' }
-    const logout = { account: 'person@example.com', csrf_token: 't0k' }
+    const logout = { username: 'person@example.com', csrf_token: 't0k' }
     const consent = { scopes: ['openid'] }
     const cases: [Partial<PageData>, ReturnType<typeof screenFor>][] = [
       [{ error, logout, consent }, { kind: 'error', error }],

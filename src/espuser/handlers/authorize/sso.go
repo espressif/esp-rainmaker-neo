@@ -77,8 +77,8 @@ func sessionShortCircuit(ctx context.Context, in AuthorizeSessionRequest) (event
 	// id_token_hint: the session must belong to the named subject. A hint that does not
 	// verify, or that names someone else, drops the session rather than switching users.
 	if hint := q["id_token_hint"]; hint != "" {
-		sub, _, err := svc.VerifyIDTokenHint(hint)
-		if err != nil || s == nil || sub != s.UserID {
+		verified, err := svc.VerifyIDTokenHint(hint)
+		if err != nil || s == nil || verified.Subject != s.UserID {
 			s = nil
 		}
 	}

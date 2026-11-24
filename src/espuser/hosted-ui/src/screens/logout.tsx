@@ -21,7 +21,7 @@ export function SignOutResult({ outcome }: { outcome: 'signed-out' | 'kept' }) {
 }
 
 /** The sign-out question: any site can send a browser to /oauth2/logout, so only the person's own Sign out ends the session. */
-export function LogoutScreen({ account, csrfToken }: { account?: string; csrfToken: string }) {
+export function LogoutScreen({ username, csrfToken }: { username?: string; csrfToken: string }) {
   // No sign-in to end here, so every error is shown on the screen.
   const { busy, error, run } = useRequest()
   const [ended, setEnded] = useState<'signed-out' | 'kept' | null>(null)
@@ -40,7 +40,7 @@ export function LogoutScreen({ account, csrfToken }: { account?: string; csrfTok
   return (
     <div class="panel consent logout">
       <h1 class="consent-title">Sign out?</h1>
-      <AccountChip account={account} />
+      <AccountChip username={username} />
 
       <Assist error={error} />
       <div class="consent-actions">

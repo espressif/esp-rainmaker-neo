@@ -26,6 +26,13 @@ function answer(status: number, body: string): Record<string, unknown>[] {
 }
 
 describe('what the page sends', () => {
+  it('puts the sign-out parameters it was opened with in the body, never in the URL, and only those', async () => {
+    Object.assign(globalThis, { window: { location: { search: '?client_id=app&id_token_hint=eyJ.x.y&state=s1&unrelated=x' } } })
+    const sent = answer(200, '{"redirect_to":""}')
+    await api.confirmLogout('csrf')
+    assert.deepEqual(sent, [{ client_id: 'app', id_token_hint: 'eyJ.x.y', state: 's1', csrf_token: 'csrf' }])
+  })
+
   it('drops the spaces a paste or a phone keyboard leaves around an address', async () => {
     const sent = answer(401, '{"error":"invalid_credentials"}')
     await api.signIn('  someone@example.com ', 'pw', 'cognito')
@@ -86,7 +93,7 @@ describe('where the page sends it', () => {
     assert.equal(await landed('/user/login/consent', () => api.answerConsent('allow')), '/prod/user/login/consent')
   })
 
-  it('confirms sign-out from the sign-out page', async () => {
+  it('answers sign-out from the sign-out page', async () => {
     Object.assign(globalThis, { window: { location: { search: '' } } })
     assert.equal(await landed('/user/logout', () => api.confirmLogout('csrf')), '/prod/user/logout/confirm')
   })

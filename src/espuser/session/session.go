@@ -12,7 +12,9 @@
 package session
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -30,6 +32,9 @@ import (
 // prefix — so another API Gateway on the shared execute-api hostname cannot shadow ours
 // (session fixation). The name survives the move to a real domain unchanged.
 const CookieName = "__Host-esp_session"
+
+// SignOutPage is where /oauth2/logout asks the person before ending their session, relative to /oauth2/logout.
+const SignOutPage = "../user/logout"
 
 const (
 	// SessionTTLSeconds is the rolling inactivity window: how long a user agent stays "known" after
@@ -298,6 +303,26 @@ func (s *Service) DeleteSessionBySID(userID, sid string) error {
 // DeleteAllSessions ends every session the user has -- sign out everywhere.
 func (s *Service) DeleteAllSessions(userID string) error {
 	return sessions_db.NewSessionsDB(s.ctx).DeleteAllForUser(userID)
+}
+
+// LogoutCSRFToken is keyed by the cookie value, which only this browser holds, so another site can neither read nor compute it, and it stops matching once the cookie rotates.
+func LogoutCSRFToken(cookieValue string) string {
+	return base64.RawURLEncoding.EncodeToString(logoutMAC(cookieValue))
+}
+
+// IsLogoutCSRFToken reports whether token is LogoutCSRFToken(cookieValue), in constant time.
+func IsLogoutCSRFToken(cookieValue, token string) bool {
+	got, err := base64.RawURLEncoding.DecodeString(token)
+	if cookieValue == "" || err != nil {
+		return false
+	}
+	return hmac.Equal(got, logoutMAC(cookieValue))
+}
+
+func logoutMAC(cookieValue string) []byte {
+	mac := hmac.New(sha256.New, []byte(cookieValue))
+	mac.Write([]byte("espuser logout confirmation"))
+	return mac.Sum(nil)
 }
 
 func hashCookie(cookieValue string) string {

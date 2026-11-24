@@ -29,9 +29,9 @@ export interface PageData {
   login_hint?: string
   idp?: string
   restart_url?: string
-  consent?: { account?: string; scopes: string[] }
+  consent?: { username?: string; scopes: string[] }
   /** csrf_token goes back with the person's answer to the sign-out question. */
-  logout?: { account?: string; csrf_token: string }
+  logout?: { username?: string; csrf_token: string }
   /** Where a sign-out with nowhere validated to return lands. */
   signed_out?: boolean
   /** Each is an https URL the server checked; an absent one is not drawn. */

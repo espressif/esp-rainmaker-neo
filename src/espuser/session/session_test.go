@@ -464,4 +464,20 @@ var _ = Describe("session service", func() {
 			Expect(strings.ToLower(h)).NotTo(ContainSubstring("domain"), "a Domain attribute voids the __Host- prefix")
 		})
 	})
+
+	Describe("the sign-out confirmation token", func() {
+		It("matches the cookie it was made from", func() {
+			Expect(session.IsLogoutCSRFToken("cookie-a", session.LogoutCSRFToken("cookie-a"))).To(BeTrue())
+		})
+
+		DescribeTable("refuses a token that is not this cookie's own (negative)",
+			func(cookieValue, token string) {
+				Expect(session.IsLogoutCSRFToken(cookieValue, token)).To(BeFalse())
+			},
+			Entry("another browser's token", "cookie-a", session.LogoutCSRFToken("cookie-b")),
+			Entry("no token", "cookie-a", ""),
+			Entry("not base64url", "cookie-a", "%%%"),
+			Entry("no cookie, which is what a cross-site POST carries", "", session.LogoutCSRFToken("")),
+		)
+	})
 })

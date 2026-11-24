@@ -708,7 +708,7 @@ def test_sso_logout_the_other_device_is_untouched(three_products, espuser_person
     body = WebClient.sessions(phone_dash["access_token"]).json()
     assert len(body["sessions"]) == 2, f"two devices, two rows: {body}"
 
-    product_a.logout(laptop)
+    product_a.confirm_logout(laptop, product_a.logout(laptop))
 
     assert not dashboard.still_signed_in(laptop_dash["refresh_token"])
     assert not product_a.still_signed_in(laptop_a["refresh_token"])

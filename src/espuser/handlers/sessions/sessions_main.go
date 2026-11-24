@@ -45,6 +45,8 @@ const (
 	// pathLogoutDone is where the upstream provider hands the browser back: a distinct exact
 	// route from pathLogout.
 	pathLogoutDone = "/oauth2/logout/done"
+	// pathLogoutConfirm takes the person's yes from the sign-out page.
+	pathLogoutConfirm = "/user/logout/confirm"
 )
 
 // SessionView is one browser. Clients are nested under it rather than listed beside it because that is the shape of the thing: you do not sign out of an application, you sign out of a browser, and every application opened in it goes with it.
@@ -196,6 +198,8 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		return handleLogout(ctx, request)
 	case pathLogoutDone:
 		return handleLogoutDone(ctx, request)
+	case pathLogoutConfirm:
+		return handleLogoutConfirm(ctx, request)
 	case pathSessions, pathSession, pathConnectedApps, pathConnectedApp:
 		return handleAccountRequest(ctx, request), nil
 	}

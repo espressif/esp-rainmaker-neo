@@ -30,9 +30,11 @@ import (
 
 const (
 	pathAuthorize = "/oauth2/authorize"
+	pathLogout    = "/oauth2/logout"
 	pathLogin     = "/user/login"
 	pathRestart   = pathLogin + "/restart"
 	pathConsent   = "/user/" + auth.ConsentPath
+	pathSignOut   = "/user/logout"
 	pathPassword  = pathLogin + "/password"
 )
 
@@ -305,6 +307,8 @@ func handleAuthorizeRequest(ctx context.Context, request events.APIGatewayProxyR
 		return handleLogin(ctx, request), nil
 	case pathConsent:
 		return handleConsentPage(ctx, request), nil
+	case pathSignOut:
+		return handleSignOutPage(ctx, request), nil
 	case pathFederationStart:
 		return handleFederationStart(ctx, request)
 	case pathFederationCallback:

@@ -58,7 +58,7 @@ func handleConsentPage(ctx context.Context, request events.APIGatewayProxyReques
 		RestartURL: routeLocation(request, pathRestart),
 		// A client with no name is shown by its id, so the person never approves a blank.
 		Client:  clientData{Name: flow.ClientID},
-		Consent: &consentData{Account: accountLabel(ctx, svc, flow.Subject), Scopes: flow.GrantedScope},
+		Consent: &consentData{Username: accountLabel(ctx, svc, flow.Subject), Scopes: flow.GrantedScope},
 	}
 	client, err := clients.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil)).Get(flow.ClientID)
 	if err != nil {

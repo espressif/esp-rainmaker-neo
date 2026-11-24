@@ -25,6 +25,8 @@ harness (`API_BASE`, set by conftest from the deployment outputs), so this is a 
 that imports nothing from the test dir. A login types the password on our own sign-in page,
 which checks it against the deployment's Cognito pool.
 """
+import json
+import re
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import requests
@@ -33,6 +35,8 @@ import requests
 #: deployment config, so the client library that speaks to these endpoints owns them.
 SESSION_COOKIE = "__Host-esp_session"
 FLOW_COOKIE = "__Host-esp_flow_id"
+# The RP-Initiated Logout 1.0 s2 parameters the sign-out page sends back with its answer.
+LOGOUT_PARAMS = ("id_token_hint", "logout_hint", "client_id", "post_logout_redirect_uri", "state")
 
 #: The ESP-User API base URL. Injected by the harness (conftest sets it from the deployment
 #: outputs) rather than imported, so this module is a py_sdk client with no dependency on the
@@ -97,8 +101,13 @@ def sign_out_destination(browser, response, limit=6):
 
     The landing page belongs to the product and generally does not exist in a test account, so
     a 404 at the end is expected and irrelevant -- the URL is the answer, not the status.
+
+    A sign-out the person confirmed answers JSON with redirect_to instead of a Location, since
+    the sign-out page calls it with fetch; the chain starts there.
     """
     url = response.headers.get("Location", "")
+    if not url and response.headers.get("Content-Type", "").startswith("application/json"):
+        url = response.json().get("redirect_to", "")
     for _ in range(limit):
         if not url:
             return ""
@@ -346,6 +355,24 @@ class WebClient:
         browser._remember_session_cookie(resp)
         return resp
 
+    @staticmethod
+    def confirm_logout(browser, asked):
+        """Answer Sign out on the page a logout without a matching id_token_hint sends the browser to.
+
+        asked is that unfollowed logout response. The page posts the parameters it was opened
+        with in the body, so the server resolves the destination exactly as the GET would have; the answer is JSON carrying
+        redirect_to and the cookies, because the page calls it with fetch.
+        """
+        assert asks_to_confirm(asked), f"this logout was not put to the person: {asked.status_code} {asked.headers}"
+        page = browser.session.get(urljoin(asked.url, asked.headers["Location"]), allow_redirects=False)
+        assert page.status_code == 200, f"sign-out page: {page.status_code} {page.text[:200]}"
+        token = page_data(page.text)["logout"]["csrf_token"]
+        opened = {k: v[0] for k, v in parse_qs(urlparse(page.url).query).items() if k in LOGOUT_PARAMS}
+        resp = browser.session.post(f"{API_BASE}/user/logout/confirm",
+                                    json={**opened, "csrf_token": token}, allow_redirects=False)
+        browser._remember_session_cookie(resp)
+        return resp
+
 
 def revoke_refresh_token(client_id, refresh_token):
     """RFC 7009 revocation of a refresh token by the public client it was issued to."""
@@ -355,6 +382,19 @@ def revoke_refresh_token(client_id, refresh_token):
 def held_for_consent(authz):
     """True when the sign-in stopped at our consent screen instead of returning to the client."""
     return not authz.returned_to_client and urlparse(authz.location).path.endswith("/user/login/consent")
+
+
+def asks_to_confirm(response):
+    """True when /oauth2/logout put the sign-out to the person instead of ending the session."""
+    location = urlparse(response.headers.get("Location", "")).path
+    return response.status_code == 302 and location.endswith("/user/logout")
+
+
+def page_data(html):
+    """The description a hosted page is served with, from its esp-page-data block."""
+    found = re.search(r'<script type="application/json" id="esp-page-data">(.*?)</script>', html, re.S)
+    assert found, "the page carries no esp-page-data block"
+    return json.loads(found.group(1))
 
 
 def sids_in(listing):

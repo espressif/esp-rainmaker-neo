@@ -185,6 +185,19 @@ class AuthorizeAPI(Construct):
             api_id=api_id
         )
 
+        # The sign-out question /oauth2/logout sends a browser to; the answer goes to the sessions Lambda's /user/logout/confirm.
+        create_cfn_api_method(
+            self, "UserLogoutGetMethod", common_resources,
+            get_or_create_api_resource(
+                self, "UserLogoutResource", common_resources,
+                user_parent_id, "logout",
+                api_id=api_id
+            ),
+            "GET", self.authorize_function,
+            authorization_type="NONE",  # a browser navigation, same as /user/login
+            api_id=api_id
+        )
+
         # Unauthenticated: the start link is a button on the login page, and the HMAC-signed upstream state is the credential on the callback.
         for verb_id, parent_id, parent_label in (
             ("Start", login_parent_id, "UserLogin"),

@@ -50,7 +50,7 @@ export function App() {
     )
   }
   if (screen.kind === 'logout') {
-    return <Shell narrow title={null}><LogoutScreen account={screen.logout.account} csrfToken={screen.logout.csrf_token} /></Shell>
+    return <Shell narrow title={null}><LogoutScreen username={screen.logout.username} csrfToken={screen.logout.csrf_token} /></Shell>
   }
   if (screen.kind === 'signed-out') {
     return <Shell narrow title={null}><SignOutResult outcome="signed-out" /></Shell>
@@ -59,7 +59,7 @@ export function App() {
     return (
       <Shell narrow title={null}>
         <ConsentScreen
-          appName={page.client.name || 'This app'} logoURI={page.client.logo_uri} account={screen.consent.account}
+          appName={page.client.name || 'This app'} logoURI={page.client.logo_uri} username={screen.consent.username}
           scopes={screen.consent.scopes} flowID={page.flow_id} onEnded={setEnded}
         />
       </Shell>

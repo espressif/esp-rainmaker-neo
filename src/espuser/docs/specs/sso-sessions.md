@@ -504,7 +504,7 @@ own expiry. It is **never** deleted by a user agent timing out, a cookie lapsing
 
 | Trigger | Scope | Path |
 |---|---|---|
-| Sign-out — one user agent | every family with that `sid` | `GET /oauth2/logout` · `DELETE /v1/user/sessions/{sessionId}` |
+| Sign-out — one user agent | every family with that `sid` | `GET /oauth2/logout` · `POST /user/logout/confirm` · `DELETE /v1/user/sessions/{sessionId}` |
 | Sign-out — everywhere | every session family for the user, with or without a `sid`; offline grants stay | `DELETE /v1/user/sessions` |
 | Disconnect a connected app | every family of that client for the user | `DELETE /v1/user/connected-apps/{clientId}` |
 | Password change | every family for the user, offline grants included | `POST /v1/user/auth/password` |
@@ -537,7 +537,8 @@ Each exists because none of the others can do its job: only a browser navigation
 
 | Endpoint | Standard | Called by | Identifies by | Ends |
 |---|---|---|---|---|
-| `GET /oauth2/logout` | OIDC RP-Initiated Logout 1.0 | a browser app, as a top-level navigation | the session cookie | this browser: its user agent row and every family under its `sid`, then the upstream provider's session |
+| `GET /oauth2/logout` | OIDC RP-Initiated Logout 1.0 | a browser app, as a top-level navigation | the session cookie, ended at once only with an `id_token_hint` minted under it; otherwise the person is asked first | this browser: its user agent row and every family under its `sid`, then the upstream provider's session |
+| `POST /user/logout/confirm` | — | the sign-out page, on the person's yes | the session cookie and its `csrf_token` | the same as `GET /oauth2/logout` |
 | `GET /oauth2/logout/done` | — | the upstream provider, handing the browser back | the `__Host-esp_logout_to` memo | nothing; forwards to the validated `post_logout_redirect_uri` |
 | `DELETE /v1/user/sessions/{sessionId}` | — | a signed-in user agent list | `sid` | one user agent and its families, from anywhere |
 | `DELETE /v1/user/sessions` | — | "sign out everywhere" | the access token's subject | every user agent and session family of the person; offline grants stay |
@@ -549,7 +550,7 @@ Which to call:
 
 | Caller | Endpoint |
 |---|---|
-| A web app signing the person out of this browser | `GET /oauth2/logout` |
+| A web app signing the person out of this browser | `GET /oauth2/logout` with the `id_token_hint` it holds; without one the person is asked first |
 | A native app or SDK ending its own login | `POST /oauth2/revoke` |
 | A user agent list | `DELETE /v1/user/sessions/{sessionId}`, `DELETE /v1/user/sessions` |
 | A connected apps list | `DELETE /v1/user/connected-apps/{clientId}` |
@@ -569,21 +570,25 @@ browser navigation, and none survives a cross-origin `fetch()`:
 1. `__Host-esp_session` is `SameSite=Lax`, so it rides top-level navigations **only**. A cross-site
    fetch would not carry it and the row could not be found.
 2. `Set-Cookie` from a cross-origin fetch response will not reliably clear it.
-3. Step 4 below has to send the browser onward to the upstream. Only a navigation can.
+3. Step 6 below has to send the browser onward to the upstream. Only a navigation can.
+
+The same navigation is open to any page on the web, and the cookie rides it, so the URL alone cannot decide a sign-out. The session ends at once only when the request shows it comes from an application signed in through this very session: an `id_token_hint` that verifies, is an ID token (`token_use` `id`; an access token carries the same `sid` but reaches every API the app calls), and whose `sid` and `sub` are the cookie's. Anything less with a live session is put to the person: §2 says the OP MUST ask when no hint is given or it does not belong to the current session, and §6 names requests without a valid hint as a means of denial of service.
 
 In order:
 
-1. Resolve the user agent from the cookie — this browser holds the secret, so no index is used.
-2. Delete every refresh family created under that `sid`. **Families first:** clearing the cookie and
+1. Resolve the destination (below) and the user agent from the cookie — this browser holds the secret, so no index is used. The row is read without rolling its retention, because this response never re-issues the cookie. Nothing is destroyed before both are known, so a rejected redirect never leaves a half-ended session behind. A hint that cannot be checked at all (the signing keys are unreadable), or a session row that cannot be read, answers `500 server_error` and ends nothing: an unreadable session is not an absent one.
+2. No live user agent: nothing to end. Clear a cookie that no longer resolves and redirect to the validated destination.
+3. Anything but a hint that verifies and names this user agent's `sid` and subject: redirect to the sign-out page (`/user/logout`, relative so the stage or base path survives) with the §2 parameters, touching no cookie. See [The sign-out question](#the-sign-out-question).
+4. Delete every refresh family created under that `sid`. **Families first:** clearing the cookie and
    then failing would leave the person signed out of the login but still signed in to everything it
    opened, which is the worse half to leave standing.
-3. Delete the row and clear the cookie.
-4. Redirect to the provider row's `end_session_url`, if it has one, and finally to the **validated** `post_logout_redirect_uri`. With no validated value, the final step is `200 Signed out.` on the issuer.
+5. Delete the row and clear the cookie.
+6. Redirect to the provider row's `end_session_url`, if it has one, and finally to the **validated** `post_logout_redirect_uri`. With no validated value, the final step is our own `/user/logout` with no query, whose page says the browser is signed out.
 
 This endpoint can only ever end a **cookie-bearing** user agent — it is the cookie that names the row.
 A cookie-less user agent is ended from the user agent list, which is correct: signing out of a browser must
 not sign out a phone. A first-party user agent has no upstream session to end, so its provider row
-carries no `end_session_url` and step 4 goes straight to the destination.
+carries no `end_session_url` and step 6 goes straight to the destination.
 
 `post_logout_redirect_uri` is matched exactly against the client's registered
 `post_logout_redirect_uris`, the same rule as `redirect_uri` and for the same reason: an endpoint
@@ -594,26 +599,35 @@ out* over a cosmetic problem would leave the session alive.
 The client is `client_id`, or, when that is absent, the audience of a verified `id_token_hint`. When both are sent and `client_id` is not the hint's audience, the return URL is ignored: RP-Initiated Logout 1.0 §2 requires the two to agree, and a mismatch means a caller is quoting another client's registered URL.
 
 An `id_token_hint` is a **hint**, never a credential. The cookie is what authorizes the logout; the
-hint only narrows which user agent the RP believes it is ending. Four outcomes:
+hint is what lets it happen without asking. With a live user agent, four outcomes:
 
 | Hint | Outcome |
 |---|---|
-| absent | sign out the cookie's user agent. RP-Initiated Logout marks it RECOMMENDED, not required |
-| verifies, names this user agent's subject | sign out |
-| verifies, names somebody else | **end nothing.** The one case a veto is for |
-| does not verify at all | sign out anyway, and log a warning |
+| verifies, names this user agent's subject and `sid` | sign out at once |
+| absent | ask the person. RP-Initiated Logout marks the hint RECOMMENDED, not required, so an app that omits it still signs out, one click later |
+| verifies, names another `sid`, none, or somebody else | ask the person: the token belongs to another session, an older one, or another person, which §2 calls suspect; nothing ends, the cookie included, until they answer |
+| does not verify | ask the person, and never return the browser to the client afterwards: a broken hint is an error in the request, and §4 forbids redirecting to the RP after one |
+
+With no live user agent nothing is asked, because nothing would end; a hint that does not verify still forfeits the return to the client.
 
 **Expiry is deliberately not checked.** An ID token lives an hour and a browser tab outlives it, so
 by the time somebody clicks "sign out" the token they were last issued is routinely stale — that is
-the normal case, not an attack. Checking `exp` here turned the hint into a second authentication and
-made sign-out a silent no-op: cookie cleared, browser redirected, row and every refresh family left
-standing. Signature and issuer are still verified, which is all a hint is asked to establish: that
-we minted it.
+the normal case, not an attack. Checking `exp` would send nearly every real sign-out through the question, when a stale token still proves what a fresh one does. Signature and issuer are verified, which is all a hint is asked to establish: that we minted it, and for which session.
 
-The last row follows from the same reasoning. Refusing on an unverifiable hint buys nothing, because
-a caller who wants no hint checked can simply omit the parameter — so a garbage hint grants no
-capability an absent one does not, while refusing costs every real user a sign-out that appeared to
-work and did nothing.
+### The sign-out question
+
+`GET /user/logout` is a page of the sign-in app, served by the authorize Lambda like `/user/login` and `/user/login/consent`. It reads the cookie's row again, without rolling it; with no live session there is nothing to ask, and it sends the browser back to `/oauth2/logout` with the same query, or, with no query, says the browser is signed out. A row it cannot read is a `500` error page, never that redirect: `/oauth2/logout` reads the row on its own, and if that read succeeded the browser would bounce between the two. Otherwise it draws *Sign out?* with the account it would end and a `csrf_token`, and keeps the query in its own URL.
+
+- **Sign out** posts the parameters the page was opened with, and `csrf_token`, as JSON to `POST /user/logout/confirm`, so `id_token_hint` stays out of that request's URL. The sessions Lambda resolves the destination from it exactly as the `GET` does, checks the token and runs steps 4 to 6 whoever the hint names, answering `{"redirect_to": …}` with the cookies rather than a redirect because the page calls it with `fetch`. An empty `redirect_to` (no destination, or a hint that did not verify) and the page says the person is signed out.
+- **Cancel** sends nothing. The session stays and the page says so ("You're still signed in"); it does not go back in the browser's history, which can replay an app's old callback URL. It never goes on to the client's `post_logout_redirect_uri`: that URL means "after a sign-out", and an app that correlates `state` would take the arrival as one.
+
+What stops another page answering for the person:
+
+| Attacker | What stands in the way |
+|---|---|
+| Another site's `POST` to `/user/logout/confirm` | `SameSite=Lax`: a cross-site `POST` carries no session cookie, so there is nothing to end. The answer then sets no cookie, because a top-level cross-site `POST` may still set or clear a Lax cookie (RFC 6265bis §5.7) |
+| A page on another host of the same site, whose `POST` does carry the cookie | `csrf_token` is an HMAC-SHA256 keyed by the cookie value, which only the browser holds (the server stores its hash). That page can read neither the cookie (`HttpOnly`) nor the sign-out page (same-origin policy), so it cannot produce the token, and the token stops matching once the cookie rotates |
+| A page framing the question to borrow a click | `frame-ancestors 'none'` and `X-Frame-Options: DENY` |
 
 ### The upstream hop: one registered URL, however many products
 
@@ -626,7 +640,8 @@ So after our row dies, the browser goes to the provider's end-session endpoint. 
 handed is **our** return URL, never the calling product's:
 
 ```
-  app ──▶ /oauth2/logout?client_id=…&post_logout_redirect_uri=https://test1/bye
+  app ──▶ /oauth2/logout?id_token_hint=…&post_logout_redirect_uri=https://test1/bye
+            │  (or the person's yes on /user/logout, through POST /user/logout/confirm)
             │  validate the return URL, kill families + row,
             │  clear __Host-esp_session, remember the destination in __Host-esp_logout_to
             ▼
@@ -646,9 +661,9 @@ The memo is a cookie rather than a query parameter because a provider matches th
 and `HttpOnly` so only this server can write it, `SameSite=Lax` so it survives the provider's
 hand-back (a top-level navigation), and short-lived so a browser abandoned mid-chain forgets it.
 
-`/oauth2/logout/done` redirects to the caller's `post_logout_redirect_uri`, carried in the memo, and never decides. That value was matched against the client's registered `post_logout_redirect_uris` before the row was destroyed; the endpoint re-checks only that it is an absolute URI naming a place rather than code, because anything that forwards a browser is one mistake from being an open redirect wearing the issuer's hostname. With no memo, or one that fails that check, it answers `200 Signed out.` instead of redirecting.
+`/oauth2/logout/done` redirects to the caller's `post_logout_redirect_uri`, carried in the memo, and never decides. That value was matched against the client's registered `post_logout_redirect_uris` before the row was destroyed; the endpoint re-checks only that it is an absolute URI naming a place rather than code, because anything that forwards a browser is one mistake from being an open redirect wearing the issuer's hostname. With no memo, or one that fails that check, it redirects to `/user/logout`, whose page says the browser is signed out.
 
-Absent an `end_session_url` on the provider row, none of this happens: `/oauth2/logout` redirects straight to the validated `post_logout_redirect_uri`, or answers `200 Signed out.` when none was sent or it did not match.
+Absent an `end_session_url` on the provider row, none of this happens: `/oauth2/logout` redirects straight to the validated `post_logout_redirect_uri`, or, when none was sent or it did not match, to `/user/logout` with no query, whose page says the browser is signed out. A browser with no session reaching `/user/logout` with a sign-out's parameters goes back to `/oauth2/logout` instead, which still owes the app its return; the bare redirect cannot loop. `/user/logout/confirm` answers the same destination as `redirect_to`, empty when there is none.
 
 ### The upstream hop, without a provider branch
 
@@ -681,6 +696,7 @@ Absent means no hop: a deployment that never fills these behaves exactly as it d
 | A browser timeout signing applications out | It cannot: families are deleted only by the deliberate acts listed above |
 | A third-party client minting a user agent | Only a human login establishes one; `client_credentials` never does, and the native path is gated on the client's `allow_direct_token` |
 | A relying party unable to demand fresh authentication | `prompt=login` and `max_age` are honoured before any shortcut is considered |
+| Another site signing a person out (logout CSRF) | Only an `id_token_hint` minted under the cookie's own session ends it unasked; anything else is the person's decision on `/user/logout`, whose answer needs the cookie and its `csrf_token`. See [The sign-out question](#the-sign-out-question) |
 
 ## Known limitations
 
@@ -705,10 +721,6 @@ Absent means no hop: a deployment that never fills these behaves exactly as it d
   expires and its refresh fails; nothing notifies it sooner.
 - **Access tokens outlive revocation.** They are verified by signature, so a user agent ended now does
   not invalidate an access token already issued; the window is that token's remaining lifetime.
-- **`GET /oauth2/logout` is not CSRF-protected.** It destroys state on a GET, so any site can force
-  a sign-out by navigating a browser to it. Accepted: the cookie is `SameSite=Lax` so only a
-  top-level navigation carries it, and the damage is a lost session rather than a stolen one.
-  RP-Initiated Logout says the OP *SHOULD* confirm with the user; we do not.
 
 ## Migration
 

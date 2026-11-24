@@ -2171,14 +2171,17 @@ def provision_end_user():
         return username
 
     yield _make
+    remove_end_users(END_USER_POOL_ID, made)
 
-    from boto3.dynamodb.conditions import Key
+
+def remove_end_users(pool_id, people):
+    """Delete each (username, email, phone) from the Cognito pool and the account rows their sign-ins created."""
     cognito = boto3.client('cognito-idp', region_name=REGION)
     table = boto3.resource('dynamodb', region_name=REGION).Table('espuser-user-details')
     user_ids = set()
-    for username, email, phone in made:
+    for username, email, phone in people:
         try:
-            cognito.admin_delete_user(UserPoolId=END_USER_POOL_ID, Username=username)
+            cognito.admin_delete_user(UserPoolId=pool_id, Username=username)
         except Exception:  # noqa: BLE001
             pass
         # Ids are opaque, so the row is found through the contact indexes rather than computed.

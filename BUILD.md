@@ -93,6 +93,11 @@ make hosted-ui-build    # just the bundle
 make hosted-ui-test     # its unit tests, also run by make test
 ```
 
+In a browser the page is covered by `make itest` like everything else: the Playwright tests
+live in `test/itest/test_user_login_ui.py` beside the rest of the login journey, and register
+their own client and person through the usual fixtures. The sign-up and password-reset journey
+needs codes Cognito really mails, so it runs only with `make itest ITEST_MARKERS=cognito_mail`.
+
 Both the build and the deploy run in parallel by default: the lambda binaries build across
 all cores, and stack groups that do not depend on each other (alexa, smartthings, gva, ...)
 deploy at the same time, as do the three regions each of alexa and smartthings ships to.
