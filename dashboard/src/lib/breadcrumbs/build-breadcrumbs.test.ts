@@ -20,7 +20,7 @@ const labels: Record<string, string> = {
 };
 
 const t = ((key: string, fallback?: string) =>
-  labels[key] ?? fallback ?? key) as TFunction;
+  labels[key] ?? fallback ?? key) as unknown as TFunction;
 
 const testRoutes: RouteConfig[] = [
   {
