@@ -95,7 +95,7 @@ def sign_out_destination(browser, response, limit=6):
 
     Sign-out is a chain, not one redirect. When the deployment configures an upstream
     end-session endpoint the browser goes to the provider first, comes back to
-    /oauth2/logout/done, and only then reaches the product's own page; with no upstream
+    /oauth2/federation/logout/callback, and only then reaches the product's own page; with no upstream
     configured it goes straight there. Asserting the FIRST Location pins whichever shape a
     deployment happens to have, and would fail the day an operator configures the other one.
 
@@ -368,7 +368,7 @@ class WebClient:
         assert page.status_code == 200, f"sign-out page: {page.status_code} {page.text[:200]}"
         token = page_data(page.text)["logout"]["csrf_token"]
         opened = {k: v[0] for k, v in parse_qs(urlparse(page.url).query).items() if k in LOGOUT_PARAMS}
-        resp = browser.session.post(f"{API_BASE}/user/logout/confirm",
+        resp = browser.session.post(f"{API_BASE}/user/logout",
                                     json={**opened, "csrf_token": token}, allow_redirects=False)
         browser._remember_session_cookie(resp)
         return resp

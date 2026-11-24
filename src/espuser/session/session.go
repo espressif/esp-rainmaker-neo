@@ -281,8 +281,8 @@ func (s *Service) FindBySID(userID, sid string) (*sessions_db.SessionEntry, erro
 	return sessions_db.NewSessionsDB(s.ctx).GetByUserAndSID(userID, sid)
 }
 
-// DeleteAppSession ends the user's cookie-less app row named sid and leaves a browser row alone, because a browser's cookie can still sign in.
-func (s *Service) DeleteAppSession(userID, sid string) error {
+// DeleteNativeAppSession ends the user's cookie-less app row named sid and leaves a browser row alone, because a browser's cookie can still sign in.
+func (s *Service) DeleteNativeAppSession(userID, sid string) error {
 	db := sessions_db.NewSessionsDB(s.ctx)
 	row, err := db.GetByUserAndSID(userID, sid)
 	if err != nil {

@@ -36,10 +36,16 @@ from py_sdk.espuser_oauth import (
     sids_in,
     sign_out_destination,
 )
+from py_sdk.test_user import User
 from test.itest.conftest import (
     API_GATEWAY_URL,
+    END_USER_POOL_ID,
+    ESP_USER_CLIENT_ID,
     ESPUSER_RESOURCE,
+    IDENTITY_POOL_ID,
+    IOT_ENDPOINT,
     NEO_RESOURCE,
+    REGION,
     SESSION_COOKIE,
     SESSIONS_SCOPE,
     USER_API_GATEWAY_URL,
@@ -76,6 +82,12 @@ def apps(register_espuser_client):
 def signed_in(app, browser, person, **extra):
     """Sign in and return the token set, so a test reads as a sequence of logins."""
     return app.tokens(app.sign_in(browser, person, **extra))
+
+
+def password_api_user(person, password=None):
+    """The person signing in through the Home app's password API (POST /v1/user/auth/token), as py_sdk's User does."""
+    return User(person.email, password or person.password, REGION, IDENTITY_POOL_ID, API_GATEWAY_URL, USER_API_GATEWAY_URL,
+                IOT_ENDPOINT, end_user_pool_id=END_USER_POOL_ID, user_api_resource=ESPUSER_RESOURCE)
 
 
 def bearer_challenge(response):
@@ -659,7 +671,7 @@ def test_sso_logout_without_a_hint_ends_nothing_until_the_person_confirms(apps, 
 
     page = browser.session.get(urljoin(asked.url, asked.headers["Location"]), allow_redirects=False)
     token = page_data(page.text)["logout"]["csrf_token"]
-    forged = Browser("another site").session.post(f"{USER_API_GATEWAY_URL}/user/logout/confirm",
+    forged = Browser("another site").session.post(f"{USER_API_GATEWAY_URL}/user/logout",
                                                    json={"csrf_token": token}, allow_redirects=False)
     assert "Set-Cookie" not in forged.headers, f"a cookie-less answer must touch no cookie: {forged.headers}"
     assert first.still_signed_in(one["refresh_token"]), "a POST without the session cookie ended the session"
@@ -803,29 +815,26 @@ def test_sso_a_password_change_ends_every_session_and_connected_app(apps, regist
     """A changed password signs out everywhere, the session that changed it included, and disconnects every connected app, so the person signs in again with the new password."""
     plain, _ = apps
     offline = offline_client(register_espuser_client, "offline-password")
-    caller = requests.post(f"{USER_API_GATEWAY_URL}/v1/user/auth/token", timeout=30,
-                           json={"username": espuser_person.email, "password": espuser_person.password})
-    assert caller.status_code == 200, f"{caller.status_code} {caller.text[:200]}"
+    caller = password_api_user(espuser_person)
+    signed = caller.signin()
+    assert signed.status_code == 200 and caller.refresh_token, f"{signed.status_code} {signed.text[:200]}"
     browser = Browser()
     browser_tokens = signed_in(plain, browser, espuser_person)
     offline_tokens = offline.tokens(offline.sign_in_allowing(browser, espuser_person))
 
     new_password = generate_test_password()
-    changed = requests.post(f"{USER_API_GATEWAY_URL}/v1/user/auth/password", timeout=30, json={
-        "access_token": caller.json()["access_token"], "old_password": espuser_person.password,
-        "new_password": new_password,
-    })
+    changed = caller.change_password(espuser_person.password, new_password)
     assert changed.status_code == 200, f"{changed.status_code} {changed.text[:200]}"
 
-    renewed = requests.post(f"{USER_API_GATEWAY_URL}/v1/user/auth/token/refresh", timeout=30,
-                            json={"refresh_token": caller.json()["refresh_token"]})
+    renewed = caller.oauth_token_refresh(caller.refresh_token, ESP_USER_CLIENT_ID)
     assert renewed.status_code != 200, f"the caller is signed out too: {renewed.status_code} {renewed.text[:200]}"
     assert not plain.still_signed_in(browser_tokens["refresh_token"]), "the browser's login is signed out"
     assert plain.authorize(browser).needs_login, "and the browser's session is gone, so it must sign in again"
     assert not offline.still_signed_in(offline_tokens["refresh_token"]), "the connected app is disconnected"
-    again = requests.post(f"{USER_API_GATEWAY_URL}/v1/user/auth/token", timeout=30,
-                          json={"username": espuser_person.email, "password": new_password})
-    assert again.status_code == 200, f"the new password signs in: {again.status_code} {again.text[:200]}"
+    again = password_api_user(espuser_person, new_password)
+    signed_again = again.signin()
+    assert signed_again.status_code == 200 and again.access_token, \
+        f"the new password signs in: {signed_again.status_code} {signed_again.text[:200]}"
 
 
 def native_app(register_espuser_client, name):
@@ -855,23 +864,60 @@ def test_sso_a_native_app_stays_signed_in_when_the_browser_signs_out(apps, regis
     assert app_sid in sids_in(WebClient.sessions(native_tokens["access_token"]).json()), "its session is still listed"
 
 
-def test_sso_an_app_signing_out_ends_only_its_own_session(register_espuser_client, espuser_person):
-    """One app revoking its own login ends that app and its session; the other app and the browser stay signed in."""
-    one = native_app(register_espuser_client, "native-one")
-    two = native_app(register_espuser_client, "native-two")
-    browser = Browser()
-    one_tokens = signed_in(one, browser, espuser_person)
-    two_tokens = signed_in(two, browser, espuser_person)
-    one_sid = decode_jwt_claims(one_tokens["id_token"])["sid"]
+def test_revoke_refuses_a_token_issued_to_another_client(apps, espuser_person):
+    """RFC 7009 s2.1: only the client a refresh token was issued to may revoke it, so one app cannot sign the person out of another."""
+    owner, other = apps
+    tokens = signed_in(owner, Browser("itest-revoke-owner"), espuser_person)
 
-    revoked = one.revoke(one_tokens["refresh_token"])
+    refused = other.revoke(tokens["refresh_token"])
+    assert refused.status_code == 400, refused.text
+    assert refused.json()["error"] == "invalid_grant", refused.text
+    assert owner.still_signed_in(tokens["refresh_token"]), "another client's revoke must leave the login working"
+
+
+@pytest.mark.parametrize("app_sign_in", ["password_api", "native_code_flow"])
+def test_sso_an_app_revoking_its_login_ends_only_its_own_session(app_sign_in, apps, register_espuser_client, espuser_person):
+    """An app revoking its own login (RFC 7009) ends that login and its app session; the browser and another app stay signed in, so the browser signs in again without a password."""
+    web, _ = apps
+    browser = Browser()
+    web_tokens = signed_in(web, browser, espuser_person)
+    other = native_app(register_espuser_client, f"native-other-{app_sign_in}")
+    other_tokens = signed_in(other, browser, espuser_person)
+    if app_sign_in == "password_api":
+        app = password_api_user(espuser_person)
+        signed = app.signin()
+        assert signed.status_code == 200 and app.refresh_token, f"{signed.status_code} {signed.text[:200]}"
+        app_access, app_refresh = app.access_token, app.refresh_token
+
+        def revoke():
+            return app.oauth_revoke(app_refresh)
+
+        def app_still_signed_in():
+            return app.oauth_token_refresh(app_refresh, ESP_USER_CLIENT_ID).status_code == 200
+    else:
+        native = native_app(register_espuser_client, "native-revoking")
+        native_tokens = signed_in(native, browser, espuser_person)
+        app_access, app_refresh = native_tokens["access_token"], native_tokens["refresh_token"]
+
+        def revoke():
+            return native.revoke(app_refresh)
+
+        def app_still_signed_in():
+            return native.still_signed_in(app_refresh)
+    browser_sid = decode_jwt_claims(web_tokens["id_token"])["sid"]
+    app_sid = decode_jwt_claims(app_access)["sid"]
+    assert app_sid in sids_in(WebClient.sessions(web_tokens["access_token"]).json()), "the app's session is listed"
+
+    revoked = revoke()
     assert revoked.status_code == 200, f"{revoked.status_code} {revoked.text[:200]}"
 
-    assert not one.still_signed_in(one_tokens["refresh_token"]), "the app that signed out is signed out"
-    assert two.still_signed_in(two_tokens["refresh_token"]), "the other app is untouched"
-    listed = sids_in(WebClient.sessions(two_tokens["access_token"]).json())
-    assert one_sid not in listed and decode_jwt_claims(two_tokens["id_token"])["sid"] in listed, f"only its session went: {listed}"
-    assert one.authorize(browser).code, "the browser is still signed in, so signing in again needs no password"
+    assert not app_still_signed_in(), "the app that signed out is signed out"
+    listed = sids_in(WebClient.sessions(web_tokens["access_token"]).json())
+    assert app_sid not in listed, f"its app session leaves the list: {listed}"
+    assert browser_sid in listed, f"the browser's session stays: {listed}"
+    assert web.still_signed_in(web_tokens["refresh_token"]), "the browser's login still refreshes"
+    assert other.still_signed_in(other_tokens["refresh_token"]), "another app is untouched"
+    assert web.authorize(browser).code, "the browser is still signed in, so signing in again needs no password"
 
 
 def test_sso_sign_out_everywhere_ends_native_app_sessions_and_keeps_connected_apps(apps, register_espuser_client, espuser_person):
@@ -937,7 +983,6 @@ def test_sso_disconnecting_a_native_app_ends_its_own_session_too(apps, register_
     assert web.still_signed_in(web_tokens["refresh_token"]), "the browser stays signed in"
 
 
-@pytest.mark.cognito_mail
 def test_sso_a_password_reset_ends_every_session_and_keeps_connected_apps(
         apps, register_espuser_client, provision_end_user, require_mailosaur):
     """A reset signs out every browser and app, and a connected app stays, because forgetting a password says nothing about who else holds it."""
@@ -956,12 +1001,12 @@ def test_sso_a_password_reset_ends_every_session_and_keeps_connected_apps(
     native_tokens = signed_in(native, browser, person)
 
     started = time.time()
-    asked = requests.post(f"{USER_API_GATEWAY_URL}/v1/user/auth/password-recovery", timeout=30, json={"username": email})
+    resetter = password_api_user(person)
+    asked = resetter.forgot_password(email)
     assert asked.status_code == 200, f"{asked.status_code} {asked.text[:200]}"
     code = get_verification_code_from_server(recipient_email=email, since_timestamp=started)
     assert code, "no recovery code arrived"
-    reset = requests.post(f"{USER_API_GATEWAY_URL}/v1/user/auth/password-recovery/confirmation", timeout=30,
-                          json={"username": email, "code": code, "new_password": generate_test_password()})
+    reset = resetter.confirm_forgot_password(email, code, generate_test_password())
     assert reset.status_code == 200, f"{reset.status_code} {reset.text[:200]}"
 
     assert not plain.still_signed_in(browser_tokens["refresh_token"]), "the browser's login is signed out"

@@ -53,7 +53,7 @@ provider-type branch in code.
 **Register with the provider — exactly one URL, forever:**
 
 ```
-{issuer}/oauth2/logout/done
+{issuer}/oauth2/federation/logout/callback
 ```
 
 That is this authorization server's sign-out return point, and it is the whole list. It does
@@ -70,7 +70,7 @@ registered refuses the hop, and sign-out silently stops ending the upstream sess
 
 1. `end_session_url` on the row — or leave unset and accept that only our session ends.
 2. `end_session_redirect_param`, if the provider does not use the OIDC-standard name.
-3. `{issuer}/oauth2/logout/done` registered with the provider. Once.
+3. `{issuer}/oauth2/federation/logout/callback` registered with the provider. Once.
 
 Then verify the way that matters: sign in, sign out, sign in again — the provider must ask for
 a password. If it does not, one of the three is missing.

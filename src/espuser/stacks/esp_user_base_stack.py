@@ -274,7 +274,7 @@ class CreateEndUserPoolResources(Construct):
     can drive sign-up or password reset against the pool.
     """
     def __init__(self, scope: Construct, id: str, *, federation_callback_url: str,
-                 logout_done_url: str, **kwargs) -> None:
+                 federation_logout_callback_url: str, **kwargs) -> None:
         super().__init__(scope, id, **kwargs)
         region = Stack.of(scope).region
 
@@ -312,7 +312,7 @@ class CreateEndUserPoolResources(Construct):
                 # UpdateUserPoolClient replaces a client's whole configuration: a manual
                 # edit that forgets one field silently drops the callback URL and every
                 # login fails with redirect_mismatch.
-                logout_urls=[logout_done_url],
+                logout_urls=[federation_logout_callback_url],
             ),
             generate_secret=True,
             refresh_token_validity=Duration.days(3650),
@@ -455,11 +455,11 @@ class EspUserBaseStack(Stack):
         # custom domain is mapped. Federated sign-in breaks if this host is not the one the IdPs
         # are registered against, so it has to be the resolved hostname, not the execute-api one.
         federation_callback_url = f"{esp_user_api.url}/oauth2/federation/callback"
-        logout_done_url = f"{esp_user_api.url}/oauth2/logout/done"
+        federation_logout_callback_url = f"{esp_user_api.url}/oauth2/federation/logout/callback"
         self.end_user_pool = CreateEndUserPoolResources(
             self, "CreateEndUserPoolResources",
             federation_callback_url=federation_callback_url,
-            logout_done_url=logout_done_url,
+            federation_logout_callback_url=federation_logout_callback_url,
         )
         self._publish_end_user_pool_params()
 

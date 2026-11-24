@@ -95,7 +95,7 @@ describe('where the page sends it', () => {
 
   it('answers sign-out from the sign-out page', async () => {
     Object.assign(globalThis, { window: { location: { search: '' } } })
-    assert.equal(await landed('/user/logout', () => api.confirmLogout('csrf')), '/prod/user/logout/confirm')
+    assert.equal(await landed('/user/logout', () => api.confirmLogout('csrf')), '/prod/user/logout')
   })
 })
 

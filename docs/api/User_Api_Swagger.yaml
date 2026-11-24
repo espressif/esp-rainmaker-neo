@@ -868,75 +868,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/OAuthError"
 
-  /user/logout/confirm:
-    post:
-      summary: The person's answer to the sign-out question
-      description: Sent only by the `/user/logout` page. Ends this browser's session and answers where to go next.
-      tags:
-        - Sign-in Pages
-      security: []
-      parameters:
-        - name: __Host-esp_session
-          in: cookie
-          required: false
-          schema:
-            type: string
-          description: The session to end; absent or ended means nothing to end.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [csrf_token]
-              properties:
-                csrf_token:
-                  type: string
-                  description: The `logout.csrf_token` the page was served with.
-                client_id: { type: string }
-                post_logout_redirect_uri: { type: string, format: uri }
-                id_token_hint: { type: string }
-                logout_hint: { type: string }
-                state: { type: string }
-            example:
-              csrf_token: 9jC0b2xWm1TQ2v8Yb1u4XwQx0b4c3kq7oR2sVn6pZ1E
-              client_id: esp-account-dashboard
-              post_logout_redirect_uri: https://accounts.example.com/signed-out
-              state: xyz123
-      responses:
-        "200":
-          description: Signed out, or nothing to end; `redirect_to` is the validated destination, empty when there is none.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/RedirectResponse"
-              example:
-                redirect_to: https://accounts.example.com/signed-out?state=xyz123
-        "400":
-          description: "`invalid_request`: the body cannot be read."
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/OAuthError"
-        "403":
-          description: "`invalid_request`: `csrf_token` is not this session's; nothing ends."
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/OAuthError"
-        "405":
-          description: Any method but `POST`.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/OAuthError"
-        "500":
-          description: "`server_error`: the hint or the session could not be read, or its tokens could not be deleted; the session is left intact."
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/OAuthError"
-
   /user/login:
     get:
       summary: The sign-in page
@@ -1199,7 +1130,7 @@ paths:
     get:
       summary: The sign-out question
       description: |
-        Asks the person to confirm a sign-out `/oauth2/logout` did not end on its own; the answer goes to `POST /user/logout/confirm`.
+        Asks the person to confirm a sign-out `/oauth2/logout` did not end on its own; the answer goes to `POST /user/logout`.
       tags:
         - Sign-in Pages
       security: []
@@ -1246,8 +1177,69 @@ paths:
             text/html:
               schema:
                 type: string
+    post:
+      summary: The person's answer to the sign-out question
+      description: Sent only by the `/user/logout` page. Ends this browser's session and answers where to go next.
+      tags:
+        - Sign-in Pages
+      security: []
+      parameters:
+        - name: __Host-esp_session
+          in: cookie
+          required: false
+          schema:
+            type: string
+          description: The session to end; absent or ended means nothing to end.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [csrf_token]
+              properties:
+                csrf_token:
+                  type: string
+                  description: The `logout.csrf_token` the page was served with.
+                client_id: { type: string }
+                post_logout_redirect_uri: { type: string, format: uri }
+                id_token_hint: { type: string }
+                logout_hint: { type: string }
+                state: { type: string }
+            example:
+              csrf_token: 9jC0b2xWm1TQ2v8Yb1u4XwQx0b4c3kq7oR2sVn6pZ1E
+              client_id: esp-account-dashboard
+              post_logout_redirect_uri: https://accounts.example.com/signed-out
+              state: xyz123
+      responses:
+        "200":
+          description: Signed out, or nothing to end; `redirect_to` is the validated destination, empty when there is none.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RedirectResponse"
+              example:
+                redirect_to: https://accounts.example.com/signed-out?state=xyz123
+        "400":
+          description: "`invalid_request`: the body cannot be read."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+        "403":
+          description: "`invalid_request`: `csrf_token` is not this session's; nothing ends."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+        "500":
+          description: "`server_error`: the hint or the session could not be read, or its tokens could not be deleted; the session is left intact."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
 
-  /oauth2/logout/done:
+  /oauth2/federation/logout/callback:
     get:
       summary: Return point for the upstream provider's sign-out
       description: |

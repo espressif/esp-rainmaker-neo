@@ -37,7 +37,7 @@ func (s *Service) RevokeFamily(clientID, refreshToken string) error {
 	if err != nil || revoked == nil {
 		return err
 	}
-	s.endEmptyAppSessions(revoked.UserID, []refresh_tokens_db.FamilyEntry{*revoked})
+	s.endNativeAppSessionsWithoutLogins(revoked.UserID, []refresh_tokens_db.FamilyEntry{*revoked})
 	return nil
 }
 
@@ -62,7 +62,7 @@ func (s *Service) DisconnectClient(userID, clientID string) error {
 	if err := s.refreshTokens.DeleteFamilies(families); err != nil {
 		return err
 	}
-	s.endEmptyAppSessions(userID, families)
+	s.endNativeAppSessionsWithoutLogins(userID, families)
 	return nil
 }
 
@@ -90,8 +90,8 @@ func (s *Service) EndAllSessionsAndConnectedApps(userID string) error {
 	return s.sessions.DeleteAllSessions(userID)
 }
 
-// endEmptyAppSessions removes each app session the ended logins hung off once no login of the user carries its sid; a browser session stays, because its cookie can still sign in. Failures are logged, not returned: the logins are already gone.
-func (s *Service) endEmptyAppSessions(userID string, ended []refresh_tokens_db.FamilyEntry) {
+// endNativeAppSessionsWithoutLogins removes each app session the ended logins hung off once no login of the user carries its sid; a browser session stays, because its cookie can still sign in. Failures are logged, not returned: the logins are already gone.
+func (s *Service) endNativeAppSessionsWithoutLogins(userID string, ended []refresh_tokens_db.FamilyEntry) {
 	sids := map[string]bool{}
 	for i := range ended {
 		if ended[i].SID != "" {
@@ -117,7 +117,7 @@ func (s *Service) endEmptyAppSessions(userID string, ended []refresh_tokens_db.F
 		}
 	}
 	for sid := range sids {
-		if err := s.sessions.DeleteAppSession(userID, sid); err != nil && !errors.Is(err, sessions_db.ErrSessionNotFound) {
+		if err := s.sessions.DeleteNativeAppSession(userID, sid); err != nil && !errors.Is(err, sessions_db.ErrSessionNotFound) {
 			rlog.Warn(s.ctx.Context).Err(err).Str("sid", sid).Msg("signout: could not remove an app session left with no login")
 		}
 	}

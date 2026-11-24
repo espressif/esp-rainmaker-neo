@@ -379,14 +379,14 @@ func establishFirstPartyUserAgent(rmngCtx *rmngctx.RmngContext, userID string, l
 	return sid, setCookie
 }
 
-// Requester is what a token request says about the device redeeming a code, recorded on a native app's own session.
-type Requester struct {
+// UserAgentInfo is the user agent and IP address of the token request that redeems a code, stored on a native app's own session row as the session table's user_agent and ip_address.
+type UserAgentInfo struct {
 	UserAgent string
 	IPAddress string
 }
 
 // ExchangeAuthCode redeems a code: verify client/redirect/PKCE, pick the access token's resource, consume (single-use), mint. Every failure but the resource's and a storage failure is ErrInvalidGrant (no oracle).
-func (s *OAuthUserAuthService) ExchangeAuthCode(ctx context.Context, client *clients.ClientResponse, code, verifier, redirectURI, resource string, requester Requester) (*UserTokens, error) {
+func (s *OAuthUserAuthService) ExchangeAuthCode(ctx context.Context, client *clients.ClientResponse, code, verifier, redirectURI, resource string, userAgent UserAgentInfo) (*UserTokens, error) {
 	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, nil)
 	flowsDB := auth_flows_db.NewAuthFlowsDB(rmngCtx)
 
@@ -414,10 +414,10 @@ func (s *OAuthUserAuthService) ExchangeAuthCode(ctx context.Context, client *cli
 	}
 	scope := strings.Join(flow.GrantedScope, " ")
 	offline := scopepkg.HasOfflineAccess(scope)
-	// An offline grant or a native app's login will not hang off the browser session that approved it, so nothing would later end one redeemed after that session ended.
-	var approving *sessions_db.SessionEntry
+	// Don't issue an offline grant or a native app's login once the person has signed out of the browser session that approved it: neither is tied to that session, so nothing would end it later.
+	var signInSession *sessions_db.SessionEntry
 	if (offline || client.IsNative()) && flow.SID != "" {
-		if approving, err = liveSession(rmngCtx, flow.Subject, flow.SID); err != nil {
+		if signInSession, err = liveSession(rmngCtx, flow.Subject, flow.SID); err != nil {
 			return nil, err
 		}
 	}
@@ -427,7 +427,7 @@ func (s *OAuthUserAuthService) ExchangeAuthCode(ctx context.Context, client *cli
 	}
 	sid := flow.SID
 	if client.IsNative() && !offline {
-		sid = establishAppSession(rmngCtx, flow, approving, requester)
+		sid = establishNativeAppSession(rmngCtx, flow, signInSession, userAgent)
 	}
 	return s.mintTokenSet(rmngCtx, flow.Subject, flow.ClientID, scope, flow.Resources, audience, sid, flow.AuthTime)
 }
@@ -447,14 +447,14 @@ func liveSession(rmngCtx *rmngctx.RmngContext, userID, sid string) (*sessions_db
 	return row, nil
 }
 
-// establishAppSession gives a native app's login a cookie-less session of its own, so a browser sign-out does not reach it; it carries the approving session's provider, sign-in method and cap, so those still bound the app. A failed write leaves the login under the approving session.
-func establishAppSession(rmngCtx *rmngctx.RmngContext, flow *auth_flows_db.AuthFlow, approving *sessions_db.SessionEntry, requester Requester) string {
-	in := session.EstablishInput{UserID: flow.Subject, AuthTime: flow.AuthTime, Origin: session.OriginApp, UserAgent: requester.UserAgent, IPAddress: requester.IPAddress}
-	if approving != nil {
-		in.Provider, in.AMR, in.ACR = approving.Provider, approving.AMR, approving.ACR
-		in.AuthTime = cmp.Or(in.AuthTime, approving.AuthTime)
-		if approving.MaxExpiresAt > 0 {
-			in.ProviderMaxTTLSeconds = max(approving.MaxExpiresAt-in.AuthTime, 1)
+// establishNativeAppSession gives a native app's login a cookie-less session of its own under a new random sid, never the browser's, so a browser sign-out does not reach it; it copies the sign-in session's provider, sign-in method and cap, so those still bound the app. A failed write leaves the login under the sign-in session.
+func establishNativeAppSession(rmngCtx *rmngctx.RmngContext, flow *auth_flows_db.AuthFlow, signInSession *sessions_db.SessionEntry, userAgent UserAgentInfo) string {
+	in := session.EstablishInput{UserID: flow.Subject, AuthTime: flow.AuthTime, Origin: session.OriginApp, UserAgent: userAgent.UserAgent, IPAddress: userAgent.IPAddress}
+	if signInSession != nil {
+		in.Provider, in.AMR, in.ACR = signInSession.Provider, signInSession.AMR, signInSession.ACR
+		in.AuthTime = cmp.Or(in.AuthTime, signInSession.AuthTime)
+		if signInSession.MaxExpiresAt > 0 {
+			in.ProviderMaxTTLSeconds = max(signInSession.MaxExpiresAt-in.AuthTime, 1)
 		}
 	}
 	_, sid, err := session.NewService(rmngCtx).Establish(in)

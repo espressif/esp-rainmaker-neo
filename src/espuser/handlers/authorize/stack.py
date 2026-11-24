@@ -185,7 +185,7 @@ class AuthorizeAPI(Construct):
             api_id=api_id
         )
 
-        # The sign-out question /oauth2/logout sends a browser to; the answer goes to the sessions Lambda's /user/logout/confirm.
+        # The sign-out question /oauth2/logout sends a browser to; its POST, the person's answer, is the sessions Lambda's.
         create_cfn_api_method(
             self, "UserLogoutGetMethod", common_resources,
             get_or_create_api_resource(

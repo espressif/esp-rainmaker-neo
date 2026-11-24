@@ -569,6 +569,52 @@ def test_a_sign_out_without_a_hint_is_asked_and_only_the_persons_yes_ends_it(
         context.close()
 
 
+
+REVOKE_WEB_REDIRECT = "https://example.com/itest-login-ui/revoke-web/callback"
+REVOKE_APP_REDIRECT = "https://example.com/itest-login-ui/revoke-app/callback"
+
+
+def test_an_app_revoking_its_login_leaves_the_browser_signed_in(register_espuser_client, espuser_person, chromium_browser):
+    """A native app signed in through the browser signs out by revoking its own refresh token (RFC 7009); in that same real browser the session cookie stays, and the web app signs in again straight from it, with no sign-in page."""
+    web_made = register_espuser_client(client_name="itest revoke web app", redirect_uris=[REVOKE_WEB_REDIRECT])
+    app_made = register_espuser_client(client_name="itest revoke native app", redirect_uris=[REVOKE_APP_REDIRECT],
+                                       application_type="native")
+    web = WebClient(web_made.client_id, REVOKE_WEB_REDIRECT)
+    app = WebClient(app_made.client_id, REVOKE_APP_REDIRECT)
+    context = chromium_browser.new_context()
+    try:
+        page = context.new_page()
+        verifier, challenge = pkce_pair()
+        page.goto(_authorize_url(web.client_id, REVOKE_WEB_REDIRECT, challenge, "state-web"), wait_until="load")
+        page.wait_for_selector("#username", timeout=10000)
+        page.fill("#username", espuser_person.email)
+        page.fill("#password", espuser_person.password)
+        with page.expect_navigation(url=lambda u: u.startswith(REVOKE_WEB_REDIRECT), timeout=30000):
+            page.click("button[type=submit]")
+        web_login = web.exchange_code(parse_qs(urlparse(page.url).query)["code"][0], verifier)
+        assert web_login.status_code == 200, web_login.text
+
+        # The browser is signed in, so the native app's authorize answers straight from the session cookie.
+        verifier, challenge = pkce_pair()
+        page.goto(_authorize_url(app.client_id, REVOKE_APP_REDIRECT, challenge, "state-app"), wait_until="load")
+        assert page.url.startswith(REVOKE_APP_REDIRECT), f"the signed-in browser must return the app a code: {page.url}"
+        app_login = app.exchange_code(parse_qs(urlparse(page.url).query)["code"][0], verifier)
+        assert app_login.status_code == 200, app_login.text
+        app_refresh = app_login.json()["refresh_token"]
+
+        revoked = app.revoke(app_refresh)
+        assert revoked.status_code == 200, revoked.text
+        assert app.refresh(app_refresh).status_code != 200, "the app that signed out is signed out"
+
+        assert [c for c in context.cookies() if c["name"] == SESSION_COOKIE], "the browser keeps its session cookie"
+        assert web.refresh(web_login.json()["refresh_token"]).status_code == 200, "the web app's login still works"
+        verifier, challenge = pkce_pair()
+        page.goto(_authorize_url(web.client_id, REVOKE_WEB_REDIRECT, challenge, "state-again"), wait_until="load")
+        assert page.url.startswith(REVOKE_WEB_REDIRECT), f"the browser must sign in again without the sign-in page: {page.url}"
+        assert web.exchange_code(parse_qs(urlparse(page.url).query)["code"][0], verifier).status_code == 200
+    finally:
+        context.close()
+
 # The account and second-pool journeys on our page. Spec: federation.md ("The sign-in app"), external-provider.md.
 
 ISSUER = (esp_user_base_outputs.get("EspUserDiscoveryIssuer") or "").rstrip("/")
@@ -638,7 +684,6 @@ def lifecycle_client(register_espuser_client):
 
 
 # Opt-in: Cognito really mails both codes, which the sandbox and the account's email quota limit.
-@pytest.mark.cognito_mail
 def test_an_account_made_on_our_page_signs_in_and_resets_its_password(
         lifecycle_client, chromium_browser, require_mailosaur):
     """Sign up, verify with the mailed code, sign in; then reset the password with the mailed code, after which only the new one signs in."""
@@ -748,7 +793,7 @@ def second_pool():
             UserPoolId=pool_id, ClientName=f"itest-second-pool-{suffix}", GenerateSecret=True,
             ExplicitAuthFlows=["ALLOW_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"],
             SupportedIdentityProviders=["COGNITO"], CallbackURLs=[callback],
-            LogoutURLs=[f"{ISSUER}/oauth2/logout/done"], AllowedOAuthFlows=["code"],
+            LogoutURLs=[f"{ISSUER}/oauth2/federation/logout/callback"], AllowedOAuthFlows=["code"],
             AllowedOAuthScopes=["openid", "email"], AllowedOAuthFlowsUserPoolClient=True,
             PreventUserExistenceErrors="ENABLED")["UserPoolClient"]
         client_id = client["ClientId"]

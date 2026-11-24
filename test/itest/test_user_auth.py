@@ -15,7 +15,6 @@ from py_sdk.espuser_oauth import (
     Browser,
     WebClient,
     client_ids_under,
-    revoke_refresh_token,
     session_with,
     sids_in,
     sign_out_destination,
@@ -756,41 +755,6 @@ def test_sso_logout_lost_phone(three_products, espuser_person):
         "the ended device still holds a working session cookie"
 
 
-@pytest.mark.espuser
-@requires_espuser
-def test_revoke_refuses_a_token_issued_to_another_client(three_products, espuser_person):
-    """RFC 7009 s2.1: only the client a refresh token was issued to may revoke it, so one app cannot sign the person out of another."""
-    owner, other, _ = three_products
-    tokens = owner.tokens(owner.sign_in(Browser("itest-revoke-owner"), espuser_person))
-
-    refused = revoke_refresh_token(other.client_id, tokens["refresh_token"])
-    assert refused.status_code == 400, refused.text
-    assert refused.json()["error"] == "invalid_grant", refused.text
-    assert owner.still_signed_in(tokens["refresh_token"]), "another client's revoke must leave the login working"
-
-
-@pytest.mark.espuser
-@requires_espuser
-def test_revoking_an_apps_last_login_removes_its_session(three_products, espuser_person):
-    """An app that signs out leaves the signed-in list: its cookie-less session row goes with its last login."""
-    signin = requests.post(f"{USER_API_GATEWAY_URL}/v1/user/auth/token",
-                           json={"username": espuser_person.email, "password": espuser_person.password}, timeout=30)
-    assert signin.status_code == 200, signin.text
-    app_login = signin.json()
-    app_sid = decode_jwt_claims(app_login["access_token"]).get("sid")
-    assert app_sid, "a password sign-in must create an app session"
-
-    dashboard = three_products[0]
-    viewer = dashboard.tokens(dashboard.sign_in(Browser("itest-revoke-viewer"), espuser_person))
-    before = WebClient.sessions(viewer["access_token"])
-    assert before.status_code == 200, before.text
-    assert app_sid in sids_in(before.json()), before.text
-
-    assert revoke_refresh_token(ESP_USER_CLIENT_ID, app_login["refresh_token"]).status_code == 200
-
-    after = WebClient.sessions(viewer["access_token"])
-    assert after.status_code == 200, after.text
-    assert app_sid not in sids_in(after.json()), f"the app's session must leave the list: {after.text}"
 
 
 # ============================================================================

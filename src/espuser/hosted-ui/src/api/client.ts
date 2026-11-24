@@ -51,7 +51,7 @@ export const api = {
   confirmLogout: (csrfToken: string) => {
     const opened = new URLSearchParams(window.location.search)
     const params = Object.fromEntries(LOGOUT_PARAMS.flatMap(name => opened.has(name) ? [[name, opened.get(name)]] : []))
-    return post('logout/confirm', { ...params, csrf_token: csrfToken })
+    return post('logout', { ...params, csrf_token: csrfToken })
   },
 }
 

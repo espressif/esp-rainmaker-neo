@@ -35,7 +35,8 @@ class SessionsAPI(Construct):
         DELETE /v1/user/connected-apps/{clientId}    disconnect one of them
         GET    /oauth2/logout             RP-Initiated Logout 1.0, advertised in discovery
         POST   /oauth2/logout             the same, as a form; answered with a 303 to the GET
-        POST   /user/logout/confirm       the person's yes on the sign-out page
+        POST   /user/logout               the person's yes on the sign-out page (its GET, the page, is the authorize Lambda's)
+        GET    /oauth2/federation/logout/callback    the upstream provider handing the browser back after its sign-out
 
     One binary, two trees. They share every dependency: the same two tables, the same token
     verification, the same session-to-family join. Splitting them would be two cold starts
@@ -110,7 +111,7 @@ class SessionsAPI(Construct):
                 # URL for the whole deployment however many products exist -- the same shape
                 # as the single federation callback the login leg registers. Unset disables
                 # the upstream hop rather than sending a provider somewhere wrong.
-                "ESPUSER_LOGOUT_DONE_URL": f"{common_resources.esp_user_api_url}/oauth2/logout/done",
+                "ESPUSER_FEDERATION_LOGOUT_CALLBACK_URL": f"{common_resources.esp_user_api_url}/oauth2/federation/logout/callback",
             },
         )
 
@@ -185,8 +186,8 @@ class SessionsAPI(Construct):
             api_id=common_resources.esp_user_api_id,
         )
 
-        # ── /user/logout/confirm ─────────────────────────────────────────────────────
-        # No CORS preflight: the only caller is the sign-out page's own same-origin fetch.
+        # ── POST /user/logout ────────────────────────────────────────────────────────
+        # No CORS preflight: the only caller is the sign-out page's own same-origin fetch. The GET on the same resource is the authorize Lambda's page.
         user_page_id = get_or_create_api_resource(
             self, "UserResource", common_resources,
             common_resources.esp_user_api_root_resource_id, "user",
@@ -197,34 +198,38 @@ class SessionsAPI(Construct):
             api_id=common_resources.esp_user_api_id,
         )
         create_cfn_api_method(
-            self, "UserLogoutConfirmPostMethod", common_resources,
-            get_or_create_api_resource(
-                self, "UserLogoutConfirmResource", common_resources, user_logout_id, "confirm",
-                api_id=common_resources.esp_user_api_id,
-            ),
-            "POST", self.sessions_function,
+            self, "UserLogoutPostMethod", common_resources,
+            user_logout_id, "POST", self.sessions_function,
             authorization_type="NONE",  # the session cookie and the page's csrf_token are the credential
             api_id=common_resources.esp_user_api_id,
         )
 
-        # ── /oauth2/logout/done ──────────────────────────────────────────────────────
+        # ── /oauth2/federation/logout/callback ───────────────────────────────────────
         # Where the upstream provider hands the browser back. This is the ONE sign-out URL
         # a deployment registers with its provider, mirroring the single federation callback
         # the login leg registers: the provider knows ESP User and never needs to learn about
         # the products behind it. GET only, and unauthenticated -- the browser arrives from
         # the provider carrying nothing but the short-lived destination cookie.
-        logout_done_id = get_or_create_api_resource(
-            self, "OAuth2LogoutDoneResource", common_resources, logout_id, "done",
+        federation_id = get_or_create_api_resource(
+            self, "OAuth2FederationResource", common_resources, oauth2_id, "federation",
+            api_id=common_resources.esp_user_api_id,
+        )
+        federation_logout_id = get_or_create_api_resource(
+            self, "OAuth2FederationLogoutResource", common_resources, federation_id, "logout",
+            api_id=common_resources.esp_user_api_id,
+        )
+        federation_logout_callback_id = get_or_create_api_resource(
+            self, "OAuth2FederationLogoutCallbackResource", common_resources, federation_logout_id, "callback",
             api_id=common_resources.esp_user_api_id,
         )
         create_cfn_api_method(
-            self, "OAuth2LogoutDoneGetMethod", common_resources,
-            logout_done_id, "GET", self.sessions_function,
+            self, "OAuth2FederationLogoutCallbackGetMethod", common_resources,
+            federation_logout_callback_id, "GET", self.sessions_function,
             authorization_type="NONE",
             api_id=common_resources.esp_user_api_id,
         )
         add_cors_options(
-            self, "OAuth2LogoutDoneOptionsMethod", common_resources,
-            logout_done_id, allowed_methods=["GET"],
+            self, "OAuth2FederationLogoutCallbackOptionsMethod", common_resources,
+            federation_logout_callback_id, allowed_methods=["GET"],
             api_id=common_resources.esp_user_api_id,
         )

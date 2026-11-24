@@ -106,7 +106,7 @@ var _ = Describe("OAuth token endpoint (a native app's own session)", func() {
 		return len(rows)
 	}
 
-	It("gives a native app's login a session of its own, carrying the approving browser session's sign-in and cap", func() {
+	It("gives a native app's login a session of its own, carrying the sign-in session's provider, sign-in time and cap", func() {
 		tokens := signIn(nativeClientID, "ac_native", "openid", "email")
 
 		appSID := familySID(nativeClientID)
@@ -182,7 +182,7 @@ var _ = Describe("OAuth token endpoint (a native app's own session)", func() {
 		nativeProfile := backend.DBMock.ProfileGet()
 		nativeReads, nativeWrites := nativeProfile.TotalCounts()
 
-		// The approving session: an index Query and a GetItem. The app session: one PutItem.
+		// The sign-in session: an index Query and a GetItem. The app session: one PutItem.
 		Expect([2]int{nativeReads - webReads, nativeWrites - webWrites}).To(Equal([2]int{2, 1}))
 	})
 })

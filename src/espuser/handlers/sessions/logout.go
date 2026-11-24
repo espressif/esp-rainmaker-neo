@@ -37,7 +37,7 @@ const (
 	// seconds; five minutes is generous and still forgets a browser abandoned mid-hop.
 	destinationCookieTTL = 300
 
-	envLogoutDoneURL = "ESPUSER_LOGOUT_DONE_URL"
+	envFederationLogoutCallbackURL = "ESPUSER_FEDERATION_LOGOUT_CALLBACK_URL"
 )
 
 // logoutParams are the RP-Initiated Logout 1.0 s2 request parameters, the only ones carried from a form POST to the GET and from the GET to the sign-out page.
@@ -160,8 +160,8 @@ func endSession(ctx context.Context, rmngCtx *rmngctx.RmngContext, sess *session
 	//
 	// The provider is handed OUR return URL, never the caller's, so it holds one registered
 	// sign-out URL however many products exist -- the shape the login leg already has. The
-	// caller's destination rides across in a cookie and is applied at /oauth2/logout/done.
-	upstream := upstreamLogoutURL(ctx, rmngCtx, sess.Provider, logoutDoneURL())
+	// caller's destination rides across in a cookie and is applied at /oauth2/federation/logout/callback.
+	upstream := upstreamLogoutURL(ctx, rmngCtx, sess.Provider, federationLogoutCallbackURL())
 	if upstream == "" {
 		return destination, cookies, nil
 	}
@@ -171,12 +171,12 @@ func endSession(ctx context.Context, rmngCtx *rmngctx.RmngContext, sess *session
 	return upstream, cookies, nil
 }
 
-// handleLogoutDone is where the upstream hands the browser back. It takes no query parameters
+// handleFederationLogoutCallback is where the upstream hands the browser back. It takes no query parameters
 // -- a provider matches the return URL exactly, so nothing may be appended -- and reads the
 // destination from the cookie the sign-out set. The value was already validated against the
 // client registry; the check below is belt-and-braces, because anything that forwards a
 // browser is one mistake from being an open redirect wearing the issuer's hostname.
-func handleLogoutDone(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+func handleFederationLogoutCallback(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	// Written escaped (a URL carries characters a cookie value may not), so read unescaped.
 	to, unescapeErr := url.QueryUnescape(rmngrequest.Cookie(request, destinationCookieName))
 	if unescapeErr != nil {
@@ -185,10 +185,10 @@ func handleLogoutDone(ctx context.Context, request events.APIGatewayProxyRequest
 	clear := destinationCookie("", 0)
 	if !isForwardableDestination(to) {
 		if to != "" {
-			rlog.Warn(ctx).Msg("logout done: destination cookie is not a forwardable URL; landing on the issuer")
+			rlog.Warn(ctx).Msg("federation logout callback: destination cookie is not a forwardable URL; landing on the issuer")
 		}
-		// No memo, or nothing we will forward to: our own sign-out page says the sign-out worked, never somewhere the browser did not ask for. Relative from /oauth2/logout/done.
-		return redirect("../"+session.SignOutPage, clear), nil
+		// No memo, or nothing we will forward to: our own sign-out page says the sign-out worked, never somewhere the browser did not ask for. Relative from /oauth2/federation/logout/callback.
+		return redirect("../../"+session.SignOutPage, clear), nil
 	}
 	return redirect(to, clear), nil
 }
@@ -215,9 +215,9 @@ func destinationCookie(value string, maxAge int64) string {
 		destinationCookieName, url.QueryEscape(value), maxAge)
 }
 
-// logoutDoneURL is our own return URL, handed to the upstream. Empty when unset, which
+// federationLogoutCallbackURL is our own return URL, handed to the upstream. Empty when unset, which
 // disables the upstream hop entirely rather than sending a provider somewhere wrong.
-func logoutDoneURL() string { return os.Getenv(envLogoutDoneURL) }
+func federationLogoutCallbackURL() string { return os.Getenv(envFederationLogoutCallbackURL) }
 
 // logoutRequest is what the s2 parameters establish before any session is touched.
 type logoutRequest struct {

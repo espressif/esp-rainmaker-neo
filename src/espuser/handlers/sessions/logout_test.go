@@ -73,11 +73,11 @@ func expiredIDToken(userID, sid string) string {
 	return token
 }
 
-// logoutDone drives the hand-back the provider performs, carrying whatever memo the browser
+// federationLogoutCallback drives the hand-back the provider performs, carrying whatever memo the browser
 // holds. No query parameters: the provider matches our return URL exactly, so nothing can be
 // appended to it -- which is precisely why the destination travels in a cookie.
-func logoutDone(cookie string) events.APIGatewayProxyResponse {
-	req := events.APIGatewayProxyRequest{HTTPMethod: http.MethodGet, Path: pathLogoutDone, Resource: pathLogoutDone}
+func federationLogoutCallback(cookie string) events.APIGatewayProxyResponse {
+	req := events.APIGatewayProxyRequest{HTTPMethod: http.MethodGet, Path: pathFederationLogoutCallback, Resource: pathFederationLogoutCallback}
 	if cookie != "" {
 		req.Headers = map[string]string{"Cookie": cookie}
 	}
@@ -98,7 +98,7 @@ func csrfTokenFor(cookie string) string {
 	return session.LogoutCSRFToken(strings.TrimPrefix(cookie, session.CookieName+"="))
 }
 
-// confirm drives the person's yes on the sign-out page: the page posts the parameters it was opened with to /user/logout/confirm, with the token it was given.
+// confirm drives the person's yes on the sign-out page: the page posts the parameters it was opened with to POST /user/logout, with the token it was given.
 func confirm(cookie string, params map[string]string, csrfToken string) events.APIGatewayProxyResponse {
 	body := map[string]string{"csrf_token": csrfToken}
 	for k, v := range params {
@@ -107,7 +107,7 @@ func confirm(cookie string, params map[string]string, csrfToken string) events.A
 	raw, err := json.Marshal(body)
 	Expect(err).NotTo(HaveOccurred())
 	req := events.APIGatewayProxyRequest{
-		HTTPMethod: http.MethodPost, Path: pathLogoutConfirm, Resource: pathLogoutConfirm,
+		HTTPMethod: http.MethodPost, Path: pathUserLogout, Resource: pathUserLogout,
 		Headers: map[string]string{"Content-Type": "application/json"},
 		Body:    string(raw),
 	}
@@ -163,8 +163,8 @@ func seedUpstream() {
 
 // withDoneURL sets our own return URL for a spec, the value CDK supplies in production.
 func withDoneURL() {
-	os.Setenv("ESPUSER_LOGOUT_DONE_URL", "https://issuer.test/oauth2/logout/done")
-	DeferCleanup(func() { os.Unsetenv("ESPUSER_LOGOUT_DONE_URL") })
+	os.Setenv("ESPUSER_FEDERATION_LOGOUT_CALLBACK_URL", "https://issuer.test/oauth2/federation/logout/callback")
+	DeferCleanup(func() { os.Unsetenv("ESPUSER_FEDERATION_LOGOUT_CALLBACK_URL") })
 }
 
 func logout(cookie string, query map[string]string) events.APIGatewayProxyResponse {
@@ -390,7 +390,7 @@ var _ = Describe("GET /oauth2/logout", func() {
 		Entry("GET /oauth2/logout", func(cookie, hint string) events.APIGatewayProxyResponse {
 			return logout(cookie, map[string]string{"client_id": dashboardClient, "id_token_hint": hint})
 		}),
-		Entry("POST /user/logout/confirm", func(cookie, hint string) events.APIGatewayProxyResponse {
+		Entry("POST /user/logout", func(cookie, hint string) events.APIGatewayProxyResponse {
 			return confirm(cookie, map[string]string{"client_id": dashboardClient, "id_token_hint": hint}, csrfTokenFor(cookie))
 		}),
 	)
@@ -425,7 +425,7 @@ var _ = Describe("GET /oauth2/logout", func() {
 		resp := logout(cookie, map[string]string{
 			"client_id": dashboardClient, "post_logout_redirect_uri": registeredExit, "id_token_hint": hintFor(me, sid),
 		})
-		Expect(resp.Headers["Location"]).To(ContainSubstring(url.QueryEscape("https://issuer.test/oauth2/logout/done")))
+		Expect(resp.Headers["Location"]).To(ContainSubstring(url.QueryEscape("https://issuer.test/oauth2/federation/logout/callback")))
 		Expect(resp.Headers["Location"]).NotTo(ContainSubstring(url.QueryEscape(registeredExit)),
 			"the caller's page must never reach the provider")
 	})
@@ -523,7 +523,7 @@ var _ = Describe("GET /oauth2/logout", func() {
 	})
 })
 
-var _ = Describe("POST /user/logout/confirm, the person's yes", func() {
+var _ = Describe("POST /user/logout, the person's yes", func() {
 	BeforeEach(func() {
 		backend = test_utils.SetupEspUserBackend(ctx())
 		registerClient(registeredExit)
@@ -603,11 +603,11 @@ var _ = Describe("POST /user/logout/confirm, the person's yes", func() {
 		resp := confirm(cookie, exitQuery, csrfTokenFor(cookie))
 
 		Expect(redirectTo(resp)).To(HavePrefix("https://pool.auth.ap-south-1.amazoncognito.com/logout?"))
-		Expect(redirectTo(resp)).To(ContainSubstring(url.QueryEscape("https://issuer.test/oauth2/logout/done")))
+		Expect(redirectTo(resp)).To(ContainSubstring(url.QueryEscape("https://issuer.test/oauth2/federation/logout/callback")))
 		joined := strings.Join(setCookies(resp), "\n")
 		Expect(joined).To(ContainSubstring(session.CookieName + "=; "))
 		Expect(joined).To(ContainSubstring("__Host-esp_logout_to=" + url.QueryEscape(registeredExit+"?state=s1")))
-		Expect(logoutDone("__Host-esp_logout_to=" + url.QueryEscape(registeredExit+"?state=s1")).Headers["Location"]).
+		Expect(federationLogoutCallback("__Host-esp_logout_to=" + url.QueryEscape(registeredExit+"?state=s1")).Headers["Location"]).
 			To(Equal(registeredExit+"?state=s1"), "the provider's hand-back still finishes at the RP")
 	})
 
@@ -620,7 +620,7 @@ var _ = Describe("POST /user/logout/confirm, the person's yes", func() {
 		resp := confirm(cookie, query, csrfTokenFor(cookie))
 
 		Expect(redirectTo(resp)).To(HavePrefix("https://pool.auth.ap-south-1.amazoncognito.com/logout?"))
-		Expect(setCookies(resp)).To(HaveLen(1), "no __Host-esp_logout_to memo, so /oauth2/logout/done lands on the issuer")
+		Expect(setCookies(resp)).To(HaveLen(1), "no __Host-esp_logout_to memo, so /oauth2/federation/logout/callback lands on the issuer")
 		Expect(setCookies(resp)[0]).To(HavePrefix(session.CookieName + "=;"))
 	})
 
@@ -671,7 +671,7 @@ var _ = Describe("POST /user/logout/confirm, the person's yes", func() {
 	It("refuses a body that is not JSON (negative)", func() {
 		cookie, sid := establish(me)
 		resp, err := handleRequest(ctx(), events.APIGatewayProxyRequest{
-			HTTPMethod: http.MethodPost, Path: pathLogoutConfirm, Resource: pathLogoutConfirm,
+			HTTPMethod: http.MethodPost, Path: pathUserLogout, Resource: pathUserLogout,
 			Headers: map[string]string{"Cookie": cookie, "Content-Type": "application/json"}, Body: "csrf_token",
 		})
 		Expect(err).NotTo(HaveOccurred())
@@ -682,7 +682,7 @@ var _ = Describe("POST /user/logout/confirm, the person's yes", func() {
 	It("405s a GET, so a link or an image can never answer for the person (negative)", func() {
 		cookie, sid := establish(me)
 		resp, err := handleRequest(ctx(), events.APIGatewayProxyRequest{
-			HTTPMethod: http.MethodGet, Path: pathLogoutConfirm, Resource: pathLogoutConfirm, Headers: map[string]string{"Cookie": cookie},
+			HTTPMethod: http.MethodGet, Path: pathUserLogout, Resource: pathUserLogout, Headers: map[string]string{"Cookie": cookie},
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.StatusCode).To(Equal(http.StatusMethodNotAllowed))
@@ -805,13 +805,13 @@ var _ = Describe("what a Sign out button actually reaches", func() {
 	})
 })
 
-var _ = Describe("GET /oauth2/logout/done — the provider's hand-back", func() {
+var _ = Describe("GET /oauth2/federation/logout/callback — the provider's hand-back", func() {
 	const memo = "__Host-esp_logout_to="
 
 	BeforeEach(func() { backend = test_utils.SetupEspUserBackend(ctx()) })
 
 	It("forwards to the destination the memo carries, and clears the memo", func() {
-		resp := logoutDone(memo + url.QueryEscape("https://test1.example/bye"))
+		resp := federationLogoutCallback(memo + url.QueryEscape("https://test1.example/bye"))
 		Expect(resp.StatusCode).To(Equal(http.StatusFound))
 		Expect(resp.Headers["Location"]).To(Equal("https://test1.example/bye"))
 		Expect(resp.Headers["Set-Cookie"]).To(ContainSubstring("__Host-esp_logout_to="))
@@ -822,9 +822,9 @@ var _ = Describe("GET /oauth2/logout/done — the provider's hand-back", func() 
 	It("lands on the issuer's own page when there is no memo (negative)", func() {
 		// The browser abandoned the chain, or the memo expired. Say the sign-out worked
 		// rather than inventing a destination.
-		resp := logoutDone("")
+		resp := federationLogoutCallback("")
 		Expect(resp.StatusCode).To(Equal(http.StatusFound))
-		Expect(resp.Headers["Location"]).To(Equal("../"+session.SignOutPage), "relative from /oauth2/logout/done to /user/logout")
+		Expect(resp.Headers["Location"]).To(Equal("../../"+session.SignOutPage), "relative from /oauth2/federation/logout/callback to /user/logout")
 	})
 
 	It("lands on /user/logout from both routes that redirect there, under any stage prefix", func() {
@@ -836,7 +836,7 @@ var _ = Describe("GET /oauth2/logout/done — the provider's hand-back", func() 
 			return base.ResolveReference(ref).Path
 		}
 		Expect(resolve("/prod/oauth2/logout", session.SignOutPage)).To(Equal("/prod/user/logout"))
-		Expect(resolve("/prod/oauth2/logout/done", "../"+session.SignOutPage)).To(Equal("/prod/user/logout"))
+		Expect(resolve("/prod/oauth2/federation/logout/callback", "../../"+session.SignOutPage)).To(Equal("/prod/user/logout"))
 		Expect(resolve("/oauth2/logout", session.SignOutPage)).To(Equal("/user/logout"))
 	})
 
@@ -846,24 +846,22 @@ var _ = Describe("GET /oauth2/logout/done — the provider's hand-back", func() 
 		// but this server could have written it -- but an endpoint that forwards a browser is
 		// one mistake away from being an open redirect wearing the issuer's own hostname.
 		for _, bad := range []string{"javascript:alert(1)", "data:text/html,<script>", "/relative", "not a url at all"} {
-			resp := logoutDone(memo + url.QueryEscape(bad))
-			Expect(resp.Headers["Location"]).To(Equal("../"+session.SignOutPage), bad)
+			resp := federationLogoutCallback(memo + url.QueryEscape(bad))
+			Expect(resp.Headers["Location"]).To(Equal("../../"+session.SignOutPage), bad)
 		}
 	})
 
 	It("forwards to a native app's private-use scheme (RFC 8252 s7.1)", func() {
-		resp := logoutDone(memo + url.QueryEscape("com.espressif.rainmaker://signed-out"))
+		resp := federationLogoutCallback(memo + url.QueryEscape("com.espressif.rainmaker://signed-out"))
 		Expect(resp.StatusCode).To(Equal(http.StatusFound))
 		Expect(resp.Headers["Location"]).To(Equal("com.espressif.rainmaker://signed-out"))
 	})
 
-	It("is not treated as a sign-out request (negative, routing)", func() {
-		// /oauth2/logout/done sits under /oauth2/logout. A prefix match on the latter would
-		// route the hand-back into handleLogout, which would find no session and no
-		// destination and land the person on the issuer's page -- correct-looking, and wrong.
+	It("forwards without ending a session (negative)", func() {
+		// The sign-out that sent the browser upstream already ended the session; the hand-back only forwards.
 		cookie, _ := establish(me)
 		value := strings.TrimPrefix(cookie, session.CookieName+"=")
-		resp := logoutDone(memo + url.QueryEscape("https://test1.example/bye"))
+		resp := federationLogoutCallback(memo + url.QueryEscape("https://test1.example/bye"))
 		Expect(resp.Headers["Location"]).To(Equal("https://test1.example/bye"))
 		Expect(session.NewService(rctx()).Peek(value)).NotTo(BeNil(),
 			"the hand-back must not destroy a session; the sign-out already did that")

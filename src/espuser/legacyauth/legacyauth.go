@@ -308,7 +308,7 @@ func (s *Service) ConfirmForgotPassword(ctx context.Context, username, code, new
 	}
 	login, err := s.cognito.InitiateAuth(ctx, &cognitoutil.LoginRequest{Username: username, Password: newPassword})
 	if err != nil {
-		return fmt.Errorf("%w: %w", ErrSessionsNotEnded, rmerror.NewRMError(err, "legacyauth: sign-in with the new password failed"))
+		return rmerror.NewRMError(fmt.Errorf("%w: %w", ErrSessionsNotEnded, err), "legacyauth: sign-in with the new password failed")
 	}
 	if login.IDToken == "" {
 		rlog.Warn(ctx).Str("challenge", login.ChallengeName).Msg("password reset: the pool answered the new password with a challenge, so the account could not be confirmed and no sessions were ended")
@@ -316,17 +316,17 @@ func (s *Service) ConfirmForgotPassword(ctx context.Context, username, code, new
 	}
 	email, phone, err := verifiedContacts(login.IDToken)
 	if err != nil {
-		return fmt.Errorf("%w: %w", ErrSessionsNotEnded, err)
+		return rmerror.NewRMError(fmt.Errorf("%w: %w", ErrSessionsNotEnded, err), "legacyauth: the reset account could not be identified")
 	}
 	userID, err := s.oauth.UserIDByVerifiedContacts(ctx, email, phone)
 	if err != nil {
-		return fmt.Errorf("%w: %w", ErrSessionsNotEnded, err)
+		return rmerror.NewRMError(fmt.Errorf("%w: %w", ErrSessionsNotEnded, err), "legacyauth: the reset account could not be identified")
 	}
 	if userID == "" {
 		// A pool user who never signed in has no account and so no sessions.
 		return nil
 	}
-	return endSessions(ctx, userID)
+	return endSessionsWithoutConnectedApps(ctx, userID)
 }
 
 // ChangePassword re-authenticates with the old password to obtain a provider access token, because
@@ -361,10 +361,10 @@ func (s *Service) ChangePassword(ctx context.Context, accessToken, oldPassword, 
 	return endSessionsAndConnectedApps(ctx, claims.Subject)
 }
 
-// endSessions signs the person out of every browser and app after a password reset; their connected apps stay, because forgetting a password says nothing about who else holds it.
-func endSessions(ctx context.Context, userID string) error {
+// endSessionsWithoutConnectedApps signs the person out of every browser and app after a password reset; their connected apps stay, because forgetting a password says nothing about who else holds it.
+func endSessionsWithoutConnectedApps(ctx context.Context, userID string) error {
 	if err := signout.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil)).EndAllSessions(userID); err != nil {
-		return fmt.Errorf("%w: %w", ErrSessionsNotEnded, err)
+		return rmerror.NewRMError(fmt.Errorf("%w: %w", ErrSessionsNotEnded, err), "legacyauth: sessions not ended")
 	}
 	return nil
 }
@@ -372,7 +372,7 @@ func endSessions(ctx context.Context, userID string) error {
 // endSessionsAndConnectedApps signs the person out everywhere and disconnects every connected app after a password change, which they make when they think someone else knows the old one.
 func endSessionsAndConnectedApps(ctx context.Context, userID string) error {
 	if err := signout.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil)).EndAllSessionsAndConnectedApps(userID); err != nil {
-		return fmt.Errorf("%w: %w", ErrSessionsNotEnded, err)
+		return rmerror.NewRMError(fmt.Errorf("%w: %w", ErrSessionsNotEnded, err), "legacyauth: sessions and connected apps not ended")
 	}
 	return nil
 }
