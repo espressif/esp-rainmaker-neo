@@ -12,6 +12,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/oauth_clients_db"
+	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/collections"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
@@ -79,7 +80,7 @@ func handleToken(ctx context.Context, request events.APIGatewayProxyRequest) (ev
 	case oidc.GrantRefreshToken:
 		return handleRefreshTokenGrant(ctx, req, client)
 	case oidc.GrantAuthorizationCode:
-		return handleAuthorizationCodeGrant(ctx, req, client)
+		return handleAuthorizationCodeGrant(ctx, req, client, auth.Requester{UserAgent: utils.UserAgent(request), IPAddress: request.RequestContext.Identity.SourceIP})
 	case oidc.GrantClientCredentials:
 		return handleClientCredentialsGrant(ctx, req, client)
 	default:
@@ -160,7 +161,7 @@ func targetRefusal(err error) (events.APIGatewayProxyResponse, bool) {
 	return oidc.OAuthErrorResp(http.StatusBadRequest, oidc.OAuthErrInvalidTarget, description), true
 }
 
-func handleAuthorizationCodeGrant(ctx context.Context, req TokenRequest, client *clients.ClientResponse) (events.APIGatewayProxyResponse, error) {
+func handleAuthorizationCodeGrant(ctx context.Context, req TokenRequest, client *clients.ClientResponse, requester auth.Requester) (events.APIGatewayProxyResponse, error) {
 	// code_verifier is not required here: whether one is needed depends on the code's PKCE
 	// binding, which ExchangeAuthCode enforces (RFC 9700 §2.1.1 downgrade protection).
 	if req.Code == "" || req.ClientID == "" || req.RedirectURI == "" {
@@ -173,7 +174,7 @@ func handleAuthorizationCodeGrant(ctx context.Context, req TokenRequest, client 
 		return oidc.OAuthErrorResp(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
 	}
 
-	tokens, err := svc.ExchangeAuthCode(ctx, client, req.Code, req.CodeVerifier, req.RedirectURI, req.Resource)
+	tokens, err := svc.ExchangeAuthCode(ctx, client, req.Code, req.CodeVerifier, req.RedirectURI, req.Resource, requester)
 	if resp, refused := targetRefusal(err); refused {
 		return resp, nil
 	}

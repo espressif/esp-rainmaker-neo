@@ -800,6 +800,115 @@ def test_sso_a_password_change_ends_every_session_and_connected_app(apps, regist
     assert again.status_code == 200, f"the new password signs in: {again.status_code} {again.text[:200]}"
 
 
+def native_app(register_espuser_client, name):
+    """A first-party native app: each of its sign-ins gets a session of its own."""
+    uri = CALLBACK.format(name)
+    client = register_espuser_client(redirect_uris=[uri], application_type="native")
+    return WebClient(client.client_id, uri)
+
+
+def test_sso_a_native_app_stays_signed_in_when_the_browser_signs_out(apps, register_espuser_client, espuser_person):
+    """A native app signed in through the browser holds its own session, so a web page signing that browser out ends the page's login and leaves the app's."""
+    web, _ = apps
+    native = native_app(register_espuser_client, "native")
+    browser = Browser()
+    web_tokens = signed_in(web, browser, espuser_person)
+    native_tokens = signed_in(native, browser, espuser_person)
+    browser_sid = decode_jwt_claims(web_tokens["id_token"])["sid"]
+    app_sid = decode_jwt_claims(native_tokens["id_token"])["sid"]
+    assert app_sid != browser_sid, "the app's login names its own session, not the browser's"
+    listed = sids_in(WebClient.sessions(web_tokens["access_token"]).json())
+    assert {browser_sid, app_sid} <= set(listed), f"both sessions are listed: {listed}"
+
+    web.logout(browser, id_token_hint=web_tokens["id_token"])
+
+    assert not web.still_signed_in(web_tokens["refresh_token"]), "the web page's login ends with its browser"
+    assert native.still_signed_in(native_tokens["refresh_token"]), "the native app is not under the browser"
+    assert app_sid in sids_in(WebClient.sessions(native_tokens["access_token"]).json()), "its session is still listed"
+
+
+def test_sso_an_app_signing_out_ends_only_its_own_session(register_espuser_client, espuser_person):
+    """One app revoking its own login ends that app and its session; the other app and the browser stay signed in."""
+    one = native_app(register_espuser_client, "native-one")
+    two = native_app(register_espuser_client, "native-two")
+    browser = Browser()
+    one_tokens = signed_in(one, browser, espuser_person)
+    two_tokens = signed_in(two, browser, espuser_person)
+    one_sid = decode_jwt_claims(one_tokens["id_token"])["sid"]
+
+    revoked = one.revoke(one_tokens["refresh_token"])
+    assert revoked.status_code == 200, f"{revoked.status_code} {revoked.text[:200]}"
+
+    assert not one.still_signed_in(one_tokens["refresh_token"]), "the app that signed out is signed out"
+    assert two.still_signed_in(two_tokens["refresh_token"]), "the other app is untouched"
+    listed = sids_in(WebClient.sessions(two_tokens["access_token"]).json())
+    assert one_sid not in listed and decode_jwt_claims(two_tokens["id_token"])["sid"] in listed, f"only its session went: {listed}"
+    assert one.authorize(browser).code, "the browser is still signed in, so signing in again needs no password"
+
+
+def test_sso_sign_out_everywhere_ends_native_app_sessions_and_keeps_connected_apps(apps, register_espuser_client, espuser_person):
+    """Sign out everywhere ends every browser and every native app session, and leaves the connected apps."""
+    web, _ = apps
+    native = native_app(register_espuser_client, "native-everywhere")
+    offline = offline_client(register_espuser_client, "offline-everywhere")
+    browser = Browser()
+    web_tokens = signed_in(web, browser, espuser_person)
+    native_tokens = signed_in(native, browser, espuser_person)
+    offline_tokens = offline.tokens(offline.sign_in_allowing(browser, espuser_person))
+
+    ended = WebClient.end_all_sessions(web_tokens["access_token"])
+    assert ended.status_code == 204, f"{ended.status_code} {ended.text[:200]}"
+
+    assert not web.still_signed_in(web_tokens["refresh_token"]), "the browser's login is signed out"
+    assert not native.still_signed_in(native_tokens["refresh_token"]), "the native app's session ends too"
+    assert offline.still_signed_in(offline_tokens["refresh_token"]), "the connected app stays"
+    assert web.authorize(browser).needs_login, "the browser's session is gone, so it must sign in again"
+
+
+def test_sso_ending_a_native_apps_session_from_the_list_ends_only_that_app(apps, register_espuser_client, espuser_person):
+    """Removing a native app from the signed-in list ends that app, and leaves the browser that removed it and the connected apps."""
+    web, _ = apps
+    native = native_app(register_espuser_client, "native-listed")
+    offline = offline_client(register_espuser_client, "offline-listed")
+    browser = Browser()
+    web_tokens = signed_in(web, browser, espuser_person)
+    native_tokens = signed_in(native, browser, espuser_person)
+    offline_tokens = offline.tokens(offline.sign_in_allowing(browser, espuser_person))
+    app_sid = decode_jwt_claims(native_tokens["id_token"])["sid"]
+
+    ended = WebClient.end_session(web_tokens["access_token"], app_sid)
+    assert ended.status_code == 204, f"{ended.status_code} {ended.text[:200]}"
+
+    assert not native.still_signed_in(native_tokens["refresh_token"]), "the removed app is signed out"
+    assert web.still_signed_in(web_tokens["refresh_token"]), "the browser that removed it stays signed in"
+    assert offline.still_signed_in(offline_tokens["refresh_token"]), "the connected app stays"
+    assert app_sid not in sids_in(WebClient.sessions(web_tokens["access_token"]).json()), "its session leaves the list"
+
+
+def test_sso_disconnecting_a_native_app_ends_its_own_session_too(apps, register_espuser_client, espuser_person):
+    """Disconnecting a native client ends its offline grant and its app login, and the app session left with no login leaves the list."""
+    web, _ = apps
+    uri = CALLBACK.format("native-connected")
+    client = register_espuser_client(redirect_uris=[uri], application_type="native",
+                                     scopes=["openid", "email", "profile", SESSIONS_SCOPE, "offline_access"])
+    linked = WebClient(client.client_id, uri, scope=OFFLINE_SCOPE)
+    app = WebClient(client.client_id, uri)
+    browser = Browser()
+    web_tokens = signed_in(web, browser, espuser_person)
+    linked_tokens = linked.tokens(linked.sign_in_allowing(browser, espuser_person))
+    app_tokens = signed_in(app, browser, espuser_person)
+    app_sid = decode_jwt_claims(app_tokens["id_token"])["sid"]
+    assert app_sid in sids_in(WebClient.sessions(web_tokens["access_token"]).json()), "the app session is listed"
+
+    ended = WebClient.disconnect_app(web_tokens["access_token"], client.client_id)
+    assert ended.status_code == 204, f"{ended.status_code} {ended.text[:200]}"
+
+    assert not linked.still_signed_in(linked_tokens["refresh_token"]), "the offline grant ends"
+    assert not app.still_signed_in(app_tokens["refresh_token"]), "the app's own login ends with it"
+    assert app_sid not in sids_in(WebClient.sessions(web_tokens["access_token"]).json()), "its empty app session leaves the list"
+    assert web.still_signed_in(web_tokens["refresh_token"]), "the browser stays signed in"
+
+
 @pytest.mark.cognito_mail
 def test_sso_a_password_reset_ends_every_session_and_keeps_connected_apps(
         apps, register_espuser_client, provision_end_user, require_mailosaur):
@@ -815,6 +924,8 @@ def test_sso_a_password_reset_ends_every_session_and_keeps_connected_apps(
     browser = Browser()
     browser_tokens = signed_in(plain, browser, person)
     offline_tokens = offline.tokens(offline.sign_in_allowing(browser, person))
+    native = native_app(register_espuser_client, "native-reset")
+    native_tokens = signed_in(native, browser, person)
 
     started = time.time()
     asked = requests.post(f"{USER_API_GATEWAY_URL}/v1/user/auth/password-recovery", timeout=30, json={"username": email})
@@ -826,4 +937,5 @@ def test_sso_a_password_reset_ends_every_session_and_keeps_connected_apps(
     assert reset.status_code == 200, f"{reset.status_code} {reset.text[:200]}"
 
     assert not plain.still_signed_in(browser_tokens["refresh_token"]), "the browser's login is signed out"
+    assert not native.still_signed_in(native_tokens["refresh_token"]), "the native app's session ends too"
     assert offline.still_signed_in(offline_tokens["refresh_token"]), "the connected app stays"

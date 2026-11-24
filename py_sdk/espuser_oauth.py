@@ -289,6 +289,10 @@ class WebClient:
             data["resource"] = resource
         return requests.post(f"{API_BASE}/oauth2/token", data=data, timeout=30)
 
+    def revoke(self, refresh_token):
+        """The app signing itself out: RFC 7009 revocation of its own refresh token."""
+        return revoke_refresh_token(self.client_id, refresh_token)
+
     def still_signed_in(self, refresh_token):
         """Whether this product can still get a new access token. The only honest test of
         "am I signed out" -- an access token already issued keeps working until it expires."""

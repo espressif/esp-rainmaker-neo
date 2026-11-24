@@ -51,6 +51,19 @@ func (f *FailingDeleteItem) DeleteItem(ctx context.Context, params *dynamodb.Del
 	return f.DynamoDBMock.DeleteItem(ctx, params, optFns...)
 }
 
+// FailingPutItem throttles every PutItem on TableName and passes every other call through.
+type FailingPutItem struct {
+	*DynamoDBMock
+	TableName string
+}
+
+func (f *FailingPutItem) PutItem(ctx context.Context, params *dynamodb.PutItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error) {
+	if aws.ToString(params.TableName) == f.TableName {
+		return nil, throttled()
+	}
+	return f.DynamoDBMock.PutItem(ctx, params, optFns...)
+}
+
 func throttled() error {
 	return &types.ProvisionedThroughputExceededException{Message: aws.String("throttled")}
 }

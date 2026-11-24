@@ -69,7 +69,7 @@ came from; a cookie is only how a *browser* re-presents it. Two kinds of row, on
 | Kind | `session_hash` | Cookie | SSO possible | Created by |
 |---|---|---|---|---|
 | Cookie-bearing | `SHA-256(cookie value)` | issued | yes | federation callback · password sign-in on the page · browser OTP verify |
-| Cookie-less | `SHA-256(a random value that is then discarded)` | none | **no, by construction** | native OTP verify · legacy password sign-in |
+| Cookie-less | `SHA-256(a random value that is then discarded)` | none | **no, by construction** | native OTP verify · legacy password sign-in · a native app's code exchange |
 
 A cookie-less row is keyed by the hash of a secret **nobody holds** — generated, hashed, dropped.
 Nothing can present it, so the shortcut can never take it, with no extra branch in the authorize
@@ -248,7 +248,7 @@ whole reason the second clock exists.
 | Browser OTP verify (sign-in page) | front | yes | issued | yes | yes |
 | Native OTP verify (`flow_type: native`) | back | yes, cookie-less | none | yes | no |
 | Legacy `POST /v1/user/auth/token` | back | yes, cookie-less | none | yes | no |
-| `authorization_code` exchange | back | none — inherits the flow's `sid` | no | yes | — |
+| `authorization_code` exchange | back | a cookie-less row for a native client; none for a web client (inherits the flow's `sid`) or an `offline_access` grant (no `sid`) | no | yes | — |
 | `refresh_token` rotation | back | none — bumps `expires_at` | no | inherits | — |
 | `client_credentials` | back | **never** — there is no human, and a machine token must carry no `sid` | none | no | — |
 
@@ -274,8 +274,7 @@ silently — genuine cross-app single sign-on, with no server change. `SFSafariV
 embedded `WKWebView` have per-app cookie stores and get none (and RFC 8252 §8.12 forbids the latter
 anyway), so the client's choice of component, not this spec, decides whether a phone gets SSO.
 
-A native app on that path inherits the **browser's** user agent row, so signing out of the browser signs
-the app out. Whether that is right is an open question — see [Known limitations](#known-limitations).
+A client registered as `application_type: native` gets a cookie-less row of its own when it redeems the code. The row carries the approving browser row's `provider`, `auth_time`, `amr`, `acr` and cap (`max_expires_at`), and the family and its tokens carry the app row's `sid`, so signing out of the browser leaves the app signed in, while sign out everywhere, a password event or removing the app from the list ends it. A code whose approving browser row has ended is refused with `invalid_grant`, because nothing would later end the app's login. A failed write of the app row leaves the login under the browser's row. A web client's login stays under the browser's row. Giving a native app its own row is ESP User's rule: OIDC Dynamic Client Registration 1.0 §2 defines `application_type`, and no standard says which session a native app's login belongs to.
 
 ### Consulting a session (the SSO shortcut)
 
@@ -693,11 +692,6 @@ Absent means no hop: a deployment that never fills these behaves exactly as it d
   the re-login mints a new `sid`; the app's still-live family stays under the old row. For genuinely
   distinct contexts that is correct — two user agents — and for one browser it is a cosmetic duplicate a
   client may avoid by revoking its old token first.
-- **A native app on the RFC 8252 path inherits the browser's user agent.** Signing out of the system
-  browser signs the app out, and ending that user agent from the list ends both. Correct for the web,
-  arguably wrong for a phone. Three options remain open: accept it; register mobile clients so their
-  families carry no `sid`; or give the app its own row. Decide before the first native app ships on
-  that path — the cookie-less rows this spec adds are the mechanism for the third option.
 - **Re-installing an app without signing out creates a second cookie-less row.** An app that revokes its login first removes its row; otherwise the old one lingers until its retention passes or the person deletes it, and `user_agent_name`, `user_agent_type` and `signed_in_at` are what tell them apart.
 - **`amr`/`acr` are recorded and nothing consumes them yet.** Reserved with a named consumer
   (step-up), not dead fields.
