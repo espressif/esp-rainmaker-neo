@@ -94,9 +94,10 @@ def complete_cognito_login(cognito_url, username, password):
             for _ in range(300):
                 if "url" in callback_holder:
                     break
-                # The MCP proxy is a third-party client, so ESP User asks before issuing its code.
-                if "/user/login/consent" in page.url and page.get_by_role("button", name="Allow").is_visible():
-                    page.get_by_role("button", name="Allow").click()
+                # The MCP proxy is a third-party client, so ESP User asks before issuing its code; exact, because a clicked Allow becomes a disabled "Allowing…".
+                allow = page.get_by_role("button", name="Allow", exact=True)
+                if "/user/login/consent" in page.url and allow.is_visible():
+                    allow.click()
                 page.wait_for_timeout(100)
 
             assert "url" in callback_holder, \

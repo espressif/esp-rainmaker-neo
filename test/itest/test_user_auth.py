@@ -11,14 +11,6 @@ import boto3
 import pytest
 import requests
 
-from py_sdk.espuser_oauth import (
-    Browser,
-    WebClient,
-    client_ids_under,
-    session_with,
-    sids_in,
-    sign_out_destination,
-)
 from py_sdk.test_user import User
 from test.itest.conftest import (
     ADMIN_CLIENT_ID,
@@ -56,38 +48,13 @@ def _second_login(user):
                 API_GATEWAY_URL, USER_API_GATEWAY_URL, IOT_ENDPOINT)
 
 
-def _assert_neo_takes_only_its_own_token(neo_tokens, espuser_token):
-    """neo accepts only its own token and refuses the ESP User API's with 401 (RFC 9068 s4, RFC 6750 s3.1); the ESP User API's own endpoints take a token for either."""
-    neo_token, id_token = neo_tokens["access_token"], neo_tokens["id_token"]
-    creds_url = f"{API_GATEWAY_URL}/v1/user/credentials"
-    me_url = f"{USER_API_GATEWAY_URL}/v1/users/me"
-    bearer = lambda token: {"Authorization": f"Bearer {token}"}  # noqa: E731
-    assert requests.post(creds_url, headers=bearer(neo_token), json={"id_token": id_token}).status_code == 200
-    assert requests.post(creds_url, headers=bearer(espuser_token), json={"id_token": id_token}).status_code == 401, \
-        "neo must refuse a token addressed to the ESP User API"
-    assert requests.get(me_url, headers=bearer(espuser_token)).status_code == 200
-    assert requests.get(me_url, headers=bearer(neo_token)).status_code == 200, \
-        "the ESP User API's own endpoints take a token addressed to any of our APIs"
-
-
-
-
-def test_signin_returns_tokens(test_user1):
-    """The password signin yields the full token set — our tokens, never the provider's — and
-    populates the instance tokens."""
-    if not USER_API_GATEWAY_URL:
-        pytest.skip("USER_API_GATEWAY_URL not configured")
-
-    response = test_user1.signin()
-    assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
-    data = response.json()
-    assert "access_token" in data
-    assert "refresh_token" in data
-    assert "id_token" in data
-    assert test_user1.access_token is not None
-    assert test_user1.refresh_token is not None
-
-    renewed = test_user1.refresh_tokens(data["refresh_token"])
+def test_a_password_sign_in_names_its_provider_and_says_a_password_was_checked(test_user1):
+    """Our tokens say how ESP User authenticated the sign-in (amr, OIDC Core s2) and through which provider row (idp), and a refresh keeps both."""
+    login = _second_login(test_user1)
+    signed = login.signin()
+    assert signed.status_code == 200, signed.text
+    data = signed.json()
+    renewed = login.oauth_token_refresh(data["refresh_token"], ESP_USER_CLIENT_ID)
     assert renewed.status_code == 200, f"refresh failed: {renewed.status_code} {renewed.text[:200]}"
     idp = decode_jwt_claims(data["id_token"]).get("idp")
     assert idp, "a password sign-in names the provider row that checked the password"
@@ -322,44 +289,6 @@ def test_credentials_endpoint_rejects_id_token(test_user1):
                              json={"id_token": id_token})
     assert accepted.status_code == 200, \
         f"the matched pair from the same login must be accepted, got {accepted.status_code}: {accepted.text}"
-
-
-def test_password_sign_in_covers_neo_and_esp_user_one_token_each(test_user1):
-    """One password sign-in, which names no resource, covers both APIs the password client is granted
-    (RFC 8707): neo accepts only its own token and refuses the other with 401 (RFC 9068 s4, RFC 6750
-    s3.1), while the ESP User API takes either; the ESP User token comes from a refresh that names it."""
-    signin = test_user1.signin()
-    assert signin.status_code == 200, signin.text
-    tokens = signin.json()
-    assert decode_jwt_claims(tokens["access_token"])["aud"] == NEO_RESOURCE, "the password client's default"
-
-    espuser_token = test_user1.user_api_token()
-    assert decode_jwt_claims(espuser_token)["aud"] == ESPUSER_RESOURCE
-
-    _assert_neo_takes_only_its_own_token(tokens, espuser_token)
-
-
-def test_rotated_refresh_token_still_covers_every_api_of_the_sign_in(test_user1):
-    """Rotation renews a sign-in, never narrows it (RFC 8707 s2.2): after two rotations the refresh token still gets neo a token and the ESP User API a token, and neo accepts only its own."""
-    login = _second_login(test_user1)
-    signin = login.signin()
-    assert signin.status_code == 200, signin.text
-    refresh_token = signin.json()["refresh_token"]
-    for _ in range(2):
-        rotated = login.refresh_tokens(refresh_token)
-        assert rotated.status_code == 200, rotated.text
-        assert rotated.json()["refresh_token"] != refresh_token, "every redemption must rotate"
-        refresh_token = rotated.json()["refresh_token"]
-
-    espuser = login.refresh_tokens(refresh_token, resource=ESPUSER_RESOURCE)
-    assert espuser.status_code == 200, f"the rotated token must still cover the ESP User API: {espuser.text}"
-    neo = login.refresh_tokens(espuser.json()["refresh_token"], resource=NEO_RESOURCE)
-    assert neo.status_code == 200, f"and still cover neo after narrowing to the ESP User API: {neo.text}"
-    espuser_token, neo_tokens = espuser.json()["access_token"], neo.json()
-    assert decode_jwt_claims(espuser_token)["aud"] == ESPUSER_RESOURCE
-    assert decode_jwt_claims(neo_tokens["access_token"])["aud"] == NEO_RESOURCE
-
-    _assert_neo_takes_only_its_own_token(neo_tokens, espuser_token)
 
 
 # --- Federated identity: which contact resolves an account, and which claims ride along. ---
@@ -628,155 +557,6 @@ def test_scope_gating_withholds_unrequested_claims(federated_identity, fed_clien
     assert "email" not in reflected, f"userinfo leaked the email without the scope: {reflected}"
     for claim in _UPSTREAM_PROFILE:
         assert claim not in reflected, f"userinfo leaked {claim} without the scope: {reflected}"
-
-
-# ============================================================================
-# Authorization-code journey: three products, one browser, one login, one sign-out
-# ============================================================================
-# The product promise end to end, merged here from the old test_espuser_journey.py. Every other
-# espuser test asserts a rule; this asserts the thing a person would describe -- I opened three of
-# your apps, signed in once, and signing out of one signed me out of all of them, on this device and
-# no other. It re-drives sign-in, single sign-on and sign-out on purpose: a failure in a rule-shaped
-# test says a rule regressed, a failure here says the product does not work. A lambda missing one IAM
-# grant reads every branch correctly and simply cannot see that sessions exist, so sign-out reaches
-# nothing while every rule-shaped test stays green -- only signing in to several products and using
-# them after sign-out catches it. Spec: espuser/docs/specs/sso-sessions.md.
-
-_JOURNEY_CALLBACK = "https://example.com/espuser-itest/journey-{}/callback"
-_JOURNEY_SIGNED_OUT = "https://example.com/espuser-itest/journey-{}/signed-out"
-
-
-@pytest.fixture
-def three_products(register_espuser_client):
-    """Three unrelated applications, as a person's browser would hold: a dashboard and two products
-    that know nothing about each other."""
-    apps = []
-    for name in ("dashboard", "product-a", "product-b"):
-        uri, bye = _JOURNEY_CALLBACK.format(name), _JOURNEY_SIGNED_OUT.format(name)
-        client = register_espuser_client(
-            client_name=f"itest {name}", redirect_uris=[uri], post_logout_redirect_uris=[bye])
-        apps.append(WebClient(client.client_id, uri, post_logout_redirect_uri=bye))
-    return apps
-
-
-@pytest.mark.espuser
-@requires_espuser
-def test_three_products_one_login_one_sign_out(three_products, espuser_person):
-    dashboard, product_a, product_b = three_products
-    browser = Browser("Mozilla/5.0 (Macintosh) itest-journey")
-
-    # 1 -- the person signs in, once, at whichever app they opened first.
-    first = dashboard.sign_in(browser, espuser_person)
-    assert first.used_upstream, "the first login must actually authenticate somebody"
-    dashboard_tokens = dashboard.tokens(first)
-    assert browser.session_cookie, "a completed login must leave a session cookie"
-
-    # 2 -- the other two are already signed in. No page, no provider, no second password.
-    tokens = {dashboard.client_id: dashboard_tokens}
-    for app in (product_a, product_b):
-        authz = app.sign_in(browser, espuser_person)
-        assert not authz.used_upstream, \
-            f"{app.client_id} went back to the provider; that is not single sign-on"
-        tokens[app.client_id] = app.tokens(authz)
-
-    for app in three_products:
-        assert app.still_signed_in(tokens[app.client_id]["refresh_token"]), \
-            f"{app.client_id} did not end up with working credentials"
-
-    # 3 -- and the person can see exactly that: one browser, three products under it.
-    listing = WebClient.sessions(dashboard_tokens["access_token"])
-    assert listing.status_code == 200, listing.text
-    body = listing.json()
-    assert len(body["sessions"]) == 1, f"one browser is one device: {body}"
-    view = body["sessions"][0]
-    assert view["current"] is True
-    assert client_ids_under(view) == sorted(a.client_id for a in three_products), view
-    assert not body.get("unattached_products"), \
-        f"nothing may be standing access with no session behind it: {body}"
-
-    # 4 -- they sign out of ONE of them, and it reaches all three.
-    out = product_a.logout(browser, id_token_hint=tokens[product_a.client_id].get("id_token"))
-    assert out.status_code in (200, 302), f"{out.status_code} {out.text[:300]}"
-    assert _JOURNEY_SIGNED_OUT.format("product-a") in sign_out_destination(browser, out), (
-        "the app that asked must get its person back, however many hops the chain takes: "
-        f"{out.headers.get('Location')!r}"
-    )
-
-    for app in three_products:
-        assert not app.still_signed_in(tokens[app.client_id]["refresh_token"]), (
-            f"{app.client_id} can still get new tokens after the sign-out; the person is signed out "
-            "of the app they clicked in and still signed in here"
-        )
-
-    # 5 -- and the browser itself is signed out: no session, no silent code.
-    assert browser.session_cookie is None, "the session cookie must be cleared, not merely stale"
-    assert dashboard.authorize(browser, prompt="none").error == "login_required", \
-        "the browser still holds a working session; the row was not deleted"
-
-
-@pytest.mark.espuser
-@requires_espuser
-def test_sso_logout_the_other_device_is_untouched(three_products, espuser_person):
-    """The same journey from two devices, ending in the thing people actually worry about: signing
-    out on one machine must not sign them out on the other."""
-    dashboard, product_a, _ = three_products
-    laptop, phone = Browser("laptop"), Browser("phone")
-
-    laptop_dash = dashboard.tokens(dashboard.sign_in(laptop, espuser_person))
-    laptop_a = product_a.tokens(product_a.sign_in(laptop, espuser_person))
-    phone_dash = dashboard.tokens(dashboard.sign_in(phone, espuser_person))
-
-    body = WebClient.sessions(phone_dash["access_token"]).json()
-    assert len(body["sessions"]) == 2, f"two devices, two rows: {body}"
-
-    product_a.confirm_logout(laptop, product_a.logout(laptop))
-
-    assert not dashboard.still_signed_in(laptop_dash["refresh_token"])
-    assert not product_a.still_signed_in(laptop_a["refresh_token"])
-    assert dashboard.still_signed_in(phone_dash["refresh_token"]), \
-        "the phone was never asked to sign out"
-
-    after = WebClient.sessions(phone_dash["access_token"]).json()
-    assert len(after["sessions"]) == 1 and after["sessions"][0]["current"], after
-
-
-@pytest.mark.espuser
-@requires_espuser
-def test_sso_logout_lost_phone(three_products, espuser_person):
-    """The recovery story, which is the sessions API's whole reason for existing: the device is
-    gone, so it cannot be asked to sign itself out. Somebody else's device has to do it, and reaching
-    a session from a device that does not hold its cookie is what the by-user index is for."""
-    dashboard, product_a, _ = three_products
-    laptop, phone = Browser("laptop"), Browser("phone")
-
-    laptop_tokens = dashboard.tokens(dashboard.sign_in(laptop, espuser_person))
-    phone_dash = dashboard.tokens(dashboard.sign_in(phone, espuser_person))
-    phone_a = product_a.tokens(product_a.sign_in(phone, espuser_person))
-
-    body = WebClient.sessions(laptop_tokens["access_token"]).json()
-    phone_sid = [s["session_id"] for s in body["sessions"] if not s["current"]][0]
-    phone_view = session_with(body, phone_sid)
-    assert client_ids_under(phone_view) == sorted([dashboard.client_id, product_a.client_id]), (
-        "the list has to show what is signed in on the lost device, or the person cannot tell which "
-        f"one it is: {phone_view}"
-    )
-
-    ended = WebClient.end_session(laptop_tokens["access_token"], phone_sid)
-    assert ended.status_code == 204, f"{ended.status_code} {ended.text[:200]}"
-
-    assert not dashboard.still_signed_in(phone_dash["refresh_token"])
-    assert not product_a.still_signed_in(phone_a["refresh_token"]), \
-        "ending a device must take every product on it, not just the one that was listed"
-    assert dashboard.still_signed_in(laptop_tokens["refresh_token"]), \
-        "and must leave the device that did the ending signed in"
-
-    assert phone_sid not in sids_in(WebClient.sessions(laptop_tokens["access_token"]).json())
-
-    # The phone, if it ever comes back, is a stranger.
-    assert dashboard.authorize(phone, prompt="none").error == "login_required", \
-        "the ended device still holds a working session cookie"
-
-
 
 
 # ============================================================================

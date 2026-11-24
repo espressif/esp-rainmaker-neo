@@ -201,7 +201,7 @@ def test_alexa_rejects_a_token_for_another_api(test_user1, alexa_region_arn):
 
     refused = test_user1.alexa_discover_devices(region=region, token=test_user1.user_api_token())
     assert "event" not in refused, f"region {region}: a token addressed to the ESP User API must not discover: {refused}"
-    assert refused.get("errorMessage") == "failed to get identity id", f"region {region}: {refused}"
+    assert "invalid token audience" in refused.get("errorMessage", ""), f"region {region}: {refused}"
 
 
 def test_alexa_control(user_with_1_dev_each_in_2_groups, alexa_region_arn):

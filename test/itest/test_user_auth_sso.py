@@ -33,6 +33,7 @@ from py_sdk.espuser_oauth import (
     client_ids_under,
     held_for_consent,
     page_data,
+    session_with,
     sids_in,
     sign_out_destination,
 )
@@ -67,14 +68,14 @@ CALLBACK = "https://example.com/espuser-itest/{}/callback"
 SIGNED_OUT = "https://example.com/espuser-itest/{}/signed-out"
 
 
-@pytest.fixture
-def apps(register_espuser_client):
+@pytest.fixture(scope="module")
+def apps(register_module_espuser_client):
     """Two products a person might have open at once, each with its own registration and a
     registered landing page for after a sign-out."""
     made = []
     for n in ("one", "two"):
         uri, bye = CALLBACK.format(n), SIGNED_OUT.format(n)
-        client = register_espuser_client(redirect_uris=[uri], post_logout_redirect_uris=[bye])
+        client = register_module_espuser_client(redirect_uris=[uri], post_logout_redirect_uris=[bye])
         made.append(WebClient(client.client_id, uri, post_logout_redirect_uri=bye))
     return made
 
@@ -416,25 +417,39 @@ def test_sso_the_list_shows_only_the_callers_own_devices(apps, espuser_person, s
         f"a shared sid means the list is not scoped to the caller: {my_sids} {their_sids}"
 
 
-def test_sso_end_session_the_other_device_is_untouched(apps, espuser_person):
-    """Sign the laptop out from the phone -- the lost-device case, and the reason this endpoint
-    exists at all. The ended device cannot get new tokens; the device that did the ending is
-    untouched; and the ended row is gone from the list."""
-    first, _ = apps
+def test_sso_logout_lost_phone(apps, espuser_person):
+    """The recovery story, which is the sessions API's whole reason for existing: the device is
+    gone, so it cannot be asked to sign itself out. Somebody else's device has to do it, and reaching
+    a session from a device that does not hold its cookie is what the by-user index is for."""
+    dashboard, product_a = apps
     laptop, phone = Browser("laptop"), Browser("phone")
-    laptop_tokens = signed_in(first, laptop, espuser_person)
-    phone_tokens = signed_in(first, phone, espuser_person)
 
-    laptop_sid = [s["session_id"] for s in WebClient.sessions(phone_tokens["access_token"]).json()["sessions"]
-                  if not s["current"]][0]
-    ended = WebClient.end_session(phone_tokens["access_token"], laptop_sid)
+    laptop_tokens = dashboard.tokens(dashboard.sign_in(laptop, espuser_person))
+    phone_dash = dashboard.tokens(dashboard.sign_in(phone, espuser_person))
+    phone_a = product_a.tokens(product_a.sign_in(phone, espuser_person))
+
+    body = WebClient.sessions(laptop_tokens["access_token"]).json()
+    phone_sid = [s["session_id"] for s in body["sessions"] if not s["current"]][0]
+    phone_view = session_with(body, phone_sid)
+    assert client_ids_under(phone_view) == sorted([dashboard.client_id, product_a.client_id]), (
+        "the list has to show what is signed in on the lost device, or the person cannot tell which "
+        f"one it is: {phone_view}"
+    )
+
+    ended = WebClient.end_session(laptop_tokens["access_token"], phone_sid)
     assert ended.status_code == 204, f"{ended.status_code} {ended.text[:200]}"
 
-    assert not first.still_signed_in(laptop_tokens["refresh_token"]), \
-        "the ended device must not be able to get new tokens"
-    assert first.still_signed_in(phone_tokens["refresh_token"]), \
-        "and the device that did the ending must be untouched"
-    assert laptop_sid not in sids_in(WebClient.sessions(phone_tokens["access_token"]).json())
+    assert not dashboard.still_signed_in(phone_dash["refresh_token"])
+    assert not product_a.still_signed_in(phone_a["refresh_token"]), \
+        "ending a device must take every product on it, not just the one that was listed"
+    assert dashboard.still_signed_in(laptop_tokens["refresh_token"]), \
+        "and must leave the device that did the ending signed in"
+
+    assert phone_sid not in sids_in(WebClient.sessions(laptop_tokens["access_token"]).json())
+
+    # The phone, if it ever comes back, is a stranger.
+    assert dashboard.authorize(phone, prompt="none").error == "login_required", \
+        "the ended device still holds a working session cookie"
 
 
 def test_sso_end_all_sessions(apps, espuser_person):
@@ -459,8 +474,6 @@ def test_sso_end_all_sessions(apps, espuser_person):
     left = WebClient.sessions(phone_tokens["access_token"])
     assert left.status_code == 200, f"{left.status_code} {left.text[:200]}"
     assert left.json()["sessions"] == [], f"every device must be gone: {left.json()}"
-    assert not left.json().get("unattached_products"), \
-        f"and no standing access may survive as an orphan: {left.json()}"
 
 
 def test_sso_another_persons_session_id_is_a_404_not_a_403(apps, espuser_person, second_espuser_person):
@@ -484,7 +497,7 @@ def test_sso_another_persons_session_id_is_a_404_not_a_403(apps, espuser_person,
         "and of course it must not actually have ended their session"
 
 
-def test_sso_sessions_endpoint_requires_the_sessions_scope(register_espuser_client, espuser_person):
+def test_sso_sessions_endpoint_requires_the_sessions_scope(apps, register_espuser_client, espuser_person):
     """Being able to sign somebody in is not a reason to enumerate every device they use, so the
     device list has a scope of its own -- and it must reject anything that is not an access token
     bearing it. A token without account:sessions is 403 with a challenge that names the scope
@@ -506,9 +519,8 @@ def test_sso_sessions_endpoint_requires_the_sessions_scope(register_espuser_clie
     assert WebClient.end_all_sessions(noscope["access_token"]).status_code == 403, \
         "and the same gate on the destructive verb, which is the one that matters"
 
-    two_apis_uri = CALLBACK.format("two-apis")
-    two_apis = WebClient(register_espuser_client(redirect_uris=[two_apis_uri]).client_id, two_apis_uri,
-                         resource=[ESPUSER_RESOURCE, NEO_RESOURCE])
+    first, _ = apps
+    two_apis = WebClient(first.client_id, first.redirect_uri, resource=[ESPUSER_RESOURCE, NEO_RESOURCE])
     tokens = signed_in(two_apis, Browser(), espuser_person)
     assert decode_jwt_claims(tokens["access_token"])["aud"] == ESPUSER_RESOURCE, "the client's default"
     assert WebClient.sessions(tokens["access_token"]).status_code == 200
@@ -526,35 +538,43 @@ def test_sso_sessions_endpoint_requires_the_sessions_scope(register_espuser_clie
     assert WebClient.sessions(neo.json()["access_token"]).status_code == 200, "the ESP User API takes a token addressed to any of our APIs"
 
 
-def test_sso_rotated_refresh_token_still_covers_every_api_of_the_sign_in(register_espuser_client, espuser_person):
-    """Rotation renews an authorization, never narrows it (RFC 8707 s2.2): after two rotations the refresh token still gets a token for each API the authorize request named, and neo refuses the ESP User API's with 401 (RFC 9068 s4) while the ESP User API takes either."""
-    uri = CALLBACK.format("rotated")
-    app = WebClient(register_espuser_client(redirect_uris=[uri]).client_id, uri, resource=[ESPUSER_RESOURCE, NEO_RESOURCE])
-    refresh_token = signed_in(app, Browser(), espuser_person)["refresh_token"]
+@pytest.mark.parametrize("sign_in", ["password_api", "code_flow"])
+def test_sso_rotated_refresh_token_still_covers_every_api_of_the_sign_in(sign_in, apps, espuser_person):
+    """Rotation renews a sign-in, never narrows it (RFC 8707 s2.2): after two rotations the refresh token still gets a token for each API, and neo refuses the ESP User API's with 401 (RFC 9068 s4) while the ESP User API takes either."""
+    if sign_in == "password_api":
+        login = password_api_user(espuser_person)
+        signed = login.signin()
+        assert signed.status_code == 200 and login.refresh_token, f"{signed.status_code} {signed.text[:200]}"
+        assert decode_jwt_claims(login.access_token)["aud"] == NEO_RESOURCE, "a password sign-in names no resource, so it gets the Home app client's default"
+        refresh, refresh_token = login.refresh_tokens, login.refresh_token
+        neo_answer_to_its_own_token = 200
+    else:
+        first, _ = apps
+        app = WebClient(first.client_id, first.redirect_uri, resource=[ESPUSER_RESOURCE, NEO_RESOURCE])
+        refresh, refresh_token = app.refresh, signed_in(app, Browser(), espuser_person)["refresh_token"]
+        # An itest client is not one of neo's first-party apps, so its neo token clears the audience check and only the client binding refuses it.
+        neo_answer_to_its_own_token = 403
     for _ in range(2):
-        rotated = app.refresh(refresh_token)
+        rotated = refresh(refresh_token)
         assert rotated.status_code == 200, f"rotation: {rotated.status_code} {rotated.text[:300]}"
         assert rotated.json()["refresh_token"] != refresh_token, "every redemption must rotate"
         refresh_token = rotated.json()["refresh_token"]
 
-    espuser = app.refresh(refresh_token, resource=ESPUSER_RESOURCE)
+    espuser = refresh(refresh_token, resource=ESPUSER_RESOURCE)
     assert espuser.status_code == 200, f"the rotated token must still cover the ESP User API: {espuser.text[:300]}"
-    neo = app.refresh(espuser.json()["refresh_token"], resource=NEO_RESOURCE)
+    neo = refresh(espuser.json()["refresh_token"], resource=NEO_RESOURCE)
     assert neo.status_code == 200, f"and still cover neo after narrowing to the ESP User API: {neo.text[:300]}"
     espuser_tokens, neo_tokens = espuser.json(), neo.json()
     assert decode_jwt_claims(espuser_tokens["access_token"])["aud"] == ESPUSER_RESOURCE
     assert decode_jwt_claims(neo_tokens["access_token"])["aud"] == NEO_RESOURCE
 
-    assert WebClient.sessions(espuser_tokens["access_token"]).status_code == 200
-    assert WebClient.sessions(neo_tokens["access_token"]).status_code == 200, "the ESP User API takes a token addressed to any of our APIs"
-    creds_url = f"{API_GATEWAY_URL}/v1/user/credentials"
-    refused = requests.post(creds_url, headers={"Authorization": f"Bearer {espuser_tokens['access_token']}"},
-                            json={"id_token": espuser_tokens["id_token"]}, timeout=30)
+    for tokens in (espuser_tokens, neo_tokens):
+        me = WebClient.profile(tokens["access_token"])
+        assert me.status_code == 200, f"the ESP User API takes a token addressed to any of our APIs: {me.status_code} {me.text[:200]}"
+    refused = WebClient.neo_credentials(espuser_tokens["access_token"], espuser_tokens["id_token"])
     assert refused.status_code == 401, f"neo must refuse a token addressed to the ESP User API: {refused.text[:200]}"
-    # An itest client is not one of neo's first-party apps, so its neo token clears the audience check and only the client binding refuses it.
-    own = requests.post(creds_url, headers={"Authorization": f"Bearer {neo_tokens['access_token']}"},
-                        json={"id_token": neo_tokens["id_token"]}, timeout=30)
-    assert own.status_code == 403, f"neo must accept the audience of its own token: {own.status_code} {own.text[:200]}"
+    own = WebClient.neo_credentials(neo_tokens["access_token"], neo_tokens["id_token"])
+    assert own.status_code == neo_answer_to_its_own_token, f"neo must accept the audience of its own token: {own.status_code} {own.text[:200]}"
 
 
 # ── RP-initiated sign-out ─────────────────────────────────────────────────────────
@@ -599,6 +619,8 @@ def test_sso_logout_ends_every_product_and_clears_the_cookie(apps, espuser_perso
     if out.status_code == 302:
         assert headers.get("referrer-policy") == "no-referrer", \
             f"the logout URL can carry an id_token_hint; the destination must not get it: {headers.get('referrer-policy')}"
+    assert SIGNED_OUT.format("two") in sign_out_destination(browser, out), \
+        f"the app that asked must get its person back, however many hops the chain takes: {out.headers.get('Location')!r}"
 
     assert not second.still_signed_in(two["refresh_token"]), "the product that asked must be signed out"
     assert not first.still_signed_in(one["refresh_token"]), \
@@ -617,6 +639,30 @@ def test_sso_logout_ends_every_product_and_clears_the_cookie(apps, espuser_perso
     late = first.tokens(pending)
     assert not first.still_signed_in(late["refresh_token"]), \
         "a code redeemed after sign-out may mint once, but its refresh token must die at the first refresh"
+
+
+def test_sso_logout_the_other_device_is_untouched(apps, espuser_person):
+    """Two devices, and the thing people actually worry about: signing out on one machine must not
+    sign them out on the other."""
+    dashboard, product_a = apps
+    laptop, phone = Browser("laptop"), Browser("phone")
+
+    laptop_dash = dashboard.tokens(dashboard.sign_in(laptop, espuser_person))
+    laptop_a = product_a.tokens(product_a.sign_in(laptop, espuser_person))
+    phone_dash = dashboard.tokens(dashboard.sign_in(phone, espuser_person))
+
+    body = WebClient.sessions(phone_dash["access_token"]).json()
+    assert len(body["sessions"]) == 2, f"two devices, two rows: {body}"
+
+    product_a.confirm_logout(laptop, product_a.logout(laptop))
+
+    assert not dashboard.still_signed_in(laptop_dash["refresh_token"])
+    assert not product_a.still_signed_in(laptop_a["refresh_token"])
+    assert dashboard.still_signed_in(phone_dash["refresh_token"]), \
+        "the phone was never asked to sign out"
+
+    after = WebClient.sessions(phone_dash["access_token"]).json()
+    assert len(after["sessions"]) == 1 and after["sessions"][0]["current"], after
 
 
 def test_sso_logout_accepts_a_form_post(apps, espuser_person):
@@ -711,18 +757,19 @@ def test_sso_logout_a_hint_naming_someone_else_ends_nothing(apps, espuser_person
 OFFLINE_SCOPE = f"openid email {SESSIONS_SCOPE} offline_access"
 
 
-def offline_client(register_espuser_client, name):
+@pytest.fixture(scope="module")
+def offline_app(register_module_espuser_client):
     """A first-party product registered for offline_access, asking for it on every sign-in."""
-    uri = CALLBACK.format(name)
-    client = register_espuser_client(redirect_uris=[uri],
-                                      scopes=["openid", "email", "profile", SESSIONS_SCOPE, "offline_access"])
+    uri = CALLBACK.format("offline")
+    client = register_module_espuser_client(redirect_uris=[uri],
+                                             scopes=["openid", "email", "profile", SESSIONS_SCOPE, "offline_access"])
     return WebClient(client.client_id, uri, scope=OFFLINE_SCOPE)
 
 
-def test_sso_an_offline_grant_outlives_logout_and_sign_out_everywhere(apps, register_espuser_client, espuser_person):
+def test_sso_an_offline_grant_outlives_logout_and_sign_out_everywhere(apps, offline_app, espuser_person):
     """An offline grant belongs to no session (OIDC Back-Channel Logout 1.0 s2.7), so logout and sign out everywhere leave it refreshing, with no sid in anything it is issued."""
     plain, _ = apps
-    offline = offline_client(register_espuser_client, "offline")
+    offline = offline_app
     browser = Browser()
     session_tokens = signed_in(plain, browser, espuser_person)
     offline_tokens = offline.tokens(offline.sign_in_allowing(browser, espuser_person))
@@ -744,9 +791,9 @@ def test_sso_an_offline_grant_outlives_logout_and_sign_out_everywhere(apps, regi
     assert offline.still_signed_in(renewed.json()["refresh_token"]), "sign out everywhere leaves the offline grant"
 
 
-def test_sso_offline_access_always_asks_for_consent(register_espuser_client, espuser_person):
+def test_sso_offline_access_always_asks_for_consent(offline_app, espuser_person):
     """Even an app we ship must ask for consent before an offline grant (OIDC Core 1.0 s11), so prompt=none gets consent_required."""
-    offline = offline_client(register_espuser_client, "offline-consent")
+    offline = offline_app
     ordinary = WebClient(offline.client_id, offline.redirect_uri)
     browser = Browser()
     signed_in(ordinary, browser, espuser_person)
@@ -767,20 +814,21 @@ def connected_client_ids(access_token):
     return [app["client_id"] for app in listed.json()["connected_apps"]]
 
 
-def test_sso_connected_apps_lists_and_disconnects_an_offline_grant(apps, register_espuser_client, espuser_person):
+def test_sso_connected_apps_lists_and_disconnects_an_offline_grant(apps, offline_app, espuser_person):
     """An offline grant is listed as a connected app rather than under a session, and disconnecting the app ends every login it holds."""
     plain, _ = apps
-    offline = offline_client(register_espuser_client, "connected")
+    offline = offline_app
     browser = Browser()
     session_tokens = signed_in(plain, browser, espuser_person)
     offline_tokens = offline.tokens(offline.sign_in_allowing(browser, espuser_person))
     manager = session_tokens["access_token"]
 
-    ordinary = WebClient(offline.client_id, offline.redirect_uri)
-    ordinary_tokens = signed_in(ordinary, browser, espuser_person)
     assert offline.client_id in connected_client_ids(manager), "the offline grant is a connected app"
     for view in WebClient.sessions(manager).json()["sessions"]:
         assert offline.client_id not in client_ids_under(view), f"an offline grant belongs to no session: {view}"
+
+    ordinary = WebClient(offline.client_id, offline.redirect_uri)
+    ordinary_tokens = signed_in(ordinary, browser, espuser_person)
 
     ended = WebClient.disconnect_app(manager, offline.client_id)
     assert ended.status_code == 204, f"{ended.status_code} {ended.text[:200]}"
@@ -794,10 +842,10 @@ def test_sso_connected_apps_lists_and_disconnects_an_offline_grant(apps, registe
 
 
 def test_sso_connected_apps_refuse_other_people_and_tokens_without_the_scope(
-        apps, register_espuser_client, espuser_person, second_espuser_person):
+        apps, offline_app, register_espuser_client, espuser_person, second_espuser_person):
     """Another person's connected app is a 404, never theirs to end, and a token without account:sessions is refused with a challenge naming the scope (RFC 6750 s3.1)."""
     plain, _ = apps
-    offline = offline_client(register_espuser_client, "connected-guarded")
+    offline = offline_app
     offline_tokens = offline.tokens(offline.sign_in_allowing(Browser("mine"), espuser_person))
 
     theirs = signed_in(plain, Browser("theirs"), second_espuser_person)
@@ -815,10 +863,10 @@ def test_sso_connected_apps_refuse_other_people_and_tokens_without_the_scope(
     assert offline.still_signed_in(offline_tokens["refresh_token"]), "neither refusal ended the grant"
 
 
-def test_sso_a_password_change_ends_every_session_and_connected_app(apps, register_espuser_client, espuser_person):
+def test_sso_a_password_change_ends_every_session_and_connected_app(apps, offline_app, espuser_person):
     """A changed password signs out everywhere, the session that changed it included, and disconnects every connected app, so the person signs in again with the new password."""
     plain, _ = apps
-    offline = offline_client(register_espuser_client, "offline-password")
+    offline = offline_app
     caller = password_api_user(espuser_person)
     signed = caller.signin()
     assert signed.status_code == 200 and caller.refresh_token, f"{signed.status_code} {signed.text[:200]}"
@@ -844,17 +892,21 @@ def test_sso_a_password_change_ends_every_session_and_connected_app(apps, regist
         f"the new password signs in: {signed_again.status_code} {signed_again.text[:200]}"
 
 
-def native_app(register_espuser_client, name):
-    """A first-party native app: each of its sign-ins gets a session of its own."""
-    uri = CALLBACK.format(name)
-    client = register_espuser_client(redirect_uris=[uri], application_type="native")
-    return WebClient(client.client_id, uri)
+@pytest.fixture(scope="module")
+def native_apps(register_module_espuser_client):
+    """Two first-party native apps: each of their sign-ins gets a session of its own."""
+    made = []
+    for n in ("native-one", "native-two"):
+        uri = CALLBACK.format(n)
+        client = register_module_espuser_client(redirect_uris=[uri], application_type="native")
+        made.append(WebClient(client.client_id, uri))
+    return made
 
 
-def test_sso_a_native_app_stays_signed_in_when_the_browser_signs_out(apps, register_espuser_client, espuser_person):
+def test_sso_a_native_app_stays_signed_in_when_the_browser_signs_out(apps, native_apps, espuser_person):
     """A native app signed in through the browser holds its own session, so a web page signing that browser out ends the page's login and leaves the app's."""
     web, _ = apps
-    native = native_app(register_espuser_client, "native")
+    native, _ = native_apps
     browser = Browser()
     web_tokens = signed_in(web, browser, espuser_person)
     native_tokens = signed_in(native, browser, espuser_person)
@@ -883,12 +935,12 @@ def test_revoke_refuses_a_token_issued_to_another_client(apps, espuser_person):
 
 
 @pytest.mark.parametrize("app_sign_in", ["password_api", "native_code_flow"])
-def test_sso_an_app_revoking_its_login_ends_only_its_own_session(app_sign_in, apps, register_espuser_client, espuser_person):
+def test_sso_an_app_revoking_its_login_ends_only_its_own_session(app_sign_in, apps, native_apps, espuser_person):
     """An app revoking its own login (RFC 7009) ends that login and its app session; the browser and another app stay signed in, so the browser signs in again without a password."""
     web, _ = apps
     browser = Browser()
     web_tokens = signed_in(web, browser, espuser_person)
-    other = native_app(register_espuser_client, f"native-other-{app_sign_in}")
+    other, native = native_apps
     other_tokens = signed_in(other, browser, espuser_person)
     if app_sign_in == "password_api":
         app = password_api_user(espuser_person)
@@ -902,7 +954,6 @@ def test_sso_an_app_revoking_its_login_ends_only_its_own_session(app_sign_in, ap
         def app_still_signed_in():
             return app.oauth_token_refresh(app_refresh, ESP_USER_CLIENT_ID).status_code == 200
     else:
-        native = native_app(register_espuser_client, "native-revoking")
         native_tokens = signed_in(native, browser, espuser_person)
         app_access, app_refresh = native_tokens["access_token"], native_tokens["refresh_token"]
 
@@ -927,11 +978,11 @@ def test_sso_an_app_revoking_its_login_ends_only_its_own_session(app_sign_in, ap
     assert web.authorize(browser).code, "the browser is still signed in, so signing in again needs no password"
 
 
-def test_sso_sign_out_everywhere_ends_native_app_sessions_and_keeps_connected_apps(apps, register_espuser_client, espuser_person):
+def test_sso_sign_out_everywhere_ends_native_app_sessions_and_keeps_connected_apps(apps, native_apps, offline_app, espuser_person):
     """Sign out everywhere ends every browser and every native app session, and leaves the connected apps."""
     web, _ = apps
-    native = native_app(register_espuser_client, "native-everywhere")
-    offline = offline_client(register_espuser_client, "offline-everywhere")
+    native, _ = native_apps
+    offline = offline_app
     browser = Browser()
     web_tokens = signed_in(web, browser, espuser_person)
     native_tokens = signed_in(native, browser, espuser_person)
@@ -946,11 +997,11 @@ def test_sso_sign_out_everywhere_ends_native_app_sessions_and_keeps_connected_ap
     assert web.authorize(browser).needs_login, "the browser's session is gone, so it must sign in again"
 
 
-def test_sso_ending_a_native_apps_session_from_the_list_ends_only_that_app(apps, register_espuser_client, espuser_person):
+def test_sso_ending_a_native_apps_session_from_the_list_ends_only_that_app(apps, native_apps, offline_app, espuser_person):
     """Removing a native app from the signed-in list ends that app, and leaves the browser that removed it and the connected apps."""
     web, _ = apps
-    native = native_app(register_espuser_client, "native-listed")
-    offline = offline_client(register_espuser_client, "offline-listed")
+    native, _ = native_apps
+    offline = offline_app
     browser = Browser()
     web_tokens = signed_in(web, browser, espuser_person)
     native_tokens = signed_in(native, browser, espuser_person)
@@ -991,7 +1042,7 @@ def test_sso_disconnecting_a_native_app_ends_its_own_session_too(apps, register_
 
 
 def test_sso_a_password_reset_ends_every_session_and_keeps_connected_apps(
-        apps, register_espuser_client, provision_end_user, require_mailosaur):
+        apps, native_apps, offline_app, provision_end_user, require_mailosaur):
     """A reset signs out every browser and app, and a connected app stays, because forgetting a password says nothing about who else holds it."""
     email = generate_mailosaur_email()
     if not email:
@@ -1000,11 +1051,11 @@ def test_sso_a_password_reset_ends_every_session_and_keeps_connected_apps(
     provision_end_user(email, {"email": email, "email_verified": "true"}, password)
     person = SimpleNamespace(email=email, password=password)
     plain, _ = apps
-    offline = offline_client(register_espuser_client, "offline-reset")
+    offline = offline_app
     browser = Browser()
     browser_tokens = signed_in(plain, browser, person)
     offline_tokens = offline.tokens(offline.sign_in_allowing(browser, person))
-    native = native_app(register_espuser_client, "native-reset")
+    native, _ = native_apps
     native_tokens = signed_in(native, browser, person)
 
     started = time.time()

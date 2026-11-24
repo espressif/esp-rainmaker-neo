@@ -20,8 +20,8 @@ Two ideas, and they are the whole module:
       clients can be driven from one; that combination is what makes the sign-out tests
       possible.
 
-`pkce_pair` and `cognito_hosted_login` live here, and the API base URL is injected by the
-harness (`API_BASE`, set by conftest from the deployment outputs), so this is a py_sdk client
+`pkce_pair` and `cognito_hosted_login` live here, and the API base URLs are injected by the
+harness (`API_BASE` and `NEO_API_BASE`, set by conftest from the deployment outputs), so this is a py_sdk client
 that imports nothing from the test dir. A login types the password on our own sign-in page,
 which checks it against the deployment's Cognito pool.
 """
@@ -42,6 +42,8 @@ LOGOUT_PARAMS = ("id_token_hint", "logout_hint", "client_id", "post_logout_redir
 #: outputs) rather than imported, so this module is a py_sdk client with no dependency on the
 #: test dir. Set once, before any test runs.
 API_BASE = ""
+#: The RainMaker Neo API base URL, injected the same way, for the one neo call a product makes with its tokens.
+NEO_API_BASE = ""
 
 
 def pkce_pair():
@@ -333,6 +335,17 @@ class WebClient:
     def disconnect_app(access_token, client_id):
         return requests.delete(f"{API_BASE}/v1/user/connected-apps/{client_id}",
                                headers={"Authorization": f"Bearer {access_token}"}, timeout=30)
+
+    @staticmethod
+    def profile(access_token):
+        return requests.get(f"{API_BASE}/v1/users/me",
+                            headers={"Authorization": f"Bearer {access_token}"}, timeout=30)
+
+    @staticmethod
+    def neo_credentials(access_token, id_token):
+        """POST /v1/user/credentials on neo, which pairs one sign-in's access token and id token."""
+        return requests.post(f"{NEO_API_BASE}/v1/user/credentials", json={"id_token": id_token},
+                             headers={"Authorization": f"Bearer {access_token}"}, timeout=30)
 
     def logout(self, browser, *, id_token_hint=None, post_logout_redirect_uri=None,
                with_client_id=True):

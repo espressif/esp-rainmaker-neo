@@ -133,8 +133,9 @@ ADMIN_CLIENT_ID = esp_user_base_outputs.get('EspAdminUserPoolClientId') or rmng_
 USER_API_GATEWAY_URL = esp_user_base_outputs.get('EspUserApiUrl', '')
 # The client the password API issues to, which the identity pool and /v1/user/credentials trust.
 ESP_USER_CLIENT_ID = esp_user_base_outputs.get('EspUserClientId', '')
-# The OAuth test client (py_sdk.espuser_oauth) is deployment-agnostic; give it this run's base URL.
+# The OAuth test client (py_sdk.espuser_oauth) is deployment-agnostic; give it this run's base URLs.
 espuser_oauth.API_BASE = USER_API_GATEWAY_URL
+espuser_oauth.NEO_API_BASE = API_GATEWAY_URL
 
 # ── ESP User browser sessions ──────────────────────────────────────────────────────
 # The __Host- prefix on these cookie names is a security property, not a spelling: a browser
@@ -2674,15 +2675,8 @@ def seed_child(bridge_in_group):
 # ============================================================================
 
 
-@pytest.fixture
-def register_espuser_client(admin_user):
-    """Factory for throwaway OAuth clients, all removed afterwards.
-
-    A factory rather than a fixture per shape because these tests need several clients at once --
-    three products open in one browser is the case the journey test is about -- and each needs its
-    own redirect_uri. This is also the only place an itest client is granted the account:sessions
-    scope, without which the sessions API refuses its tokens.
-    """
+def _espuser_clients(admin):
+    """Yield a factory that registers OAuth clients through admin, then remove every client it made."""
     made = []
 
     def _make(**overrides):
@@ -2699,7 +2693,7 @@ def register_espuser_client(admin_user):
             "default_resource": ESPUSER_RESOURCE,
         }
         body.update(overrides)
-        created = admin_user.create_oauth_client(body)
+        created = admin.create_oauth_client(body)
         assert created.status_code == 201, f"registering {client_id}: {created.text}"
         made.append(client_id)
         return SimpleNamespace(
@@ -2710,7 +2704,28 @@ def register_espuser_client(admin_user):
 
     yield _make
     for client_id in made:
-        admin_user.delete_oauth_client(client_id)
+        admin.delete_oauth_client(client_id)
+
+
+@pytest.fixture
+def register_espuser_client(admin_user):
+    """Factory for throwaway OAuth clients, all removed afterwards.
+
+    A factory rather than a fixture per shape because these tests need several clients at once --
+    two products open in one browser, say -- and each needs its own redirect_uri. This is also the only place an itest client is granted the account:sessions
+    scope, without which the sessions API refuses its tokens.
+    """
+    yield from _espuser_clients(admin_user)
+
+
+@pytest.fixture(scope="module")
+def register_module_espuser_client():
+    """register_espuser_client for clients every test in a module shares, removed when the module ends: a client is only configuration, and each test signs in a person of its own."""
+    admin = admin_user_pool.acquire()
+    try:
+        yield from _espuser_clients(admin)
+    finally:
+        admin_user_pool.release(admin)
 
 
 @pytest.fixture
