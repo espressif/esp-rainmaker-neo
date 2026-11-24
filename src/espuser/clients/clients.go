@@ -7,6 +7,7 @@
 package clients
 
 import (
+	"cmp"
 	"context"
 	"crypto/subtle"
 	"encoding/base64"
@@ -58,6 +59,7 @@ type ClientResponse struct {
 	ClientID                string   `json:"client_id"`
 	ClientName              string   `json:"client_name,omitempty"`
 	ClientType              string   `json:"client_type"`
+	ApplicationType         string   `json:"application_type"`
 	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
 	RedirectURIs            []string `json:"redirect_uris,omitempty"`
 	PostLogoutRedirectURIs  []string `json:"post_logout_redirect_uris,omitempty"`
@@ -75,6 +77,11 @@ type ClientResponse struct {
 	ClientSecret string `json:"client_secret,omitempty"`
 	CreatedAt    int64  `json:"created_at,omitempty"`
 	UpdatedAt    int64  `json:"updated_at,omitempty"`
+}
+
+// IsNative reports whether the client is a native app, whose login holds a session of its own.
+func (c *ClientResponse) IsNative() bool {
+	return c.ApplicationType == oauth_clients_db.ApplicationTypeNative
 }
 
 // AllowsRedirectURI reports whether uri exactly matches a registered redirect URI (no wildcards/prefixes — open-redirector defense, RFC 9700 §2.1).
@@ -135,6 +142,7 @@ type CreateInput struct {
 	ClientID               string
 	ClientName             string
 	ClientType             string
+	ApplicationType        string
 	RedirectURIs           []string
 	PostLogoutRedirectURIs []string
 	GrantTypes             []string
@@ -148,9 +156,11 @@ type CreateInput struct {
 }
 
 // UpdateInput is the full desired state of a client's mutable fields (PUT semantics): the
-// values here replace the stored ones wholesale, so an omitted field resets to empty/default.
+// values here replace the stored ones wholesale, so an omitted field resets to empty/default, except ApplicationType.
 type UpdateInput struct {
-	ClientName             string
+	ClientName string
+	// ApplicationType replaces the stored type when set; empty keeps it, because a seeded native app must not turn web on an update that omits the field.
+	ApplicationType        string
 	RedirectURIs           []string
 	PostLogoutRedirectURIs []string
 	GrantTypes             []string
@@ -287,6 +297,9 @@ func (s *Service) Update(clientID string, in UpdateInput) (*ClientResponse, erro
 		return nil, err
 	}
 	entry.ClientName = in.ClientName
+	if in.ApplicationType != "" {
+		entry.ApplicationType = in.ApplicationType
+	}
 	entry.RedirectURIs = in.RedirectURIs
 	entry.PostLogoutRedirectURIs = in.PostLogoutRedirectURIs
 	entry.GrantTypes = in.GrantTypes
@@ -349,6 +362,7 @@ func buildEntry(in CreateInput) (*oauth_clients_db.OAuthClientEntry, error) {
 		ClientID:               clientID,
 		ClientName:             in.ClientName,
 		ClientType:             in.ClientType,
+		ApplicationType:        cmp.Or(in.ApplicationType, oauth_clients_db.ApplicationTypeWeb),
 		RedirectURIs:           in.RedirectURIs,
 		PostLogoutRedirectURIs: in.PostLogoutRedirectURIs,
 		GrantTypes:             in.GrantTypes,
@@ -379,6 +393,11 @@ func validateEntry(e *oauth_clients_db.OAuthClientEntry) error {
 	case oauth_clients_db.ClientTypePublic, oauth_clients_db.ClientTypeConfidential:
 	default:
 		return rmerror.NewRMError(nil, fmt.Sprintf("client_type must be public or confidential, got %q", e.ClientType))
+	}
+	switch e.ApplicationType {
+	case "", oauth_clients_db.ApplicationTypeWeb, oauth_clients_db.ApplicationTypeNative:
+	default:
+		return rmerror.NewRMError(nil, fmt.Sprintf("application_type must be web or native, got %q", e.ApplicationType))
 	}
 	// Both redirect lists get the same treatment, because they are one rule: each names a URL
 	// this server will send a BROWSER to on a caller's say-so. A bad entry here is an open
@@ -546,6 +565,7 @@ func toClient(e *oauth_clients_db.OAuthClientEntry, getSecret bool) ClientRespon
 		ClientID:                e.ClientID,
 		ClientName:              e.ClientName,
 		ClientType:              e.ClientType,
+		ApplicationType:         cmp.Or(e.ApplicationType, oauth_clients_db.ApplicationTypeWeb),
 		TokenEndpointAuthMethod: authMethod,
 		RedirectURIs:            e.RedirectURIs,
 		PostLogoutRedirectURIs:  e.PostLogoutRedirectURIs,

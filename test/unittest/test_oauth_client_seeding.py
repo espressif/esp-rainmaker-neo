@@ -236,6 +236,25 @@ def test_the_seed_fills_a_field_an_existing_client_lacks(seed):
     assert table.rows["rainmaker-neo-home-app-client"]["first_party"] is True
 
 
+def test_a_home_app_deployed_before_application_type_becomes_native(seed):
+    table = FakeClientsTable(
+        {"client_id": "rainmaker-neo-home-app-client", "client_type": "public", "client_name": "RainMaker Home"},
+        {"client_id": "mcp-oauth-client", "secret": "s2"})
+    assert seed(table) == "SUCCESS"
+    assert (table.rows["rainmaker-neo-home-app-client"]["application_type"], table.rows["mcp-oauth-client"]["application_type"]) == ("native", "web")
+
+
+def test_only_the_home_app_is_declared_native():
+    from src.espuser.stacks.base_res_constants import (
+        HOME_APP_CLIENT_ID,
+        SEEDED_OAUTH_CLIENTS,
+    )
+    from src.rmneo.stacks import base_res_constants as rmng
+    declared = {c["client_id"]: c["application_type"] for c in SEEDED_OAUTH_CLIENTS + [rmng.ALEXA_OAUTH_CLIENT, rmng.GVA_OAUTH_CLIENT, rmng.SMART_THINGS_OAUTH_CLIENT]}
+    assert {cid for cid, kind in declared.items() if kind == "native"} == {HOME_APP_CLIENT_ID}
+    assert set(declared.values()) == {"native", "web"}
+
+
 def test_the_seed_never_overwrites_what_an_operator_set(seed):
     edited = {"client_id": "mcp-oauth-client", "client_name": "MCP only", "client_type": "confidential", "secret": "kept",
               "redirect_uris": {"https://mcp.example.com/oauth2/callback"},
@@ -321,7 +340,7 @@ def test_the_seed_creates_the_home_app_as_a_public_first_party_client(seed):
     table, ssm = FakeClientsTable(), FakeSSM()
     assert seed(table, ssm) == "SUCCESS"
     home = table.rows["rainmaker-neo-home-app-client"]
-    assert (home["client_type"], home["first_party"], home["require_pkce"]) == ("public", True, True)
+    assert (home["client_type"], home["application_type"], home["first_party"], home["require_pkce"]) == ("public", "native", True, True)
     assert home["redirect_uris"] == {"rainmaker://com.espressif.novahome/success"}
     assert home["post_logout_redirect_uris"] == {"rainmaker://com.espressif.novahome/success"}
     assert "secret" not in home
@@ -344,7 +363,7 @@ def test_an_assistant_stack_creates_its_own_confidential_client_and_hands_over_o
     assert seed(table, ssm, clients=[client], secret_params={client_id: param}, secret_attributes={}) == "SUCCESS"
     assert set(table.rows) == {client_id}
     row = table.rows[client_id]
-    assert (row["client_type"], bool(row["secret"]), row.get("first_party")) == ("confidential", True, None)
+    assert (row["client_type"], row["application_type"], bool(row["secret"]), row.get("first_party")) == ("confidential", "web", True, None)
     assert ssm.params == {param: (row["secret"], "SecureString")}
 
 

@@ -24,6 +24,9 @@ const (
 
 	ClientTypePublic       = "public"
 	ClientTypeConfidential = "confidential"
+
+	ApplicationTypeWeb    = "web"
+	ApplicationTypeNative = "native"
 )
 
 var ErrOAuthClientNotFound = errors.New("oauth client not found")
@@ -45,11 +48,13 @@ func NewOAuthClientsDB(ctx *rmngctx.RmngContext) *OAuthClientsDB {
 
 // OAuthClientEntry is one registered client. Secret is stored plaintext so List can return it (get_secret).
 type OAuthClientEntry struct {
-	ClientID     string   `dynamodbav:"client_id"`
-	ClientName   string   `dynamodbav:"client_name,omitempty"`
-	ClientType   string   `dynamodbav:"client_type,omitempty"`
-	Secret       string   `dynamodbav:"secret,omitempty"`
-	RedirectURIs []string `dynamodbav:"redirect_uris,stringset,omitempty"`
+	ClientID   string `dynamodbav:"client_id"`
+	ClientName string `dynamodbav:"client_name,omitempty"`
+	ClientType string `dynamodbav:"client_type,omitempty"`
+	// ApplicationType is OIDC Dynamic Client Registration 1.0 s2's application_type; a native app's login gets a session of its own rather than the browser's that approved it. Absent reads as web.
+	ApplicationType string   `dynamodbav:"application_type,omitempty"`
+	Secret          string   `dynamodbav:"secret,omitempty"`
+	RedirectURIs    []string `dynamodbav:"redirect_uris,stringset,omitempty"`
 	// PostLogoutRedirectURIs is where /oauth2/logout may return the browser afterwards.
 	// Validated by EXACT match, exactly like redirect_uris and for exactly the same reason:
 	// an unvalidated return URL turns the logout endpoint into an open redirect that borrows

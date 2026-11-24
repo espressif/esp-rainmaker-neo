@@ -2578,6 +2578,10 @@ components:
         require_pkce:
           type: boolean
           description: Always true for public clients.
+        application_type:
+          type: string
+          enum: [web, native]
+          description: A native app's sign-in gets a session of its own, so a browser sign-out leaves it signed in (OIDC Dynamic Client Registration 1.0 s2).
         first_party:
           type: boolean
           description: Whether this client is one the account ships itself. A first-party client signs in with no consent screen and may manage a user's own sessions.
@@ -2691,6 +2695,11 @@ components:
             Always true for public clients (forced server-side); applies to
             confidential clients as sent.
           default: false
+        application_type:
+          type: string
+          enum: [web, native]
+          default: web
+          description: native for an app installed on a device; each of its sign-ins then gets a session of its own, so a browser sign-out leaves it signed in.
         first_party:
           type: boolean
           description:
@@ -2774,6 +2783,10 @@ components:
             enum: ["openid", "email", "profile", "phone", "account:sessions", "offline_access"]
         require_pkce:
           type: boolean
+        application_type:
+          type: string
+          enum: [web, native]
+          description: Replaces the stored type when sent; omitting it keeps the stored one.
         first_party:
           type: boolean
           description:

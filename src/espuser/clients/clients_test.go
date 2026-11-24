@@ -235,6 +235,55 @@ var _ = Describe("clients.Service", func() {
 		})
 	})
 
+	Describe("application_type", func() {
+		get := func(id string) *clients.ClientResponse {
+			c, err := svc.Get(id)
+			Expect(err).NotTo(HaveOccurred())
+			return c
+		}
+
+		It("registers a client as web unless it says native", func() {
+			_, err := svc.Create(publicClient("rm_web"))
+			Expect(err).NotTo(HaveOccurred())
+			native := publicClient("rm_native")
+			native.ApplicationType = "native"
+			_, err = svc.Create(native)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect([]string{get("rm_web").ApplicationType, get("rm_native").ApplicationType}).To(Equal([]string{"web", "native"}))
+			Expect([]bool{get("rm_web").IsNative(), get("rm_native").IsNative()}).To(Equal([]bool{false, true}))
+		})
+
+		It("refuses any other value (negative)", func() {
+			bad := publicClient("rm_bad")
+			bad.ApplicationType = "mobile"
+			_, err := svc.Create(bad)
+			Expect(err).To(MatchError(ContainSubstring("application_type must be web or native")))
+		})
+
+		It("keeps the stored type on an update that omits it, and replaces it on one that names it", func() {
+			native := publicClient("rm_native")
+			native.ApplicationType = "native"
+			_, err := svc.Create(native)
+			Expect(err).NotTo(HaveOccurred())
+
+			_, err = svc.Update("rm_native", clients.UpdateInput{ClientName: "Renamed", GrantTypes: []string{"authorization_code"}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(get("rm_native").ApplicationType).To(Equal("native"), "a seeded native app must not turn web on an ordinary edit")
+
+			_, err = svc.Update("rm_native", clients.UpdateInput{ClientName: "Renamed", ApplicationType: "web", GrantTypes: []string{"authorization_code"}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(get("rm_native").ApplicationType).To(Equal("web"))
+		})
+
+		It("reads a client registered before the field as web", func() {
+			Expect(oauth_clients_db.NewOAuthClientsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).CreateClient(&oauth_clients_db.OAuthClientEntry{
+				ClientID: "rm_old", ClientName: "Old", ClientType: "public",
+			})).To(Succeed())
+			Expect(get("rm_old").ApplicationType).To(Equal("web"))
+		})
+	})
+
 	Describe("List", func() {
 		It("lists all created clients", func() {
 			_, _ = svc.Create(publicClient("rm_a"))

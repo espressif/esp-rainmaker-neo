@@ -82,10 +82,11 @@ OFFLINE_CLIENT_SCOPES = ['openid', 'email', 'phone', 'profile', 'offline_access'
 SEEDED_OAUTH_CLIENTS = [
     # MCP OAuth proxy: confidential client (secret-authenticated at the token endpoint). Its callback
     # (<MCP_BASE_URL>/oauth2/callback) is only known after rmng deploys, so redirect_uris is set then.
-    {'client_id': 'mcp-oauth-client', 'client_name': 'MCP OAuth Proxy', 'client_type': 'confidential',
+    {'client_id': 'mcp-oauth-client', 'client_name': 'MCP OAuth Proxy', 'client_type': 'confidential', 'application_type': 'web',
      'grant_types': ['authorization_code', 'refresh_token'], 'scopes': OFFLINE_CLIENT_SCOPES},
     # The Espressif RainMaker Home app, and the client the password API issues to; an app with its own scheme adds its redirect through the admin API, and the seed never removes it.
-    {'client_id': HOME_APP_CLIENT_ID, 'client_name': 'RainMaker Home', 'client_type': 'public',
+    # A native app: each of its sign-ins gets a session of its own, so a browser sign-out on the phone leaves it signed in.
+    {'client_id': HOME_APP_CLIENT_ID, 'client_name': 'RainMaker Home', 'client_type': 'public', 'application_type': 'native',
      'grant_types': ['authorization_code', 'refresh_token'], 'require_pkce': True, 'first_party': True,
      'redirect_uris': [HOME_APP_REDIRECT_URI], 'post_logout_redirect_uris': [HOME_APP_REDIRECT_URI]},
 ]

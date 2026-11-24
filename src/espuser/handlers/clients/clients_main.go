@@ -52,6 +52,8 @@ type ClientWriteRequest struct {
 	RequirePKCE      *bool     `json:"require_pkce,omitempty"`
 	// FirstParty marks a client we ship ourselves; only a first-party client may manage a user's own sessions.
 	FirstParty bool `json:"first_party,omitempty"`
+	// ApplicationType is web or native (OIDC Dynamic Client Registration 1.0 s2); an update that omits it keeps the stored one.
+	ApplicationType string `json:"application_type,omitempty"`
 	// LogoURI is shown on the consent screen: a data:image/png, jpeg or webp URI of at most 4 KiB.
 	LogoURI string `json:"logo_uri,omitempty"`
 }
@@ -83,6 +85,7 @@ func handleCreate(ctx context.Context, request events.APIGatewayProxyRequest) (e
 		ClientID:               req.ClientID,
 		ClientName:             derefStr(req.ClientName),
 		ClientType:             req.ClientType,
+		ApplicationType:        req.ApplicationType,
 		RedirectURIs:           derefSlice(req.RedirectURIs),
 		PostLogoutRedirectURIs: derefSlice(req.PostLogoutRedirectURIs),
 		GrantTypes:             derefSlice(req.GrantTypes),
@@ -127,6 +130,7 @@ func handlePut(ctx context.Context, request events.APIGatewayProxyRequest) (even
 	// PUT is a full replace: the body is the complete desired state of the mutable fields.
 	client, err := clientsService(ctx).Update(clientID(request), clients.UpdateInput{
 		ClientName:             derefStr(req.ClientName),
+		ApplicationType:        req.ApplicationType,
 		RedirectURIs:           derefSlice(req.RedirectURIs),
 		PostLogoutRedirectURIs: derefSlice(req.PostLogoutRedirectURIs),
 		GrantTypes:             derefSlice(req.GrantTypes),

@@ -163,7 +163,7 @@ FUNCTION_NAMES = {
 ALEXA_CLIENT_ID = 'rainmaker-neo-alexa-client'
 GVA_CLIENT_ID = 'rainmaker-neo-gva-client'
 SMART_THINGS_CLIENT_ID = 'rainmaker-neo-smartthings-client'
-_VOICE_ASSISTANT_CLIENT = {'client_type': 'confidential', 'grant_types': ['authorization_code', 'refresh_token'],
+_VOICE_ASSISTANT_CLIENT = {'client_type': 'confidential', 'application_type': 'web', 'grant_types': ['authorization_code', 'refresh_token'],
                            'scopes': OFFLINE_CLIENT_SCOPES}
 ALEXA_OAUTH_CLIENT = {'client_id': ALEXA_CLIENT_ID, 'client_name': 'Amazon Alexa', **_VOICE_ASSISTANT_CLIENT}
 GVA_OAUTH_CLIENT = {'client_id': GVA_CLIENT_ID, 'client_name': 'Google Home', **_VOICE_ASSISTANT_CLIENT}
