@@ -142,6 +142,12 @@ paths:
                 $ref: "#/components/schemas/OpenIDConfiguration"
         "304":
           description: Not modified; the `If-None-Match` ETag is current. No body.
+        "500":
+          description: "`server_error`: the document could not be built from this deployment's configuration."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
 
   /.well-known/oauth-authorization-server:
     get:
@@ -183,6 +189,12 @@ paths:
                 $ref: "#/components/schemas/AuthorizationServerMetadata"
         "304":
           description: Not modified; the `If-None-Match` ETag is current. No body.
+        "500":
+          description: "`server_error`: the document could not be built from this deployment's configuration."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
 
   /.well-known/jwks.json:
     get:
@@ -223,6 +235,12 @@ paths:
                 $ref: "#/components/schemas/JWKS"
         "304":
           description: Not modified; the `If-None-Match` ETag is current. No body.
+        "500":
+          description: "`server_error`: the document could not be built from this deployment's configuration."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
 
   /oauth2/authorize:
     get:
@@ -360,9 +378,18 @@ paths:
             invalid_request / unsupported_response_type / invalid client or
             redirect_uri — rendered on the service error page (not redirected).
           content:
-            application/json:
+            text/html:
               schema:
-                $ref: "#/components/schemas/OAuthError"
+                type: string
+        "500":
+          description: "`server_error` error page, not redirected; plain text when the page itself cannot be served."
+          content:
+            text/html:
+              schema:
+                type: string
+            text/plain:
+              schema:
+                type: string
 
   /user/login/federation/start:
     get:
@@ -409,9 +436,12 @@ paths:
                 type: string
         "500":
           description:
-            "`server_error`: the provider registry could not be read, or the provider's authorize URL could not be built (HTML error page)."
+            "`server_error`: the provider registry could not be read, or the provider's authorize URL could not be built (HTML error page; plain text when the page itself cannot be served)."
           content:
             text/html:
+              schema:
+                type: string
+            text/plain:
               schema:
                 type: string
 
@@ -485,9 +515,12 @@ paths:
                 type: string
         "500":
           description:
-            "`server_error`: the provider registry, the flow or the account could not be read or written, or the code could not be issued (HTML error page)."
+            "`server_error`: the provider registry, the flow or the account could not be read or written, or the code could not be issued (HTML error page; plain text when the page itself cannot be served)."
           content:
             text/html:
+              schema:
+                type: string
+            text/plain:
               schema:
                 type: string
 
@@ -631,6 +664,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/OAuthError"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
     post:
       summary: OIDC UserInfo endpoint (POST variant)
       description: |
@@ -665,6 +700,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/OAuthError"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /oauth2/revoke:
     post:
@@ -920,9 +957,12 @@ paths:
               schema:
                 type: string
         "500":
-          description: The flow or its client could not be read (`server_error`); the error screen is drawn.
+          description: "`server_error`: the flow or its client could not be read, or the client allows no sign-in method; plain text when the page itself cannot be served."
           content:
             text/html:
+              schema:
+                type: string
+            text/plain:
               schema:
                 type: string
 
@@ -1036,9 +1076,20 @@ paths:
               schema:
                 type: string
         "400":
-          description: No flow cookie, or nothing left to resume from; the error page is shown.
+          description: "`invalid_request` error page: no flow cookie, or nothing left to resume from."
+          content:
+            text/html:
+              schema:
+                type: string
         "500":
-          description: The flow could not be read; the error page is shown.
+          description: "`server_error` error page: the flow could not be read; plain text when the page itself cannot be served."
+          content:
+            text/html:
+              schema:
+                type: string
+            text/plain:
+              schema:
+                type: string
 
   /user/login/consent:
     get:
@@ -1063,9 +1114,20 @@ paths:
               schema:
                 type: string
         "400":
-          description: No sign-in is waiting for consent; the error page is shown.
+          description: "`invalid_request` error page: no sign-in is waiting for consent."
+          content:
+            text/html:
+              schema:
+                type: string
         "500":
-          description: The sign-in could not be read; the error page is shown.
+          description: "`server_error` error page: the sign-in could not be read; plain text when the page itself cannot be served."
+          content:
+            text/html:
+              schema:
+                type: string
+            text/plain:
+              schema:
+                type: string
     post:
       summary: Allow or cancel the client's access
       description: |
@@ -1172,9 +1234,12 @@ paths:
                 type: string
                 example: "/oauth2/logout?client_id=esp-account-dashboard&post_logout_redirect_uri=https%3A%2F%2Faccounts.example.com%2Fsigned-out"
         "500":
-          description: "`server_error` page: the session could not be read."
+          description: "`server_error` page: the session could not be read; plain text when the page itself cannot be served."
           content:
             text/html:
+              schema:
+                type: string
+            text/plain:
               schema:
                 type: string
     post:
@@ -1341,7 +1406,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/OAuthError"
         "403":
-          description: The token was not granted `account:sessions`.
+          description: The token lacks `account:sessions` (`insufficient_scope`), or its client is not first-party (`access_denied`).
           content:
             application/json:
               schema:
@@ -1370,7 +1435,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/OAuthError"
         "403":
-          description: The token was not granted `account:sessions`.
+          description: The token lacks `account:sessions` (`insufficient_scope`), or its client is not first-party (`access_denied`).
           content:
             application/json:
               schema:
@@ -1408,7 +1473,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/OAuthError"
         "403":
-          description: The token was not granted `account:sessions`.
+          description: The token lacks `account:sessions` (`insufficient_scope`), or its client is not first-party (`access_denied`).
           content:
             application/json:
               schema:
@@ -1605,6 +1670,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/user/auth/token/refresh:
     post:
@@ -1652,6 +1719,8 @@ paths:
                     message: "The requested resource is not part of this authorization."
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/user/auth/signup:
     post:
@@ -1693,6 +1762,16 @@ paths:
                 $ref: "#/components/schemas/Error"
               example:
                 message: Password does not meet the password requirements
+        "409":
+          description: An account with this email or phone number already exists; sign in or reset the password.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: Account already exists. Signin or reset password.
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/user/auth/signup/verify:
     post:
@@ -1732,6 +1811,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/user/auth/password-recovery:
     post:
@@ -1767,6 +1848,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/user/auth/password-recovery/confirmation:
     post:
@@ -1808,7 +1891,7 @@ paths:
               example:
                 message: Password does not meet the password requirements
         "500":
-          description: The password was reset, but the sessions could not be signed out; the new password works.
+          description: The service could not start (`Internal server error`), or the password was reset but the sessions could not be signed out; the new password works.
           content:
             application/json:
               schema:
@@ -1868,7 +1951,7 @@ paths:
               example:
                 message: You signed in through Google. This doesn't support password change.
         "500":
-          description: The password was changed, but the sessions could not be signed out; the new password works.
+          description: The service could not start (`Internal server error`), or the password was changed but the sessions could not be signed out; the new password works.
           content:
             application/json:
               schema:
@@ -1969,8 +2052,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/GetUserResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: "`access_denied`: the token's client is not first-party; `Forbidden`: `userId` is neither `me` nor the caller."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/OAuthError"
+                  - $ref: "#/components/schemas/Error"
         "404":
           description: User not found
           content:
@@ -2053,6 +2146,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/admin/clients/{client_id}:
     parameters:
@@ -2101,12 +2196,20 @@ paths:
       responses:
         "200":
           description: Client deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: Client deleted
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/admin/credentials:
     post:
@@ -2136,6 +2239,12 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "500":
           description: Failed to assume the admin-creds role
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: Error assuming role
 
 components:
   schemas:
