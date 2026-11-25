@@ -16,7 +16,9 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/refresh_tokens_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/sessions_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/scope"
+	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/jwtutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
@@ -219,6 +221,37 @@ var _ = Describe("GET /v1/user/sessions", func() {
 		Expect(bySID[sidPhone].Clients).To(HaveLen(1))
 		Expect(bySID[sidMac].UserAgentType).To(Equal("Chrome on macOS"))
 		Expect(bySID[sidPhone].UserAgentType).To(Equal("Safari on iPhone"))
+	})
+
+	It("names each app under its session and shows its logo from its registration, never its secret", func() {
+		Expect(oauth_clients_db.NewOAuthClientsDB(rctx()).CreateClient(&oauth_clients_db.OAuthClientEntry{
+			ClientID: "secvuln-web", ClientName: "ESP SecVuln", ClientType: oauth_clients_db.ClientTypeConfidential,
+			Secret: "s3cret-secvuln", LogoURI: "data:image/png;base64,iVBORw0KGgo=",
+		})).To(Succeed())
+
+		resp := call(http.MethodGet, pathSessions, tokenFor(me, scope.Sessions, sidMac))
+		Expect(resp.Body).NotTo(ContainSubstring("s3cret-secvuln"))
+		for _, s := range listBody(resp).Sessions {
+			for _, app := range s.Clients {
+				if app.ClientID == "secvuln-web" {
+					Expect([]string{app.ClientName, app.LogoURI}).To(Equal([]string{"ESP SecVuln", "data:image/png;base64,iVBORw0KGgo="}), "in session %s", s.SID)
+					continue
+				}
+				Expect(app.ClientName).To(BeEmpty(), "%s registered no name", app.ClientID)
+			}
+			Expect(s.Clients).NotTo(ContainElement(HaveField("Scopes", Not(BeEmpty()))), "scopes belong to connected apps only")
+		}
+	})
+
+	It("still lists every session, without names, when the registrations cannot be read (negative)", func() {
+		token := tokenFor(me, scope.Sessions, sidMac)
+		awscommon.SetDynamoDBClient(&mock.FailingBatchGetItem{DynamoDBMock: backend.DBMock, TableName: "espuser-oauth-clients"})
+		DeferCleanup(awscommon.SetDynamoDBClient, backend.DBMock)
+
+		resp := call(http.MethodGet, pathSessions, token)
+		Expect(resp.StatusCode).To(Equal(http.StatusOK), resp.Body)
+		Expect(listBody(resp).Sessions).To(HaveLen(2))
+		Expect(resp.Body).NotTo(ContainSubstring("client_name"))
 	})
 
 	It("marks the session this very token was minted under, and only that one", func() {

@@ -491,6 +491,7 @@ def test_the_deploy_seeds_the_home_app_as_a_first_party_client_of_both_apis(admi
     assert {f: client[f] for f in fields} == {f: declared[f] for f in fields}
     assert set(declared["redirect_uris"]) <= set(client["redirect_uris"])
     assert set(declared["post_logout_redirect_uris"]) <= set(client.get("post_logout_redirect_uris") or [])
+    assert client.get("logo_uri", "").startswith("data:image/")
     resources = [{"neo": NEO_RESOURCE, "espuser": ESPUSER_RESOURCE}[api] for api in SEEDED_CLIENT_APIS[HOME_APP_CLIENT_ID]]
     assert set(resources) <= set(client["allowed_resources"]) and client["default_resource"] == resources[0]
 

@@ -112,6 +112,22 @@ func (db *OAuthClientsDB) GetClient(clientID string) (*OAuthClientEntry, error) 
 	return &entry, nil
 }
 
+// BatchGetDisplays returns the registered clients among clientIDs with only client_id, client_name and logo_uri read, so a caller showing apps to their user never loads a secret; unknown ids are omitted.
+func (db *OAuthClientsDB) BatchGetDisplays(clientIDs []string) ([]OAuthClientEntry, error) {
+	if len(clientIDs) == 0 {
+		return []OAuthClientEntry{}, nil
+	}
+	keys := make([]ddbu.Key, 0, len(clientIDs))
+	for _, id := range clientIDs {
+		keys = append(keys, db.clients.Key(id))
+	}
+	entries, err := db.clients.BatchGet(db.Ctx.Context, keys, ddbu.ReadOpts{Project: []string{oauthClientsHashKey, "client_name", "logo_uri"}})
+	if err != nil {
+		return nil, rmerror.NewRMError(err, "failed to batch get oauth clients")
+	}
+	return entries, nil
+}
+
 // ListClients scans the whole (small, admin-only) table and returns every client.
 func (db *OAuthClientsDB) ListClients() ([]OAuthClientEntry, error) {
 	page, err := db.clients.Scan(db.Ctx.Context)

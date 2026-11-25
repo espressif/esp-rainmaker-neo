@@ -1323,7 +1323,7 @@ paths:
                     expires_at: 1759750000
                     cookie_expires_at: 1759750000
                     clients:
-                      - { client_id: esp-account-dashboard, created_at: 1725100000, last_used: 1725190000 }
+                      - { client_id: esp-account-dashboard, client_name: ESP Account, created_at: 1725100000, last_used: 1725190000 }
                   - session_id: sess_7bQ9
                     current: false
                     user_agent_type: Android app
@@ -1450,8 +1450,8 @@ paths:
                       $ref: "#/components/schemas/ClientGrant"
               example:
                 connected_apps:
-                  - { client_id: rainmaker-neo-alexa-client, created_at: 1725000000, last_used: 1725300000 }
-                  - { client_id: mcp-oauth-client, created_at: 1725100000, last_used: 1725200000 }
+                  - { client_id: rainmaker-neo-alexa-client, client_name: Alexa, created_at: 1725000000, last_used: 1725300000, scopes: [offline_access, openid] }
+                  - { client_id: mcp-oauth-client, created_at: 1725100000, last_used: 1725200000, scopes: [offline_access, openid] }
         "401":
           description: Missing, malformed, expired, or not an access token; a `client_credentials` token is refused here too.
           content:
@@ -2154,6 +2154,17 @@ components:
           type: integer
           format: int64
           description: The most recent refresh of any of those grants, epoch seconds.
+        client_name:
+          type: string
+          description: The client's registered display name; absent when it registered none.
+        logo_uri:
+          type: string
+          description: The client's registered logo as an inline `data:image/...` URI; absent when it registered none.
+        scopes:
+          type: array
+          items:
+            type: string
+          description: Connected apps only. Every scope granted across the client's offline grants, sorted.
     CredsRequest:
       type: object
       properties:

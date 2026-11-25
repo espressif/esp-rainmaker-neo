@@ -149,7 +149,7 @@ Seed set = ESP-User OIDC clients for the current first-party apps, with `client_
 
 | client_id | client_type | notable config | resources (default first) |
 | --- | --- | --- | --- |
-| `rainmaker-neo-home-app-client` | public | `application_type=native`, `require_pkce=true`, `first_party=true`; redirect and post-logout redirect `rainmaker://com.espressif.novahome/success` (the Espressif RainMaker Home app); the password API's client, published as espuser-base `EspUserClientId` | neo, ESP User |
+| `rainmaker-neo-home-app-client` | public | `application_type=native`, `require_pkce=true`, `first_party=true`; redirect and post-logout redirect `rainmaker://com.espressif.novahome/success` (the Espressif RainMaker Home app); `logo_uri` the app's icon from `assets/rainmaker_home_logo.png`; the password API's client, published as espuser-base `EspUserClientId` | neo, ESP User |
 | `rainmaker-neo-alexa-client` | confidential | created by `rmng-alexa-cfg-core`; a plaintext `secret` is generated; redirects added by Alexa's config API | neo |
 | `rainmaker-neo-gva-client` | confidential | created by `rmng-gva-core`; a plaintext `secret` is generated; redirects added by Google Home's config API | neo |
 | `rainmaker-neo-smartthings-client` | confidential | created by `rmng-st-cfg-core`; a plaintext `secret` is generated; redirects added by SmartThings' config API | neo |

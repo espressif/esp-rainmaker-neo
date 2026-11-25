@@ -77,6 +77,19 @@ func (f *FailingScan) Scan(ctx context.Context, params *dynamodb.ScanInput, optF
 	return f.DynamoDBMock.Scan(ctx, params, optFns...)
 }
 
+// FailingBatchGetItem throttles every BatchGetItem that reads TableName and passes every other call through.
+type FailingBatchGetItem struct {
+	*DynamoDBMock
+	TableName string
+}
+
+func (f *FailingBatchGetItem) BatchGetItem(ctx context.Context, params *dynamodb.BatchGetItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.BatchGetItemOutput, error) {
+	if _, reads := params.RequestItems[f.TableName]; reads {
+		return nil, throttled()
+	}
+	return f.DynamoDBMock.BatchGetItem(ctx, params, optFns...)
+}
+
 func throttled() error {
 	return &types.ProvisionedThroughputExceededException{Message: aws.String("throttled")}
 }

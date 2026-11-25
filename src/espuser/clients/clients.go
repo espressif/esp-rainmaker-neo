@@ -15,7 +15,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
-
+	"slices"
 	"strings"
 	"time"
 
@@ -262,6 +262,26 @@ func (s *Service) Get(clientID string) (*ClientResponse, error) {
 	}
 	c := toClient(entry, false)
 	return &c, nil
+}
+
+// Display is how a client presents itself to a person: its registered name and logo, either of which may be empty.
+type Display struct {
+	Name    string
+	LogoURI string
+}
+
+// Displays returns each registered client's Display keyed by client id, in one read; an unregistered id is absent from the map.
+func (s *Service) Displays(clientIDs []string) (map[string]Display, error) {
+	ids := slices.Compact(slices.Sorted(slices.Values(clientIDs)))
+	entries, err := s.db.BatchGetDisplays(ids)
+	if err != nil {
+		return nil, rmerror.NewRMError(err, "failed to read client displays")
+	}
+	out := make(map[string]Display, len(entries))
+	for _, e := range entries {
+		out[e.ClientID] = Display{Name: e.ClientName, LogoURI: e.LogoURI}
+	}
+	return out, nil
 }
 
 // RequireFirstParty reads the client's registration on every call, so taking first-party standing away applies to its next request rather than when its tokens expire.

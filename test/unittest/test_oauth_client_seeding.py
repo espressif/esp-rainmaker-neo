@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Unit tests for the OAuth client seed and the per-API resource grant. Run with `pytest test/unittest/`; no AWS needed."""
+import base64
 import copy
 import json
 import os
@@ -242,6 +243,52 @@ def test_a_home_app_deployed_before_application_type_becomes_native(seed):
         {"client_id": "mcp-oauth-client", "secret": "s2"})
     assert seed(table) == "SUCCESS"
     assert (table.rows["rainmaker-neo-home-app-client"]["application_type"], table.rows["mcp-oauth-client"]["application_type"]) == ("native", "web")
+
+
+def test_a_home_app_row_without_a_logo_gets_the_app_icon(seed):
+    from src.espuser.stacks.base_res_constants import HOME_APP_LOGO_URI
+    table = FakeClientsTable(
+        {"client_id": "rainmaker-neo-home-app-client", "client_type": "public", "client_name": "RainMaker Home"},
+        {"client_id": "mcp-oauth-client", "secret": "s2"})
+    assert seed(table) == "SUCCESS"
+    assert table.rows["rainmaker-neo-home-app-client"]["logo_uri"] == HOME_APP_LOGO_URI
+
+
+def test_a_logo_an_operator_set_on_the_home_app_is_kept(seed):
+    own = "data:image/png;base64,iVBORw0KGgo="
+    table = FakeClientsTable(
+        {"client_id": "rainmaker-neo-home-app-client", "client_type": "public", "client_name": "RainMaker Home", "logo_uri": own},
+        {"client_id": "mcp-oauth-client", "secret": "s2"})
+    assert seed(table) == "SUCCESS"
+    assert table.rows["rainmaker-neo-home-app-client"]["logo_uri"] == own
+
+
+def test_every_seeded_logo_is_one_the_registry_accepts():
+    """clients.ValidateLogoURI: a base64 PNG, JPEG or WebP data: URI of at most 4 KiB decoded."""
+    from src.espuser.stacks.base_res_constants import SEEDED_OAUTH_CLIENTS
+    logos = [c["logo_uri"] for c in SEEDED_OAUTH_CLIENTS if "logo_uri" in c]
+    assert logos
+    for uri in logos:
+        match = re.fullmatch(r"data:image/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})", uri)
+        assert match and len(base64.b64decode(match.group(2))) <= 4 * 1024
+
+
+def test_the_seed_lambda_environment_stays_under_lambdas_4_kb_limit():
+    """The seed hands its Lambda every client in one environment variable, so a larger logo would fail the espuser-base deploy."""
+    from aws_cdk import App, Environment, Stack
+    from aws_cdk.assertions import Template
+
+    from app_common import seed_oauth_clients
+    from src.espuser.stacks.base_res_constants import (
+        SEEDED_CLIENT_SECRET_ATTRIBUTES,
+        SEEDED_OAUTH_CLIENTS,
+    )
+    stack = Stack(App(), "Seed", env=Environment(account="123456789012", region="us-east-1"))
+    seed_oauth_clients(stack, "SeedOAuthClients", name="espuser-oauth-clients-seed", table_name="espuser-oauth-clients",
+                       clients=SEEDED_OAUTH_CLIENTS, secret_attributes=SEEDED_CLIENT_SECRET_ATTRIBUTES)
+    (function,) = Template.from_stack(stack).find_resources("AWS::Lambda::Function").values()
+    variables = function["Properties"]["Environment"]["Variables"]
+    assert sum(len(k) + len(v) for k, v in variables.items()) <= 4 * 1024
 
 
 def test_only_the_home_app_is_declared_native():

@@ -99,6 +99,11 @@ class SessionsAPI(Construct):
                 get_table_arn(USER_TABLE_NAMES['IDENTITY_PROVIDERS'], region),
             ],
         ))
+        # The session and connected-app lists read every listed app's name and logo in one batch.
+        sessions_lambda_role.add_to_policy(iam.PolicyStatement(
+            actions=["dynamodb:BatchGetItem"],
+            resources=[get_table_arn(USER_TABLE_NAMES['OAUTH_CLIENTS'], region)],
+        ))
 
         self.sessions_function = create_lambda_function(
             self, function_name,

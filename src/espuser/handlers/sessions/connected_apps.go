@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
 
@@ -27,7 +28,7 @@ type connectedAppsResponse struct {
 	ConnectedApps []ClientView `json:"connected_apps"`
 }
 
-// connectedApps folds offline families into one entry per client: the earliest creation and the latest use, most recently used first.
+// connectedApps folds offline families into one entry per client: the earliest creation, the latest use and every scope granted, most recently used first.
 func connectedApps(families []refresh_tokens_db.FamilyEntry) []ClientView {
 	byClient := map[string]*ClientView{}
 	for i := range families {
@@ -36,14 +37,16 @@ func connectedApps(families []refresh_tokens_db.FamilyEntry) []ClientView {
 		createdAt := cmp.Or(family.CreatedAt, family.RotatedAt)
 		app, seen := byClient[family.ClientID]
 		if !seen {
-			byClient[family.ClientID] = &ClientView{ClientID: family.ClientID, CreatedAt: createdAt, LastUsed: family.RotatedAt}
-			continue
+			app = &ClientView{ClientID: family.ClientID, CreatedAt: createdAt, LastUsed: family.RotatedAt}
+			byClient[family.ClientID] = app
 		}
 		app.CreatedAt = min(app.CreatedAt, createdAt)
 		app.LastUsed = max(app.LastUsed, family.RotatedAt)
+		app.Scopes = append(app.Scopes, strings.Fields(family.Scope)...)
 	}
 	apps := make([]ClientView, 0, len(byClient))
 	for _, app := range byClient {
+		app.Scopes = slices.Compact(slices.Sorted(slices.Values(app.Scopes)))
 		apps = append(apps, *app)
 	}
 	slices.SortFunc(apps, func(a, b ClientView) int {
@@ -58,7 +61,9 @@ func handleListConnectedApps(ctx context.Context, rmngCtx *rmngctx.RmngContext, 
 		rlog.Error(ctx).Err(err).Msg("connected apps: list offline grants")
 		return oidc.OAuthErrorResp(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.")
 	}
-	return utils.APIGwRespJSON(http.StatusOK, connectedAppsResponse{ConnectedApps: connectedApps(families)})
+	apps := connectedApps(families)
+	withDisplays(ctx, rmngCtx, apps)
+	return utils.APIGwRespJSON(http.StatusOK, connectedAppsResponse{ConnectedApps: apps})
 }
 
 // handleDisconnectApp ends every login one client holds for the caller; a client the caller has not connected answers 404 whether or not anyone else has, so the endpoint reveals nothing about other people's grants.

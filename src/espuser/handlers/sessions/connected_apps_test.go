@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/oauth_clients_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/refresh_tokens_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/scope"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
@@ -42,11 +43,40 @@ var _ = Describe("GET /v1/user/connected-apps", func() {
 		putGrant(me, "smart-home", "fam_d", 0, 8000)
 
 		body := connectedAppsBody(call(http.MethodGet, pathConnectedApps, tokenFor(me, scope.Sessions, sidMac)))
+		granted := []string{"offline_access", "openid"}
 		Expect(body.ConnectedApps).To(Equal([]ClientView{
-			{ClientID: "voice-assistant", CreatedAt: 1000, LastUsed: 9000},
-			{ClientID: "smart-home", CreatedAt: 8000, LastUsed: 8000},
-			{ClientID: "mcp-connector", CreatedAt: 3000, LastUsed: 7000},
+			{ClientID: "voice-assistant", CreatedAt: 1000, LastUsed: 9000, Scopes: granted},
+			{ClientID: "smart-home", CreatedAt: 8000, LastUsed: 8000, Scopes: granted},
+			{ClientID: "mcp-connector", CreatedAt: 3000, LastUsed: 7000, Scopes: granted},
 		}))
+	})
+
+	It("names each app and shows its logo from its registration, never its secret, and leaves both out for an unregistered client", func() {
+		Expect(oauth_clients_db.NewOAuthClientsDB(rctx()).CreateClient(&oauth_clients_db.OAuthClientEntry{
+			ClientID: "voice-assistant", ClientName: "Voice Assistant", ClientType: oauth_clients_db.ClientTypeConfidential,
+			Secret: "s3cret-voice", LogoURI: "data:image/png;base64,iVBORw0KGgo=",
+		})).To(Succeed())
+		putGrant(me, "voice-assistant", "fam_a", 1000, 9000)
+		putGrant(me, "mcp-connector", "fam_c", 3000, 7000)
+
+		resp := call(http.MethodGet, pathConnectedApps, tokenFor(me, scope.Sessions, sidMac))
+		Expect(resp.Body).NotTo(ContainSubstring("s3cret-voice"))
+		apps := connectedAppsBody(resp).ConnectedApps
+		Expect(apps).To(HaveLen(2))
+		Expect([]string{apps[0].ClientID, apps[0].ClientName, apps[0].LogoURI}).To(Equal([]string{"voice-assistant", "Voice Assistant", "data:image/png;base64,iVBORw0KGgo="}))
+		Expect([]string{apps[1].ClientID, apps[1].ClientName, apps[1].LogoURI}).To(Equal([]string{"mcp-connector", "", ""}))
+	})
+
+	It("lists every scope granted across one app's offline grants, once each", func() {
+		for familyID, granted := range map[string]string{"fam_a": "openid offline_access", "fam_b": "openid email offline_access"} {
+			Expect(refresh_tokens_db.NewRefreshTokensDB(rctx()).CreateFamily(&refresh_tokens_db.FamilyEntry{
+				UserID: me, ClientID: "voice-assistant", FamilyID: familyID, Scope: granted, CreatedAt: 1000, RotatedAt: 2000, ExpiresOn: time.Now().Unix() + 86400,
+			})).To(Succeed())
+		}
+
+		apps := connectedAppsBody(call(http.MethodGet, pathConnectedApps, tokenFor(me, scope.Sessions, sidMac))).ConnectedApps
+		Expect(apps).To(HaveLen(1))
+		Expect(apps[0].Scopes).To(Equal([]string{"email", "offline_access", "openid"}))
 	})
 
 	It("never lists a session family, which belongs under its session instead, an expired grant the TTL has not swept, nor another person's grant (negative)", func() {
@@ -150,6 +180,17 @@ var _ = Describe("the connected apps endpoints, when storage fails", func() {
 		awscommon.SetDynamoDBClient(&mock.FailingIndexQuery{DynamoDBMock: backend.DBMock})
 		DeferCleanup(awscommon.SetDynamoDBClient, backend.DBMock)
 	}
+
+	It("still lists the apps, without names, when their registrations cannot be read (negative)", func() {
+		token := tokenFor(me, scope.Sessions, sidMac)
+		awscommon.SetDynamoDBClient(&mock.FailingBatchGetItem{DynamoDBMock: backend.DBMock, TableName: "espuser-oauth-clients"})
+		DeferCleanup(awscommon.SetDynamoDBClient, backend.DBMock)
+
+		apps := connectedAppsBody(call(http.MethodGet, pathConnectedApps, token)).ConnectedApps
+		Expect(apps).To(HaveLen(1))
+		Expect(apps[0].ClientID).To(Equal("voice-assistant"))
+		Expect(apps[0].ClientName).To(BeEmpty())
+	})
 
 	It("answers 500 server_error when the grants cannot be listed (negative)", func() {
 		token := tokenFor(me, scope.Sessions, sidMac)

@@ -82,6 +82,35 @@ type ClientView struct {
 	// list is standing access, not presence, and the UI must not imply otherwise.
 	CreatedAt int64 `json:"created_at,omitempty"`
 	LastUsed  int64 `json:"last_used,omitempty"`
+	// ClientName and LogoURI are the client's registered name and logo, so a person recognises the app rather than its id; absent when it registered none.
+	ClientName string `json:"client_name,omitempty"`
+	LogoURI    string `json:"logo_uri,omitempty"`
+	// Scopes is what a connected app was granted across its offline grants; never set on an app under a session.
+	Scopes []string `json:"scopes,omitempty"`
+}
+
+// withDisplays fills each app's registered name and logo in one read; a failed read leaves them out, because the list is complete without them.
+func withDisplays(ctx context.Context, rmngCtx *rmngctx.RmngContext, lists ...[]ClientView) {
+	var ids []string
+	for _, list := range lists {
+		for _, app := range list {
+			ids = append(ids, app.ClientID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	displays, err := clients.NewService(rmngCtx).Displays(ids)
+	if err != nil {
+		rlog.Warn(ctx).Err(err).Msg("sessions: read client names and logos")
+		return
+	}
+	for _, list := range lists {
+		for i := range list {
+			display := displays[list[i].ClientID]
+			list[i].ClientName, list[i].LogoURI = display.Name, display.LogoURI
+		}
+	}
 }
 
 type listResponse struct {
@@ -142,6 +171,11 @@ func handleList(ctx context.Context, rmngCtx *rmngctx.RmngContext, identity auth
 			Clients:         clients,
 		})
 	}
+	lists := make([][]ClientView, 0, len(out.Sessions))
+	for _, view := range out.Sessions {
+		lists = append(lists, view.Clients)
+	}
+	withDisplays(ctx, rmngCtx, lists...)
 	return utils.APIGwRespJSON(http.StatusOK, out)
 }
 

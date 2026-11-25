@@ -9,6 +9,8 @@ Base Resource Constants for ESP User infrastructure.
 This file contains constants for resources defined in the ESP User base stack
 that need to be referenced in the core stack.
 """
+import base64
+from pathlib import Path
 
 USER_TABLE_NAMES = {
     'USER_DETAILS': 'espuser-user-details',
@@ -65,6 +67,8 @@ USER_SSM_PARAMETERS = {
 HOME_APP_CLIENT_ID = 'rainmaker-neo-home-app-client'
 # The app returns here from both sign-in and sign-out.
 HOME_APP_REDIRECT_URI = 'rainmaker://com.espressif.novahome/success'
+# Shown beside the app's name on the consent screen and in a person's session lists; a 112px PNG because the seed hands its Lambda every client in one environment variable, which Lambda caps at 4 KB.
+HOME_APP_LOGO_URI = 'data:image/png;base64,' + base64.b64encode((Path(__file__).resolve().parents[3] / 'assets' / 'rainmaker_home_logo.png').read_bytes()).decode()
 
 
 def first_party_client_ids(esp_user_client_id: str) -> list:
@@ -88,7 +92,7 @@ SEEDED_OAUTH_CLIENTS = [
     # A native app: each of its sign-ins gets a session of its own, so a browser sign-out on the phone leaves it signed in.
     {'client_id': HOME_APP_CLIENT_ID, 'client_name': 'RainMaker Home', 'client_type': 'public', 'application_type': 'native',
      'grant_types': ['authorization_code', 'refresh_token'], 'require_pkce': True, 'first_party': True,
-     'redirect_uris': [HOME_APP_REDIRECT_URI], 'post_logout_redirect_uris': [HOME_APP_REDIRECT_URI]},
+     'redirect_uris': [HOME_APP_REDIRECT_URI], 'post_logout_redirect_uris': [HOME_APP_REDIRECT_URI], 'logo_uri': HOME_APP_LOGO_URI},
 ]
 
 # The seeded clients whose secret espuser-base surfaces as a stack output, by the seed's attribute name.

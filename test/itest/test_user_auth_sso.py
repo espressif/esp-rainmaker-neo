@@ -824,8 +824,13 @@ def test_sso_connected_apps_lists_and_disconnects_an_offline_grant(apps, offline
     manager = session_tokens["access_token"]
 
     assert offline.client_id in connected_client_ids(manager), "the offline grant is a connected app"
+    connected = {app["client_id"]: app for app in WebClient.connected_apps(manager).json()["connected_apps"]}
+    assert connected[offline.client_id].get("client_name") == "espuser itest", f"a connected app carries its registered name: {connected[offline.client_id]}"
+    assert "offline_access" in connected[offline.client_id].get("scopes", []), f"and what it was granted: {connected[offline.client_id]}"
     for view in WebClient.sessions(manager).json()["sessions"]:
         assert offline.client_id not in client_ids_under(view), f"an offline grant belongs to no session: {view}"
+        for app in view["clients"]:
+            assert app.get("client_name") == "espuser itest", f"an app under a session carries its registered name: {app}"
 
     ordinary = WebClient(offline.client_id, offline.redirect_uri)
     ordinary_tokens = signed_in(ordinary, browser, espuser_person)

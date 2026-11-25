@@ -453,10 +453,10 @@ to sign somebody in is not a reason to enumerate every user agent they use.
 
 | Method | Path | Result |
 |---|---|---|
-| `GET` | `/v1/user/sessions` | Every live user agent, with the refresh families grouped under each by `sid` |
+| `GET` | `/v1/user/sessions` | Every live user agent, with the refresh families grouped under each by `sid`; each app carries its registered `client_name` and `logo_uri` when it has them |
 | `DELETE` | `/v1/user/sessions/{sessionId}` | Ends one user agent and its families. `204`, or `404` when the caller has no such session |
 | `DELETE` | `/v1/user/sessions` | Ends every user agent, the caller's own included |
-| `GET` | `/v1/user/connected-apps` | Every client holding a live offline grant: `client_id`, the earliest grant's `created_at` (its `rotated_at` when absent) and the latest `last_used`, most recently used first; a grant past `expires_on` is left out; `[]` when none |
+| `GET` | `/v1/user/connected-apps` | Every client holding a live offline grant: `client_id`, its registered `client_name` and `logo_uri` when it has them, the earliest grant's `created_at` (its `rotated_at` when absent), the latest `last_used` and the sorted `scopes` granted across its grants, most recently used first; a grant past `expires_on` is left out; `[]` when none |
 | `DELETE` | `/v1/user/connected-apps/{clientId}` | Ends every login that client holds for the person, session logins included, and an app row left with none. `204`, or `404`, ending nothing, when the caller holds no offline grant for it |
 
 The response body names the session id `session_id`, matching the snake_case every other field on
