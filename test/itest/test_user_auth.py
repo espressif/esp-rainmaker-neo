@@ -11,6 +11,7 @@ import boto3
 import pytest
 import requests
 
+from py_sdk.espuser_oauth import WebClient, bearer_challenge
 from py_sdk.test_user import User
 from test.itest.conftest import (
     ADMIN_CLIENT_ID,
@@ -275,18 +276,21 @@ def test_credentials_endpoint_rejects_id_token(test_user1):
     id_token, access_token = tokens.get("id_token"), tokens.get("access_token")
     assert id_token and access_token, "a login must return both an id and an access token"
 
-    creds_url = f"{API_GATEWAY_URL}/v1/user/credentials"
-    rejected = requests.post(creds_url, headers={"Authorization": f"Bearer {id_token}"},
-                             json={"id_token": id_token})
+    rejected = WebClient.neo_credentials(id_token, id_token)
     assert rejected.status_code == 401, \
         f"an id token in the Authorization header must be rejected, got {rejected.status_code}: {rejected.text}"
+    assert bearer_challenge(rejected) == 'Bearer error="invalid_token"', \
+        f"RFC 6750 s3: the 401 must carry the bearer challenge, got {dict(rejected.headers)}"
+    # RFC 6750 s3.1: a request with no token is challenged without an error code.
+    anonymous = WebClient.neo_credentials(None, id_token)
+    assert anonymous.status_code == 401 and bearer_challenge(anonymous) == "Bearer", \
+        f"a request with no token must get a bare challenge, got {anonymous.status_code} {dict(anonymous.headers)}"
     # The body is mandatory: the endpoint pairs the two halves of one sign-in.
-    no_body = requests.post(creds_url, headers={"Authorization": f"Bearer {access_token}"})
+    no_body = WebClient.neo_credentials(access_token, None)
     assert no_body.status_code == 400, \
         f"a request without the body id_token must be a 400, got {no_body.status_code}: {no_body.text}"
     # Positive control, so the rejections above cannot be passing for an unrelated reason.
-    accepted = requests.post(creds_url, headers={"Authorization": f"Bearer {access_token}"},
-                             json={"id_token": id_token})
+    accepted = WebClient.neo_credentials(access_token, id_token)
     assert accepted.status_code == 200, \
         f"the matched pair from the same login must be accepted, got {accepted.status_code}: {accepted.text}"
 

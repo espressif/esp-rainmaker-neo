@@ -343,9 +343,11 @@ class WebClient:
 
     @staticmethod
     def neo_credentials(access_token, id_token):
-        """POST /v1/user/credentials on neo, which pairs one sign-in's access token and id token."""
-        return requests.post(f"{NEO_API_BASE}/v1/user/credentials", json={"id_token": id_token},
-                             headers={"Authorization": f"Bearer {access_token}"}, timeout=30)
+        """POST /v1/user/credentials on neo, which pairs one sign-in's access token and id token; None leaves out the header or the body."""
+        return requests.post(f"{NEO_API_BASE}/v1/user/credentials",
+                             json={"id_token": id_token} if id_token is not None else None,
+                             headers={"Authorization": f"Bearer {access_token}"} if access_token is not None else {},
+                             timeout=30)
 
     def logout(self, browser, *, id_token_hint=None, post_logout_redirect_uri=None,
                with_client_id=True):
@@ -390,6 +392,15 @@ class WebClient:
 def revoke_refresh_token(client_id, refresh_token):
     """RFC 7009 revocation of a refresh token by the public client it was issued to."""
     return requests.post(f"{API_BASE}/oauth2/revoke", data={"token": refresh_token, "client_id": client_id}, timeout=30)
+
+
+def bearer_challenge(response):
+    """The RFC 6750 challenge as it actually arrives at the client. API Gateway renames
+    WWW-Authenticate to x-amzn-Remapped-WWW-Authenticate, so the standard name never reaches a
+    caller; both are accepted, and the assertion stays on the thing that matters -- that the
+    challenge reaches the client at all."""
+    headers = {k.lower(): v for k, v in response.headers.items()}
+    return headers.get("www-authenticate") or headers.get("x-amzn-remapped-www-authenticate") or ""
 
 
 def held_for_consent(authz):

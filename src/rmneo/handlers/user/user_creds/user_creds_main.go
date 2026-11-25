@@ -22,6 +22,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/jwtutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngrequest"
 
@@ -55,7 +56,7 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 	// The endpoint is an authorization action, so the access token arrives in the header.
 	accessToken := rmngrequest.ExtractAuthToken(request.Headers)
 	if accessToken == "" {
-		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Unauthorized")), nil
+		return unauthorized(""), nil
 	}
 
 	var req UserCredsRequest
@@ -72,7 +73,7 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		// match is authenticated but forbidden this exchange.
 		if errors.Is(err, auth.ErrUntrustedIssuer) || jwtutil.IsUnreadableToken(err) ||
 			errors.Is(err, jwtutil.ErrInvalidAccessToken) {
-			return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Unauthorized")), nil
+			return unauthorized(oidc.OAuthErrInvalidToken), nil
 		}
 		return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus("id_token does not match the authenticated session")), nil
 	}
@@ -90,6 +91,16 @@ func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 		SessionToken:    credsResp.SessionToken,
 		Expiration:      credsResp.Expiration,
 	}), nil
+}
+
+// unauthorized is neo's 401 body plus the challenge RFC 6750 s3 requires; errCode is "" for a request with no token, which s3.1 says gets no error code: unauthorized("invalid_token") sends `Bearer error="invalid_token"`.
+func unauthorized(errCode string) events.APIGatewayProxyResponse {
+	resp := utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Unauthorized"))
+	resp.Headers["WWW-Authenticate"] = "Bearer"
+	if errCode != "" {
+		resp.Headers["WWW-Authenticate"] = `Bearer error="` + errCode + `"`
+	}
+	return resp
 }
 
 func verifyPair(ctx context.Context, accessToken, idToken string) error {

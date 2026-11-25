@@ -30,6 +30,7 @@ from py_sdk.espuser_oauth import (
     Browser,
     WebClient,
     asks_to_confirm,
+    bearer_challenge,
     client_ids_under,
     held_for_consent,
     page_data,
@@ -91,15 +92,6 @@ def password_api_user(person, password=None):
     """The person signing in through the Home app's password API (POST /v1/user/auth/token), as py_sdk's User does."""
     return User(person.email, password or person.password, REGION, IDENTITY_POOL_ID, API_GATEWAY_URL, USER_API_GATEWAY_URL,
                 IOT_ENDPOINT, end_user_pool_id=END_USER_POOL_ID, user_api_resource=ESPUSER_RESOURCE)
-
-
-def bearer_challenge(response):
-    """The RFC 6750 challenge as it actually arrives at the client. API Gateway renames
-    WWW-Authenticate to x-amzn-Remapped-WWW-Authenticate, so the standard name never reaches a
-    caller; both are accepted, and the assertion stays on the thing that matters -- that the
-    challenge reaches the client at all."""
-    headers = {k.lower(): v for k, v in response.headers.items()}
-    return headers.get("www-authenticate") or headers.get("x-amzn-remapped-www-authenticate") or ""
 
 
 # ── the single sign-on promise, and the ways to refuse it (OIDC Core s3.1.2.1) ────
