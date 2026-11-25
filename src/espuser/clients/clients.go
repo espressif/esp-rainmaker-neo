@@ -419,6 +419,11 @@ func validateEntry(e *oauth_clients_db.OAuthClientEntry) error {
 	default:
 		return rmerror.NewRMError(nil, fmt.Sprintf("application_type must be web or native, got %q", e.ApplicationType))
 	}
+	// RFC 8252 s8.4: a secret shipped inside an app is readable by anyone who has the app.
+	isNative := e.ApplicationType == oauth_clients_db.ApplicationTypeNative
+	if isNative && e.ClientType != oauth_clients_db.ClientTypePublic {
+		return rmerror.NewRMError(nil, fmt.Sprintf("application_type native requires client_type public, got %q: an app cannot keep a client secret", e.ClientType))
+	}
 	// Both redirect lists get the same treatment, because they are one rule: each names a URL
 	// this server will send a BROWSER to on a caller's say-so. A bad entry here is an open
 	// redirect wearing the issuer's own hostname -- the most credible phishing origin we own --
@@ -429,6 +434,13 @@ func validateEntry(e *oauth_clients_db.OAuthClientEntry) error {
 	} {
 		for _, uri := range uris {
 			if err := validateRedirectURI(field, uri); err != nil {
+				return err
+			}
+		}
+	}
+	if isNative {
+		for _, uri := range e.RedirectURIs {
+			if err := validateNativeRedirectURI(uri); err != nil {
 				return err
 			}
 		}
@@ -565,6 +577,14 @@ func validateRedirectURI(field, uri string) error {
 		if u.Opaque == "" && u.Host == "" && strings.Trim(u.Path, "/") == "" {
 			return fail("names a scheme but no destination")
 		}
+	}
+	return nil
+}
+
+// validateNativeRedirectURI refuses https for a native app, whose redirect must be a private-use scheme or an http loopback address (OIDC Dynamic Client Registration 1.0 s2); validateRedirectURI has already confined http to loopback. "com.example.app:/cb" passes, "https://app.example.com/cb" does not.
+func validateNativeRedirectURI(uri string) error {
+	if u, err := url.Parse(uri); err == nil && strings.EqualFold(u.Scheme, "https") {
+		return rmerror.NewRMError(nil, fmt.Sprintf("redirect_uris %q is not allowed for a native application, which may only redirect to its own URI scheme or an http loopback address; register a web application for an https redirect", uri))
 	}
 	return nil
 }

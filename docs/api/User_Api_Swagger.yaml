@@ -2722,7 +2722,7 @@ components:
         application_type:
           type: string
           enum: [web, native]
-          description: A native app's sign-in gets a session of its own, so a browser sign-out leaves it signed in (OIDC Dynamic Client Registration 1.0 s2).
+          description: A native app's sign-in gets a session of its own, so a browser sign-out leaves it signed in (OIDC Dynamic Client Registration 1.0 s2). A native client must be public and may redirect only to its own URI scheme or an http loopback address.
         first_party:
           type: boolean
           description: Whether this client is one the account ships itself. A first-party client signs in with no consent screen and may manage a user's own sessions.
@@ -2840,7 +2840,7 @@ components:
           type: string
           enum: [web, native]
           default: web
-          description: native for an app installed on a device; each of its sign-ins then gets a session of its own, so a browser sign-out leaves it signed in.
+          description: native for an app installed on a device; each of its sign-ins then gets a session of its own, so a browser sign-out leaves it signed in. A native client must be public and may redirect only to its own URI scheme or an http loopback address.
         first_party:
           type: boolean
           description:
@@ -2927,7 +2927,7 @@ components:
         application_type:
           type: string
           enum: [web, native]
-          description: Replaces the stored type when sent; omitting it keeps the stored one.
+          description: Replaces the stored type when sent; omitting it keeps the stored one. A native client must be public and may redirect only to its own URI scheme or an http loopback address.
         first_party:
           type: boolean
           description:

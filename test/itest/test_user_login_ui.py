@@ -18,8 +18,10 @@ Spec: federation.md, sso-sessions.md.
 Requires playwright (declared in requirements.txt); the module skips cleanly without it.
 """
 import json
+import threading
 import time
 import uuid
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlencode, urlparse
 
@@ -571,16 +573,34 @@ def test_a_sign_out_without_a_hint_is_asked_and_only_the_persons_yes_ends_it(
 
 
 REVOKE_WEB_REDIRECT = "https://example.com/itest-login-ui/revoke-web/callback"
-REVOKE_APP_REDIRECT = "https://example.com/itest-login-ui/revoke-app/callback"
 
 
-def test_an_app_revoking_its_login_leaves_the_browser_signed_in(register_espuser_client, espuser_person, chromium_browser):
+class _AnswerOk(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def loopback_redirect():
+    """An http loopback redirect URI with a listener behind it: a native app may not register https, and Playwright routing never sees a redirect hop, so Chromium needs a real answer there."""
+    server = HTTPServer(("127.0.0.1", 0), _AnswerOk)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}/itest-login-ui/revoke-app/callback"
+    server.shutdown()
+    server.server_close()
+
+
+def test_an_app_revoking_its_login_leaves_the_browser_signed_in(register_espuser_client, espuser_person, chromium_browser, loopback_redirect):
     """A native app signed in through the browser signs out by revoking its own refresh token (RFC 7009); in that same real browser the session cookie stays, and the web app signs in again straight from it, with no sign-in page."""
     web_made = register_espuser_client(client_name="itest revoke web app", redirect_uris=[REVOKE_WEB_REDIRECT])
-    app_made = register_espuser_client(client_name="itest revoke native app", redirect_uris=[REVOKE_APP_REDIRECT],
+    app_made = register_espuser_client(client_name="itest revoke native app", redirect_uris=[loopback_redirect],
                                        application_type="native")
     web = WebClient(web_made.client_id, REVOKE_WEB_REDIRECT)
-    app = WebClient(app_made.client_id, REVOKE_APP_REDIRECT)
+    app = WebClient(app_made.client_id, loopback_redirect)
     context = chromium_browser.new_context()
     try:
         page = context.new_page()
@@ -596,8 +616,8 @@ def test_an_app_revoking_its_login_leaves_the_browser_signed_in(register_espuser
 
         # The browser is signed in, so the native app's authorize answers straight from the session cookie.
         verifier, challenge = pkce_pair()
-        page.goto(_authorize_url(app.client_id, REVOKE_APP_REDIRECT, challenge, "state-app"), wait_until="load")
-        assert page.url.startswith(REVOKE_APP_REDIRECT), f"the signed-in browser must return the app a code: {page.url}"
+        page.goto(_authorize_url(app.client_id, loopback_redirect, challenge, "state-app"), wait_until="load")
+        assert page.url.startswith(loopback_redirect), f"the signed-in browser must return the app a code: {page.url}"
         app_login = app.exchange_code(parse_qs(urlparse(page.url).query)["code"][0], verifier)
         assert app_login.status_code == 200, app_login.text
         app_refresh = app_login.json()["refresh_token"]

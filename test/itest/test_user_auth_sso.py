@@ -66,6 +66,8 @@ pytestmark = [pytest.mark.espuser, requires_espuser]
 # host and fails as an assertion rather than as a DNS error three frames deep.
 CALLBACK = "https://example.com/espuser-itest/{}/callback"
 SIGNED_OUT = "https://example.com/espuser-itest/{}/signed-out"
+# A native app may only redirect to its own private-use scheme (RFC 8252 s7.1) or an http loopback address.
+NATIVE_CALLBACK = "com.example.espuser-itest.{}:/callback"
 
 
 @pytest.fixture(scope="module")
@@ -902,7 +904,7 @@ def native_apps(register_module_espuser_client):
     """Two first-party native apps: each of their sign-ins gets a session of its own."""
     made = []
     for n in ("native-one", "native-two"):
-        uri = CALLBACK.format(n)
+        uri = NATIVE_CALLBACK.format(n)
         client = register_module_espuser_client(redirect_uris=[uri], application_type="native")
         made.append(WebClient(client.client_id, uri))
     return made
@@ -1025,7 +1027,7 @@ def test_sso_ending_a_native_apps_session_from_the_list_ends_only_that_app(apps,
 def test_sso_disconnecting_a_native_app_ends_its_own_session_too(apps, register_espuser_client, espuser_person):
     """Disconnecting a native client ends its offline grant and its app login, and the app session left with no login leaves the list."""
     web, _ = apps
-    uri = CALLBACK.format("native-connected")
+    uri = NATIVE_CALLBACK.format("native-connected")
     client = register_espuser_client(redirect_uris=[uri], application_type="native",
                                      scopes=["openid", "email", "profile", SESSIONS_SCOPE, "offline_access"])
     linked = WebClient(client.client_id, uri, scope=OFFLINE_SCOPE)

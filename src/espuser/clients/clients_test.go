@@ -276,6 +276,70 @@ var _ = Describe("clients.Service", func() {
 			Expect(get("rm_native").ApplicationType).To(Equal("web"))
 		})
 
+		Describe("native clients", func() {
+			native := func(id string, redirect string) clients.CreateInput {
+				in := publicClient(id)
+				in.ApplicationType = "native"
+				in.RedirectURIs = []string{redirect}
+				return in
+			}
+
+			It("refuses a confidential native client, since an app cannot keep a secret (negative)", func() {
+				in := native("rm_native_conf", "com.example.app:/cb")
+				in.ClientType = "confidential"
+				in.RequirePKCE = nil
+				_, err := svc.Create(in)
+				Expect(err).To(MatchError(ContainSubstring("application_type native requires client_type public")))
+			})
+
+			It("refuses turning a confidential client native on update (negative)", func() {
+				_, err := svc.Create(clients.CreateInput{ClientID: "rm_conf", ClientName: "S", ClientType: "confidential", GrantTypes: []string{"authorization_code"}})
+				Expect(err).NotTo(HaveOccurred())
+				_, err = svc.Update("rm_conf", clients.UpdateInput{ClientName: "S", ApplicationType: "native", GrantTypes: []string{"authorization_code"}})
+				Expect(err).To(MatchError(ContainSubstring("application_type native requires client_type public")))
+			})
+
+			DescribeTable("accepts its own scheme or an http loopback address",
+				func(redirect string) {
+					_, err := svc.Create(native("rm_native_ok", redirect))
+					Expect(err).NotTo(HaveOccurred())
+				},
+				Entry("a private-use scheme", "com.example.app:/callback"),
+				Entry("the shipped Home app scheme", "rainmaker://com.espressif.novahome/success"),
+				Entry("127.0.0.1", "http://127.0.0.1:8765/callback"),
+				Entry("[::1]", "http://[::1]:8765/callback"),
+				Entry("localhost", "http://localhost/callback"),
+			)
+
+			DescribeTable("refuses any other redirect (negative)",
+				func(redirect, msg string) {
+					_, err := svc.Create(native("rm_native_bad", redirect))
+					Expect(err).To(MatchError(ContainSubstring(msg)))
+				},
+				Entry("https", "https://app.example.com/callback", "register a web application for an https redirect"),
+				Entry("http off loopback", "http://app.example.com/callback", "may use http only for loopback"),
+			)
+
+			It("refuses an https redirect added by update (negative)", func() {
+				_, err := svc.Create(native("rm_native_upd", "com.example.app:/cb"))
+				Expect(err).NotTo(HaveOccurred())
+				_, err = svc.Update("rm_native_upd", clients.UpdateInput{ClientName: "T", RedirectURIs: []string{"https://app.example.com/cb"}, GrantTypes: []string{"authorization_code"}})
+				Expect(err).To(MatchError(ContainSubstring("not allowed for a native application")))
+			})
+
+			It("leaves post_logout_redirect_uris and web clients' https redirects alone", func() {
+				in := native("rm_native_logout", "com.example.app:/cb")
+				in.PostLogoutRedirectURIs = []string{"https://app.example.com/bye"}
+				_, err := svc.Create(in)
+				Expect(err).NotTo(HaveOccurred())
+
+				web := publicClient("rm_web_https")
+				web.RedirectURIs = []string{"https://app.example.com/callback"}
+				_, err = svc.Create(web)
+				Expect(err).NotTo(HaveOccurred())
+			})
+		})
+
 		It("reads a client registered before the field as web", func() {
 			Expect(oauth_clients_db.NewOAuthClientsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).CreateClient(&oauth_clients_db.OAuthClientEntry{
 				ClientID: "rm_old", ClientName: "Old", ClientType: "public",
