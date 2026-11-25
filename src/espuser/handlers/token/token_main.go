@@ -71,7 +71,7 @@ func handleToken(ctx context.Context, request events.APIGatewayProxyRequest) (ev
 		resourceValues = rmngrequest.FormValues(request, "resource")
 	}
 	resource, err := auth.RequestedResourceForTokenRequest(resourceValues)
-	if resp, refused := targetRefusal(err); refused {
+	if resp, refused := resourceRefusal(err); refused {
 		return resp, nil
 	}
 	req.Resource = resource
@@ -142,7 +142,7 @@ func handleClientCredentialsGrant(ctx context.Context, req TokenRequest, client 
 		return oidc.OAuthErrorResp(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
 	}
 	tokens, err := svc.MintClientCredentialsToken(ctx, client, scope, req.Resource)
-	if resp, refused := targetRefusal(err); refused {
+	if resp, refused := resourceRefusal(err); refused {
 		return resp, nil
 	}
 	if err != nil {
@@ -152,9 +152,9 @@ func handleClientCredentialsGrant(ctx context.Context, req TokenRequest, client 
 	return oidc.OAuthTokenResp(tokens), nil
 }
 
-// targetRefusal answers an RFC 8707 refusal with invalid_target and a description that tells the client what to fix.
-func targetRefusal(err error) (events.APIGatewayProxyResponse, bool) {
-	description, ok := auth.TargetDescription(err)
+// resourceRefusal answers an RFC 8707 refusal with invalid_target and a description that tells the client what to fix.
+func resourceRefusal(err error) (events.APIGatewayProxyResponse, bool) {
+	description, ok := auth.ResourceRefusal(err)
 	if !ok {
 		return events.APIGatewayProxyResponse{}, false
 	}
@@ -175,7 +175,7 @@ func handleAuthorizationCodeGrant(ctx context.Context, req TokenRequest, client 
 	}
 
 	tokens, err := svc.ExchangeAuthCode(ctx, client, req.Code, req.CodeVerifier, req.RedirectURI, req.Resource, userAgent)
-	if resp, refused := targetRefusal(err); refused {
+	if resp, refused := resourceRefusal(err); refused {
 		return resp, nil
 	}
 	if err != nil {
@@ -200,7 +200,7 @@ func handleRefreshTokenGrant(ctx context.Context, req TokenRequest, client *clie
 
 	tokens, err := svc.RefreshToken(ctx, client, req.RefreshToken, req.Resource)
 	// invalid_target, not invalid_grant: the token is still good, so retrying it is not the remedy.
-	if resp, refused := targetRefusal(err); refused {
+	if resp, refused := resourceRefusal(err); refused {
 		rlog.Warn(ctx).Err(err).Str("client_id", req.ClientID).Msg("Refresh refused on its resource")
 		return resp, nil
 	}

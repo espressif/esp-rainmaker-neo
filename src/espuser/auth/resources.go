@@ -22,8 +22,8 @@ var (
 	ErrResourceNoLongerAllowed = fmt.Errorf("%w: resource no longer allowed for the client", ErrInvalidTarget)
 )
 
-// TargetDescription is the sentence a client is shown for an RFC 8707 refusal; ok is false for any other error.
-func TargetDescription(err error) (description string, ok bool) {
+// ResourceRefusal returns the sentence a client is shown for an RFC 8707 refusal; ok is false for any other error.
+func ResourceRefusal(err error) (description string, ok bool) {
 	switch {
 	case errors.Is(err, ErrResourceNotAllowed):
 		return "This client is not registered for the requested resource.", true

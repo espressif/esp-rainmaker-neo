@@ -346,7 +346,7 @@ var _ = Describe("OAuth token endpoint (refresh_token grant)", func() {
 var _ = Describe("invalid_target refusals (RFC 8707 s2)", func() {
 	DescribeTable("names what the client must fix",
 		func(err error, description string) {
-			resp, refused := targetRefusal(err)
+			resp, refused := resourceRefusal(err)
 			Expect(refused).To(BeTrue())
 			Expect(resp.StatusCode).To(Equal(400))
 			Expect(decodeBody[map[string]string](resp)).To(Equal(map[string]string{"error": "invalid_target", "error_description": description}))
@@ -360,7 +360,7 @@ var _ = Describe("invalid_target refusals (RFC 8707 s2)", func() {
 	)
 
 	It("leaves a grant failure to the caller (negative)", func() {
-		_, refused := targetRefusal(auth.ErrInvalidGrant)
+		_, refused := resourceRefusal(auth.ErrInvalidGrant)
 		Expect(refused).To(BeFalse())
 	})
 })

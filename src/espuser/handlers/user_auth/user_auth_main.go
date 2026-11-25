@@ -347,7 +347,7 @@ func handlePassword(ctx context.Context, request events.APIGatewayProxyRequest) 
 
 // resourceRefusal answers an RFC 8707 refusal with a 400 naming it, so a client can fix its request rather than retry.
 func resourceRefusal(err error) (events.APIGatewayProxyResponse, bool) {
-	message, ok := auth.TargetDescription(err)
+	message, ok := auth.ResourceRefusal(err)
 	if !ok {
 		return events.APIGatewayProxyResponse{}, false
 	}
