@@ -199,7 +199,7 @@ esp-morpheus admin <admin-email> integrations alexa setup alexa_skills_manual_co
 
 **Process**:
 1. Validate all four fields are present (`redirect_uris`, `client_id`, `client_secret`, `skill_id`)
-2. Register the redirect URIs on Alexa's own client (env var `OIDC_LINK_CLIENT_ID`, value `rainmaker-neo-alexa-client`); a URI a registration would refuse gets `400`
+2. Register the redirect URIs on Alexa's own client (env var `OIDC_VA_CLIENT_ID`, value `rainmaker-neo-alexa-client`); a URI a registration would refuse gets `400`
 3. Store Alexa client ID in SSM `/rmng/alexa/client_id` and client secret in SSM `/rmng/alexa/client_secret`
 4. Add Lambda invoke permission for `alexa-connectedhome.amazon.com` with the skill ID as event source token (env var: `ALEXA_SKILL_FUNCTION_NAME`)
 5. If `manufacturer_name` is present, store it in SSM `/rmng/alexa/manufacturer_name` — see [Manufacturer name](#manufacturer-name)

@@ -114,7 +114,7 @@ The configuration is stored by calling the admin configuration API with the serv
 **Process**:
 1. Validate required fields (`project_id`, `client_email`, `private_key`)
 2. Calculate redirect URI: `https://oauth-redirect.googleusercontent.com/r/<project_id>`
-3. Register the redirect URI on Google Home's own client (env var `OIDC_LINK_CLIENT_ID`, value `rainmaker-neo-gva-client`); a URI a registration would refuse gets `400`
+3. Register the redirect URI on Google Home's own client (env var `OIDC_VA_CLIENT_ID`, value `rainmaker-neo-gva-client`); a URI a registration would refuse gets `400`
 4. Store the entire service account JSON as a single SSM parameter (`/rmng/gva/service_account_json`)
 
 **Response**:

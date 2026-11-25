@@ -80,8 +80,8 @@ var errInvalidRequest = errors.New("invalid request")
 // credentials of Alexa's own client.
 func accountLinkingConfig(ctx context.Context) (authURL, tokenURL, clientID, clientSecret string, err error) {
 	apiURL := strings.TrimSuffix(os.Getenv("ESP_USER_API_URL"), "/")
-	clientID = os.Getenv("OIDC_LINK_CLIENT_ID")
-	secretParam := os.Getenv("OIDC_LINK_CLIENT_SECRET_PARAM")
+	clientID = os.Getenv("OIDC_VA_CLIENT_ID")
+	secretParam := os.Getenv("OIDC_VA_CLIENT_SECRET_PARAM")
 	if apiURL == "" || clientID == "" || secretParam == "" {
 		return "", "", "", "", rmerror.NewRMError(nil, "Account-linking config not set")
 	}
@@ -344,7 +344,7 @@ func runConfigWorker(ctx context.Context, ev configWorkerEvent) {
 		}) &&
 		// None when reusing the live skill without a named vendor: its URIs were registered when it went live.
 		(len(ev.RedirectURIs) == 0 || step("register the linking client's redirect URIs", func() error {
-			return alexa_skill.UpdateVAClientRedirectURIs(ctx, os.Getenv("OIDC_LINK_CLIENT_ID"), ev.RedirectURIs)
+			return alexa_skill.UpdateVAClientRedirectURIs(ctx, os.Getenv("OIDC_VA_CLIENT_ID"), ev.RedirectURIs)
 		})) &&
 		// After the final manifest build, so the build does not reset it.
 		step("set account linking", func() error {

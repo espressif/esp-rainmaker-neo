@@ -56,7 +56,7 @@ func vaClientURIs(ctx context.Context) []string {
 var _ = BeforeSuite(func() {
 	fmt.Printf("Setting environment variables for testing\n")
 	os.Setenv("GVA_SKILL_FUNCTION_NAME", "test-gva-skill-function")
-	os.Setenv("OIDC_LINK_CLIENT_ID", vaClientID)
+	os.Setenv("OIDC_VA_CLIENT_ID", vaClientID)
 })
 
 var _ = Describe("GVA Config", func() {
@@ -249,18 +249,18 @@ var _ = Describe("GVA Config", func() {
 			Expect(response.Body).To(ContainSubstring("Forbidden"))
 		})
 
-		It("should fail when OIDC_LINK_CLIENT_ID is not set", func() {
-			os.Setenv("OIDC_LINK_CLIENT_ID", "")
+		It("should fail when OIDC_VA_CLIENT_ID is not set", func() {
+			os.Setenv("OIDC_VA_CLIENT_ID", "")
 			requestBody, _ := json.Marshal(req)
 			request.Body = string(requestBody)
 
 			response, err := handler(ctx, request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusInternalServerError))
-			Expect(response.Body).To(ContainSubstring("OIDC_LINK_CLIENT_ID not configured"))
+			Expect(response.Body).To(ContainSubstring("OIDC_VA_CLIENT_ID not configured"))
 
 			// Restore environment variable
-			os.Setenv("OIDC_LINK_CLIENT_ID", vaClientID)
+			os.Setenv("OIDC_VA_CLIENT_ID", vaClientID)
 		})
 
 		It("should fail when its OIDC client cannot be resolved", func() {

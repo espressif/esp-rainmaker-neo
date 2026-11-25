@@ -86,8 +86,8 @@ func vaClientURIs(ctx context.Context) []string {
 var _ = BeforeSuite(func() {
 	os.Setenv("RMNG_REGION", testRegion)
 	os.Setenv("ESP_USER_API_URL", "https://user.example.com/prod")
-	os.Setenv("OIDC_LINK_CLIENT_ID", vaClientID)
-	os.Setenv("OIDC_LINK_CLIENT_SECRET_PARAM", vaSecretParam)
+	os.Setenv("OIDC_VA_CLIENT_ID", vaClientID)
+	os.Setenv("OIDC_VA_CLIENT_SECRET_PARAM", vaSecretParam)
 	os.Setenv("AWS_LAMBDA_FUNCTION_NAME", "rmng-alexa-auto-cfg")
 	// Shrink build waits so the worker's WaitForBuild returns fast in tests.
 	buildTimeout = 50 * time.Millisecond
@@ -321,8 +321,8 @@ var _ = Describe("Alexa Auto Cfg", func() {
 		)
 
 		It("refuses before creating a skill when the linking client's secret parameter is not configured", func() {
-			os.Unsetenv("OIDC_LINK_CLIENT_SECRET_PARAM")
-			DeferCleanup(os.Setenv, "OIDC_LINK_CLIENT_SECRET_PARAM", vaSecretParam)
+			os.Unsetenv("OIDC_VA_CLIENT_SECRET_PARAM")
+			DeferCleanup(os.Setenv, "OIDC_VA_CLIENT_SECRET_PARAM", vaSecretParam)
 			before := createSkillCalls()
 			resp, _ := handleRequest(ctx, adminRequest(validBody()))
 			Expect(resp.StatusCode).To(Equal(http.StatusInternalServerError))
@@ -727,8 +727,8 @@ var _ = Describe("Alexa Auto Cfg", func() {
 				_ = httpM.RegisterResponse(smapi.LWATokenURL, "POST", 400, `{"error":"invalid_grant"}`)
 			}, "authenticate", "connect it again"),
 			Entry("account-linking config missing", func() {
-				os.Unsetenv("OIDC_LINK_CLIENT_SECRET_PARAM")
-				DeferCleanup(os.Setenv, "OIDC_LINK_CLIENT_SECRET_PARAM", vaSecretParam)
+				os.Unsetenv("OIDC_VA_CLIENT_SECRET_PARAM")
+				DeferCleanup(os.Setenv, "OIDC_VA_CLIENT_SECRET_PARAM", vaSecretParam)
 			}, "set account linking", "account-linking config not set"),
 			Entry("Alexa has minted no credentials", func() {
 				_ = httpM.RegisterResponse(smapi.BaseURL+"/v1/skills/"+testSkillID+"/credentials", "GET", 200, `{}`)

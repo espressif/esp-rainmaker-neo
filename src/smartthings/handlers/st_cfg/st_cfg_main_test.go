@@ -53,7 +53,7 @@ func vaClientURIs(ctx context.Context) []string {
 }
 
 var _ = BeforeSuite(func() {
-	os.Setenv("OIDC_LINK_CLIENT_ID", vaClientID)
+	os.Setenv("OIDC_VA_CLIENT_ID", vaClientID)
 })
 
 var _ = Describe("SmartThings Config", func() {
@@ -66,7 +66,7 @@ var _ = Describe("SmartThings Config", func() {
 		ctx = context.Background()
 		test_utils.TestSetup()
 		seedVAClient(ctx)
-		os.Setenv("OIDC_LINK_CLIENT_ID", vaClientID)
+		os.Setenv("OIDC_VA_CLIENT_ID", vaClientID)
 		userID := "51bbf520-70a1-70ac-627f-07d1af2a930c"
 
 		// Set up admin user
@@ -105,8 +105,8 @@ var _ = Describe("SmartThings Config", func() {
 			Expect(vaClientURIs(ctx)).To(ContainElements(stRedirectURIs))
 		})
 
-		It("should fail when OIDC_LINK_CLIENT_ID is not set", func() {
-			os.Setenv("OIDC_LINK_CLIENT_ID", "")
+		It("should fail when OIDC_VA_CLIENT_ID is not set", func() {
+			os.Setenv("OIDC_VA_CLIENT_ID", "")
 			body, _ := json.Marshal(STCfgRequest{
 				ClientID:     "test-client-id",
 				ClientSecret: "test-client-secret",
@@ -116,7 +116,7 @@ var _ = Describe("SmartThings Config", func() {
 			response, err := handler(ctx, request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusInternalServerError))
-			Expect(response.Body).To(ContainSubstring("OIDC_LINK_CLIENT_ID not configured"))
+			Expect(response.Body).To(ContainSubstring("OIDC_VA_CLIENT_ID not configured"))
 		})
 
 		It("should overwrite previously stored values", func() {

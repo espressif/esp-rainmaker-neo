@@ -101,8 +101,8 @@ class AlexaAutoCfgAPI(Construct):
                 # token endpoints hang off the API base, and Alexa's own client is the one
                 # the redirect URIs are registered on.
                 "ESP_USER_API_URL": common_resources.esp_user_api_url,
-                "OIDC_LINK_CLIENT_ID": ALEXA_CLIENT_ID,
-                "OIDC_LINK_CLIENT_SECRET_PARAM": VOICE_ASSISTANT_CLIENT_SECRET_PARAMS[ALEXA_CLIENT_ID],
+                "OIDC_VA_CLIENT_ID": ALEXA_CLIENT_ID,
+                "OIDC_VA_CLIENT_SECRET_PARAM": VOICE_ASSISTANT_CLIENT_SECRET_PARAMS[ALEXA_CLIENT_ID],
             },
         )
 

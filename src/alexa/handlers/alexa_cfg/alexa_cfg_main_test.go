@@ -62,7 +62,7 @@ func vaClientURIs(ctx context.Context) []string {
 var _ = BeforeSuite(func() {
 	fmt.Printf("Setting environment variables for testing\n")
 	os.Setenv("RMNG_REGION", region)
-	os.Setenv("OIDC_LINK_CLIENT_ID", vaClientID)
+	os.Setenv("OIDC_VA_CLIENT_ID", vaClientID)
 	// Route regional AddPermission to the global mock (production uses a client per Alexa region).
 	alexa_skill.NewRegionalLambdaClient = func(ctx context.Context, region string) (awscommon.LambdaClientInterface, error) {
 		return awscommon.GetLambdaClient(), nil

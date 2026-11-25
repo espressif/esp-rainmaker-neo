@@ -59,7 +59,7 @@ class STCfgAPI(Construct):
             common_resources,
             lambda_role=st_cfg_lambda_role,
             environment={
-                "OIDC_LINK_CLIENT_ID": SMART_THINGS_CLIENT_ID,
+                "OIDC_VA_CLIENT_ID": SMART_THINGS_CLIENT_ID,
             }
         )
 

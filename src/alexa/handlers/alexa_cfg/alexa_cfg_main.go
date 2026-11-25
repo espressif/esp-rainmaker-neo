@@ -66,9 +66,9 @@ func handleAlexaCfg(ctx context.Context, request events.APIGatewayProxyRequest) 
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Missing skill ID")), nil
 	}
 
-	vaClientID := os.Getenv("OIDC_LINK_CLIENT_ID")
+	vaClientID := os.Getenv("OIDC_VA_CLIENT_ID")
 	if vaClientID == "" {
-		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("OIDC_LINK_CLIENT_ID not configured")), nil
+		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("OIDC_VA_CLIENT_ID not configured")), nil
 	}
 	err = alexa_skill.UpdateVAClientRedirectURIs(ctx, vaClientID, req.RedirectURIs)
 	switch {
@@ -158,7 +158,7 @@ func handleGetAlexaCfg(ctx context.Context) (events.APIGatewayProxyResponse, err
 		response.SkillID = skillID
 	}
 
-	vaClientID := os.Getenv("OIDC_LINK_CLIENT_ID")
+	vaClientID := os.Getenv("OIDC_VA_CLIENT_ID")
 	if vaClientID != "" {
 		callbackURLs, err := alexa_skill.VAClientRedirectURIs(ctx, vaClientID)
 		if err != nil {

@@ -73,7 +73,7 @@ class GVACfgAPI(Construct):
             environment={
                 "IDENTITY_POOL_ID": common_resources.identity_pool_id,
                 "USER_ISSUER": common_resources.esp_user_issuer,
-                "OIDC_LINK_CLIENT_ID": GVA_CLIENT_ID,
+                "OIDC_VA_CLIENT_ID": GVA_CLIENT_ID,
             }
         )
 

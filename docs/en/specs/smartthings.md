@@ -163,7 +163,7 @@ For production catalog listing:
 **Process**:
 1. Validate admin authorization
 2. Validate input fields
-3. Register the three SmartThings callback URLs on SmartThings' own client (env var `OIDC_LINK_CLIENT_ID`, value `rainmaker-neo-smartthings-client`)
+3. Register the three SmartThings callback URLs on SmartThings' own client (env var `OIDC_VA_CLIENT_ID`, value `rainmaker-neo-smartthings-client`)
 4. Store Client ID at SSM `/rmng/smartthings/client_id` (String)
 5. Store Client Secret at SSM `/rmng/smartthings/client_secret` (SecureString)
 

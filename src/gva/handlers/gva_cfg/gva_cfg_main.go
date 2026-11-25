@@ -74,9 +74,9 @@ func handleStoreConfig(ctx context.Context, request events.APIGatewayProxyReques
 	redirectURI := "https://oauth-redirect.googleusercontent.com/r/" + configRequest.ProjectID
 	redirectURIs := []string{redirectURI}
 
-	vaClientID := os.Getenv("OIDC_LINK_CLIENT_ID")
+	vaClientID := os.Getenv("OIDC_VA_CLIENT_ID")
 	if vaClientID == "" {
-		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("OIDC_LINK_CLIENT_ID not configured"))
+		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("OIDC_VA_CLIENT_ID not configured"))
 	}
 	svc := clients.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil))
 	_, err := svc.AddRedirectURIs(vaClientID, redirectURIs)

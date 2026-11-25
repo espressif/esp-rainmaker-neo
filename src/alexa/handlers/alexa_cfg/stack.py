@@ -86,7 +86,7 @@ class AlexaCfgAPI(Construct):
             environment={
                 "USER_ISSUER": common_resources.esp_user_issuer,
                 "RMNG_REGION": region,
-                "OIDC_LINK_CLIENT_ID": ALEXA_CLIENT_ID,
+                "OIDC_VA_CLIENT_ID": ALEXA_CLIENT_ID,
             }
         )
 
