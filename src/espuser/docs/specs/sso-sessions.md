@@ -367,7 +367,7 @@ rather than by expiring the user agent. A client guarding a sensitive operation 
 `max_age=0`) to `/oauth2/authorize`; that disables the shortcut unconditionally, and the fresh
 authentication updates `auth_time`/`amr`/`acr` on the *same* row (same `sid`, same `created_at`).
 
-This is where `amr`/`acr` earn their place: a step-up requiring multi-factor checks the fresh `amr`.
+This is where `amr`/`acr` earn their place: a step-up reads the fresh `amr` for a method ESP User checked itself (`pwd`, `otp`), and the upstream's `acr` for a federated sign-in, whose `amr` is not recorded.
 Wiring specific endpoints to demand step-up is out of scope here; the model is designed so that it
 is a per-endpoint change with no further session work.
 
@@ -415,7 +415,7 @@ clamp above is what keeps a short value safe.
 | `user_id` | Who the user agent belongs to |
 | `provider` | Which provider authenticated the most recent login: a federated row's name, `otp`, or the password row's name |
 | `auth_time` | When the person last actually authenticated. A fact — never moved by use |
-| `amr` | How they authenticated (RFC 8176): the upstream's values, or `otp` / `otp,sms` / `pwd` for a first-party login |
+| `amr` | How ESP User authenticated them (RFC 8176): `pwd` or `otp` for a first-party login, none for a federated one (an upstream's `amr` is not recorded); a silent SSO answer stamps it, with `provider` as `idp`, on the tokens it issues |
 | `acr` | The authentication context the provider asserted. Empty for a first-party login: an ACR names a class a consumer must be able to interpret, and an invented value nothing reads is noise on a security-relevant field |
 | `origin` | `browser` or `app` — what kind of sign-in origin this row records, and therefore whether a cookie was ever issued for it. Absent reads as `browser` |
 | `expires_at` | The row's retention deadline and the DynamoDB TTL attribute. Bumped by any activity |
@@ -685,7 +685,7 @@ Absent means no hop: a deployment that never fills these behaves exactly as it d
 | A cookie still valid after the person signed in again | Re-authentication deletes the row the presented cookie named, so the value it replaced stops resolving |
 | A cookie-less row being presented for SSO | Its key is the hash of a discarded value: no cookie exists to present, and the lookup fails closed. `origin` makes the property auditable from the data as well as from the argument |
 | A long-lived user agent with no calendar cap | Accepted deliberately, and safe only because the cookie is revocable **and** sensitive actions step up. The cap is replaced by revocation plus per-action re-authentication, not by a short timeout |
-| A single one-time code buying a long-lived user agent | The code is the first factor, as it is today; what changes is retention, not assurance. Bounded by remote revocation — which first-party users gain here for the first time — and by step-up. `amr` records `otp` and `sms` separately, so an SMS-authenticated user agent can be capped or step-up-gated without a code change |
+| A single one-time code buying a long-lived user agent | The code is the first factor, as it is today; what changes is retention, not assurance. Bounded by remote revocation — which first-party users gain here for the first time — and by step-up. `amr` records `otp` for a one-time code whatever channel delivered it, so capping or step-up-gating an SMS-authenticated user agent first needs the add-on to record the channel |
 | A client's provider restriction bypassed via SSO | `allowed_providers` is checked at the shortcut as well as at `/user/login/federation/start` |
 | Script reading the session | `HttpOnly` |
 | A table read yielding a usable cookie | Only the hash is stored |
@@ -709,8 +709,8 @@ Absent means no hop: a deployment that never fills these behaves exactly as it d
   distinct contexts that is correct — two user agents — and for one browser it is a cosmetic duplicate a
   client may avoid by revoking its old token first.
 - **Re-installing an app without signing out creates a second cookie-less row.** An app that revokes its login first removes its row; otherwise the old one lingers until its retention passes or the person deletes it, and `user_agent_name`, `user_agent_type` and `signed_in_at` are what tell them apart.
-- **`amr`/`acr` are recorded and nothing consumes them yet.** Reserved with a named consumer
-  (step-up), not dead fields.
+- **`acr` is recorded and nothing consumes it yet.** Reserved with a named consumer (step-up), not a
+  dead field; `amr` reaches the tokens a silent SSO answer issues.
 - **Step-up is specified but not wired to any endpoint.** Until it is, a long-lived user agent is
   bounded only by revocation and retention.
 - **Back-channel logout is not implemented.** Ending a user agent deletes the families under it, which is

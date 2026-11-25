@@ -128,6 +128,10 @@ def test_sso_multi_webapps(apps, espuser_person):
     assert second_tokens["access_token"], "and the silent code must spend"
     assert decode_jwt_claims(second_tokens["id_token"])["auth_time"] == signed_in_at, \
         "a code answered from the session authenticated nobody, so it must carry the session's auth_time"
+    for label in ("access_token", "id_token"):
+        claims = decode_jwt_claims(second_tokens[label])
+        assert claims.get("amr") == ["pwd"] and claims.get("idp"), \
+            f"a silent code carries the session's password sign-in: {label} {claims}"
 
     assert first.sign_in(Browser("phone"), espuser_person).used_upstream, \
         "a second device must authenticate; a session that follows the person is not a session"
@@ -818,6 +822,9 @@ def test_sso_a_password_change_ends_every_session_and_connected_app(apps, regist
     caller = password_api_user(espuser_person)
     signed = caller.signin()
     assert signed.status_code == 200 and caller.refresh_token, f"{signed.status_code} {signed.text[:200]}"
+    signed_claims = decode_jwt_claims(signed.json()["access_token"])
+    assert signed_claims.get("amr") == ["pwd"] and signed_claims.get("idp"), \
+        f"the token names the password provider whose password the change reaches: {signed_claims}"
     browser = Browser()
     browser_tokens = signed_in(plain, browser, espuser_person)
     offline_tokens = offline.tokens(offline.sign_in_allowing(browser, espuser_person))

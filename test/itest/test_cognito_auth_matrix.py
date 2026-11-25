@@ -124,6 +124,12 @@ def _auth_url(path):
     return f"{USER_API_GATEWAY_URL}/v1/user/auth/{path}"
 
 
+def _change_password(access_token, old_password, new_password):
+    """POST /v1/user/auth/password with the caller's access token as the bearer, as the route requires."""
+    return requests.post(_auth_url("password"), headers={"Authorization": f"Bearer {access_token}"},
+                         json={"old_password": old_password, "new_password": new_password})
+
+
 def _require_outputs():
     """Skip when the espuser stack outputs this suite drives are not configured."""
     if not USER_API_GATEWAY_URL:
@@ -1049,10 +1055,7 @@ def test_password_change_succeeds_and_the_new_password_signs_in(cognito_pool, co
     access_token = signin.json()["access_token"]
 
     new_password = generate_test_password()
-    changed = requests.post(_auth_url("password"),
-                            json={"access_token": access_token,
-                                  "old_password": password,
-                                  "new_password": new_password})
+    changed = _change_password(access_token, password, new_password)
     assert changed.status_code == 200, f"[{label}] {changed.text}"
 
     assert requests.post(_auth_url("token"),
@@ -1086,10 +1089,7 @@ def test_password_change_fails_identically_without_proof(cognito_pool, confirmed
             # The token stays valid while the account behind it is gone.
             cognito.admin_delete_user(UserPoolId=pool_id, Username=email)
 
-    refused = requests.post(_auth_url("password"),
-                            json={"access_token": access_token,
-                                  "old_password": old_password,
-                                  "new_password": generate_test_password()})
+    refused = _change_password(access_token, old_password, generate_test_password())
     assert refused.status_code == 401, f"[{label}/{case}] {refused.text}"
     assert _status(refused) == "Password change failed", refused.text
 

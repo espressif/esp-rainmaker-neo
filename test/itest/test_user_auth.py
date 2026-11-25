@@ -87,6 +87,17 @@ def test_signin_returns_tokens(test_user1):
     assert test_user1.access_token is not None
     assert test_user1.refresh_token is not None
 
+    renewed = test_user1.refresh_tokens(data["refresh_token"])
+    assert renewed.status_code == 200, f"refresh failed: {renewed.status_code} {renewed.text[:200]}"
+    idp = decode_jwt_claims(data["id_token"]).get("idp")
+    assert idp, "a password sign-in names the provider row that checked the password"
+    for label, token in (("id_token", data["id_token"]), ("access_token", data["access_token"]),
+                         ("refreshed id_token", renewed.json()["id_token"]),
+                         ("refreshed access_token", renewed.json()["access_token"])):
+        claims = decode_jwt_claims(token)
+        assert claims.get("amr") == ["pwd"], f"{label} must say a password was checked: {claims}"
+        assert claims.get("idp") == idp, f"{label} must name the same provider: {claims}"
+
 
 def test_an_old_app_build_signs_in_renews_and_reaches_its_devices_without_naming_a_client(test_user1):
     """The store app sends the password API only a username and password and renews through its refresh endpoint; its sign-in belongs to EspUserClientId, the Home app client, which /v1/user/credentials and the identity pool trust."""
@@ -440,6 +451,10 @@ def test_federated_login_carries_contacts_and_claims(federated_identity, fed_cli
                     provider=hosted_cognito_provider, before_callback=from_another_browser)
 
     id_claims = decode_jwt_claims(tokens["id_token"])
+    for label in ("access_token", "id_token"):
+        claims = decode_jwt_claims(tokens[label])
+        assert claims.get("idp") == hosted_cognito_provider, f"{label} must name the provider row: {claims}"
+        assert "amr" not in claims, f"{label}: ESP User verified an upstream token, not a password: {claims}"
     assert abs(id_claims["auth_time"] - started) < 300 and id_claims["auth_time"] <= id_claims["iat"], \
         f"auth_time does not name this sign-in: {id_claims}"
 
@@ -471,6 +486,13 @@ def test_federated_login_carries_contacts_and_claims(federated_identity, fed_cli
         assert refreshed_claims.get(claim) == expected, f"refreshed token lost {claim}: {refreshed_claims}"
     assert decode_jwt_claims(refreshed.json()["id_token"])["auth_time"] == id_claims["auth_time"], \
         "a refresh is not an authentication: its ID token must still name the original sign-in"
+    assert refreshed_claims.get("idp") == hosted_cognito_provider and "amr" not in refreshed_claims, \
+        f"a refresh keeps the sign-in's idp and adds no amr: {refreshed_claims}"
+
+    refused = _new_user(email).change_password(password, generate_test_password(), access_token=tokens["access_token"])
+    assert refused.status_code == 403 and \
+        refused.json().get("message") == "You signed in through itest hosted page. This doesn't support password change.", \
+        f"a sign-in through a provider's own page is refused, naming the row's display_name: {refused.status_code} {refused.text[:200]}"
 
     # A second login is the only way to observe that resolution reused the account.
     again = decode_jwt_claims(_login(fed_client, email, password, provider=hosted_cognito_provider)["access_token"])

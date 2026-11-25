@@ -169,7 +169,7 @@ same way.
 | `external_sub` | `sub` | Stored on the account as `external_sub` |
 | `name`, `locale`, `picture` | same | Stored on the account |
 | `given_name`, `family_name` | same | Read, not stored |
-| `auth_time`, `amr`, `acr` | same | Session metadata |
+| `auth_time`, `acr` | same | Session metadata; an upstream `amr` is not read, since ESP User verified the upstream's token, not its method |
 | `sub` | none | When a row maps it (e.g. `custom:user_id`), a new account opens under that claim's value instead of a minted id, so a pool that predates ESP User keeps its own ids |
 
 **What trust rests on.** Mapping `sub` trusts the claim: ESP User cannot tell a real id from one a user

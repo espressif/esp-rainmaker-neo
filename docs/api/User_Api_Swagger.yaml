@@ -106,7 +106,7 @@ paths:
     get:
       summary: OpenID Provider metadata
       description:
-        OIDC discovery document — endpoint URLs and the `jwks_uri`. Public and
+        OIDC discovery document — endpoint URLs and the `jwks_uri`; `claims_supported` includes `amr` and `idp`. Public and
         cacheable. Served at `<issuer>/.well-known/*` by the ESP User API, built per request;
         revalidate with `If-None-Match` to get a 304 instead of the body.
       tags:
@@ -1820,27 +1820,24 @@ paths:
     post:
       summary: Change password
       description: |
-        Changes the caller's password with the current one, then signs out every session, the caller's included, and disconnects every connected app, so the person signs in again with the new password. Requires an access token from this issuer for any of its APIs.
+        Changes the caller's password with the current one, then signs out every session, the caller's included, and disconnects every connected app, so the person signs in again with the new password. Requires an access token from this issuer for any of its APIs in the `Authorization: Bearer` header.
+        A token carrying `idp` changes that provider's password only when its `amr` contains `pwd`; a token without `idp` uses the default password provider.
       tags:
         - User Auth
-      security: []
+      security:
+        - bearerAuth: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [access_token, old_password, new_password]
+              required: [old_password, new_password]
               properties:
-                access_token:
-                  type: string
-                  description: Access token issued by this service.
                 old_password:
                   type: string
                 new_password:
                   type: string
-                provider:
-                  $ref: "#/components/schemas/PasswordProvider"
       responses:
         "200":
           description: Password changed.
@@ -1849,13 +1846,27 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         "400":
-          description: Missing field, or `Unknown provider.`.
+          description: The body cannot be parsed.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: The bearer token is missing or invalid, or the old password is wrong.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: Password change failed
+        "403":
+          description: The token is valid but its sign-in used no password ESP User checks; the message names the provider it signed in through.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: You signed in through Google. This doesn't support password change.
         "500":
           description: The password was changed, but the sessions could not be signed out; the new password works.
           content:
@@ -2390,7 +2401,7 @@ components:
           description: Refresh token; rotated on each use.
         id_token:
           type: string
-          description: Present only if `openid` was requested.
+          description: Present only if `openid` was requested. Like the access token, it carries `amr` (RFC 8176 methods ESP User verified, e.g. `["pwd"]`; absent for a federated sign-in) and `idp` (the provider that authenticated the person) when known.
         scope:
           type: string
           description: The granted scope, space-delimited, which can be narrower than the request (RFC 6749 §5.1). Absent for `client_credentials`.

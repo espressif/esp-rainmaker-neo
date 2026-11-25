@@ -74,6 +74,17 @@ semantics:
   example, to obtain short-lived AWS/IoT credentials. Keeping the two separate
   avoids handing the id token to a resource surface it was not issued for.
 
+### How the person signed in: `amr` and `idp`
+
+User ID and access tokens (never `client_credentials` tokens) carry two claims about the sign-in, each left out when unknown:
+
+| Claim | Meaning | Values |
+|---|---|---|
+| `amr` | Methods ESP User itself verified (OIDC Core 1.0 §2, values from RFC 8176; RFC 9068 §2.2.1 allows it in access tokens) | `["pwd"]` for a password checked by the password API or the sign-in page's password form, `["otp"]` for a one-time code. A federated sign-in (Google, GitHub, a provider's own page, any upstream OIDC) has none: ESP User verified a signed upstream ID token, not a password, and an upstream `amr` is never copied. |
+| `idp` | The provider row that authenticated the person, the session row's `provider` | e.g. `rainmaker`, `google`, `github`, `otp`. Not an OIDC-registered claim; Microsoft Entra ID and Okta issue the same name. |
+
+Storage names the provider `provider` everywhere; `idp` is only the claim. The code exchange takes both from the flow record's `provider` and `amr`, which the sign-in (or a silent SSO answer, from the session row) wrote, replacing the provider of a federation leg the person abandoned on the same flow; a refresh takes them from the refresh family's `provider` and `amr`, recorded next to `auth_time` when it is created, so neither path reads the session. A family created before the claims were recorded renews without them. An app shows "Change password" only when the ID token's `amr` contains `pwd`; the password change itself is decided by `idp` (see [legacy-user-auth.md](legacy-user-auth.md)). Discovery lists both in `claims_supported`.
+
 > The access token issued here is what a relying party exchanges for AWS/IoT
 > credentials via Cognito identity-pool OIDC federation; that mechanism (the
 > identity pool, the device-users role, STS `AssumeRoleWithWebIdentity`) is

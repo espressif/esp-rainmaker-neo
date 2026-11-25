@@ -24,10 +24,12 @@ needs no change:
 | `POST /v1/user/auth/signup/verify` | `{email?\|phone_number?, code, provider?}` | `{message}` |
 | `POST /v1/user/auth/password-recovery` | `{username, provider?}` | `{message}` |
 | `POST /v1/user/auth/password-recovery/confirmation` | `{username, code, new_password, provider?}` | `{message}` |
-| `POST /v1/user/auth/password` | `{access_token, old_password, new_password, provider?}` | `{message}` |
+| `POST /v1/user/auth/password` | `{old_password, new_password}`, our access token as `Authorization: Bearer` | `{message}` |
 | `POST /v1/user/auth/signout` | `{access_token?, refresh_token?, global?}` | `{message}` |
 
-Every route that reaches a Cognito pool (sign-in, signup, signup verify, password recovery and its confirmation, password change) takes an optional `provider` naming the pool, so an account in any password pool can be created, signed in, recovered and changed; the sign-in page sends it, and a main-era client omits it. Refresh and signout touch only our own tokens and take none.
+Every route that reaches a Cognito pool by name (sign-in, signup, signup verify, password recovery and its confirmation) takes an optional `provider` naming the pool, so an account in any password pool can be created, signed in and recovered; the sign-in page sends it, and a main-era client omits it. A password change takes its pool from the caller's token instead, and refresh and signout touch only our own tokens; none of them takes `provider`.
+
+A password change verifies the access token first and lets its `idp` claim pick the pool: a token whose `amr` contains `pwd` changes the password of the provider its `idp` names, and a token from any other sign-in (federated, one-time code, or a provider without a password ESP User checks) is refused before any pool is called with `403 You signed in through <provider>. This doesn't support password change.`, where `<provider>` is the provider row's display name, else its name, else the token's `idp` when no enabled row holds it. A token without `idp` (issued before tokens carried it) uses the default password provider, the first by name. A `provider` an older client still sends in the body is ignored.
 
 Token response fields (RFC 6749 §5.1 names): `access_token`, `refresh_token`,
 `id_token`, `token_type` (`Bearer`), `expires_in`, `scope` (the granted scope, never `offline_access`), `must_change_password`.
@@ -149,9 +151,9 @@ Cognito answers some correct passwords with a challenge rather than tokens; thos
   rejected rather than reported as success, and a global signout request is refused: our sessions are
   refresh families of ours, which a provider-side sign-out does not touch, so a success there would
   mean nothing was ended.
-- **password**: the client presents our access token plus the old password. The token is verified
-  before anything else, because it names whose password is being changed, and it must be addressed
-  to the ESP User API ([resource-indicators.md](resource-indicators.md)). The old password is then
+- **password**: the client presents our access token in the `Authorization: Bearer` header (RFC 6750 s2.1) and the old password in the body. The token is verified
+  before anything else, because it names whose password is being changed, and it may be addressed
+  to any of our APIs ([resource-indicators.md](resource-indicators.md)). The old password is then
   re-presented to the provider to obtain a provider access token, which is what the provider's
   change-password operation requires — the client never holds one.
 - **Sessions after a password event**: a new password ends the sessions the old one could have opened. Once the provider accepts a change, every browser and app session of the caller is signed out, the caller's own included, and every refresh family deleted, `offline_access` grants too, so the person signs in again and relinks their connected apps; a change is what someone makes when they think another person knows the old password. Once the provider accepts a recovery confirmation, the service signs in once with the new password and signs out every session of the account the ID token's verified email and phone name, found as sign-in finds it but never created; the typed username picks no account, because the pool may hold it as an unverified alias of someone else's address. Grants made with `offline_access` survive a reset ([sso-sessions.md](sso-sessions.md#offline-grants)), because forgetting a password says nothing about who else holds it. A pool user no account holds yet has nothing to end. A sign-in that answers with a challenge (MFA, a forced new password) confirms no account, so the reset succeeds and ends nothing (logged as a warning); verified contacts held by two accounts end nothing either and answer the 500 below, as sign-in refuses them. If the password changed but the sessions could not be signed out, a change answers `500 Password changed, but sessions could not be signed out` and a reset `500 Password reset, but sessions could not be signed out`, so the person knows the new password works and can sign out everywhere.

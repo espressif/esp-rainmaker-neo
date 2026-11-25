@@ -3622,30 +3622,29 @@ class User:
         path = '/v1/admin/auth/password-recovery/confirmation' if is_admin else '/v1/user/auth/password-recovery/confirmation'
         return self.make_user_api_request('POST', path, data=data)
 
-    def change_password(self, old_password=None, new_password=None, is_admin=False):
+    def change_password(self, old_password=None, new_password=None, is_admin=False, access_token=None):
         """Change user/admin password via POST /v1/user/auth/password or /v1/admin/auth/password endpoint.
 
-        The Authorization header carries the access_token (the method declares
-        API Gateway authorizationScopes, so the Cognito authorizer validates the
-        access token and rejects the ID token). The body separately carries the
-        access_token that Cognito's ChangePassword API acts on.
+        The end-user route reads the caller's access token from the Authorization: Bearer header only.
+        The admin route takes the ID token in the header and the Cognito access token in the body.
 
         Args:
             old_password (str): Current password
             new_password (str): New password
             is_admin (bool): If True, uses admin endpoint, otherwise uses user endpoint
+            access_token (str): end-user access token to send as the bearer instead of this user's own, e.g. one from a browser sign-in
 
         Returns:
             requests.Response: The API response
         """
-        # Ensure we have a fresh access token for the body.
-        if not self.access_token:
-            self.get_cognito_token()
-        access_token = self.access_token if is_admin else self.user_api_token()
+        if access_token is None:
+            if not self.access_token:
+                self.get_cognito_token()
+            access_token = self.access_token if is_admin else self.user_api_token()
 
         data = {}
-        # Access token is required in body for authenticated password change
-        if access_token:
+        # Only the admin route's Cognito ChangePassword call takes the access token from the body.
+        if is_admin and access_token:
             data["access_token"] = access_token
         if old_password:
             data["old_password"] = old_password
