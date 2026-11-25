@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
@@ -37,6 +38,9 @@ const legacyClientID = "rainmaker-neo-home-app-client"
 
 const legacyScope = "openid email phone"
 
+// amrPassword is RFC 8176's method for a password ESP User checked.
+const amrPassword = "pwd"
+
 // challengeNewPasswordRequired is Cognito's name for "this account has never set its own password".
 const challengeNewPasswordRequired = "NEW_PASSWORD_REQUIRED"
 
@@ -47,6 +51,8 @@ type Service struct {
 	providerName string
 	// Read like the browser flow's, so both logins of one person reach the same account.
 	attributeMapping map[string]string
+	// caller is the verified access token NewServiceForCaller was given; only it may change a password, since it names whose.
+	caller *auth.TokenClaims
 }
 
 // IsRainMakerProvider reports whether the resolved provider is RainMaker's own, so user-facing
@@ -81,6 +87,11 @@ const (
 	ProviderNotAllowedMessage    = "This application does not allow signing in with that provider."
 )
 
+// NoPasswordToChangeMessage names the provider a refused password change signed in through: "Google" -> "You signed in through Google. This doesn't support password change."
+func NoPasswordToChangeMessage(provider string) string {
+	return "You signed in through " + provider + ". This doesn't support password change."
+}
+
 // ErrAuthenticationFailed is the credential being refused, deliberately without saying why, so the form cannot test whether an address is registered.
 var ErrAuthenticationFailed = errors.New("legacyauth: authentication failed")
 
@@ -90,6 +101,23 @@ var ErrPasswordRefused = errors.New("legacyauth: the password does not meet the 
 // ErrSessionsNotEnded means the provider changed the password but the account's sessions could not all be signed out, so the caller must not report the change as failed.
 var ErrSessionsNotEnded = errors.New("legacyauth: password changed but the sessions were not signed out")
 
+// ErrNoPasswordToChange means the caller's sign-in used no password ESP User checks, so there is none for this route to change.
+var ErrNoPasswordToChange = errors.New("legacyauth: the sign-in used no password this route can change")
+
+// NoPasswordToChangeError is ErrNoPasswordToChange carrying the name of the provider the caller signed in through, for the refusal message.
+type NoPasswordToChangeError struct {
+	Provider string
+}
+
+func (e *NoPasswordToChangeError) Error() string {
+	return ErrNoPasswordToChange.Error() + ": " + e.Provider
+}
+
+func (e *NoPasswordToChangeError) Unwrap() error { return ErrNoPasswordToChange }
+
+// ErrNoVerifiedCaller means ChangePassword ran on a service built without a verified caller, so nothing names whose password to change.
+var ErrNoVerifiedCaller = errors.New("legacyauth: no verified caller to change the password of")
+
 // ErrAccountAlreadyUsable means a duplicate signup authenticated an existing confirmed account, so
 // the caller owns it and should sign in rather than wait for a verification code. Not a failure —
 // the handler still answers 201, only with a different message.
@@ -97,29 +125,88 @@ var ErrAccountAlreadyUsable = errors.New("legacyauth: account already exists and
 
 // NewService resolves the password app client from the provider registry; an empty providerName takes the first by name.
 func NewService(ctx context.Context, providerName string) (*Service, error) {
-	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, nil)
-	entries, err := identity_providers_db.NewIdentityProvidersDB(rmngCtx).ListEnabled()
+	provider, err := passwordProvider(ctx, providerName)
 	if err != nil {
-		return nil, rmerror.NewRMError(err, "legacyauth: failed to read the provider registry")
+		return nil, err
 	}
-	var provider *identity_providers_db.ProviderEntry
-	for i := range entries {
-		if entries[i].OurPageTakesPassword() && (providerName == "" || entries[i].ProviderName == providerName) {
-			provider = &entries[i]
-			break
-		}
-	}
-	switch {
-	case provider == nil && providerName != "":
-		return nil, ErrProviderNotFound
-	case provider == nil:
-		return nil, ErrNoPasswordProvider
-	}
-	// The app client is confidential, so Cognito demands SECRET_HASH on every call below.
 	oauth, err := auth.NewOAuthUserAuthService(ctx)
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "legacyauth: failed to build token issuer")
 	}
+	return newService(provider, oauth), nil
+}
+
+// NewServiceForCaller builds the service for the provider whose password the caller's sign-in may change, keeping the caller's claims for ChangePassword; the caller's access token must already be verified.
+// The token's idp decides: a password sign-in reaches that row and any other is a NoPasswordToChangeError; a token without idp takes the default password row, the first by name.
+func NewServiceForCaller(ctx context.Context, caller auth.TokenClaims) (*Service, error) {
+	oauth, err := auth.NewOAuthUserAuthService(ctx)
+	if err != nil {
+		return nil, rmerror.NewRMError(err, "legacyauth: failed to build token issuer")
+	}
+	provider, err := callerPasswordProvider(ctx, caller)
+	if err != nil {
+		return nil, err
+	}
+	svc := newService(provider, oauth)
+	svc.caller = &caller
+	return svc, nil
+}
+
+// callerPasswordProvider returns the row whose password the caller's sign-in may change, reading the registry once to both decide and name the provider in a refusal.
+func callerPasswordProvider(ctx context.Context, caller auth.TokenClaims) (*identity_providers_db.ProviderEntry, error) {
+	if caller.Provider == "" {
+		return passwordProvider(ctx, "")
+	}
+	signedInWithPassword := slices.Contains(caller.AMR, amrPassword)
+	entries, err := enabledProviders(ctx)
+	if err != nil {
+		if signedInWithPassword {
+			return nil, err
+		}
+		rlog.Warn(ctx).Err(err).Msg("password change: refusing a sign-in without a password, named by its idp since the registry is unreadable")
+		return nil, &NoPasswordToChangeError{Provider: caller.Provider}
+	}
+	i := slices.IndexFunc(entries, func(e identity_providers_db.ProviderEntry) bool { return e.ProviderName == caller.Provider })
+	if i < 0 {
+		return nil, &NoPasswordToChangeError{Provider: caller.Provider}
+	}
+	if !signedInWithPassword || !entries[i].OurPageTakesPassword() {
+		name := entries[i].DisplayName
+		if name == "" {
+			name = entries[i].ProviderName
+		}
+		return nil, &NoPasswordToChangeError{Provider: name}
+	}
+	return &entries[i], nil
+}
+
+func enabledProviders(ctx context.Context) ([]identity_providers_db.ProviderEntry, error) {
+	entries, err := identity_providers_db.NewIdentityProvidersDB(rmngctx.NewRmngContextWithCtx(ctx, nil)).ListEnabled()
+	if err != nil {
+		return nil, rmerror.NewRMError(err, "legacyauth: failed to read the provider registry")
+	}
+	return entries, nil
+}
+
+// passwordProvider returns the enabled row whose password our page takes, named by providerName or else the first by name.
+func passwordProvider(ctx context.Context, providerName string) (*identity_providers_db.ProviderEntry, error) {
+	entries, err := enabledProviders(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range entries {
+		if entries[i].OurPageTakesPassword() && (providerName == "" || entries[i].ProviderName == providerName) {
+			return &entries[i], nil
+		}
+	}
+	if providerName != "" {
+		return nil, ErrProviderNotFound
+	}
+	return nil, ErrNoPasswordProvider
+}
+
+func newService(provider *identity_providers_db.ProviderEntry, oauth *auth.OAuthUserAuthService) *Service {
+	// The app client is confidential, so Cognito demands SECRET_HASH on every call below.
 	return &Service{
 		// The provider's pool may live in another region than this deployment; InitiateAuth must
 		// reach that region's Cognito endpoint, so the client is built for the issuer's region.
@@ -127,7 +214,7 @@ func NewService(ctx context.Context, providerName string) (*Service, error) {
 		oauth:            oauth,
 		providerName:     provider.ProviderName,
 		attributeMapping: provider.AttributeMapping,
-	}, nil
+	}
 }
 
 // regionFromCognitoIssuer extracts the AWS region from a Cognito issuer URL of the form
@@ -166,7 +253,7 @@ func (s *Service) SigninWithPassword(ctx context.Context, username, password str
 	return s.oauth.MintTokenSetForClient(ctx, userID, client, legacyScope, auth.FirstPartyLogin{
 		AllAllowedResources: true,
 		Provider:            s.providerName,
-		AMR:                 []string{"pwd"},
+		AMR:                 []string{amrPassword},
 		Origin:              session.OriginApp,
 	})
 }
@@ -182,7 +269,7 @@ func (s *Service) SigninToFlow(ctx context.Context, flowID, username, password s
 		return "", "", err
 	}
 	login.Provider = s.providerName
-	login.AMR = []string{"pwd"}
+	login.AMR = []string{amrPassword}
 	return s.oauth.CompleteSignIn(ctx, flow, userID, login)
 }
 
@@ -329,20 +416,15 @@ func (s *Service) ConfirmForgotPassword(ctx context.Context, username, code, new
 	return endSessionsWithoutConnectedApps(ctx, userID)
 }
 
-// ChangePassword re-authenticates with the old password to obtain a provider access token, because
-// the client holds our tokens and the provider will not accept one. The caller's own access token is
-// verified first: it names whose password is being changed, so an unverified one would let anyone
-// repassword anyone.
-func (s *Service) ChangePassword(ctx context.Context, accessToken, oldPassword, newPassword string) error {
-	if accessToken == "" || oldPassword == "" || newPassword == "" {
-		return rmerror.NewRMError(nil, "access token, old password and new password are required")
+// ChangePassword re-authenticates with the old password to obtain a provider access token, because the client holds our tokens and the provider will not accept one; it changes only the password of the caller NewServiceForCaller was given.
+func (s *Service) ChangePassword(ctx context.Context, oldPassword, newPassword string) error {
+	if s.caller == nil {
+		return ErrNoVerifiedCaller
 	}
-	// Any API's token will do: a legacy sign-in's is addressed to its client's default API, and the token only names the account, whose old password is the proof.
-	claims, err := s.oauth.VerifyUserTokenForAnyAPI(accessToken)
-	if err != nil {
-		return rmerror.NewRMError(err, "legacyauth: access token rejected")
+	if oldPassword == "" || newPassword == "" {
+		return rmerror.NewRMError(nil, "old password and new password are required")
 	}
-	info := claims.UserInfo()
+	info := s.caller.UserInfo()
 	username := info.Email
 	if username == "" {
 		username = info.PhoneNumber
@@ -358,7 +440,7 @@ func (s *Service) ChangePassword(ctx context.Context, accessToken, oldPassword, 
 	if err := s.cognito.ChangePassword(ctx, login.AccessToken, oldPassword, newPassword); err != nil {
 		return rmerror.NewRMError(err, "legacyauth: password change rejected")
 	}
-	return endSessionsAndConnectedApps(ctx, claims.Subject)
+	return endSessionsAndConnectedApps(ctx, s.caller.Subject)
 }
 
 // endSessionsWithoutConnectedApps signs the person out of every browser and app after a password reset; their connected apps stay, because forgetting a password says nothing about who else holds it.

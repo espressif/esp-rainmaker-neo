@@ -16,6 +16,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/refresh_tokens_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/legacyauth"
+	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngrequest"
@@ -112,13 +113,14 @@ type signoutReq struct {
 }
 
 type passwordReq struct {
-	AccessToken string `json:"access_token,omitempty"`
 	OldPassword string `json:"old_password,omitempty"`
 	NewPassword string `json:"new_password,omitempty"`
 }
 
-// accountRoutes reach a Cognito pool, so each takes an optional provider naming which; refresh and signout touch only our own tokens.
-var accountRoutes = map[string]bool{pathToken: true, pathSignup: true, pathSignupVerify: true, pathRecovery: true, pathRecoveryConfirm: true, pathPassword: true}
+// accountRoutes reach a Cognito pool, so each takes an optional provider naming which; refresh and signout touch only our own tokens, and a password change picks its pool from the caller's token.
+var accountRoutes = map[string]bool{pathToken: true, pathSignup: true, pathSignupVerify: true, pathRecovery: true, pathRecoveryConfirm: true}
+
+const unknownProviderMessage = "Unknown provider."
 
 func newService(ctx context.Context, request events.APIGatewayProxyRequest) (*legacyauth.Service, error) {
 	var req providerReq
@@ -130,10 +132,14 @@ func newService(ctx context.Context, request events.APIGatewayProxyRequest) (*le
 }
 
 func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+	// The caller's token names the pool, so the service is built from it rather than from the body alone.
+	if request.Path == pathPassword {
+		return handlePassword(ctx, request)
+	}
 	svc, err := newService(ctx, request)
 	if err != nil {
 		if errors.Is(err, legacyauth.ErrProviderNotFound) {
-			return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Unknown provider.")), nil
+			return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(unknownProviderMessage)), nil
 		}
 		rlog.Error(ctx).Err(err).Msg("failed to build legacy auth service")
 		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Internal server error")), nil
@@ -154,8 +160,6 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return handleRecoveryConfirm(ctx, request, svc)
 	case pathSignout:
 		return handleSignout(ctx, request, svc)
-	case pathPassword:
-		return handlePassword(ctx, request, svc)
 	default:
 		return utils.APIGwRespJSON(http.StatusNotFound, utils.NewAPIStatus("Not found")), nil
 	}
@@ -310,12 +314,27 @@ func handleSignout(ctx context.Context, request events.APIGatewayProxyRequest, s
 	return utils.APIGwRespJSON(http.StatusOK, utils.NewAPIStatus("Successfully signed out")), nil
 }
 
-func handlePassword(ctx context.Context, request events.APIGatewayProxyRequest, svc *legacyauth.Service) (events.APIGatewayProxyResponse, error) {
+func handlePassword(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	var req passwordReq
 	if err := rmngrequest.ExtractRequestStruct(request, &req); err != nil {
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Invalid request body")), nil
 	}
-	if err := svc.ChangePassword(ctx, req.AccessToken, req.OldPassword, req.NewPassword); err != nil {
+	// Any API's token will do: a legacy sign-in's is addressed to its client's default API, and the token only names the account, whose old password is the proof.
+	caller := user.ClaimsFrom(user.NewContextWithAnyAPIToken(ctx, request))
+	if caller.Subject == "" {
+		return utils.APIGwRespJSON(http.StatusUnauthorized, utils.NewAPIStatus("Password change failed")), nil
+	}
+	svc, err := legacyauth.NewServiceForCaller(ctx, caller)
+	var noPassword *legacyauth.NoPasswordToChangeError
+	switch {
+	// A verified token whose sign-in may not do this is an authorization refusal, not a malformed request.
+	case errors.As(err, &noPassword):
+		return utils.APIGwRespJSON(http.StatusForbidden, utils.NewAPIStatus(legacyauth.NoPasswordToChangeMessage(noPassword.Provider))), nil
+	case err != nil:
+		rlog.Error(ctx).Err(err).Msg("failed to build legacy auth service")
+		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Internal server error")), nil
+	}
+	if err := svc.ChangePassword(ctx, req.OldPassword, req.NewPassword); err != nil {
 		if errors.Is(err, legacyauth.ErrSessionsNotEnded) {
 			rlog.Error(ctx).Err(err).Msg("password change: sessions not signed out")
 			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus(changeSessionsNotEndedMessage)), nil

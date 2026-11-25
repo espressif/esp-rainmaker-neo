@@ -64,6 +64,19 @@ func (f *FailingPutItem) PutItem(ctx context.Context, params *dynamodb.PutItemIn
 	return f.DynamoDBMock.PutItem(ctx, params, optFns...)
 }
 
+// FailingScan throttles every Scan on TableName and passes every other call through.
+type FailingScan struct {
+	*DynamoDBMock
+	TableName string
+}
+
+func (f *FailingScan) Scan(ctx context.Context, params *dynamodb.ScanInput, optFns ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error) {
+	if aws.ToString(params.TableName) == f.TableName {
+		return nil, throttled()
+	}
+	return f.DynamoDBMock.Scan(ctx, params, optFns...)
+}
+
 func throttled() error {
 	return &types.ProvisionedThroughputExceededException{Message: aws.String("throttled")}
 }

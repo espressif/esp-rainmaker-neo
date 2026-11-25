@@ -53,10 +53,14 @@ var _ = Describe("legacy token responses (RFC 6749 s5.1)", func() {
 		secondPassword = "Second#123"
 	)
 	resetCode := mock.NewCognitoProviderMock().DefaultResetCode
+	var (
+		backend *test_utils.EspUserBackend
+		cog     *mock.CognitoProviderMock
+	)
 
 	BeforeEach(func() {
-		backend := test_utils.SetupEspUserBackend(context.Background())
-		cog := mock.NewCognitoProviderMock()
+		backend = test_utils.SetupEspUserBackend(context.Background())
+		cog = mock.NewCognitoProviderMock()
 		cog.AddTestUserPoolDirect(poolID, clientID)
 		cog.AddTestUserDirect(poolID, email, email, password, true)
 		cog.AddTestUserPoolDirect(secondPool, "second-client")
@@ -84,12 +88,20 @@ var _ = Describe("legacy token responses (RFC 6749 s5.1)", func() {
 		})).To(Succeed())
 	})
 
-	post := func(path string, body map[string]any) events.APIGatewayProxyResponse {
+	postWithHeaders := func(path string, body map[string]any, headers map[string]string) events.APIGatewayProxyResponse {
 		raw, err := json.Marshal(body)
 		Expect(err).NotTo(HaveOccurred())
-		resp, err := handler(context.Background(), events.APIGatewayProxyRequest{HTTPMethod: http.MethodPost, Path: path, Body: string(raw)})
+		resp, err := handler(context.Background(), events.APIGatewayProxyRequest{HTTPMethod: http.MethodPost, Path: path, Body: string(raw), Headers: headers})
 		Expect(err).NotTo(HaveOccurred())
 		return resp
+	}
+
+	post := func(path string, body map[string]any) events.APIGatewayProxyResponse {
+		return postWithHeaders(path, body, nil)
+	}
+
+	changePassword := func(accessToken any, body map[string]any) events.APIGatewayProxyResponse {
+		return postWithHeaders(pathPassword, body, map[string]string{"Authorization": "Bearer " + accessToken.(string)})
 	}
 
 	tokenSet := func(resp events.APIGatewayProxyResponse) map[string]any {
@@ -258,17 +270,97 @@ var _ = Describe("legacy token responses (RFC 6749 s5.1)", func() {
 		Expect(unnamed.StatusCode).To(Equal(http.StatusUnauthorized), "the first pool by name does not hold this password (negative)")
 	})
 
-	It("changes the password in the pool the request names, leaving the first pool's account alone", func() {
+	It("stamps a password sign-in and its refresh with amr pwd and the pool's provider row as idp", func() {
+		signin := tokenSet(post(pathToken, map[string]any{"username": email, "password": secondPassword, "provider": secondProvider}))
+		refresh := tokenSet(post(pathRefresh, map[string]any{"refresh_token": signin["refresh_token"]}))
+		for _, token := range []any{signin["access_token"], signin["id_token"], refresh["access_token"], refresh["id_token"]} {
+			Expect(claimsOf(token)["amr"]).To(Equal([]any{"pwd"}))
+			Expect(claimsOf(token)["idp"]).To(Equal(secondProvider))
+		}
+	})
+
+	It("changes the password in the pool the token signed in with, leaving the first pool's account alone", func() {
 		signin := tokenSet(post(pathToken, map[string]any{"username": email, "password": secondPassword, "provider": secondProvider}))
 		const newPassword = "Second#456"
 
-		unnamed := post(pathPassword, map[string]any{"access_token": signin["access_token"], "old_password": secondPassword, "new_password": newPassword})
-		Expect(unnamed.StatusCode).To(Equal(http.StatusUnauthorized), "the first pool by name does not hold this password (negative)")
-
-		changed := post(pathPassword, map[string]any{"access_token": signin["access_token"], "old_password": secondPassword, "new_password": newPassword, "provider": secondProvider})
+		changed := changePassword(signin["access_token"], map[string]any{"old_password": secondPassword, "new_password": newPassword})
 		Expect(changed.StatusCode).To(Equal(http.StatusOK), changed.Body)
 		tokenSet(post(pathToken, map[string]any{"username": email, "password": newPassword, "provider": secondProvider}))
 		tokenSet(post(pathToken, map[string]any{"username": email, "password": password}))
+	})
+
+	It("ignores a provider an old client still sends in the body, since the token's idp decides", func() {
+		signin := tokenSet(post(pathToken, map[string]any{"username": email, "password": secondPassword, "provider": secondProvider}))
+		const newPassword = "Second#456"
+
+		changed := changePassword(signin["access_token"], map[string]any{"old_password": secondPassword, "new_password": newPassword, "provider": "cognito"})
+		Expect(changed.StatusCode).To(Equal(http.StatusOK), changed.Body)
+		tokenSet(post(pathToken, map[string]any{"username": email, "password": newPassword, "provider": secondProvider}))
+		tokenSet(post(pathToken, map[string]any{"username": email, "password": password}))
+	})
+
+	It("refuses a token sent only in the body, since the caller is read from the Authorization header (RFC 6750 s2.1) (negative)", func() {
+		signin := tokenSet(post(pathToken, map[string]any{"username": email, "password": password}))
+		calls := cog.InitiateAuthCalls
+
+		resp := post(pathPassword, map[string]any{"access_token": signin["access_token"], "old_password": password, "new_password": "NewPass#123"})
+		Expect(resp.StatusCode).To(Equal(http.StatusUnauthorized))
+		Expect(resp.Body).To(MatchJSON(`{"message":"Password change failed"}`))
+		Expect(cog.InitiateAuthCalls).To(Equal(calls), "no pool is reached without a caller")
+		tokenSet(post(pathToken, map[string]any{"username": email, "password": password}))
+	})
+
+	DescribeTable("refuses a bearer token that is not one of our user access tokens (negative)",
+		func(token func() string) {
+			bearer := token()
+			calls := cog.InitiateAuthCalls
+
+			resp := changePassword(bearer, map[string]any{"old_password": password, "new_password": "NewPass#123"})
+			Expect(resp.StatusCode).To(Equal(http.StatusUnauthorized))
+			Expect(resp.Body).To(MatchJSON(`{"message":"Password change failed"}`))
+			Expect(cog.InitiateAuthCalls).To(Equal(calls), "no pool is reached without a caller")
+		},
+		Entry("not a JWT", func() string { return "not-a-token" }),
+		Entry("an id token", func() string {
+			return tokenSet(post(pathToken, map[string]any{"username": email, "password": password}))["id_token"].(string)
+		}),
+	)
+
+	DescribeTable("refuses a sign-in with no password here, naming its provider, without reaching any pool (negative)",
+		func(claims jwtutil.UserClaims, message string) {
+			Expect(identity_providers_db.NewIdentityProvidersDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).CreateProvider(&identity_providers_db.ProviderEntry{
+				ProviderName: "google", DisplayName: "Google", Type: identity_providers_db.TypeOIDC, Enabled: utils.Ptr(true), ClientID: "google-client",
+			})).To(Succeed())
+			claims.Email = email
+			token, err := jwtutil.NewMinter(backend.Issuer, backend.SigningKey, oidc.SigningKeyID).
+				AccessToken("user-1", homeAppClientID, "openid email phone", neoResource, claims)
+			Expect(err).NotTo(HaveOccurred())
+
+			resp := changePassword(token, map[string]any{"old_password": password, "new_password": "NewPass#123"})
+			Expect(resp.StatusCode).To(Equal(http.StatusForbidden))
+			Expect(resp.Body).To(MatchJSON(`{"message":"` + message + `"}`))
+			Expect(cog.InitiateAuthCalls).To(BeZero())
+		},
+		Entry("a federated sign-in, by the row's display name", jwtutil.UserClaims{Provider: "google"}, "You signed in through Google. This doesn't support password change."),
+		Entry("a one-time code, by its idp since no row holds it", jwtutil.UserClaims{AMR: []string{"otp"}, Provider: "otp"}, "You signed in through otp. This doesn't support password change."),
+	)
+
+	It("changes the default password row's password for a token that names no idp", func() {
+		mint := func() string {
+			token, err := jwtutil.NewMinter(backend.Issuer, backend.SigningKey, oidc.SigningKeyID).
+				AccessToken("user-1", homeAppClientID, "openid email phone", neoResource, jwtutil.UserClaims{Contact: jwtutil.Contact{Email: email}})
+			Expect(err).NotTo(HaveOccurred())
+			return token
+		}
+		const newPassword = "NewPass#456"
+
+		other := changePassword(mint(), map[string]any{"old_password": secondPassword, "new_password": newPassword, "provider": secondProvider})
+		Expect(other.StatusCode).To(Equal(http.StatusUnauthorized), "the default row's pool does not hold the second pool's password (negative)")
+
+		changed := changePassword(mint(), map[string]any{"old_password": password, "new_password": newPassword})
+		Expect(changed.StatusCode).To(Equal(http.StatusOK), changed.Body)
+		tokenSet(post(pathToken, map[string]any{"username": email, "password": newPassword}))
+		tokenSet(post(pathToken, map[string]any{"username": email, "password": secondPassword, "provider": secondProvider}))
 	})
 
 	It("refuses a refresh naming two resources, so no token is good at two APIs (negative)", func() {
@@ -282,7 +374,7 @@ var _ = Describe("legacy token responses (RFC 6749 s5.1)", func() {
 		caller := tokenSet(post(pathToken, map[string]any{"username": email, "password": password}))
 		other := tokenSet(post(pathToken, map[string]any{"username": email, "password": password}))
 
-		changed := post(pathPassword, map[string]any{"access_token": caller["access_token"], "old_password": password, "new_password": "NewPass#123"})
+		changed := changePassword(caller["access_token"], map[string]any{"old_password": password, "new_password": "NewPass#123"})
 		Expect(changed.StatusCode).To(Equal(http.StatusOK), changed.Body)
 
 		Expect(post(pathRefresh, map[string]any{"refresh_token": other["refresh_token"]}).StatusCode).To(Equal(http.StatusUnauthorized))
@@ -300,19 +392,19 @@ var _ = Describe("legacy token responses (RFC 6749 s5.1)", func() {
 	})
 
 	DescribeTable("answers a password that changed while the sessions could not be signed out with 500, saying the password did change (negative)",
-		func(path, message string, body func(signin map[string]any) map[string]any) {
+		func(message string, send func(signin map[string]any) events.APIGatewayProxyResponse) {
 			signin := tokenSet(post(pathToken, map[string]any{"username": email, "password": password}))
 			awscommon.SetDynamoDBClient(&mock.FailingIndexQuery{DynamoDBMock: awscommon.GetDynamoDBClient().(*mock.DynamoDBMock), IndexName: sessions_db.SessionsByUserIndex})
 
-			resp := post(path, body(signin))
+			resp := send(signin)
 			Expect(resp.StatusCode).To(Equal(http.StatusInternalServerError))
 			Expect(resp.Body).To(MatchJSON(`{"message":"` + message + `"}`))
 		},
-		Entry("a change", pathPassword, "Password changed, but sessions could not be signed out", func(signin map[string]any) map[string]any {
-			return map[string]any{"access_token": signin["access_token"], "old_password": password, "new_password": "NewPass#123"}
+		Entry("a change", "Password changed, but sessions could not be signed out", func(signin map[string]any) events.APIGatewayProxyResponse {
+			return changePassword(signin["access_token"], map[string]any{"old_password": password, "new_password": "NewPass#123"})
 		}),
-		Entry("a reset", pathRecoveryConfirm, "Password reset, but sessions could not be signed out", func(map[string]any) map[string]any {
-			return map[string]any{"username": email, "code": resetCode, "new_password": "NewPass#123"}
+		Entry("a reset", "Password reset, but sessions could not be signed out", func(map[string]any) events.APIGatewayProxyResponse {
+			return post(pathRecoveryConfirm, map[string]any{"username": email, "code": resetCode, "new_password": "NewPass#123"})
 		}),
 	)
 })
@@ -443,7 +535,7 @@ var _ = Describe("against a pool with no such account", func() {
 			http.StatusUnauthorized, "Authentication failed"),
 		Entry("refresh", pathRefresh, map[string]any{"refresh_token": "not-a-token", "provider": "nope"}, http.StatusUnauthorized, "Invalid refresh token"),
 		Entry("signout", pathSignout, map[string]any{"provider": "nope"}, http.StatusBadRequest, "Refresh token is required"),
-		Entry("password", pathPassword, map[string]any{"access_token": "not-a-token", "old_password": "a", "new_password": "b"},
+		Entry("password", pathPassword, map[string]any{"old_password": "a", "new_password": "b"},
 			http.StatusUnauthorized, "Password change failed"),
 	)
 
@@ -462,7 +554,6 @@ var _ = Describe("against a pool with no such account", func() {
 		Entry("recovery, a name that does not exist", pathRecovery, "nope"),
 		Entry("recovery confirmation, a name that does not exist", pathRecoveryConfirm, "nope"),
 		Entry("sign-in, a name that does not exist", pathToken, "nope"),
-		Entry("password change, a name that does not exist", pathPassword, "nope"),
 		Entry("signup, a disabled password row", pathSignup, "retired"),
 		Entry("sign-in, a disabled password row", pathToken, "retired"),
 	)

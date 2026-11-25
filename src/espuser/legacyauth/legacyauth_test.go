@@ -76,6 +76,24 @@ func unverifiedAudience(token string) any {
 	return claims["aud"]
 }
 
+// verifiedCaller verifies a minted access token the way the password-change route does, so the specs hand NewServiceForCaller real claims.
+func verifiedCaller(accessToken string) auth.TokenClaims {
+	oauth, err := auth.NewOAuthUserAuthService(context.Background())
+	Expect(err).NotTo(HaveOccurred())
+	caller, err := oauth.VerifyUserTokenForAnyAPI(accessToken)
+	Expect(err).NotTo(HaveOccurred())
+	return caller
+}
+
+// changePassword is the password-change route's two steps: resolve the caller's provider from the token, then change the password there.
+func changePassword(accessToken, oldPassword, newPassword string) error {
+	svc, err := NewServiceForCaller(context.Background(), verifiedCaller(accessToken))
+	if err != nil {
+		return err
+	}
+	return svc.ChangePassword(context.Background(), oldPassword, newPassword)
+}
+
 // Which pool a password reaches is an authorization decision, so it must not depend on DynamoDB's scan order.
 var _ = Describe("provider selection", func() {
 	BeforeEach(func() {
@@ -348,17 +366,17 @@ var _ = Describe("SigninWithPassword", func() {
 		Expect(err).To(MatchError(ErrNoPasswordProvider))
 	})
 
-	It("rejects a password change whose access token is not ours (negative)", func() {
+	It("refuses a password change on a service built without a caller (negative)", func() {
 		svc := newService("u@example.com", true)
-		err := svc.ChangePassword(context.Background(), "not-a-jwt", testPassword, "NewPass#123")
-		Expect(err).To(HaveOccurred())
+		Expect(svc.ChangePassword(context.Background(), testPassword, "NewPass#123")).To(MatchError(ErrNoVerifiedCaller))
 	})
 
 	It("rejects a password change with a missing field (negative)", func() {
 		svc := newService("u@example.com", true)
-		Expect(svc.ChangePassword(context.Background(), "", testPassword, "NewPass#123")).NotTo(Succeed())
-		Expect(svc.ChangePassword(context.Background(), "tok", "", "NewPass#123")).NotTo(Succeed())
-		Expect(svc.ChangePassword(context.Background(), "tok", testPassword, "")).NotTo(Succeed())
+		tokens, err := svc.SigninWithPassword(context.Background(), "u@example.com", testPassword)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(changePassword(tokens.AccessToken, "", "NewPass#123")).NotTo(Succeed())
+		Expect(changePassword(tokens.AccessToken, testPassword, "")).NotTo(Succeed())
 	})
 
 	It("changes the password when the caller's own token and old password both check out", func() {
@@ -366,7 +384,7 @@ var _ = Describe("SigninWithPassword", func() {
 		tokens, err := svc.SigninWithPassword(context.Background(), "u@example.com", testPassword)
 		Expect(err).NotTo(HaveOccurred())
 
-		Expect(svc.ChangePassword(context.Background(), tokens.AccessToken, testPassword, "NewPass#123")).To(Succeed())
+		Expect(changePassword(tokens.AccessToken, testPassword, "NewPass#123")).To(Succeed())
 	})
 
 	It("changes the password with the token a legacy sign-in returns, although it is addressed to the RainMaker API and not this one", func() {
@@ -375,7 +393,85 @@ var _ = Describe("SigninWithPassword", func() {
 		tokens, err := svc.SigninWithPassword(context.Background(), "u@example.com", testPassword)
 		Expect(err).NotTo(HaveOccurred())
 
-		Expect(svc.ChangePassword(context.Background(), tokens.AccessToken, testPassword, "NewPass#123")).To(Succeed())
+		Expect(changePassword(tokens.AccessToken, testPassword, "NewPass#123")).To(Succeed())
+	})
+
+	It("stamps a password sign-in's tokens with amr pwd and the provider row as idp", func() {
+		svc := newService("u@example.com", true)
+		tokens, err := svc.SigninWithPassword(context.Background(), "u@example.com", testPassword)
+		Expect(err).NotTo(HaveOccurred())
+
+		for _, token := range []string{tokens.AccessToken, tokens.IDToken} {
+			claims := jwt.MapClaims{}
+			_, _, err := jwt.NewParser().ParseUnverified(token, claims)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(claims["amr"]).To(Equal([]any{"pwd"}))
+			Expect(claims["idp"]).To(Equal("cognito"))
+		}
+	})
+
+	Describe("choosing the provider whose password changes", func() {
+		// tokenFor mints an access token for a sign-in a spec describes directly, such as a federated one or one from before idp was stamped.
+		tokenFor := func(claims jwtutil.UserClaims) string {
+			claims.Email = "u@example.com"
+			token, err := jwtutil.NewMinter(backend.Issuer, backend.SigningKey, oidc.SigningKeyID).
+				AccessToken("user-1", legacyClientID, legacyScope, neoResource, claims)
+			Expect(err).NotTo(HaveOccurred())
+			return token
+		}
+		providerFor := func(accessToken string) (string, error) {
+			svc, err := NewServiceForCaller(context.Background(), verifiedCaller(accessToken))
+			if err != nil {
+				return "", err
+			}
+			return svc.providerName, nil
+		}
+
+		BeforeEach(func() {
+			newService("u@example.com", true)
+			seedNamedPasswordProvider("zeta", testClientID2, nil)
+			rmngCtx := rmngctx.NewRmngContextWithCtx(context.Background(), nil)
+			Expect(identity_providers_db.NewIdentityProvidersDB(rmngCtx).CreateProvider(&identity_providers_db.ProviderEntry{
+				ProviderName: "google", DisplayName: "Google", Type: identity_providers_db.TypeOIDC, Enabled: utils.Ptr(true), ClientID: "google-client",
+			})).To(Succeed())
+		})
+
+		It("takes the provider the token's idp names, not the first by name", func() {
+			Expect(providerFor(tokenFor(jwtutil.UserClaims{AMR: []string{"pwd"}, Provider: "zeta"}))).To(Equal("zeta"))
+		})
+
+		DescribeTable("refuses a sign-in with no password ESP User checked, naming its provider (negative)",
+			func(claims jwtutil.UserClaims, name string) {
+				_, err := providerFor(tokenFor(claims))
+				Expect(err).To(MatchError(ErrNoPasswordToChange))
+				var refusal *NoPasswordToChangeError
+				Expect(errors.As(err, &refusal)).To(BeTrue())
+				Expect(refusal.Provider).To(Equal(name))
+			},
+			Entry("a federated sign-in, by the row's display name", jwtutil.UserClaims{Provider: "google"}, "Google"),
+			Entry("a one-time code, by its idp since no row holds it", jwtutil.UserClaims{AMR: []string{"otp"}, Provider: "otp"}, "otp"),
+			Entry("a password row's sign-in that checked no password, by the row's name when it has no display name", jwtutil.UserClaims{Provider: "zeta"}, "zeta"),
+			Entry("a provider row missing from the registry, by its idp", jwtutil.UserClaims{AMR: []string{"pwd"}, Provider: "retired"}, "retired"),
+		)
+
+		It("refuses a sign-in without a password by its idp when the registry is unreadable (negative)", func() {
+			awscommon.SetDynamoDBClient(&mock.FailingScan{DynamoDBMock: backend.DBMock, TableName: "espuser-identity-providers"})
+			_, err := providerFor(tokenFor(jwtutil.UserClaims{Provider: "google"}))
+			var refusal *NoPasswordToChangeError
+			Expect(errors.As(err, &refusal)).To(BeTrue())
+			Expect(refusal.Provider).To(Equal("google"))
+		})
+
+		It("fails rather than refuse a password sign-in when the registry is unreadable (negative)", func() {
+			awscommon.SetDynamoDBClient(&mock.FailingScan{DynamoDBMock: backend.DBMock, TableName: "espuser-identity-providers"})
+			_, err := providerFor(tokenFor(jwtutil.UserClaims{AMR: []string{"pwd"}, Provider: "zeta"}))
+			Expect(err).To(HaveOccurred())
+			Expect(err).NotTo(MatchError(ErrNoPasswordToChange))
+		})
+
+		It("uses the default password row for a token that names no idp", func() {
+			Expect(providerFor(tokenFor(jwtutil.UserClaims{}))).To(Equal("cognito"))
+		})
 	})
 
 	It("names a password the pool's policy refuses at signup and recovery confirmation, not the route's catch-all", func() {
@@ -455,7 +551,7 @@ var _ = Describe("SigninWithPassword", func() {
 		})
 
 		It("ends every session, the caller's included, and every connected app on a change, so the person signs in again", func() {
-			Expect(svc.ChangePassword(context.Background(), caller.AccessToken, testPassword, newPassword)).To(Succeed())
+			Expect(changePassword(caller.AccessToken, testPassword, newPassword)).To(Succeed())
 
 			Expect(families()).To(BeEmpty())
 			Expect(sessionSIDs()).To(BeEmpty())
@@ -544,7 +640,7 @@ var _ = Describe("SigninWithPassword", func() {
 				Expect(event()).To(MatchError(ErrSessionsNotEnded))
 			},
 			Entry("a change, the session rows unreachable", sessions_db.SessionsByUserIndex, func() error {
-				return svc.ChangePassword(context.Background(), caller.AccessToken, testPassword, newPassword)
+				return changePassword(caller.AccessToken, testPassword, newPassword)
 			}),
 			Entry("a reset, the account lookup unreachable", "espuser-user-details-by-email", func() error {
 				return svc.ConfirmForgotPassword(context.Background(), "u@example.com", resetCode, newPassword)
