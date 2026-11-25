@@ -136,7 +136,7 @@ Cognito answers some correct passwords with a challenge rather than tokens; thos
   are discarded. So a legacy password login and a federated/OTP login for the same
   verified contact resolve to the same `user_id` and issue the same shape of token.
   The tokens are for the RainMaker Home app's client, `rainmaker-neo-home-app-client` (espuser-base
-  `EspUserClientId`), whichever app calls: a refresh token renews only with the client it was issued to,
+  `HomeAppClientId`), whichever app calls: a refresh token renews only with the client it was issued to,
   so the app's password sign-ins keep renewing once it signs in through the browser with that client.
   Like the client id, the resource is not a parameter here: the sign-in covers every API the password
   client's `allowed_resources` name, and its access token is for the client's `default_resource`

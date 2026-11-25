@@ -132,7 +132,7 @@ ADMIN_USER_POOL_ID = esp_user_base_outputs.get('EspAdminUserPoolId') or rmng_bas
 ADMIN_CLIENT_ID = esp_user_base_outputs.get('EspAdminUserPoolClientId') or rmng_base_outputs.get('AdminUserPoolClientId', '')
 USER_API_GATEWAY_URL = esp_user_base_outputs.get('EspUserApiUrl', '')
 # The client the password API issues to, which the identity pool and /v1/user/credentials trust.
-ESP_USER_CLIENT_ID = esp_user_base_outputs.get('EspUserClientId', '')
+HOME_APP_CLIENT_ID = esp_user_base_outputs.get('HomeAppClientId', '')
 # The OAuth test client (py_sdk.espuser_oauth) is deployment-agnostic; give it this run's base URLs.
 espuser_oauth.API_BASE = USER_API_GATEWAY_URL
 espuser_oauth.NEO_API_BASE = API_GATEWAY_URL

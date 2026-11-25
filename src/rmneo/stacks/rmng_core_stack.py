@@ -65,10 +65,10 @@ class RMNGCoreStack(Stack):
         common_resources.esp_user_issuer = ssm.StringParameter.value_for_string_parameter(
             self, SSM_PARAMETERS['ESP_USER_ISSUER']
         )
-        common_resources.esp_user_client_id = ssm.StringParameter.value_for_string_parameter(
-            self, SSM_PARAMETERS['ESP_USER_CLIENT_ID']
+        common_resources.home_app_client_id = ssm.StringParameter.value_for_string_parameter(
+            self, SSM_PARAMETERS['HOME_APP_CLIENT_ID']
         )
-        common_resources.first_party_client_ids = Fn.join(",", first_party_client_ids(common_resources.esp_user_client_id))
+        common_resources.first_party_client_ids = Fn.join(",", first_party_client_ids(common_resources.home_app_client_id))
         common_resources.esp_mcp_client_id = ssm.StringParameter.value_for_string_parameter(
             self, SSM_PARAMETERS['ESP_MCP_CLIENT_ID']
         )

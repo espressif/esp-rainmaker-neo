@@ -300,7 +300,7 @@ class CreateIdentityPool(Construct):
         esp_user_oidc_provider = iam.CfnOIDCProvider(
             self, "EspUserOidcProvider",
             url=common_resources.esp_user_issuer,
-            client_id_list=first_party_client_ids(common_resources.esp_user_client_id),
+            client_id_list=first_party_client_ids(common_resources.home_app_client_id),
             thumbprint_list=["9e99a48a9960b14926bb7f3b02e22da2b0ab7280"],
         )
         esp_user_oidc_provider.override_logical_id(
@@ -388,10 +388,10 @@ class RMNGBaseStack(Stack):
             description="ESP User Issuer (leave empty to read from SSM /espuser/base/user-issuer)",
             default=""
         )
-        esp_user_client_id_param = CfnParameter(
-            self, "EspUserClientId",
+        home_app_client_id_param = CfnParameter(
+            self, "HomeAppClientId",
             type="String",
-            description="ESP User Pool Client ID (leave empty to read from SSM /espuser/base/user-client-id)",
+            description="RainMaker Home app client ID (leave empty to read from SSM /espuser/base/home-app-client-id)",
             default=""
         )
         esp_mcp_client_id_param = CfnParameter(
@@ -436,7 +436,7 @@ class RMNGBaseStack(Stack):
         # but allow CfnParameter override when a non-empty value is provided.
         esp_param_overrides = [
             ("HasEspUserIssuer", esp_user_issuer, USER_SSM_PARAMETERS['ESP_USER_ISSUER'], "esp_user_issuer"),
-            ("HasEspUserClientId", esp_user_client_id_param, USER_SSM_PARAMETERS['ESP_USER_CLIENT_ID'], "esp_user_client_id"),
+            ("HasHomeAppClientId", home_app_client_id_param, USER_SSM_PARAMETERS['HOME_APP_CLIENT_ID'], "home_app_client_id"),
             ("HasEspMcpClientId", esp_mcp_client_id_param, USER_SSM_PARAMETERS['ESP_MCP_CLIENT_ID'], "esp_mcp_client_id"),
             ("HasEspMcpClientSecret", esp_mcp_client_secret_param, USER_SSM_PARAMETERS['ESP_MCP_CLIENT_SECRET'], "esp_mcp_client_secret"),
             ("HasEspAdminUserPoolId", esp_admin_user_pool_id_param, USER_SSM_PARAMETERS['ESP_ADMIN_USER_POOL_ID'], "esp_admin_user_pool_id"),
@@ -562,7 +562,7 @@ class RMNGBaseStack(Stack):
         # Don't add any assume role policy statements here - we'll add them in AssumeRoleAPI
 
         CfnOutput(self, "UserIssuer", value=common_resources.esp_user_issuer)
-        CfnOutput(self, "UserClientId", value=common_resources.esp_user_client_id)
+        CfnOutput(self, "UserClientId", value=common_resources.home_app_client_id)
         CfnOutput(self, "IdentityPoolId", value=id_pool.identity_pool.ref)
 
         self.identity_pool = id_pool
@@ -830,10 +830,10 @@ class RMNGBaseStack(Stack):
             description="ESP User Issuer"
         )
         create_ssm_string_parameter(
-            self, "EspUserClientIdParameter",
-            parameter_name=SSM_PARAMETERS['ESP_USER_CLIENT_ID'],
-            string_value=common_resources.esp_user_client_id,
-            description="ESP User Client ID"
+            self, "HomeAppClientIdParameter",
+            parameter_name=SSM_PARAMETERS['HOME_APP_CLIENT_ID'],
+            string_value=common_resources.home_app_client_id,
+            description="RainMaker Home app client ID"
         )
         create_ssm_string_parameter(
             self, "EspMcpClientIdParameter",

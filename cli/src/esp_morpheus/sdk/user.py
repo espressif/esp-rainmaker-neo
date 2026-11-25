@@ -27,7 +27,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
-from ..outputs import DEFAULT_ESP_USER_CLIENT_ID, RmngSettings
+from ..outputs import DEFAULT_HOME_APP_CLIENT_ID, RmngSettings
 from . import smartthings
 from .errors import requires
 from .util import shadow_to_unstructured
@@ -40,13 +40,13 @@ reset = "\033[0m"
 # seeded literal for contexts without rmng-outputs.json). The OTP login path issues tokens to this
 # client. Resolved from the repo-anchored outputs, so the value no longer depends on the CWD the
 # importing process happened to start in.
-def _esp_user_client_id():
+def _home_app_client_id():
     try:
-        return RmngSettings.from_source().esp_user_client_id
+        return RmngSettings.from_source().home_app_client_id
     except (FileNotFoundError, json.JSONDecodeError, SystemExit):
-        return DEFAULT_ESP_USER_CLIENT_ID
+        return DEFAULT_HOME_APP_CLIENT_ID
 
-ESP_USER_CLIENT_ID = _esp_user_client_id()
+HOME_APP_CLIENT_ID = _home_app_client_id()
 
 # Off by default: the trace prints bearer tokens and STS session credentials verbatim, so it
 # belongs on a terminal only when the operator asks for it. `esp-morpheus -v` turns it on.
@@ -3329,7 +3329,7 @@ class User:
         url = f"{self.user_api_gateway_url}/oauth2/userinfo"
         return self.session.get(url, headers={"Authorization": f"Bearer {access_token}"})
 
-    def oauth_revoke(self, token, client_id=ESP_USER_CLIENT_ID, client_secret="", token_type_hint=None):
+    def oauth_revoke(self, token, client_id=HOME_APP_CLIENT_ID, client_secret="", token_type_hint=None):
         """Revoke one refresh token (POST /oauth2/revoke, RFC 7009). Client auth is HTTP Basic: a public client passes an empty secret. Always 200 (no token-validity oracle)."""
         url = f"{self.user_api_gateway_url}/oauth2/revoke"
         payload = {"token": token}
@@ -3532,7 +3532,7 @@ class User:
         if refresh_token is None:
             refresh_token = self.refresh_token
 
-        response = self.oauth_token_refresh(refresh_token, ESP_USER_CLIENT_ID, resource=resource)
+        response = self.oauth_token_refresh(refresh_token, HOME_APP_CLIENT_ID, resource=resource)
 
         # If successful, update tokens
         if response.status_code in (200, 201):
@@ -3570,7 +3570,7 @@ class User:
 
         body = urlencode({
             "token": refresh_token,
-            "client_id": ESP_USER_CLIENT_ID,
+            "client_id": HOME_APP_CLIENT_ID,
         })
         return self.session.post(
             f"{self.user_api_gateway_url}/oauth2/revoke",

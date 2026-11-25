@@ -51,7 +51,7 @@ USER_SSM_PARAMETERS = {
     'ESP_USER_V1_RESOURCE_ID': '/espuser/base/v1-api-resource-id',
     'ESP_ADMIN_COGNITO_AUTHORIZER_ID': '/espuser/base/admin-cognito-authorizer-id',
     'ESP_USER_ISSUER': '/espuser/base/user-issuer',
-    'ESP_USER_CLIENT_ID': '/espuser/base/user-client-id',
+    'HOME_APP_CLIENT_ID': '/espuser/base/home-app-client-id',
     'ESP_MCP_CLIENT_ID': '/espuser/base/mcp-client-id',
     'ESP_MCP_CLIENT_SECRET': '/espuser/base/mcp-client-secret',
     'ESP_ADMIN_USER_POOL_ID': '/espuser/base/admin-user-pool-id',
@@ -71,9 +71,9 @@ HOME_APP_REDIRECT_URI = 'rainmaker://com.espressif.novahome/success'
 HOME_APP_LOGO_URI = 'data:image/png;base64,' + base64.b64encode((Path(__file__).resolve().parents[3] / 'assets' / 'rainmaker_home_logo.png').read_bytes()).decode()
 
 
-def first_party_client_ids(esp_user_client_id: str) -> list:
-    """The apps the identity pool federates and USER_CLIENT_ID pins for /v1/user/credentials, listed once so the two cannot drift: the ESP User client espuser-base publishes, which is HOME_APP_CLIENT_ID."""
-    return [esp_user_client_id]
+def first_party_client_ids(home_app_client_id: str) -> list:
+    """The apps the identity pool federates and USER_CLIENT_ID pins for /v1/user/credentials, listed once so the two cannot drift: the Home app client espuser-base publishes, which is HOME_APP_CLIENT_ID."""
+    return [home_app_client_id]
 
 
 # The scopes of a client that acts while the person is away (an assistant link, an MCP connector); offline_access keeps its grant through every sign-out (OIDC Core 1.0 s11).

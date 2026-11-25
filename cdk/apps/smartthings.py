@@ -87,7 +87,7 @@ def _cfg_common_resources():
 # Parameters resolved from rmng-outputs.json unless CDK_PUBLISH=true (then empty defaults; override at deploy)
 st_params = {
     "rmng_region": "" if is_publish else rmng_region,
-    "esp_user_client_id": esp_user_base.get('EspUserClientId', ''),
+    "home_app_client_id": esp_user_base.get('HomeAppClientId', ''),
     "esp_admin_user_pool_id": esp_user_base.get('EspAdminUserPoolId', ''),
     "esp_admin_user_pool_client_id": esp_user_base.get('EspAdminUserPoolClientId', ''),
     "esp_user_jwks": esp_user_base.get('EspUserJWKSParameter', ''),

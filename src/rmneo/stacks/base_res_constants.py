@@ -126,7 +126,7 @@ SSM_PARAMETERS = {
     'RMNG_API_AUDIENCES': '/rmng/base/api-audiences',
     'RMNG_API_RESOURCE': '/rmng/base/api-resource',
     'ESP_USER_ISSUER': '/rmng/base/esp-user-issuer',
-    'ESP_USER_CLIENT_ID': '/rmng/base/esp-user-client-id',
+    'HOME_APP_CLIENT_ID': '/rmng/base/home-app-client-id',
     'ESP_MCP_CLIENT_ID': '/rmng/base/esp-mcp-client-id',
     'ESP_MCP_CLIENT_SECRET': '/rmng/base/esp-mcp-client-secret',
     'ESP_ADMIN_USER_POOL_ID': '/rmng/base/esp-admin-user-pool-id',

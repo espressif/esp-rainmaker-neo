@@ -59,8 +59,8 @@ class EspUserCoreStack(Stack):
         common_resources.esp_user_issuer = ssm.StringParameter.value_for_string_parameter(
             self, USER_SSM_PARAMETERS['ESP_USER_ISSUER']
         )
-        common_resources.esp_user_client_id = ssm.StringParameter.value_for_string_parameter(
-            self, USER_SSM_PARAMETERS['ESP_USER_CLIENT_ID']
+        common_resources.home_app_client_id = ssm.StringParameter.value_for_string_parameter(
+            self, USER_SSM_PARAMETERS['HOME_APP_CLIENT_ID']
         )
         common_resources.esp_admin_user_pool_id = ssm.StringParameter.value_for_string_parameter(
             self, USER_SSM_PARAMETERS['ESP_ADMIN_USER_POOL_ID']

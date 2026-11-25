@@ -18,8 +18,8 @@ from test.itest.conftest import (
     ADMIN_USER_POOL_ID,
     API_GATEWAY_URL,
     END_USER_POOL_ID,
-    ESP_USER_CLIENT_ID,
     ESPUSER_RESOURCE,
+    HOME_APP_CLIENT_ID,
     IDENTITY_POOL_ID,
     IOT_ENDPOINT,
     NEO_RESOURCE,
@@ -55,7 +55,7 @@ def test_a_password_sign_in_names_its_provider_and_says_a_password_was_checked(t
     signed = login.signin()
     assert signed.status_code == 200, signed.text
     data = signed.json()
-    renewed = login.oauth_token_refresh(data["refresh_token"], ESP_USER_CLIENT_ID)
+    renewed = login.oauth_token_refresh(data["refresh_token"], HOME_APP_CLIENT_ID)
     assert renewed.status_code == 200, f"refresh failed: {renewed.status_code} {renewed.text[:200]}"
     idp = decode_jwt_claims(data["id_token"]).get("idp")
     assert idp, "a password sign-in names the provider row that checked the password"
@@ -68,10 +68,10 @@ def test_a_password_sign_in_names_its_provider_and_says_a_password_was_checked(t
 
 
 def test_an_old_app_build_signs_in_renews_and_reaches_its_devices_without_naming_a_client(test_user1):
-    """The store app sends the password API only a username and password and renews through its refresh endpoint; its sign-in belongs to EspUserClientId, the Home app client, which /v1/user/credentials and the identity pool trust."""
+    """The store app sends the password API only a username and password and renews through its refresh endpoint; its sign-in belongs to HomeAppClientId, the Home app client, which /v1/user/credentials and the identity pool trust."""
     if not USER_API_GATEWAY_URL:
         pytest.skip("USER_API_GATEWAY_URL not configured")
-    assert ESP_USER_CLIENT_ID, "espuser-base must publish EspUserClientId"
+    assert HOME_APP_CLIENT_ID, "espuser-base must publish HomeAppClientId"
     auth_url = f"{USER_API_GATEWAY_URL}/v1/user/auth"
     bearer = lambda token: {"Authorization": f"Bearer {token}"}  # noqa: E731
 
@@ -79,14 +79,14 @@ def test_an_old_app_build_signs_in_renews_and_reaches_its_devices_without_naming
     assert signin.status_code == 200, signin.text
     tokens = signin.json()
     aud = decode_jwt_claims(tokens["id_token"])["aud"]
-    assert (aud if isinstance(aud, list) else [aud]) == [ESP_USER_CLIENT_ID], f"the id token must be for the Home app client: {aud}"
-    assert decode_jwt_claims(tokens["access_token"])["client_id"] == ESP_USER_CLIENT_ID
+    assert (aud if isinstance(aud, list) else [aud]) == [HOME_APP_CLIENT_ID], f"the id token must be for the Home app client: {aud}"
+    assert decode_jwt_claims(tokens["access_token"])["client_id"] == HOME_APP_CLIENT_ID
 
     renewed = requests.post(f"{auth_url}/token/refresh", json={"refresh_token": tokens["refresh_token"]})
     assert renewed.status_code == 200, renewed.text
     renewed_tokens = renewed.json()
     assert renewed_tokens["refresh_token"] != tokens["refresh_token"], "every renewal must rotate"
-    assert decode_jwt_claims(renewed_tokens["access_token"])["client_id"] == ESP_USER_CLIENT_ID
+    assert decode_jwt_claims(renewed_tokens["access_token"])["client_id"] == HOME_APP_CLIENT_ID
 
     creds = requests.post(f"{API_GATEWAY_URL}/v1/user/credentials", headers=bearer(renewed_tokens["access_token"]),
                           json={"id_token": renewed_tokens["id_token"]})

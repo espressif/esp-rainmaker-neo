@@ -216,11 +216,11 @@ stacks:
         prompt: false
         configurable: false
         description: "ESP User OAuth issuer URL (leave empty to read from SSM)"
-      EspUserClientId:
-        value: ${espuser-base.outputs.EspUserClientId}
+      HomeAppClientId:
+        value: ${espuser-base.outputs.HomeAppClientId}
         prompt: false
         configurable: false
-        description: "ESP User Client ID (leave empty to read from SSM)"
+        description: "RainMaker Home app client ID (leave empty to read from SSM)"
       EspMcpClientId:
         value: ${espuser-base.outputs.EspMcpClientId}
         prompt: false
@@ -378,10 +378,10 @@ stacks:
         value: ${rmng-base.inputs.EspUserIssuer}
         prompt: false
         description: "ESP User OAuth issuer URL"
-      EspUserClientId:
-        value: ${rmng-base.inputs.EspUserClientId}
+      HomeAppClientId:
+        value: ${rmng-base.inputs.HomeAppClientId}
         prompt: false
-        description: "ESP User Client ID"
+        description: "RainMaker Home app client ID"
       EspAdminUserPoolId:
         value: ${rmng-base.inputs.EspAdminUserPoolId}
         prompt: false
@@ -439,10 +439,10 @@ stacks:
         value: ${rmng-base.inputs.EspUserIssuer}
         prompt: false
         description: "ESP User OAuth issuer URL"
-      EspUserClientId:
-        value: ${rmng-base.inputs.EspUserClientId}
+      HomeAppClientId:
+        value: ${rmng-base.inputs.HomeAppClientId}
         prompt: false
-        description: "ESP User Client ID"
+        description: "RainMaker Home app client ID"
       EspAdminUserPoolId:
         value: ${rmng-base.inputs.EspAdminUserPoolId}
         prompt: false

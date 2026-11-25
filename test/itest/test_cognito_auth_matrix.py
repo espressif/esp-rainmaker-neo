@@ -48,7 +48,7 @@ from botocore.exceptions import ClientError
 
 from test.itest.conftest import (
     END_USER_POOL_ID,
-    ESP_USER_CLIENT_ID,
+    HOME_APP_CLIENT_ID,
     NEO_RESOURCE,
     PROVIDER_SETTLE,
     REGION,
@@ -87,7 +87,7 @@ PROVIDER_ROW = {
     "external-alias": ALIAS_PROVIDER_NAME,
 }
 
-# The scope every legacy access token is issued for (legacyScope in legacyauth); its client is EspUserClientId, the Home app, and its audience that client's default API, neo.
+# The scope every legacy access token is issued for (legacyScope in legacyauth); its client is HomeAppClientId, the Home app, and its audience that client's default API, neo.
 LEGACY_SCOPE = "openid email phone"
 
 # Long enough for Cognito to mail a code and Mailosaur to receive it.
@@ -1188,7 +1188,7 @@ def _assert_legacy_access_claims(claims, sub, email):
     assert claims["sub"] == sub, claims
     assert claims["email"] == email.lower(), claims
     assert claims["token_use"] == "access", claims
-    assert claims["client_id"] == ESP_USER_CLIENT_ID, claims
+    assert claims["client_id"] == HOME_APP_CLIENT_ID, claims
     assert claims["aud"] == NEO_RESOURCE, claims
     assert claims["scope"] == LEGACY_SCOPE, claims
     assert claims["exp"] > claims["iat"], claims

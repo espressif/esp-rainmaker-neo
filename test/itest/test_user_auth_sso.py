@@ -42,8 +42,8 @@ from py_sdk.test_user import User
 from test.itest.conftest import (
     API_GATEWAY_URL,
     END_USER_POOL_ID,
-    ESP_USER_CLIENT_ID,
     ESPUSER_RESOURCE,
+    HOME_APP_CLIENT_ID,
     IDENTITY_POOL_ID,
     IOT_ENDPOINT,
     NEO_RESOURCE,
@@ -880,7 +880,7 @@ def test_sso_a_password_change_ends_every_session_and_connected_app(apps, offlin
     changed = caller.change_password(espuser_person.password, new_password)
     assert changed.status_code == 200, f"{changed.status_code} {changed.text[:200]}"
 
-    renewed = caller.oauth_token_refresh(caller.refresh_token, ESP_USER_CLIENT_ID)
+    renewed = caller.oauth_token_refresh(caller.refresh_token, HOME_APP_CLIENT_ID)
     assert renewed.status_code != 200, f"the caller is signed out too: {renewed.status_code} {renewed.text[:200]}"
     assert not plain.still_signed_in(browser_tokens["refresh_token"]), "the browser's login is signed out"
     assert plain.authorize(browser).needs_login, "and the browser's session is gone, so it must sign in again"
@@ -951,7 +951,7 @@ def test_sso_an_app_revoking_its_login_ends_only_its_own_session(app_sign_in, ap
             return app.oauth_revoke(app_refresh)
 
         def app_still_signed_in():
-            return app.oauth_token_refresh(app_refresh, ESP_USER_CLIENT_ID).status_code == 200
+            return app.oauth_token_refresh(app_refresh, HOME_APP_CLIENT_ID).status_code == 200
     else:
         native_tokens = signed_in(native, browser, espuser_person)
         app_access, app_refresh = native_tokens["access_token"], native_tokens["refresh_token"]

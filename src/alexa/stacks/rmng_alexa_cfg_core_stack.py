@@ -70,8 +70,8 @@ class RMNGAlexaCfgCoreStack(Stack):
         # nil and the handler panics (502).
         common_resources.esp_user_issuer = ssm.StringParameter.value_for_string_parameter(
             self, SSM_PARAMETERS['ESP_USER_ISSUER'])
-        common_resources.esp_user_client_id = ssm.StringParameter.value_for_string_parameter(
-            self, SSM_PARAMETERS['ESP_USER_CLIENT_ID'])
+        common_resources.home_app_client_id = ssm.StringParameter.value_for_string_parameter(
+            self, SSM_PARAMETERS['HOME_APP_CLIENT_ID'])
         common_resources.esp_user_jwks = ssm.StringParameter.value_for_string_parameter(
             self, SSM_PARAMETERS['ESP_USER_JWKS'])
         common_resources.esp_admin_user_pool_id = ssm.StringParameter.value_for_string_parameter(

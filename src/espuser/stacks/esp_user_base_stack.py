@@ -548,9 +548,9 @@ class EspUserBaseStack(Stack):
             description="User OAuth2 Revoke URL"
         )
 
-        CfnOutput(self, "EspUserClientId",
+        CfnOutput(self, "HomeAppClientId",
             value=HOME_APP_CLIENT_ID,
-            description="ESP User Client ID: the RainMaker Home app's, which its browser sign-in uses and the password API issues to"
+            description="RainMaker Home app client ID: its browser sign-in uses it and the password API issues to it"
         )
 
         CfnOutput(self, "EspMcpClientId",
@@ -660,10 +660,10 @@ class EspUserBaseStack(Stack):
         )
 
         create_ssm_string_parameter(
-            self, "EspUserClientIdParameter",
-            parameter_name=USER_SSM_PARAMETERS['ESP_USER_CLIENT_ID'],
+            self, "HomeAppClientIdParameter",
+            parameter_name=USER_SSM_PARAMETERS['HOME_APP_CLIENT_ID'],
             string_value=HOME_APP_CLIENT_ID,
-            description="ESP User Client ID"
+            description="RainMaker Home app client ID"
         )
 
         create_ssm_string_parameter(

@@ -491,7 +491,7 @@ def create_lambda_function(
     base_env = {
         "AWS_ACCOUNT_ID": Aws.ACCOUNT_ID,
         # rmng-core sets the first-party list; other stacks pin the ESP User client alone.
-        "USER_CLIENT_ID": (getattr(common_resources, 'first_party_client_ids', None) or getattr(common_resources, 'esp_user_client_id', None) or "") if common_resources else "",
+        "USER_CLIENT_ID": (getattr(common_resources, 'first_party_client_ids', None) or getattr(common_resources, 'home_app_client_id', None) or "") if common_resources else "",
         "USER_JWKS_PARA_NAME": common_resources.esp_user_jwks if common_resources and hasattr(common_resources, 'esp_user_jwks') and common_resources.esp_user_jwks else "",
         "ADMIN_USER_POOL_ID": common_resources.esp_admin_user_pool_id if common_resources and hasattr(common_resources, 'esp_admin_user_pool_id') and common_resources.esp_admin_user_pool_id else "",
         "ADMIN_USER_POOL_CLIENT_ID": common_resources.esp_admin_user_pool_client_id if common_resources and hasattr(common_resources, 'esp_admin_user_pool_client_id') and common_resources.esp_admin_user_pool_client_id else "",
