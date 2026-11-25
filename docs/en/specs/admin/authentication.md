@@ -39,6 +39,8 @@ A passwordless admin can adopt a password from **Account settings → Password**
 dashboard picks the form from `GetUserAuthFactors`. Afterwards they hold both
 factors like any pre-existing admin.
 
+The sign-in screen takes the address with **Email me a code** as the main action and a small **Use a password instead** link beneath it. No code is emailed until the admin presses that button, and the password link contacts Cognito not at all until the password is submitted: `InitiateAuth` mails the code itself to an admin whose only factor is `EMAIL_OTP`, so asking for the account's factors up front would send one unasked. A passwordless admin who takes the link creates a first password with **Forgot or set a new password**, which Cognito accepts for an account with no password.
+
 One-time password factors are incompatible with **required** MFA, and under the
 pool's optional MFA an admin who enrols MFA stops being eligible for OTP sign-in.
 Nothing in the dashboard enrols MFA today.

@@ -26,3 +26,16 @@
 nav[aria-label="breadcrumb"] [aria-current="page"] {
   font-weight: 600;
 }
+
+/*
+ * Pin the onboarding footer to the bottom of EntryLayout's left panel: the library centres the content and footer as one block, so the content takes the free space instead.
+ */
+.onboarding-entry .main-content-wrapper > :last-child {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+
+.onboarding-entry .main-content {
+  flex: 1;
+}

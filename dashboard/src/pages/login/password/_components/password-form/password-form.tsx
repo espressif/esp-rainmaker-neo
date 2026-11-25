@@ -59,7 +59,7 @@ export default function PasswordForm({
       loading={isRequestingReset}
       onClick={onForgotPassword}
     >
-      {t("forgotPasswordLink", "Forgot password?")}
+      {t("forgotPasswordLink", "Forgot or set a new password")}
     </Button>
   );
 
@@ -78,7 +78,6 @@ export default function PasswordForm({
             <FormItem>
               <FormControl>
                 <InputPassword
-                  placeholder={t("passwordPlaceholder", "Enter your password")}
                   autoComplete="current-password"
                   autoFocus
                   label={t("passwordLabel", "Password")}

@@ -24,13 +24,15 @@ import {
   type IdentifyRequestSchema,
 } from "@/api";
 import { voidFormSubmit } from "@/lib/void-form-submit";
+import { PasswordLink } from "../../../_components/password-link";
 import type { EmailFormProps } from "./email-form.props";
 
-/** Screen 3's form: collect the address, so Cognito can say which factors it has. */
+/** Screen 3's form: collect the address and how to sign in with it, the emailed code being the default. */
 export default function EmailForm({
   defaultUsername,
   isSubmitting,
-  onSubmit,
+  onContinueWithCode,
+  onContinueWithPassword,
 }: EmailFormProps) {
   const { t } = useTranslation(["login", "common"]);
   const schema = useMemo(
@@ -42,11 +44,15 @@ export default function EmailForm({
     defaultValues: { username: defaultUsername },
   });
 
+  // Validates the address the same way the code button does before leaving for the password screen.
+  const continueWithPassword = () =>
+    void form.handleSubmit((data) => onContinueWithPassword(data.username))();
+
   return (
     <Form {...form}>
       <form
         onSubmit={voidFormSubmit(
-          form.handleSubmit((data) => onSubmit(data.username)),
+          form.handleSubmit((data) => onContinueWithCode(data.username)),
         )}
         className="space-y-6"
       >
@@ -69,16 +75,19 @@ export default function EmailForm({
           )}
         />
 
-        <Button
-          type="submit"
-          loading={isSubmitting}
-          size="lg"
-          endIcon={<ArrowRightIcon className="w-4 h-4" />}
-          animateEndIconOnHover={true}
-          loadingIndicator="progress-bar"
-        >
-          {t("continue", "Continue")}
-        </Button>
+        <div className="flex flex-col gap-4">
+          <Button
+            type="submit"
+            loading={isSubmitting}
+            size="lg"
+            endIcon={<ArrowRightIcon className="w-4 h-4" />}
+            animateEndIconOnHover={true}
+            loadingIndicator="progress-bar"
+          >
+            {t("emailMeCode", "Email me a code")}
+          </Button>
+          <PasswordLink onUsePassword={continueWithPassword} />
+        </div>
       </form>
     </Form>
   );

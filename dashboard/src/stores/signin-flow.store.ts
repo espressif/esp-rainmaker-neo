@@ -59,6 +59,7 @@ export const useSigninFlowStore = create<SigninFlowStore>()((set) => ({
           session: state.session,
           challenges: state.challenges,
           destination: state.destination,
+          codeSent: state.codeSent,
         },
         event,
       ),

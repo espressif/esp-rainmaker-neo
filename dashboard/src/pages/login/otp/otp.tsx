@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
 import { MailCheck } from "lucide-react";
 import OnboardingLayout from "@/containers/onboarding/onboarding-layout";
 import { OnboardingCard } from "@/components/onboarding-card";
@@ -32,7 +32,6 @@ export default function LoginOtp() {
   const flow = useSigninFlow();
   const username = useSigninFlowStore((s) => s.username);
   const destination = useSigninFlowStore((s) => s.destination);
-  const challenges = useSigninFlowStore((s) => s.challenges);
   const keepSignedIn = useSigninFlowStore((s) => s.keepSignedIn);
   const setKeepSignedIn = useSigninFlowStore((s) => s.setKeepSignedIn);
   const flowMessage = useSigninFlowStore((s) => s.flowMessage);
@@ -43,7 +42,8 @@ export default function LoginOtp() {
     return null;
   }
 
-  const allowKeepMeSignedIn = appConfig.customAuth?.allowKeepMeSignedIn ?? false;
+  const allowKeepMeSignedIn =
+    appConfig.customAuth?.allowKeepMeSignedIn ?? false;
   // The typed address is the recognisable one; Cognito's masked `destination`
   // (`a***@e***.com`) covers entry points where it was never typed.
   const sentTo = username || destination || "";
@@ -60,26 +60,35 @@ export default function LoginOtp() {
       <OnboardingCard
         icon={<MailCheck className="w-6 h-6" />}
         title={t("otp.title", "Check your email")}
-        description={t("otp.sentTo", {
-          defaultValue: "Enter the 8 digit code sent to {{email}}",
-          email: sentTo,
-        })}
         actions={<BackToSignInLink to={signinEntryRoute()} />}
       >
         <SigninAlerts errorMessage={errorMessage} />
 
-        <OtpForm
-          allowKeepMeSignedIn={allowKeepMeSignedIn}
-          keepSignedIn={keepSignedIn}
-          onKeepSignedInChange={setKeepSignedIn}
-          isSubmitting={flow.isVerifying}
-          isResending={flow.isSending}
-          resendSecondsLeft={cooldown.secondsLeft}
-          canUsePassword={challenges.includes("PASSWORD")}
-          onSubmit={flow.verify}
-          onResend={() => flow.resend(cooldown.restart)}
-          onUsePassword={flow.choosePassword}
-        />
+        <div className="space-y-6">
+          <p className="text-sm text-muted-foreground">
+            <Trans
+              t={t}
+              i18nKey="otp.sentTo"
+              values={{ email: sentTo }}
+              components={{
+                strong: (
+                  <span className="font-semibold text-foreground break-words" />
+                ),
+              }}
+            />
+          </p>
+
+          <OtpForm
+            allowKeepMeSignedIn={allowKeepMeSignedIn}
+            keepSignedIn={keepSignedIn}
+            onKeepSignedInChange={setKeepSignedIn}
+            isSubmitting={flow.isVerifying}
+            isResending={flow.isSending}
+            resendSecondsLeft={cooldown.secondsLeft}
+            onSubmit={flow.verify}
+            onResend={() => flow.sendCode(cooldown.restart)}
+          />
+        </div>
       </OnboardingCard>
     </OnboardingLayout>
   );

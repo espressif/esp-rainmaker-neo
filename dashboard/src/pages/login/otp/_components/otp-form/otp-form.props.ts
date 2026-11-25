@@ -12,9 +12,6 @@ export interface OtpFormProps {
   isResending: boolean;
   /** Seconds until Resend re-arms; `0` renders the live Resend control. */
   resendSecondsLeft: number;
-  /** Only admins Cognito reports a PASSWORD challenge for get the opt-out. */
-  canUsePassword: boolean;
   onSubmit: (code: string) => void;
   onResend: () => void;
-  onUsePassword: () => void;
 }

@@ -8,7 +8,7 @@ import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { ArrowRightIcon, KeyRoundIcon } from "lucide-react";
+import { ArrowRightIcon } from "lucide-react";
 import {
   Button,
   Checkbox,
@@ -39,10 +39,8 @@ export default function OtpForm({
   isSubmitting,
   isResending,
   resendSecondsLeft,
-  canUsePassword,
   onSubmit,
   onResend,
-  onUsePassword,
 }: OtpFormProps) {
   const { t } = useTranslation(["login", "common"]);
   const schema = useMemo(
@@ -126,18 +124,6 @@ export default function OtpForm({
           >
             {t("otpSubmit", "Verify")}
           </Button>
-
-          {canUsePassword && (
-            <Button
-              type="button"
-              variant="outline"
-              size="lg"
-              startIcon={<KeyRoundIcon className="w-4 h-4" />}
-              onClick={onUsePassword}
-            >
-              {t("usePasswordInstead", "Sign in with password")}
-            </Button>
-          )}
         </div>
       </form>
     </Form>
