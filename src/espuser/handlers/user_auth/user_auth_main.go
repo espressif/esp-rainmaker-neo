@@ -84,8 +84,8 @@ type tokenReq struct {
 	Username     string `json:"username,omitempty"`
 	Password     string `json:"password,omitempty"`
 	RefreshToken string `json:"refresh_token,omitempty"`
-	// Resource is read by refresh only: at most one RFC 8707 resource, the API the renewed access token is for.
-	Resource []string `json:"resource,omitempty"`
+	// Resource is read by refresh only: the one RFC 8707 resource, the API the renewed access token is for.
+	Resource string `json:"resource,omitempty"`
 }
 
 // providerReq is read before the service exists, because the pool decides what it is built against; absent means the first row by name whose password our page takes.
@@ -200,7 +200,7 @@ func handleRefresh(ctx context.Context, request events.APIGatewayProxyRequest, s
 	if err := rmngrequest.ExtractRequestStruct(request, &req); err != nil {
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Invalid request body")), nil
 	}
-	resource, err := auth.RequestedResourceForTokenRequest(req.Resource)
+	resource, err := auth.RequestedResourceForTokenRequest([]string{req.Resource})
 	if resp, refused := resourceRefusal(err); refused {
 		return resp, nil
 	}

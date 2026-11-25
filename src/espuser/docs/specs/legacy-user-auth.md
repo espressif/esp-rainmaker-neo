@@ -142,7 +142,7 @@ Cognito answers some correct passwords with a challenge rather than tokens; thos
   client's `allowed_resources` name, and its access token is for the client's `default_resource`
   ([resource-indicators.md](resource-indicators.md)).
 - **`/token/refresh`**: rotates **our** refresh token via our refresh service —
-  it never calls Cognito. See rotation note below. `resource`, an array of at most one,
+  it never calls Cognito. See rotation note below. `resource`, one API as a string,
   picks which of the sign-in's APIs the renewed access token is for.
 - **signup / verify / password-recovery / password**: operate directly on the
   Cognito pool (`SignUp`, `ConfirmSignUp`, `ForgotPassword`, `ConfirmForgotPassword`,

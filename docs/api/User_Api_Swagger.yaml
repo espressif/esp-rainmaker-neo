@@ -1630,7 +1630,7 @@ paths:
                 description: The renewed access token's `aud` is this resource.
                 value:
                   refresh_token: "<refresh-token>"
-                  resource: ["https://account.example.com"]
+                  resource: "https://account.example.com"
       responses:
         "200":
           description: "ESP User token set, sent with `Cache-Control: no-store` and `Pragma: no-cache` (RFC 6749 §5.1)."
@@ -1640,7 +1640,7 @@ paths:
                 $ref: "#/components/schemas/TokenSet"
         "400":
           description: |
-            `Invalid request body`, or an RFC 8707 refusal naming the problem, e.g. `Only one resource may be requested; a token is never issued for two audiences.` or `The requested resource is not part of this authorization.`
+            `Invalid request body` (e.g. `resource` sent as an array), or an RFC 8707 refusal such as `The requested resource is not part of this authorization.`
           content:
             application/json:
               schema:
@@ -2368,15 +2368,12 @@ components:
           type: string
           description: Refresh token from this surface; spent once redeemed.
         resource:
-          type: array
-          maxItems: 1
+          type: string
+          format: uri
           description:
             The one API the renewed access token is for, from among those the
             sign-in covers. Omitted or empty, the only covered API, else the default.
-          items:
-            type: string
-            format: uri
-          example: ["https://account.example.com"]
+          example: "https://account.example.com"
 
     LegacySignupRequest:
       type: object

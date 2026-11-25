@@ -3685,7 +3685,7 @@ class User:
         if not self.user_api_access_token or jwt.decode(self.user_api_access_token, options={"verify_signature": False})["exp"] <= time.time() + 30:
             response = self.session.post(
                 f"{self.user_api_gateway_url}/v1/user/auth/token/refresh",
-                json={"refresh_token": self.refresh_token, "resource": [self.user_api_resource]},
+                json={"refresh_token": self.refresh_token, "resource": self.user_api_resource},
             )
             if response.status_code != 200:
                 raise RuntimeError(f"narrowing refresh to {self.user_api_resource} failed: {response.status_code} {response.text}")

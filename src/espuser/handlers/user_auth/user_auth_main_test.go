@@ -228,14 +228,14 @@ var _ = Describe("legacy token responses (RFC 6749 s5.1)", func() {
 	It("signs in for every resource the client is granted and narrows to the ESP User one on refresh (RFC 8707 s2.2)", func() {
 		signin := tokenSet(post(pathToken, map[string]any{"username": email, "password": password}))
 		Expect(audience(signin)).To(Equal(neoResource), "the client's default")
-		refresh := tokenSet(post(pathRefresh, map[string]any{"refresh_token": signin["refresh_token"], "resource": []string{accountResource}}))
+		refresh := tokenSet(post(pathRefresh, map[string]any{"refresh_token": signin["refresh_token"], "resource": accountResource}))
 		Expect(audience(refresh)).To(Equal(accountResource))
 	})
 
-	It("narrows a refresh to the one resource named when another value is empty (RFC 6749 s3.2)", func() {
+	It("treats an empty resource on refresh as none named, keeping the client's default (RFC 6749 s3.2)", func() {
 		signin := tokenSet(post(pathToken, map[string]any{"username": email, "password": password}))
-		refresh := tokenSet(post(pathRefresh, map[string]any{"refresh_token": signin["refresh_token"], "resource": []string{"", accountResource}}))
-		Expect(audience(refresh)).To(Equal(accountResource))
+		refresh := tokenSet(post(pathRefresh, map[string]any{"refresh_token": signin["refresh_token"], "resource": ""}))
+		Expect(audience(refresh)).To(Equal(neoResource))
 	})
 
 	It("tells an account an admin created to get a new password, which only its right temporary password reveals", func() {
@@ -363,11 +363,11 @@ var _ = Describe("legacy token responses (RFC 6749 s5.1)", func() {
 		tokenSet(post(pathToken, map[string]any{"username": email, "password": secondPassword, "provider": secondProvider}))
 	})
 
-	It("refuses a refresh naming two resources, so no token is good at two APIs (negative)", func() {
+	It("refuses a refresh whose resource is an array, since it names one API as a string (negative)", func() {
 		tokens := tokenSet(post(pathToken, map[string]any{"username": email, "password": password}))
 		refresh := post(pathRefresh, map[string]any{"refresh_token": tokens["refresh_token"], "resource": []string{neoResource, accountResource}})
 		Expect(refresh.StatusCode).To(Equal(http.StatusBadRequest))
-		Expect(refresh.Body).To(MatchJSON(`{"message":"Only one resource may be requested; a token is never issued for two audiences."}`))
+		Expect(refresh.Body).To(MatchJSON(`{"message":"Invalid request body"}`))
 	})
 
 	It("signs every session out on a password change, the caller's included, so the person signs in again", func() {

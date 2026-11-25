@@ -96,7 +96,7 @@ the refresh family. **What one token is for** is decided at every mint.
 | `POST /oauth2/token`, `refresh_token` | at most one | Picks the renewed access token's resource from the family's |
 | `POST /oauth2/token`, `client_credentials` | at most one | The request is the whole grant: the one named, else the client's default |
 | `POST /v1/user/auth/token` (password sign-in) | not accepted | The sign-in covers every resource the password client is granted; the access token is for its default |
-| `POST /v1/user/auth/token/refresh` | JSON array of at most one | As the `refresh_token` grant |
+| `POST /v1/user/auth/token/refresh` | at most one, a JSON string | As the `refresh_token` grant |
 
 An empty `resource` value is treated as omitted at each of these, as RFC 6749 §3.1 and §3.2 require
 of any parameter sent without a value.

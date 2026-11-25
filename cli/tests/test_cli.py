@@ -2060,7 +2060,7 @@ def test_an_expired_user_api_token_is_narrowed_again():
     """A run longer than one access-token lifetime keeps reaching the ESP User API instead of getting 401."""
     user, sent = _user_holding_user_api_token(-1)
     assert user.user_api_token() == 'fresh'
-    assert sent == [('https://user.example.com/v1/user/auth/token/refresh', {'refresh_token': 'rt-1', 'resource': ['https://user.example.com']})]
+    assert sent == [('https://user.example.com/v1/user/auth/token/refresh', {'refresh_token': 'rt-1', 'resource': 'https://user.example.com'})]
     assert user.refresh_token == 'rt-2'
 
 
