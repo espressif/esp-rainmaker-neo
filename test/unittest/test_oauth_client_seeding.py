@@ -389,7 +389,7 @@ def test_the_seed_creates_the_home_app_as_a_public_first_party_client(seed):
     home = table.rows["rainmaker-neo-home-app-client"]
     assert (home["client_type"], home["application_type"], home["first_party"], home["require_pkce"]) == ("public", "native", True, True)
     assert home["redirect_uris"] == {"rainmaker://com.espressif.novahome/success"}
-    assert home["post_logout_redirect_uris"] == {"rainmaker://com.espressif.novahome/success"}
+    assert "post_logout_redirect_uris" not in home, "a native app signs out with /oauth2/revoke, so it registers no post-logout redirect"
     assert "secret" not in home
     assert ssm.params == {}
 
@@ -438,7 +438,7 @@ def test_a_hand_made_row_holding_its_redirects_as_a_list_gets_them_back_as_a_set
     row = table.rows["rainmaker-neo-home-app-client"]
     assert row["redirect_uris"] == {"com.espressif.rainmaker://oauth2redirect", "http://127.0.0.1/callback",
                                     "rainmaker://com.espressif.novahome/success"}
-    assert row["post_logout_redirect_uris"] == {"http://127.0.0.1", "rainmaker://com.espressif.novahome/success"}
+    assert row["post_logout_redirect_uris"] == ["http://127.0.0.1"], "the seed declares none, so an operator's post-logout redirect is left as it is"
     assert row["first_party"] is True
     assert row["updated_at"] > HAND_MADE_HOME_APP["updated_at"]
 

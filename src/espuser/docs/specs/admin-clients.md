@@ -84,6 +84,11 @@ These OAuth 2.1 client invariants are enforced at create/patch so the admin UI f
    account-management edge (not stamped into the token) so revoking it takes effect on the next call.
    Setting it is admin-only, like every field here.
 
+10. **A native app (`application_type: native`) is registered as RFC 8252 describes**, and the seeded Home app follows it:
+    - `client_type: public`, because an app cannot keep a secret (RFC 8252 §8.4); a public client must use PKCE (RFC 8252 §8.1, RFC 7636).
+    - `redirect_uris`: the app's own private-use scheme (RFC 8252 §7.1) or an `http` loopback address (§7.3); `https` is refused (OIDC Dynamic Client Registration 1.0 §2).
+    - No `post_logout_redirect_uris`: the app signs out by revoking its own refresh token with `POST /oauth2/revoke` (RFC 7009), which ends its login and its app session with no browser involved, and it signs in as someone else with `prompt=login` (OIDC Core 1.0 §3.1.2.1). It has no use for `/oauth2/logout`, whose `id_token_hint` would name the app's own session rather than the browser's, so the person would only be asked to confirm.
+
 ## APIs
 
 All requests carry the admin Cognito token in `Authorization`. Errors use the API's generic `{ "message": ... }` shape (these are admin config endpoints, not an OAuth protocol surface).
@@ -102,7 +107,7 @@ All requests carry the admin Cognito token in `Authorization`. Errors use the AP
 | `response_types` | `["code"]` |  |
 | `scopes` | `["openid", "profile", "email", "phone"]` |  |
 | `require_pkce` | `true` |  |
-| `application_type` | `native` | `web` or `native` (OIDC Dynamic Client Registration 1.0 §2). A native app's code exchange gets a cookie-less session of its own, so a browser sign-out leaves it signed in ([sso-sessions.md](sso-sessions.md)). A native client must be `public` (RFC 8252 §8.4: an app cannot keep a secret), and each of its `redirect_uris` must be a private-use scheme or an `http` loopback address, never `https` (OIDC Dynamic Client Registration 1.0 §2); its `post_logout_redirect_uris` follow rule 2 only. Optional, default `web`; a client registered before the field reads as `web` |
+| `application_type` | `native` | `web` or `native` (OIDC Dynamic Client Registration 1.0 §2). A native app's code exchange gets a cookie-less session of its own, so a browser sign-out leaves it signed in ([sso-sessions.md](sso-sessions.md)). A native client must be `public` (RFC 8252 §8.4: an app cannot keep a secret), and each of its `redirect_uris` must be a private-use scheme or an `http` loopback address, never `https` (OIDC Dynamic Client Registration 1.0 §2); the rest of a native registration is rule 10. Optional, default `web`; a client registered before the field reads as `web` |
 | `first_party` | `true` | marks an app **we ship ourselves** (vs a delegated partner); a first-party client signs in with no consent screen and is the only kind that may call account-management endpoints such as `GET /v1/user/sessions`. Optional, default `false` |
 | `logo_uri` | `data:image/png;base64,…` | RFC 7591 §2 logo, shown on the consent screen. Must be a base64 `data:` URI of a PNG, JPEG or WebP image, at most 4 KiB decoded: inline because the sign-in page's CSP is `img-src 'self' data:`, and raster only because SVG can carry script. Optional; without it the screen shows a generic app icon |
 > **Scope of this slice.** The body carries only fields with a live consumer today. Reserved for later slices (not accepted yet): `jwks_uri`, `audiences`, `branding_id`, and `token_ttls` — (M2M/`private_key_jwt`, hosted-UI branding, and per-client TTLs are later slices). `allowed_resources`, `default_resource`, `allowed_providers`, `post_logout_redirect_uris` and `logo_uri` are accepted now: RFC 8707 resource indicators, RP-Initiated Logout and the consent screen have landed, and a field the logout endpoint validates against but no API can write is a check that can never pass. They will be added to the schema when their features land; adding fields is Native.
@@ -149,7 +154,7 @@ Seed set = ESP-User OIDC clients for the current first-party apps, with `client_
 
 | client_id | client_type | notable config | resources (default first) |
 | --- | --- | --- | --- |
-| `rainmaker-neo-home-app-client` | public | `application_type=native`, `require_pkce=true`, `first_party=true`; redirect and post-logout redirect `rainmaker://com.espressif.novahome/success` (the Espressif RainMaker Home app); `logo_uri` the app's icon from `assets/rainmaker_home_logo.png`; the password API's client, published as espuser-base `HomeAppClientId` | neo, ESP User |
+| `rainmaker-neo-home-app-client` | public | `application_type=native`, `require_pkce=true`, `first_party=true`; redirect `rainmaker://com.espressif.novahome/success` (the Espressif RainMaker Home app) and no post-logout redirect (rule 10); `logo_uri` the app's icon from `assets/rainmaker_home_logo.png`; the password API's client, published as espuser-base `HomeAppClientId` | neo, ESP User |
 | `rainmaker-neo-alexa-client` | confidential | created by `rmng-alexa-cfg-core`; a plaintext `secret` is generated; redirects added by Alexa's config API | neo |
 | `rainmaker-neo-gva-client` | confidential | created by `rmng-gva-core`; a plaintext `secret` is generated; redirects added by Google Home's config API | neo |
 | `rainmaker-neo-smartthings-client` | confidential | created by `rmng-st-cfg-core`; a plaintext `secret` is generated; redirects added by SmartThings' config API | neo |
@@ -177,4 +182,5 @@ An API's names are known only once its stack has deployed it (neo and MCP after 
 
 - **OAuth 2.1 / RFC 9700 (BCP 240)** — exact redirect match, code+PKCE, no implicit/ROPC. Client invariants enforced on write.
 - **RFC 6749 §2** — client types (`public`/`confidential`) and `token_endpoint_auth_method`.
+- **RFC 8252 (BCP 212)** — native apps: public clients, PKCE, private-use or loopback redirects (rule 10); **RFC 7009** — revocation, how a native app signs out.
 - **RFC 7591/7592 (Dynamic Client Registration)** — explicitly **deferred**; this API is admin-managed, not self-service DCR.

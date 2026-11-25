@@ -92,7 +92,7 @@ SEEDED_OAUTH_CLIENTS = [
     # A native app: each of its sign-ins gets a session of its own, so a browser sign-out on the phone leaves it signed in.
     {'client_id': HOME_APP_CLIENT_ID, 'client_name': 'RainMaker Home', 'client_type': 'public', 'application_type': 'native',
      'grant_types': ['authorization_code', 'refresh_token'], 'require_pkce': True, 'first_party': True,
-     'redirect_uris': [HOME_APP_REDIRECT_URI], 'post_logout_redirect_uris': [HOME_APP_REDIRECT_URI], 'logo_uri': HOME_APP_LOGO_URI},
+     'redirect_uris': [HOME_APP_REDIRECT_URI], 'logo_uri': HOME_APP_LOGO_URI},
 ]
 
 # The seeded clients whose secret espuser-base surfaces as a stack output, by the seed's attribute name.
