@@ -28,6 +28,8 @@ const (
 	colGranted  = "granted_scope"
 	colSID      = "sid"
 	colAuthTime = "auth_time"
+	colProvider = "provider"
+	colAMR      = "amr"
 
 	colExpiresOn = "expires_on"
 )
@@ -80,14 +82,17 @@ type AuthFlow struct {
 	// SID names the browser session this login ran under, so the refresh family minted at the exchange is tied to its parent session; empty when the session write failed or the row predates sessions.
 	SID string `dynamodbav:"sid,omitempty"`
 	// AuthTime is when the person authenticated, not when the code was issued (OIDC Core §2); zero on older flows means now.
-	AuthTime     int64    `dynamodbav:"auth_time,omitempty"`
+	AuthTime int64 `dynamodbav:"auth_time,omitempty"`
+	// AMR is the methods ESP User verified at sign-in, which the code exchange stamps on the tokens; empty for a federated sign-in.
+	AMR          []string `dynamodbav:"amr,omitempty"`
 	Subject      string   `dynamodbav:"subject,omitempty"`
 	GrantedScope []string `dynamodbav:"granted_scope,omitempty"`
 	Code         string   `dynamodbav:"code,omitempty"`
 	ExpiresOn    int64    `dynamodbav:"expires_on,omitempty"`
+	// Provider is the row the federation leg went to, then the row that authenticated the person once they sign in, which the code exchange stamps as idp.
+	Provider string `dynamodbav:"provider,omitempty"`
 	// Our own state/nonce/verifier for the upstream round-trip. Never the client's: reusing the
 	// downstream values would leak them upstream and break the client-to-code binding.
-	Provider             string `dynamodbav:"provider,omitempty"`
 	UpstreamState        string `dynamodbav:"upstream_state,omitempty"`
 	UpstreamNonce        string `dynamodbav:"upstream_nonce,omitempty"`
 	UpstreamPKCEVerifier string `dynamodbav:"upstream_pkce_verifier,omitempty"`
@@ -128,17 +133,27 @@ func (db *AuthFlowsDB) GetFlowIgnoringExpiry(flowID string) (*AuthFlow, error) {
 // AwaitingConsent is a sign-in that has a person but no code: a third-party client waits for them to allow it.
 func (a *AuthFlow) AwaitingConsent() bool { return a.Subject != "" && a.Code == "" }
 
-// IssueCode binds the person who just signed in and issues the flow's single-use code; a flow already bound to someone (login fixation), missing or expired is ErrFlowNotFound.
-func (db *AuthFlowsDB) IssueCode(flowID, subject string, grantedScope []string, code, sid string, authTime int64) (*AuthFlow, error) {
-	update := bindSubject(subject, grantedScope, sid, authTime).
+// Login is the person a flow's login step authenticated, and how.
+type Login struct {
+	Subject      string
+	GrantedScope []string
+	SID          string
+	AuthTime     int64
+	Provider     string
+	AMR          []string
+}
+
+// IssueCode records the login and issues the flow's single-use code; a missing, expired or already signed-in flow is ErrFlowNotFound.
+func (db *AuthFlowsDB) IssueCode(flowID, code string, login Login) (*AuthFlow, error) {
+	update := setLogin(login).
 		Set(expression.Name(colCode), expression.Value(code)).
 		Set(expression.Name(colExpiresOn), expression.Value(time.Now().Add(CodeTTL).Unix()))
 	return db.updateFlow(flowID, update, unbound().And(unexpired()))
 }
 
-// AwaitConsent binds the person who just signed in but issues no code, so the sign-in keeps its own expiry while they decide.
-func (db *AuthFlowsDB) AwaitConsent(flowID, subject string, grantedScope []string, sid string, authTime int64) error {
-	_, err := db.updateFlow(flowID, bindSubject(subject, grantedScope, sid, authTime), unbound().And(unexpired()))
+// AwaitConsent records the login without a code, so the person answers the consent screen first.
+func (db *AuthFlowsDB) AwaitConsent(flowID string, login Login) error {
+	_, err := db.updateFlow(flowID, setLogin(login), unbound().And(unexpired()))
 	return err
 }
 
@@ -153,11 +168,19 @@ func (db *AuthFlowsDB) IssueConsentedCode(flowID, code, sid string) (*AuthFlow, 
 	return db.updateFlow(flowID, update, awaitingConsent.And(unexpired()))
 }
 
-func bindSubject(subject string, grantedScope []string, sid string, authTime int64) expression.UpdateBuilder {
-	return expression.Set(expression.Name(colSubject), expression.Value(subject)).
-		Set(expression.Name(colGranted), expression.Value(grantedScope)).
-		Set(expression.Name(colSID), expression.Value(sid)).
-		Set(expression.Name(colAuthTime), expression.Value(authTime))
+func setLogin(login Login) expression.UpdateBuilder {
+	update := expression.Set(expression.Name(colSubject), expression.Value(login.Subject)).
+		Set(expression.Name(colGranted), expression.Value(login.GrantedScope)).
+		Set(expression.Name(colSID), expression.Value(login.SID)).
+		Set(expression.Name(colAuthTime), expression.Value(login.AuthTime))
+	// Overwrites the federation leg's provider, since the person may have signed in another way on the same flow.
+	if login.Provider != "" {
+		update = update.Set(expression.Name(colProvider), expression.Value(login.Provider))
+	}
+	if len(login.AMR) > 0 {
+		update = update.Set(expression.Name(colAMR), expression.Value(login.AMR))
+	}
+	return update
 }
 
 func unbound() expression.ConditionBuilder {
@@ -189,7 +212,7 @@ func (db *AuthFlowsDB) updateFlow(flowID string, update expression.UpdateBuilder
 // Conditioned on the subject still being unbound: a flow that already resolved a subject must not
 // start a fresh upstream round-trip.
 func (db *AuthFlowsDB) SetUpstreamLeg(flowID, provider, upstreamState, upstreamNonce, upstreamPKCEVerifier string) error {
-	update := expression.Set(expression.Name("provider"), expression.Value(provider)).
+	update := expression.Set(expression.Name(colProvider), expression.Value(provider)).
 		Set(expression.Name("upstream_state"), expression.Value(upstreamState)).
 		Set(expression.Name("upstream_nonce"), expression.Value(upstreamNonce)).
 		Set(expression.Name("upstream_pkce_verifier"), expression.Value(upstreamPKCEVerifier))

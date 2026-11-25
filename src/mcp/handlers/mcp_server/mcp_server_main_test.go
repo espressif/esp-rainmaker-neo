@@ -1260,7 +1260,7 @@ var _ = Describe("MCP Main", func() {
 		// mcpAccessToken mints an ESP User access token addressed to this MCP server.
 		mcpAccessToken := func() string {
 			token, err := jwtutil.NewMinter(issuer, test_utils.TestJWKUtil.SigningKey(), oidc.SigningKeyID).
-				AccessToken(userID, "mcp-oauth-client", "openid email", "", mcpResource, jwtutil.Contact{Email: "test@example.com"})
+				AccessToken(userID, "mcp-oauth-client", "openid email", mcpResource, jwtutil.UserClaims{Contact: jwtutil.Contact{Email: "test@example.com"}})
 			Expect(err).NotTo(HaveOccurred())
 			return token
 		}

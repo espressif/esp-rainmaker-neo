@@ -30,6 +30,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/user_details_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/refreshtoken"
 	scopepkg "github.com/espressif/esp-rainmaker-neo/src/espuser/scope"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/session"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/signout"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/jwtutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
@@ -78,17 +79,17 @@ func NewOAuthUserAuthService(ctx context.Context) (*OAuthUserAuthService, error)
 
 // mintTokenSet mints signed access/id tokens (via jwt) plus a fresh refresh-token
 // family (via refreshtoken). The two service packages compose symmetrically here.
-// sid ties the family to the browser session the login ran under; empty means none.
-func (s *OAuthUserAuthService) mintTokenSet(rmngCtx *rmngctx.RmngContext, userID, clientID, scope string, resources []string, audience, sid string, authTime int64) (*UserTokens, error) {
+// login.SID ties the family to the browser session the login ran under; empty means none.
+func (s *OAuthUserAuthService) mintTokenSet(rmngCtx *rmngctx.RmngContext, userID, clientID, scope string, resources []string, audience string, login session.Session) (*UserTokens, error) {
 	// OIDC Back-Channel Logout 1.0 s2.7: an offline_access grant is not ended by logout, so it belongs to no session.
 	if scopepkg.HasOfflineAccess(scope) {
-		sid = ""
+		login.SID = ""
 	}
-	refreshToken, err := refreshtoken.NewService(rmngCtx).MintRefreshtoken(userID, clientID, scope, resources, sid, authTime)
+	refreshToken, err := refreshtoken.NewService(rmngCtx).MintRefreshtoken(userID, clientID, scope, resources, login)
 	if err != nil {
 		return nil, err
 	}
-	return s.signTokens(rmngCtx.Context, userID, clientID, scope, audience, refreshToken, sid, authTime)
+	return s.signTokens(rmngCtx.Context, userID, clientID, scope, audience, refreshToken, login)
 }
 
 // IDTokenHint is what a verified id_token_hint says.
@@ -129,17 +130,21 @@ func (s *OAuthUserAuthService) VerifyIDTokenHint(hint string) (*IDTokenHint, err
 
 // signTokens mints a signed access token and, when openid is in scope, an id token,
 // pairing them with the supplied (already-persisted) refresh token.
-func (s *OAuthUserAuthService) signTokens(ctx context.Context, userID, clientID, scope, audience, refreshToken, sid string, authTime int64) (*UserTokens, error) {
+func (s *OAuthUserAuthService) signTokens(ctx context.Context, userID, clientID, scope, audience, refreshToken string, login session.Session) (*UserTokens, error) {
 	minter, err := s.newMinter(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	contact := s.resolveTokenContact(ctx, userID, scope)
+	claims := jwtutil.UserClaims{
+		Contact:     s.resolveTokenContact(ctx, userID, scope),
+		AuthEventID: jwtutil.NewAuthEventID(),
+		SID:         login.SID,
+		AMR:         login.AMR,
+		Provider:    login.Provider,
+	}
 
-	authEventID := jwtutil.NewAuthEventID()
-
-	accessToken, err := minter.AccessToken(userID, clientID, scope, authEventID, audience, contact, sid)
+	accessToken, err := minter.AccessToken(userID, clientID, scope, audience, claims)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +154,7 @@ func (s *OAuthUserAuthService) signTokens(ctx context.Context, userID, clientID,
 	// the access token must not "fix" this one.
 	var idToken string
 	if scopepkg.HasOpenID(scope) {
-		if idToken, err = minter.IDToken(userID, clientID, authEventID, authTime, contact, sid); err != nil {
+		if idToken, err = minter.IDToken(userID, clientID, login.AuthTime, claims); err != nil {
 			return nil, err
 		}
 	}
@@ -394,8 +399,8 @@ func (s *OAuthUserAuthService) RefreshToken(ctx context.Context, client *clients
 	if err != nil {
 		return nil, err
 	}
-	// sid and auth_time are the family's, so a renewal still names the original session and sign-in.
-	return s.signTokens(ctx, rotation.UserID, client.ClientID, rotation.Scope, audience, rotation.Token, rotation.SID, rotation.AuthTime)
+	// The sign-in is the family's, so a renewal still names the original session, authentication and provider.
+	return s.signTokens(ctx, rotation.UserID, client.ClientID, rotation.Scope, audience, rotation.Token, rotation.Login)
 }
 
 // accountForContacts returns the account the verified contacts name, nil when no account holds either, and ErrContactsOnDifferentUsers when they name two; sign-in and a password reset both resolve through it, so they always reach the same account.
@@ -503,27 +508,16 @@ func (s *OAuthUserAuthService) GetUserFromProviderUsingToken(ctx context.Context
 	return s.ParseUserInfoFromToken(ctx, token)
 }
 
-// TokenClaims are the claims our own RS256 tokens carry. sub/iss/exp come from the embedded
-// RegisteredClaims; email/phone_number are scope-gated at minting (addContact), so what the token
-// holds is what the scope authorized.
+// TokenClaims are the claims our own RS256 tokens carry: the optional user claims as minted (contact is scope-gated, so the token holds what the scope authorized), the verify-side fields, and sub/iss/exp from RegisteredClaims.
 type TokenClaims struct {
-	Email       string `json:"email,omitempty"`
-	PhoneNumber string `json:"phone_number,omitempty"`
-	Name        string `json:"name,omitempty"`
-	Locale      string `json:"locale,omitempty"`
-	Picture     string `json:"picture,omitempty"`
-	TokenUse    string `json:"token_use,omitempty"`
+	jwtutil.UserClaims
+	TokenUse string `json:"token_use,omitempty"`
 	// ClientID names the client an access token was minted for; id tokens name it in `aud`.
 	ClientID string `json:"client_id,omitempty"`
 	// GrantType is the `gty` claim: `client_credentials` on a machine token, absent on a user grant.
 	GrantType string `json:"gty,omitempty"`
-	// OriginJTI ties an access token to the id token minted in the same sign-in.
-	OriginJTI string `json:"origin_jti,omitempty"`
 	// Scope is the space-separated grant. Present on every access token we mint.
 	Scope string `json:"scope,omitempty"`
-	// SID names the browser session this token was minted under; absent when the login
-	// established none.
-	SID string `json:"sid,omitempty"`
 	jwtgo.RegisteredClaims
 }
 
@@ -567,7 +561,7 @@ func (s *OAuthUserAuthService) VerifyTokenPair(ctx context.Context, accessToken,
 	}
 	return jwtutil.RequireSameAuthEventValues(
 		accessClaims.Subject, idClaims.Subject,
-		accessClaims.OriginJTI, idClaims.OriginJTI,
+		accessClaims.AuthEventID, idClaims.AuthEventID,
 	)
 }
 

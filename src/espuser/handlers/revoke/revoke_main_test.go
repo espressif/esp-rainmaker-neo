@@ -15,6 +15,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/sessions_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/refreshtoken"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/session"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
@@ -82,7 +83,7 @@ var _ = Describe("RFC 7009 revoke endpoint", func() {
 	})
 
 	It("revokes the presented token and returns 200 with an empty body", func() {
-		token, err := svc.MintRefreshtoken("user-123", testClientID, "openid", nil, "", 0)
+		token, err := svc.MintRefreshtoken("user-123", testClientID, "openid", nil, session.Session{})
 		Expect(err).NotTo(HaveOccurred())
 
 		// Public client: Basic with an empty secret.
@@ -112,13 +113,13 @@ var _ = Describe("RFC 7009 revoke endpoint", func() {
 			SessionHash: "hash_" + sid, SID: sid, UserID: "user-123", ExpiresAt: time.Now().Add(time.Hour).Unix(),
 		})).To(Succeed())
 
-		token, err := svc.MintRefreshtoken("user-123", testClientID, "openid", []string{resource}, sid, 0)
+		token, err := svc.MintRefreshtoken("user-123", testClientID, "openid", []string{resource}, session.Session{SID: sid})
 		Expect(err).NotTo(HaveOccurred())
 
 		rot, err := svc.Rotate(testClientID, token)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(rot.Resources).To(Equal([]string{resource}), "a rotation that drops the resources re-widens the audience")
-		Expect(rot.SID).To(Equal(sid), "a rotation that drops the sid outlives its browser's sign-out")
+		Expect(rot.Login.SID).To(Equal(sid), "a rotation that drops the sid outlives its browser's sign-out")
 
 		resp, err := handleRevokeRequest(context.Background(), basicReq(testClientID, "", form(map[string]string{"token": rot.Token})))
 		Expect(err).NotTo(HaveOccurred())
@@ -130,7 +131,7 @@ var _ = Describe("RFC 7009 revoke endpoint", func() {
 
 	It("revokes the whole family, ending the login (RFC 7009 §2.1 grant revocation)", func() {
 		// Mint a login's first token, rotate once so the login has a spent old token + a fresh current one.
-		original, err := svc.MintRefreshtoken("user-123", testClientID, "openid", nil, "", 0)
+		original, err := svc.MintRefreshtoken("user-123", testClientID, "openid", nil, session.Session{})
 		Expect(err).NotTo(HaveOccurred())
 		rotated, err := svc.Rotate(testClientID, original)
 		Expect(err).NotTo(HaveOccurred())
@@ -145,7 +146,7 @@ var _ = Describe("RFC 7009 revoke endpoint", func() {
 	})
 
 	It("lets a client end its own offline_access grant, which no sign-out reaches (RFC 7009 s2.1)", func() {
-		token, err := svc.MintRefreshtoken("user-123", testClientID, "openid offline_access", nil, "", 0)
+		token, err := svc.MintRefreshtoken("user-123", testClientID, "openid offline_access", nil, session.Session{})
 		Expect(err).NotTo(HaveOccurred())
 
 		resp, err := handleRevokeRequest(context.Background(), basicReq(testClientID, "", form(map[string]string{"token": token})))
@@ -157,7 +158,7 @@ var _ = Describe("RFC 7009 revoke endpoint", func() {
 	})
 
 	It("answers 500 server_error when the client registry cannot be read, and revokes nothing (negative)", func() {
-		token, err := svc.MintRefreshtoken("user-123", testClientID, "openid", nil, "", 0)
+		token, err := svc.MintRefreshtoken("user-123", testClientID, "openid", nil, session.Session{})
 		Expect(err).NotTo(HaveOccurred())
 
 		backend.DBMock.NextGetItemError = errors.New("throttled")
@@ -178,7 +179,7 @@ var _ = Describe("RFC 7009 revoke endpoint", func() {
 			GrantTypes: []string{"authorization_code", "refresh_token"}, RequirePKCE: utils.Ptr(true),
 		})
 		Expect(err).NotTo(HaveOccurred())
-		token, err := svc.MintRefreshtoken("user-123", testClientID, "openid", nil, "", 0)
+		token, err := svc.MintRefreshtoken("user-123", testClientID, "openid", nil, session.Session{})
 		Expect(err).NotTo(HaveOccurred())
 
 		resp, err := handleRevokeRequest(context.Background(), basicReq(otherClientID, "", form(map[string]string{"token": token})))
@@ -199,7 +200,7 @@ var _ = Describe("RFC 7009 revoke endpoint", func() {
 
 	DescribeTable("answers 503 temporarily_unavailable when storage fails and leaves the login working (RFC 7009 s2.2.1, negative)",
 		func(fault func(*mock.DynamoDBMock) awscommon.DynamoDBClientInterface) {
-			token, err := svc.MintRefreshtoken("user-123", testClientID, "openid", nil, "", 0)
+			token, err := svc.MintRefreshtoken("user-123", testClientID, "openid", nil, session.Session{})
 			Expect(err).NotTo(HaveOccurred())
 
 			awscommon.SetDynamoDBClient(fault(backend.DBMock))
@@ -234,14 +235,14 @@ var _ = Describe("RFC 7009 revoke endpoint", func() {
 	})
 
 	It("accepts a public client identifying via body client_id (no Basic, RFC 7009 §5)", func() {
-		token, _ := svc.MintRefreshtoken("user-123", testClientID, "openid", nil, "", 0)
+		token, _ := svc.MintRefreshtoken("user-123", testClientID, "openid", nil, session.Session{})
 		resp, err := handleRevokeRequest(context.Background(), formRequest(form(map[string]string{"token": token, "client_id": testClientID})))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.StatusCode).To(Equal(200))
 	})
 
 	It("rejects a request with neither Basic nor body client_id with 400 invalid_request", func() {
-		token, _ := svc.MintRefreshtoken("user-123", testClientID, "openid", nil, "", 0)
+		token, _ := svc.MintRefreshtoken("user-123", testClientID, "openid", nil, session.Session{})
 		resp, err := handleRevokeRequest(context.Background(), formRequest(form(map[string]string{"token": token})))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.StatusCode).To(Equal(400))
@@ -249,7 +250,7 @@ var _ = Describe("RFC 7009 revoke endpoint", func() {
 	})
 
 	It("rejects an unknown client with 401 invalid_client (negative, no oracle)", func() {
-		token, _ := svc.MintRefreshtoken("user-123", testClientID, "openid", nil, "", 0)
+		token, _ := svc.MintRefreshtoken("user-123", testClientID, "openid", nil, session.Session{})
 		resp, err := handleRevokeRequest(context.Background(), basicReq("ghost", "", form(map[string]string{"token": token})))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.StatusCode).To(Equal(401))
@@ -257,7 +258,7 @@ var _ = Describe("RFC 7009 revoke endpoint", func() {
 	})
 
 	It("rejects a public client that presents a secret with 401 invalid_client (negative)", func() {
-		token, _ := svc.MintRefreshtoken("user-123", testClientID, "openid", nil, "", 0)
+		token, _ := svc.MintRefreshtoken("user-123", testClientID, "openid", nil, session.Session{})
 		resp, err := handleRevokeRequest(context.Background(), basicReq(testClientID, "unexpected", form(map[string]string{"token": token})))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.StatusCode).To(Equal(401))
@@ -280,14 +281,14 @@ var _ = Describe("RFC 7009 revoke endpoint", func() {
 		})
 
 		It("accepts a valid secret via HTTP Basic (200)", func() {
-			token, _ := svc.MintRefreshtoken("user-123", confID, "openid", nil, "", 0)
+			token, _ := svc.MintRefreshtoken("user-123", confID, "openid", nil, session.Session{})
 			resp, err := handleRevokeRequest(context.Background(), basicReq(confID, confSecret, form(map[string]string{"token": token})))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp.StatusCode).To(Equal(200))
 		})
 
 		It("rejects a wrong secret with 401 invalid_client (negative)", func() {
-			token, _ := svc.MintRefreshtoken("user-123", confID, "openid", nil, "", 0)
+			token, _ := svc.MintRefreshtoken("user-123", confID, "openid", nil, session.Session{})
 			resp, err := handleRevokeRequest(context.Background(), basicReq(confID, "wrong", form(map[string]string{"token": token})))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp.StatusCode).To(Equal(401))
@@ -295,7 +296,7 @@ var _ = Describe("RFC 7009 revoke endpoint", func() {
 		})
 
 		It("rejects a missing secret with 401 invalid_client (negative, confidential needs a secret)", func() {
-			token, _ := svc.MintRefreshtoken("user-123", confID, "openid", nil, "", 0)
+			token, _ := svc.MintRefreshtoken("user-123", confID, "openid", nil, session.Session{})
 			resp, err := handleRevokeRequest(context.Background(), basicReq(confID, "", form(map[string]string{"token": token})))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp.StatusCode).To(Equal(401))

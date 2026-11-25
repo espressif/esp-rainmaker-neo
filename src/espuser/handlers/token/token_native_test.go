@@ -68,7 +68,7 @@ var _ = Describe("OAuth token endpoint (a native app's own session)", func() {
 			CodeChallenge: testChallenge(), CodeChallengeMethod: "S256", Resources: []string{testResource},
 			ExpiresOn: time.Now().Add(10 * time.Minute).Unix(),
 		})).To(Succeed())
-		Expect(flows.IssueCode("fl_"+code, userID, granted, code, browserSID, browser.AuthTime)).Error().NotTo(HaveOccurred())
+		Expect(flows.IssueCode("fl_"+code, code, auth_flows_db.Login{Subject: userID, GrantedScope: granted, SID: browserSID, AuthTime: browser.AuthTime})).Error().NotTo(HaveOccurred())
 		request := formRequest(url.Values{
 			"grant_type": {"authorization_code"}, "code": {code}, "code_verifier": {testVerifier},
 			"client_id": {clientID}, "redirect_uri": {redirectURI},

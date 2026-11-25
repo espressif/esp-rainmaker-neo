@@ -80,7 +80,7 @@ var (
 
 	SupportedScopes = []string{scopeOpenID, scopeEmail, scopeProfile, scopePhone, scopeSessions, scopeOfflineAccess}
 
-	SupportedClaims = []string{"sub", "email", "phone_number", "name", "locale", "picture"}
+	SupportedClaims = []string{"sub", "email", "phone_number", "name", "locale", "picture", "amr", "idp"}
 )
 
 func IsSupportedGrant(grant string) bool { return collections.Contains(SupportedGrantTypes, grant) }

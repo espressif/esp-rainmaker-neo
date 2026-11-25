@@ -88,7 +88,7 @@ func federationLogoutCallback(cookie string) events.APIGatewayProxyResponse {
 
 // hintFor mints the id token an app signed in under sid holds: what a well-behaved app sends as id_token_hint.
 func hintFor(userID, sid string) string {
-	hint, err := jwtutil.NewMinter(backend.Issuer, backend.SigningKey, oidc.SigningKeyID).IDToken(userID, dashboardClient, "", 0, jwtutil.Contact{}, sid)
+	hint, err := jwtutil.NewMinter(backend.Issuer, backend.SigningKey, oidc.SigningKeyID).IDToken(userID, dashboardClient, 0, jwtutil.UserClaims{SID: sid})
 	Expect(err).NotTo(HaveOccurred())
 	return hint
 }

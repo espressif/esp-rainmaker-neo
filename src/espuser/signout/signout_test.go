@@ -15,6 +15,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/refresh_tokens_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/sessions_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/refreshtoken"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/session"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/signout"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
@@ -99,7 +100,7 @@ var _ = Describe("signout.Service", func() {
 		})).To(Succeed())
 	}
 	mint := func(userID, clientID, scope, sid string) {
-		token, err := refreshtoken.NewService(rmngCtx).MintRefreshtoken(userID, clientID, scope, nil, sid, 0)
+		token, err := refreshtoken.NewService(rmngCtx).MintRefreshtoken(userID, clientID, scope, nil, session.Session{SID: sid})
 		Expect(err).NotTo(HaveOccurred())
 		tokens[userID+"/"+clientID+"@"+cmp.Or(sid, "offline")] = token
 	}

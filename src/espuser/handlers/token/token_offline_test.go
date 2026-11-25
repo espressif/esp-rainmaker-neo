@@ -49,7 +49,7 @@ var _ = Describe("OAuth token endpoint (offline_access grants)", func() {
 			CodeChallenge: testChallenge(), CodeChallengeMethod: "S256", Resources: []string{testResource},
 			ExpiresOn: time.Now().Add(10 * time.Minute).Unix(),
 		})).To(Succeed())
-		Expect(flows.IssueCode("fl_"+code, userID, granted, code, sid, time.Now().Unix())).Error().NotTo(HaveOccurred())
+		Expect(flows.IssueCode("fl_"+code, code, auth_flows_db.Login{Subject: userID, GrantedScope: granted, SID: sid, AuthTime: time.Now().Unix(), Provider: "up", AMR: []string{"pwd"}})).Error().NotTo(HaveOccurred())
 		resp, err := handleTokenRequest(context.Background(), formRequest(url.Values{
 			"grant_type": {"authorization_code"}, "code": {code}, "code_verifier": {testVerifier},
 			"client_id": {testClientID}, "redirect_uri": {redirectURI},
@@ -95,6 +95,10 @@ var _ = Describe("OAuth token endpoint (offline_access grants)", func() {
 		status, body := refresh(offline["refresh_token"].(string))
 		Expect(status).To(Equal(200))
 		Expect(tokenClaims(body["access_token"].(string))).NotTo(HaveKey("sid"))
+		for _, token := range []any{offline["access_token"], offline["id_token"], body["access_token"], body["id_token"]} {
+			Expect(tokenClaims(token.(string))).To(HaveKeyWithValue("amr", []any{"pwd"}), "an offline grant still says how the person signed in")
+			Expect(tokenClaims(token.(string))).To(HaveKeyWithValue("idp", "up"))
+		}
 
 		status, body = refresh(online["refresh_token"].(string))
 		Expect(status).To(Equal(400))
@@ -108,7 +112,7 @@ var _ = Describe("OAuth token endpoint (offline_access grants)", func() {
 			CodeChallenge: testChallenge(), CodeChallengeMethod: "S256", Resources: []string{testResource},
 			ExpiresOn: time.Now().Add(10 * time.Minute).Unix(),
 		})).To(Succeed())
-		Expect(flows.IssueCode("fl_late", userID, []string{"openid", "offline_access"}, "ac_late", sid, time.Now().Unix())).Error().NotTo(HaveOccurred())
+		Expect(flows.IssueCode("fl_late", "ac_late", auth_flows_db.Login{Subject: userID, GrantedScope: []string{"openid", "offline_access"}, SID: sid, AuthTime: time.Now().Unix()})).Error().NotTo(HaveOccurred())
 		Expect(session.NewService(rmngCtx).DeleteSessionBySID(userID, sid)).To(Succeed())
 
 		resp, err := handleTokenRequest(context.Background(), formRequest(url.Values{

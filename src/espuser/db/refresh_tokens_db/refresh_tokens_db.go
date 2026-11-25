@@ -70,8 +70,11 @@ type FamilyEntry struct {
 	// SID names the browser session this login ran under (the sessions table's public id), so ending a session can end the refresh families created through it. Empty for an offline_access grant, or when the session write failed or the family predates sessions.
 	SID string `dynamodbav:"sid,omitempty"`
 	// AuthTime is the login's authentication time, so a refreshed ID token never claims a fresh sign-in; zero on older families.
-	AuthTime  int64 `dynamodbav:"auth_time,omitempty"`
-	ExpiresOn int64 `dynamodbav:"expires_on,omitempty"`
+	AuthTime int64 `dynamodbav:"auth_time,omitempty"`
+	// AMR and Provider are the login's methods and provider row, re-stamped as amr and idp on every renewal; empty when the login had none and on older families.
+	AMR       []string `dynamodbav:"amr,omitempty"`
+	Provider  string   `dynamodbav:"provider,omitempty"`
+	ExpiresOn int64    `dynamodbav:"expires_on,omitempty"`
 	// RotatedAt (unix secs) bounds the reuse grace so a lost rotation response can be retried.
 	RotatedAt int64 `dynamodbav:"rotated_at,omitempty"`
 	// CreatedAt is when this application first got a token under this login. A sessions

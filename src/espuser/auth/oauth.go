@@ -143,6 +143,9 @@ type CompleteAuthFlowInput struct {
 	SID            string
 	RequestedScope []string
 	AuthTime       int64
+	// Provider and AMR are recorded on the flow so the code exchange stamps them without reading the session.
+	Provider string
+	AMR      []string
 	// SkipConsent is the flow's own decision from StartAuthFlow.
 	SkipConsent bool
 }
@@ -150,14 +153,17 @@ type CompleteAuthFlowInput struct {
 // CompleteAuthFlow issues the flow's code, or, unless in.SkipConsent, holds the sign-in for the person's answer and returns awaitingConsent.
 func (s *OAuthUserAuthService) CompleteAuthFlow(ctx context.Context, in CompleteAuthFlowInput) (codeRedirect string, awaitingConsent bool, err error) {
 	flowsDB := auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(ctx, nil))
+	login := auth_flows_db.Login{
+		Subject: in.UserID, GrantedScope: in.RequestedScope, SID: in.SID, AuthTime: in.AuthTime, Provider: in.Provider, AMR: in.AMR,
+	}
 	if !in.SkipConsent {
-		return "", true, flowsDB.AwaitConsent(in.FlowID, in.UserID, in.RequestedScope, in.SID, in.AuthTime)
+		return "", true, flowsDB.AwaitConsent(in.FlowID, login)
 	}
 	authCode, err := secretutil.GenRandom(secretutil.DefaultSecretBytes)
 	if err != nil {
 		return "", false, err
 	}
-	flow, err := flowsDB.IssueCode(in.FlowID, in.UserID, in.RequestedScope, authCode, in.SID, in.AuthTime)
+	flow, err := flowsDB.IssueCode(in.FlowID, authCode, login)
 	if err != nil {
 		return "", false, err
 	}
@@ -308,6 +314,7 @@ func (s *OAuthUserAuthService) CompleteSignIn(ctx context.Context, flow *auth_fl
 	sid, setCookie := establishFirstPartyUserAgent(rmngctx.NewRmngContextWithCtx(ctx, nil), userID, login)
 	codeRedirect, awaitingConsent, err := s.CompleteAuthFlow(ctx, CompleteAuthFlowInput{
 		FlowID: flow.FlowID, UserID: userID, SID: sid, RequestedScope: flow.RequestedScope, AuthTime: login.AuthTime, SkipConsent: flow.SkipConsent,
+		Provider: login.Provider, AMR: login.AMR,
 	})
 	if err != nil {
 		return "", setCookie, err
@@ -349,7 +356,9 @@ func (s *OAuthUserAuthService) MintTokenSetForClient(ctx context.Context, userID
 	sid, _ := establishFirstPartyUserAgent(rmngCtx, userID, login)
 	// OIDC Core 1.0 s11: offline_access is ignored unless a code is returned, and this channel returns none and shows no consent.
 	grantedScope := scopepkg.Without(scope, scopepkg.OfflineAccess)
-	return s.mintTokenSet(rmngCtx, userID, client.ClientID, grantedScope, resources, audience, sid, time.Now().Unix())
+	return s.mintTokenSet(rmngCtx, userID, client.ClientID, grantedScope, resources, audience, session.Session{
+		SID: sid, AuthTime: time.Now().Unix(), AMR: login.AMR, Provider: login.Provider,
+	})
 }
 
 // establishFirstPartyUserAgent degrades a failed session write to sid "" and no cookie, because a lost single sign-on must never block the login.
@@ -429,7 +438,9 @@ func (s *OAuthUserAuthService) ExchangeAuthCode(ctx context.Context, client *cli
 	if client.IsNative() && !offline {
 		sid = establishNativeAppSession(rmngCtx, flow, signInSession, userAgent)
 	}
-	return s.mintTokenSet(rmngCtx, flow.Subject, flow.ClientID, scope, flow.Resources, audience, sid, flow.AuthTime)
+	return s.mintTokenSet(rmngCtx, flow.Subject, flow.ClientID, scope, flow.Resources, audience, session.Session{
+		SID: sid, AuthTime: flow.AuthTime, AMR: flow.AMR, Provider: flow.Provider,
+	})
 }
 
 // liveSession returns the user's session named sid, or ErrInvalidGrant when it has ended.

@@ -16,6 +16,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils/httpclient"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
@@ -78,11 +80,24 @@ const (
 )
 
 type Contact struct {
-	Email       string
-	PhoneNumber string
-	Name        string
-	Locale      string
-	Picture     string
+	Email       string `json:"email,omitempty"`
+	PhoneNumber string `json:"phone_number,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Locale      string `json:"locale,omitempty"`
+	Picture     string `json:"picture,omitempty"`
+}
+
+// UserClaims are the claims a user's tokens carry beyond the registered ones; each json tag is the claim's name, and a zero field is left out.
+type UserClaims struct {
+	Contact
+	// AuthEventID ties the tokens of one sign-in together under Cognito's claim name, so RequireSameAuthEvent serves both issuers.
+	AuthEventID string `json:"origin_jti,omitempty"`
+	// SID names the browser session the token was minted under (OIDC Front-Channel Logout 1.0 s3); the session cookie never reaches a product's API.
+	SID string `json:"sid,omitempty"`
+	// AMR lists the methods ESP User itself verified (RFC 8176), e.g. ["pwd"]; a federated sign-in has none.
+	AMR []string `json:"amr,omitempty"`
+	// Provider names the provider row that authenticated the person; the claim name is Entra's and Okta's, not OIDC-registered.
+	Provider string `json:"idp,omitempty"`
 }
 
 type Minter struct {
@@ -95,20 +110,6 @@ func NewMinter(issuer string, signer crypto.Signer, kid string) *Minter {
 	return &Minter{issuer: issuer, signer: signer, kid: kid}
 }
 
-func addContact(claims jwt.MapClaims, contact Contact) {
-	for name, value := range map[string]string{
-		"email":        contact.Email,
-		"phone_number": contact.PhoneNumber,
-		"name":         contact.Name,
-		"locale":       contact.Locale,
-		"picture":      contact.Picture,
-	} {
-		if value != "" {
-			claims[name] = value
-		}
-	}
-}
-
 // NewAuthEventID returns an identifier for one authentication event, to be stamped on
 // every token issued from it. Two tokens carrying the same value provably came from a
 // single sign-in, which is what lets a receiver refuse a mismatched pair — Cognito calls
@@ -117,21 +118,16 @@ func NewAuthEventID() string {
 	return uuid.NewString()
 }
 
-// AccessToken mints a signed RS256 access token, stamping scope-gated contact claims when present.
-//
-// authEventID ties this token to the id token minted alongside it; pass the same value to
-// IDToken. Empty omits the claim, for a token issued outside any pair.
+// AccessToken mints a signed RS256 access token for a user.
 //
 // audience is the RFC 8707 resource the token is for, the API it will be spent at (RFC 9068 s3); it is required, unlike IDToken's, which is the client by definition.
-// sid is optional and names the browser session this token was minted under (OIDC Core
-// s2). A resource server needs it to answer "which of my sessions is this request on" --
-// the session cookie lives on the issuer's origin and never reaches a product's API.
-func (m *Minter) AccessToken(userID, clientID, scope, authEventID, audience string, contact Contact, sid ...string) (string, error) {
+// RFC 9068 s2.2.1 allows amr (and auth_time, which we keep to the ID token); sid is OIDC Front-Channel Logout 1.0 s3.
+func (m *Minter) AccessToken(userID, clientID, scope, audience string, claims UserClaims) (string, error) {
 	if audience == "" {
 		return "", ErrNoAudience
 	}
 	now := time.Now()
-	claims := jwt.MapClaims{
+	token := jwt.MapClaims{
 		"iss":       m.issuer,
 		"sub":       userID,
 		"aud":       audience,
@@ -141,17 +137,29 @@ func (m *Minter) AccessToken(userID, clientID, scope, authEventID, audience stri
 		"iat":       now.Unix(),
 		"exp":       now.Add(AccessTokenTTL).Unix(),
 	}
-	addAuthEvent(claims, authEventID)
-	addContact(claims, contact)
-	addSID(claims, sid)
-	return SignRS256(claims, m.signer, m.kid)
+	if err := stampUserClaims(token, claims); err != nil {
+		return "", err
+	}
+	return SignRS256(token, m.signer, m.kid)
 }
 
-// addSID stamps the session identifier when one was supplied. Absent when the session write failed or the token predates sessions, and a consumer must treat it as "unknown", never as an error.
-func addSID(claims jwt.MapClaims, sid []string) {
-	if len(sid) > 0 && sid[0] != "" {
-		claims["sid"] = sid[0]
+// stampUserClaims adds each non-zero field of claims to token under its json name, e.g. Provider "google" becomes "idp": "google"; a name already in token is an error, so it never overwrites a registered claim.
+func stampUserClaims(token jwt.MapClaims, claims UserClaims) error {
+	encoded, err := json.Marshal(claims)
+	if err != nil {
+		return rmerror.NewRMError(err, "jwtutil: failed to encode user claims")
 	}
+	var optional map[string]any
+	if err := json.Unmarshal(encoded, &optional); err != nil {
+		return rmerror.NewRMError(err, "jwtutil: failed to decode user claims")
+	}
+	for name, value := range optional {
+		if _, registered := token[name]; registered {
+			return rmerror.NewRMError(nil, fmt.Sprintf("jwtutil: user claim %q would overwrite a registered claim", name))
+		}
+		token[name] = value
+	}
+	return nil
 }
 
 // ClientCredentialsToken mints an access token for the client itself (RFC 6749 s4.4).
@@ -177,17 +185,15 @@ func (m *Minter) ClientCredentialsToken(clientID, scope, audience string) (strin
 	}, m.signer, m.kid)
 }
 
-// IDToken mints a signed RS256 id token (OIDC), stamping auth_time and scope-gated contact claims when present.
+// IDToken mints a signed RS256 id token (OIDC) for a user.
 //
-// authEventID must be the same value given to the AccessToken minted in the same sign-in.
-//
-// authTime is when the person authenticated, not the mint time (OIDC Core §2); zero means now.
-func (m *Minter) IDToken(userID, clientID, authEventID string, authTime int64, contact Contact, sid ...string) (string, error) {
+// authTime is when the person authenticated, not the mint time (OIDC Core s2); zero means now. claims.AuthEventID must be the one given to the AccessToken minted in the same sign-in.
+func (m *Minter) IDToken(userID, clientID string, authTime int64, claims UserClaims) (string, error) {
 	now := time.Now()
 	if authTime <= 0 {
 		authTime = now.Unix()
 	}
-	claims := jwt.MapClaims{
+	token := jwt.MapClaims{
 		"iss":       m.issuer,
 		"sub":       userID,
 		"aud":       clientID,
@@ -196,18 +202,10 @@ func (m *Minter) IDToken(userID, clientID, authEventID string, authTime int64, c
 		"iat":       now.Unix(),
 		"exp":       now.Add(IDTokenTTL).Unix(),
 	}
-	addAuthEvent(claims, authEventID)
-	addContact(claims, contact)
-	addSID(claims, sid)
-	return SignRS256(claims, m.signer, m.kid)
-}
-
-// addAuthEvent stamps the auth-event id under the same claim name Cognito uses, so one
-// pairing check serves tokens from either issuer.
-func addAuthEvent(claims jwt.MapClaims, authEventID string) {
-	if authEventID != "" {
-		claims["origin_jti"] = authEventID
+	if err := stampUserClaims(token, claims); err != nil {
+		return "", err
 	}
+	return SignRS256(token, m.signer, m.kid)
 }
 
 // rs256KeyFunc resolves a token's RSA verify key from keySet by kid, rejecting non-RSA algorithms.

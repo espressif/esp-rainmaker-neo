@@ -16,6 +16,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/oauth_clients_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/refreshtoken"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/session"
 	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
@@ -81,7 +82,7 @@ func mintRefreshToken(userID, scope string, resources ...string) string {
 		resources = []string{testResource}
 	}
 	svc := refreshtoken.NewService(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
-	token, err := svc.MintRefreshtoken(userID, testClientID, scope, resources, "", 0)
+	token, err := svc.MintRefreshtoken(userID, testClientID, scope, resources, session.Session{})
 	Expect(err).NotTo(HaveOccurred())
 	return token
 }
@@ -138,7 +139,7 @@ var _ = Describe("OAuth token endpoint (refresh_token grant)", func() {
 
 		It("starts the login over for a family minted before resources were recorded (negative)", func() {
 			svc := refreshtoken.NewService(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
-			legacy, err := svc.MintRefreshtoken("user-legacy", testClientID, "openid", nil, "", 0)
+			legacy, err := svc.MintRefreshtoken("user-legacy", testClientID, "openid", nil, session.Session{})
 			Expect(err).NotTo(HaveOccurred())
 			resp, err := handleTokenRequest(context.Background(), formRequest(form(map[string]string{
 				"grant_type": "refresh_token", "refresh_token": legacy, "client_id": testClientID,

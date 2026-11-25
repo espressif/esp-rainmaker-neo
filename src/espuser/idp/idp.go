@@ -32,7 +32,6 @@ type UpstreamIdentity struct {
 	// instead would assert an authentication that did not happen, in the permissive direction,
 	// on the exact value max_age and step-up are computed from.
 	AuthTime int64
-	AMR      []string
 	ACR      string
 }
 

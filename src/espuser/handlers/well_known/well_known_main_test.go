@@ -69,6 +69,7 @@ var _ = Describe("GET /.well-known/* (OIDC Discovery 1.0 s4, RFC 8414 s3)", func
 		var got oidc.OIDCProviderMetadata
 		Expect(json.Unmarshal([]byte(get(oidc.OIDCDiscoveryPath, nil).Body), &got)).To(Succeed())
 		Expect(got).To(Equal(oidc.BuildOIDCMetadata(backend.Issuer, apiBase)))
+		Expect(got.ClaimsSupported).To(ContainElements("amr", "idp"), "an app learns from discovery that tokens say how the person signed in")
 	})
 
 	It("builds the authorization server metadata from the same configuration", func() {

@@ -56,7 +56,7 @@ func tokenFor(userID, scopes, sid string) string {
 // tokenForClient is tokenFor with the issuing client named, for exercising the first-party pin with a third-party audience.
 func tokenForClient(userID, clientID, scopes, sid string) string {
 	minter := jwtutil.NewMinter(backend.Issuer, backend.SigningKey, oidc.SigningKeyID)
-	token, err := minter.AccessToken(userID, clientID, scopes, "", "https://api.example.com", jwtutil.Contact{}, sid)
+	token, err := minter.AccessToken(userID, clientID, scopes, "https://api.example.com", jwtutil.UserClaims{SID: sid})
 	Expect(err).NotTo(HaveOccurred())
 	return token
 }
@@ -341,14 +341,14 @@ var _ = Describe("the five negatives, on every session endpoint", func() {
 
 	It("accepts a token addressed to another of our APIs: the account's own endpoints take any of them", func() {
 		minter := jwtutil.NewMinter(backend.Issuer, backend.SigningKey, oidc.SigningKeyID)
-		token, err := minter.AccessToken(me, dashboardClient, scope.Sessions, "", "https://other.example.com", jwtutil.Contact{}, sidMac)
+		token, err := minter.AccessToken(me, dashboardClient, scope.Sessions, "https://other.example.com", jwtutil.UserClaims{SID: sidMac})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(call(http.MethodGet, pathSessions, token).StatusCode).To(Equal(http.StatusOK))
 	})
 
 	It("401s an id token replayed as an access token (negative, token substitution)", func() {
 		minter := jwtutil.NewMinter(backend.Issuer, backend.SigningKey, oidc.SigningKeyID)
-		idToken, err := minter.IDToken(me, "esp-account-dashboard", "", 0, jwtutil.Contact{}, sidMac)
+		idToken, err := minter.IDToken(me, "esp-account-dashboard", 0, jwtutil.UserClaims{SID: sidMac})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(call(http.MethodGet, pathSessions, idToken).StatusCode).To(Equal(http.StatusUnauthorized))
 	})

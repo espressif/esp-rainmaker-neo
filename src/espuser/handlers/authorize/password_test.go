@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/auth_flows_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/identity_providers_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/oauth_clients_db"
@@ -176,6 +177,36 @@ var _ = Describe("POST /user/login/password", func() {
 		Expect(resp.StatusCode).To(Equal(http.StatusOK), resp.Body)
 		s := session.NewService(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).Peek(sessionCookieValue(resp))
 		Expect(s.Provider).To(Equal("second"))
+	})
+
+	It("names the password row as idp on the code's tokens after the person abandoned a federation leg on the same flow", func() {
+		rmngCtx := rmngctx.NewRmngContextWithCtx(context.Background(), nil)
+		flowsDB := auth_flows_db.NewAuthFlowsDB(rmngCtx)
+		Expect(flowsDB.CreateFlow(&auth_flows_db.AuthFlow{
+			FlowID: "fl_left_leg", ClientID: testClientID, RedirectURI: redirectURI, State: "xyz", RequestedScope: []string{"openid"},
+			Resources: []string{testResource}, SkipConsent: true, ExpiresOn: time.Now().Add(auth_flows_db.FlowTTL).Unix(),
+		})).To(Succeed())
+		Expect(flowsDB.SetUpstreamLeg("fl_left_leg", "corp", "st", "nonce", "verifier")).To(Succeed())
+
+		resp := post(flowCookie("fl_left_leg"), signInBody("fl_left_leg", map[string]any{"provider": "second"}))
+		Expect(resp.StatusCode).To(Equal(http.StatusOK), resp.Body)
+		var body map[string]string
+		Expect(json.Unmarshal([]byte(resp.Body), &body)).To(Succeed())
+		code := strings.TrimPrefix(strings.Split(body["redirect_to"], "&")[0], redirectURI+"?code=")
+
+		client, err := clients.NewService(rmngCtx).Get(testClientID)
+		Expect(err).NotTo(HaveOccurred())
+		svc, err := auth.NewOAuthUserAuthService(context.Background())
+		Expect(err).NotTo(HaveOccurred())
+		tokens, err := svc.ExchangeAuthCode(context.Background(), client, code, "", redirectURI, "", auth.UserAgentInfo{})
+		Expect(err).NotTo(HaveOccurred())
+		for _, token := range []string{tokens.AccessToken, tokens.IDToken} {
+			claims := jwtgo.MapClaims{}
+			_, _, err := jwtgo.NewParser().ParseUnverified(token, claims)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(claims["idp"]).To(Equal("second"), "the abandoned leg's corp must not name this sign-in")
+			Expect(claims["amr"]).To(Equal([]any{"pwd"}))
+		}
 	})
 
 	It("records the browser that signed in on its session, for the person's own device list", func() {
@@ -347,7 +378,7 @@ var _ = Describe("POST /user/login/password", func() {
 
 		createFlow("fl_raced", testClientID, true, auth_flows_db.FlowTTL)
 		_, err := auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).
-			IssueCode("fl_raced", "someone", []string{"openid"}, "other-tabs-code", "", time.Now().Unix())
+			IssueCode("fl_raced", "other-tabs-code", auth_flows_db.Login{Subject: "someone", GrantedScope: []string{"openid"}, AuthTime: time.Now().Unix()})
 		Expect(err).NotTo(HaveOccurred())
 
 		raced := post(flowCookie("fl_raced")+"; "+session.CookieName+"="+oldCookie, signInBody("fl_raced", nil))

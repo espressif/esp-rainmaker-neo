@@ -166,7 +166,6 @@ func handleFederationCallback(ctx context.Context, request events.APIGatewayProx
 	redirectTo, setCookie, err := svc.CompleteSignIn(ctx, flow, userID, auth.FirstPartyLogin{
 		Provider:              identity.Profile.Provider,
 		AuthTime:              identity.AuthTime,
-		AMR:                   identity.AMR,
 		ACR:                   identity.ACR,
 		ProviderMaxTTLSeconds: providerMaxTTL,
 		Origin:                session.OriginBrowser,

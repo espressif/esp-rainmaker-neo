@@ -107,9 +107,10 @@ func sessionShortCircuit(ctx context.Context, in AuthorizeSessionRequest) (event
 		return oidc.OAuthErrorRedirect(q["redirect_uri"], oidc.OAuthErrConsentRequired, q["state"]), true
 	}
 
-	// Same scope StartAuthFlow just stored on the flow, and the session's auth_time because nobody authenticated on this request.
+	// Same scope StartAuthFlow just stored on the flow, and the session's sign-in because nobody authenticated on this request.
 	codeRedirect, awaitingConsent, err := svc.CompleteAuthFlow(ctx, auth.CompleteAuthFlowInput{
 		FlowID: flowID, UserID: s.UserID, SID: s.SID, RequestedScope: strings.Fields(q["scope"]), AuthTime: s.AuthTime, SkipConsent: in.SkipConsent,
+		Provider: s.Provider, AMR: s.AMR,
 	})
 	if err != nil {
 		rlog.Warn(ctx).Err(err).Msg("sso: session shortcut failed; falling back to login")

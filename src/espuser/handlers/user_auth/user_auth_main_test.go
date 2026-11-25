@@ -156,7 +156,7 @@ var _ = Describe("legacy token responses (RFC 6749 s5.1)", func() {
 
 	It("refuses to sign out a refresh token issued to another client and leaves it working (negative)", func() {
 		refresh := refreshtoken.NewService(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
-		other, err := refresh.MintRefreshtoken("user-123", "another-app", "openid", nil, "", 0)
+		other, err := refresh.MintRefreshtoken("user-123", "another-app", "openid", nil, session.Session{})
 		Expect(err).NotTo(HaveOccurred())
 
 		signout := post(pathSignout, map[string]any{"refresh_token": other})

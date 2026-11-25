@@ -61,6 +61,11 @@ type Session struct {
 	UserID   string
 	Provider string
 	AuthTime int64
+	AMR      []string
+}
+
+func sessionOf(entry *sessions_db.SessionEntry) *Session {
+	return &Session{SID: entry.SID, UserID: entry.UserID, Provider: entry.Provider, AuthTime: entry.AuthTime, AMR: entry.AMR}
 }
 
 // Service reads and writes sessions.
@@ -223,7 +228,7 @@ func (s *Service) Lookup(cookieValue string) *Session {
 		}
 		return nil
 	}
-	return &Session{SID: entry.SID, UserID: entry.UserID, Provider: entry.Provider, AuthTime: entry.AuthTime}
+	return sessionOf(entry)
 }
 
 // Peek is Lookup without the retention roll, for a caller whose response does not re-issue the cookie; it fails to nil the same way.
@@ -247,7 +252,7 @@ func (s *Service) Find(cookieValue string) (*Session, error) {
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "session: read failed")
 	}
-	return &Session{SID: entry.SID, UserID: entry.UserID, Provider: entry.Provider, AuthTime: entry.AuthTime}, nil
+	return sessionOf(entry), nil
 }
 
 // BumpRetentionBySID rolls a user agent's expires_at forward from a BACK-channel token event and

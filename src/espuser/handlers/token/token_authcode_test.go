@@ -17,6 +17,8 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
+	"github.com/aws/aws-lambda-go/events"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -46,7 +48,7 @@ var _ = Describe("OAuth token endpoint (authorization_code grant)", func() {
 			Resources:           []string{testResource},
 			ExpiresOn:           time.Now().Add(10 * time.Minute).Unix(),
 		})).To(Succeed())
-		Expect(db.IssueCode("fl_"+code, "user-123", []string{"openid", "email"}, code, "", 0)).Error().NotTo(HaveOccurred())
+		Expect(db.IssueCode("fl_"+code, code, auth_flows_db.Login{Subject: "user-123", GrantedScope: []string{"openid", "email"}})).Error().NotTo(HaveOccurred())
 	}
 
 	codeForm := func(overrides map[string]string) string {
@@ -199,7 +201,7 @@ var _ = Describe("OAuth token endpoint (authorization_code grant)", func() {
 				FlowID: "fl_" + code, ClientID: confID, RedirectURI: redirectURI,
 				RequestedScope: []string{"openid"}, Resources: []string{testResource}, ExpiresOn: time.Now().Add(10 * time.Minute).Unix(),
 			})).To(Succeed())
-			Expect(db.IssueCode("fl_"+code, "user-123", []string{"openid"}, code, "", 0)).Error().NotTo(HaveOccurred())
+			Expect(db.IssueCode("fl_"+code, code, auth_flows_db.Login{Subject: "user-123", GrantedScope: []string{"openid"}})).Error().NotTo(HaveOccurred())
 		}
 
 		basic := func(id, secret string) map[string]string {
@@ -279,8 +281,8 @@ var _ = Describe("RFC 8707 resource on the authorization-code flow", func() {
 		Expect(err).NotTo(HaveOccurred())
 	}
 
-	// seedCodeWithResource writes the post-login flow state a real /authorize would have left.
-	seedCodeWithResource := func(code string, resources ...string) {
+	// seedCode writes the post-login flow state a real /authorize would have left, for user-123 signed in as login says.
+	seedCode := func(code string, login auth_flows_db.Login, resources ...string) {
 		db := auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
 		Expect(db.CreateFlow(&auth_flows_db.AuthFlow{
 			FlowID: "fl_" + code, ClientID: resClientID, RedirectURI: resRedirect,
@@ -289,7 +291,15 @@ var _ = Describe("RFC 8707 resource on the authorization-code flow", func() {
 			Resources: resources,
 			ExpiresOn: time.Now().Add(10 * time.Minute).Unix(),
 		})).To(Succeed())
-		Expect(db.IssueCode("fl_"+code, "user-123", []string{"openid", "email"}, code, "", 0)).Error().NotTo(HaveOccurred())
+		login.Subject, login.GrantedScope = "user-123", []string{"openid", "email"}
+		Expect(db.IssueCode("fl_"+code, code, login)).Error().NotTo(HaveOccurred())
+	}
+
+	refresh := func(refreshToken string) events.APIGatewayProxyResponse {
+		form := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refreshToken}, "client_id": {resClientID}}
+		resp, err := handleTokenRequest(context.Background(), formRequest(form.Encode()))
+		Expect(err).NotTo(HaveOccurred())
+		return resp
 	}
 
 	exchange := func(code string, resource ...string) map[string]any {
@@ -304,8 +314,10 @@ var _ = Describe("RFC 8707 resource on the authorization-code flow", func() {
 		return decodeBody[map[string]any](resp)
 	}
 
+	var backend *test_utils.EspUserBackend
+
 	BeforeEach(func() {
-		test_utils.SetupEspUserBackend(context.Background())
+		backend = test_utils.SetupEspUserBackend(context.Background())
 		seedClient()
 	})
 
@@ -313,7 +325,7 @@ var _ = Describe("RFC 8707 resource on the authorization-code flow", func() {
 		// One exchange pins both: the access token's audience is the API named by resource, while
 		// the ID token's stays this client -- it is a statement to the client about who signed in,
 		// and fixing the access token must not "fix" this one.
-		seedCodeWithResource("ac_res", resAPI)
+		seedCode("ac_res", auth_flows_db.Login{}, resAPI)
 		tokens := exchange("ac_res")
 		access := unverifiedClaims(tokens["access_token"].(string))
 		Expect(access["aud"]).To(Equal(resAPI))
@@ -322,7 +334,7 @@ var _ = Describe("RFC 8707 resource on the authorization-code flow", func() {
 	})
 
 	It("narrows the exchange to the one resource named when the sign-in covers several", func() {
-		seedCodeWithResource("ac_two", resAPI, otherAPI)
+		seedCode("ac_two", auth_flows_db.Login{}, resAPI, otherAPI)
 		Expect(unverifiedClaims(exchange("ac_two", otherAPI)["access_token"].(string))["aud"]).To(Equal(otherAPI))
 	})
 
@@ -330,14 +342,8 @@ var _ = Describe("RFC 8707 resource on the authorization-code flow", func() {
 		// The access token is renewed constantly and silently. If the refresh forgot the
 		// resource, every renewal would produce a token the API refuses -- and the failure
 		// would appear an hour after login, nowhere near the cause.
-		seedCodeWithResource("ac_refresh", resAPI)
-		refresh := exchange("ac_refresh")["refresh_token"].(string)
-
-		form := url.Values{
-			"grant_type": {"refresh_token"}, "refresh_token": {refresh}, "client_id": {resClientID},
-		}
-		resp, err := handleTokenRequest(context.Background(), formRequest(form.Encode()))
-		Expect(err).NotTo(HaveOccurred())
+		seedCode("ac_refresh", auth_flows_db.Login{}, resAPI)
+		resp := refresh(exchange("ac_refresh")["refresh_token"].(string))
 		Expect(resp.StatusCode).To(Equal(200), resp.Body)
 		renewed := decodeBody[map[string]any](resp)["access_token"].(string)
 		Expect(unverifiedClaims(renewed)["aud"]).To(Equal(resAPI))
@@ -346,30 +352,45 @@ var _ = Describe("RFC 8707 resource on the authorization-code flow", func() {
 	// A relying party's max_age check reads auth_time, so a shortcut or refresh must not claim a fresh login.
 	It("stamps the session's original auth_time on the ID token, through exchange and refresh", func() {
 		signedIn := time.Now().Add(-180 * 24 * time.Hour).Unix()
-		db := auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
-		Expect(db.CreateFlow(&auth_flows_db.AuthFlow{
-			FlowID: "fl_ac_authtime", ClientID: resClientID, RedirectURI: resRedirect,
-			RequestedScope: []string{"openid", "email"}, Resources: []string{resAPI},
-			CodeChallenge: testChallenge(), CodeChallengeMethod: "S256",
-			ExpiresOn: time.Now().Add(10 * time.Minute).Unix(),
-		})).To(Succeed())
-		Expect(db.IssueCode("fl_ac_authtime", "user-123", []string{"openid", "email"}, "ac_authtime", "", signedIn)).Error().NotTo(HaveOccurred())
+		seedCode("ac_authtime", auth_flows_db.Login{AuthTime: signedIn}, resAPI)
 
 		tokens := exchange("ac_authtime")
 		Expect(unverifiedClaims(tokens["id_token"].(string))["auth_time"]).To(BeNumerically("==", signedIn))
 
-		form := url.Values{
-			"grant_type": {"refresh_token"}, "refresh_token": {tokens["refresh_token"].(string)}, "client_id": {resClientID},
-		}
-		resp, err := handleTokenRequest(context.Background(), formRequest(form.Encode()))
-		Expect(err).NotTo(HaveOccurred())
+		resp := refresh(tokens["refresh_token"].(string))
 		Expect(resp.StatusCode).To(Equal(200), resp.Body)
 		renewed := decodeBody[map[string]any](resp)["id_token"].(string)
 		Expect(unverifiedClaims(renewed)["auth_time"]).To(BeNumerically("==", signedIn), "a refresh is not a new authentication")
 	})
 
+	DescribeTable("stamps how the person signed in on both tokens, through exchange and refresh, reading nothing more than the flow and the family",
+		func(code string, login auth_flows_db.Login, wantAMR any, wantIDP any) {
+			seedCode(code, login, resAPI)
+			tokens := exchange(code)
+			backend.DBMock.ProfileReset()
+			resp := refresh(tokens["refresh_token"].(string))
+			Expect(resp.StatusCode).To(Equal(200), resp.Body)
+			Expect(backend.DBMock.ProfileGet().Accesses["espuser-sessions"].ReadCount).To(BeZero(), "a refresh never reads the session for the sign-in")
+			renewed := decodeBody[map[string]any](resp)
+
+			for _, token := range []any{tokens["access_token"], tokens["id_token"], renewed["access_token"], renewed["id_token"]} {
+				claims := unverifiedClaims(token.(string))
+				for name, want := range map[string]any{"amr": wantAMR, "idp": wantIDP} {
+					if want == nil {
+						Expect(claims).NotTo(HaveKey(name), "an unknown claim is left out, never stamped empty")
+						continue
+					}
+					Expect(claims).To(HaveKeyWithValue(name, want))
+				}
+			}
+		},
+		Entry("a password ESP User checked", "ac_pwd", auth_flows_db.Login{Provider: "rainmaker", AMR: []string{"pwd"}}, []any{"pwd"}, "rainmaker"),
+		Entry("a federated sign-in, which names its provider row and no method", "ac_fed", auth_flows_db.Login{Provider: "google"}, nil, "google"),
+		Entry("a flow that recorded neither (negative)", "ac_unknown", auth_flows_db.Login{}, nil, nil),
+	)
+
 	It("stamps now when the flow recorded no auth_time (flows issued before the field existed)", func() {
-		seedCodeWithResource("ac_noauthtime", resAPI)
+		seedCode("ac_noauthtime", auth_flows_db.Login{}, resAPI)
 		before := time.Now().Unix()
 		at := unverifiedClaims(exchange("ac_noauthtime")["id_token"].(string))["auth_time"]
 		Expect(at).To(BeNumerically(">=", before))
@@ -381,8 +402,8 @@ var _ = Describe("RFC 8707 resource on the authorization-code flow", func() {
 		// an API from allowed_resources stops new logins asking for it and does nothing about
 		// the ones already asking. The family's lifetime is re-stamped on each rotation, so a
 		// client that keeps refreshing would never be cut off at all.
-		seedCodeWithResource("ac_revoked", resAPI)
-		refresh := exchange("ac_revoked")["refresh_token"].(string)
+		seedCode("ac_revoked", auth_flows_db.Login{}, resAPI)
+		refreshToken := exchange("ac_revoked")["refresh_token"].(string)
 
 		svc := clients.NewService(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
 		_, err := svc.Update(resClientID, clients.UpdateInput{
@@ -395,11 +416,7 @@ var _ = Describe("RFC 8707 resource on the authorization-code flow", func() {
 		})
 		Expect(err).NotTo(HaveOccurred())
 
-		form := url.Values{
-			"grant_type": {"refresh_token"}, "refresh_token": {refresh}, "client_id": {resClientID},
-		}
-		resp, err := handleTokenRequest(context.Background(), formRequest(form.Encode()))
-		Expect(err).NotTo(HaveOccurred())
+		resp := refresh(refreshToken)
 		Expect(resp.StatusCode).To(Equal(400), resp.Body)
 		// invalid_target, not invalid_grant: the token is good, the entitlement is gone, and a
 		// client told invalid_grant would retry forever against something that cannot work.
@@ -411,8 +428,8 @@ var _ = Describe("RFC 8707 resource on the authorization-code flow", func() {
 		// act, so a check placed after it would leave the client one counter behind -- the next
 		// attempt reads as reuse and deletes the whole family. Then restoring the entitlement
 		// would not help anyone, because the login is already gone.
-		seedCodeWithResource("ac_restore", resAPI)
-		refresh := exchange("ac_restore")["refresh_token"].(string)
+		seedCode("ac_restore", auth_flows_db.Login{}, resAPI)
+		refreshToken := exchange("ac_restore")["refresh_token"].(string)
 		svc := clients.NewService(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
 		base := clients.UpdateInput{
 			ClientName: "Web", RedirectURIs: []string{resRedirect},
@@ -420,22 +437,17 @@ var _ = Describe("RFC 8707 resource on the authorization-code flow", func() {
 			Scopes:     []string{"openid", "email"}, RequirePKCE: utils.Ptr(true),
 			AllowedResources: []string{otherAPI},
 		}
-		form := url.Values{
-			"grant_type": {"refresh_token"}, "refresh_token": {refresh}, "client_id": {resClientID},
-		}
 
 		_, err := svc.Update(resClientID, base) // withdraw
 		Expect(err).NotTo(HaveOccurred())
-		refused, _ := handleTokenRequest(context.Background(), formRequest(form.Encode()))
-		Expect(refused.StatusCode).To(Equal(400))
+		Expect(refresh(refreshToken).StatusCode).To(Equal(400))
 
 		withResource := base
 		withResource.AllowedResources = []string{resAPI}
 		_, err = svc.Update(resClientID, withResource) // restore
 		Expect(err).NotTo(HaveOccurred())
 
-		resp, err := handleTokenRequest(context.Background(), formRequest(form.Encode()))
-		Expect(err).NotTo(HaveOccurred())
+		resp := refresh(refreshToken)
 		Expect(resp.StatusCode).To(Equal(200), resp.Body)
 		Expect(unverifiedClaims(decodeBody[map[string]any](resp)["access_token"].(string))["aud"]).
 			To(Equal(resAPI), "the same refresh token must still work, unspent by the refusal")

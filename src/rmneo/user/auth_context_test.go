@@ -72,7 +72,7 @@ var _ = Describe("NewContextWithAPIRequest", func() {
 	}
 
 	It("resolves a first-party user access token and carries its claims to the handler", func() {
-		token, err := minter().AccessToken(caller, firstParty, grant, "", "https://api.example.com", jwtutil.Contact{}, "sid_CHROME")
+		token, err := minter().AccessToken(caller, firstParty, grant, "https://api.example.com", jwtutil.UserClaims{SID: "sid_CHROME"})
 		Expect(err).NotTo(HaveOccurred())
 
 		rctx := user.NewContextWithAPIRequest(context.Background(), bearer(token))
@@ -88,7 +88,7 @@ var _ = Describe("NewContextWithAPIRequest", func() {
 	})
 
 	It("refuses every token when the Lambda was given no audiences, rather than accepting any (negative)", func() {
-		token, err := minter().AccessToken(caller, firstParty, grant, "", "https://api.example.com", jwtutil.Contact{})
+		token, err := minter().AccessToken(caller, firstParty, grant, "https://api.example.com", jwtutil.UserClaims{})
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(os.Setenv, "ACCEPTED_AUDIENCES", os.Getenv("ACCEPTED_AUDIENCES"))
 		Expect(os.Unsetenv("ACCEPTED_AUDIENCES")).To(Succeed())
@@ -106,19 +106,19 @@ var _ = Describe("NewContextWithAPIRequest", func() {
 		}, "RFC 6749 s4.4: its sub is a client id, so admitting it would make a machine the owner of every user_id-keyed row it touched"),
 
 		Entry("a token addressed to another API", func() string {
-			token, err := minter().AccessToken(caller, firstParty, grant, "", "https://other.example.com", jwtutil.Contact{})
+			token, err := minter().AccessToken(caller, firstParty, grant, "https://other.example.com", jwtutil.UserClaims{})
 			Expect(err).NotTo(HaveOccurred())
 			return token
 		}, "RFC 9068 s4: aud names the API a token is for, and every API trusts the same signing key"),
 
 		Entry("a token addressed to a client id", func() string {
-			token, err := minter().AccessToken(caller, firstParty, grant, "", firstParty, jwtutil.Contact{})
+			token, err := minter().AccessToken(caller, firstParty, grant, firstParty, jwtutil.UserClaims{})
 			Expect(err).NotTo(HaveOccurred())
 			return token
 		}, "a client id names the caller, never an API"),
 
 		Entry("an id token presented as an access token", func() string {
-			token, err := minter().IDToken(caller, firstParty, "", 0, jwtutil.Contact{})
+			token, err := minter().IDToken(caller, firstParty, 0, jwtutil.UserClaims{})
 			Expect(err).NotTo(HaveOccurred())
 			return token
 		}, "RFC 9700 token substitution: an id token is minted for the client, never for an API"),
@@ -128,14 +128,14 @@ var _ = Describe("NewContextWithAPIRequest", func() {
 			other, err := rsa.GenerateKey(rand.Reader, 2048)
 			Expect(err).NotTo(HaveOccurred())
 			token, err := jwtutil.NewMinter(backend.Issuer, other, oidc.SigningKeyID).
-				AccessToken(caller, firstParty, grant, "", "https://api.example.com", jwtutil.Contact{})
+				AccessToken(caller, firstParty, grant, "https://api.example.com", jwtutil.UserClaims{})
 			Expect(err).NotTo(HaveOccurred())
 			return token
 		}, "a valid-looking token from an untrusted signer is the whole point of verifying the signature"),
 
 		Entry("a token from another issuer", func() string {
 			token, err := jwtutil.NewMinter("https://evil.example.com", backend.SigningKey, oidc.SigningKeyID).
-				AccessToken(caller, firstParty, grant, "", "https://api.example.com", jwtutil.Contact{})
+				AccessToken(caller, firstParty, grant, "https://api.example.com", jwtutil.UserClaims{})
 			Expect(err).NotTo(HaveOccurred())
 			return token
 		}, "our own key can only vouch for our own issuer"),
@@ -155,7 +155,7 @@ var _ = Describe("NewContextWithAPIRequest", func() {
 
 	It("keeps the gateway's identity when one is present, whoever the bearer token names", func() {
 		seedUser(gatewayGuy)
-		token, err := minter().AccessToken(caller, firstParty, grant, "", "https://api.example.com", jwtutil.Contact{})
+		token, err := minter().AccessToken(caller, firstParty, grant, "https://api.example.com", jwtutil.UserClaims{})
 		Expect(err).NotTo(HaveOccurred())
 
 		request := bearer(token)

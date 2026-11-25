@@ -16,6 +16,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/refresh_tokens_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/sessions_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/refreshtoken"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/session"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
@@ -82,7 +83,7 @@ var _ = Describe("refreshtoken.Service", func() {
 
 	Describe("MintRefreshtoken", func() {
 		It("mints a signed base64(fields).sig token", func() {
-			token, err := svc.MintRefreshtoken("user-123", clientID, "openid email", nil, "", 0)
+			token, err := svc.MintRefreshtoken("user-123", clientID, "openid email", nil, session.Session{})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(token).To(ContainSubstring("."))
 		})
@@ -93,7 +94,7 @@ var _ = Describe("refreshtoken.Service", func() {
 			// written here, so "last used" rendered correctly beside an empty "connected".
 			// Asserting on the ROW rather than the token is the point: a test that only
 			// checks the returned string cannot see a missing column.
-			_, err := svc.MintRefreshtoken("user-created-at", clientID, "openid", nil, "sid-x", 0)
+			_, err := svc.MintRefreshtoken("user-created-at", clientID, "openid", nil, session.Session{SID: "sid-x"})
 			Expect(err).NotTo(HaveOccurred())
 
 			rows, err := refresh_tokens_db.NewRefreshTokensDB(
@@ -106,7 +107,7 @@ var _ = Describe("refreshtoken.Service", func() {
 		})
 
 		It("stamps resource and sid on the family, so a renewal stays addressed to the same API and a sign-out can find it by session", func() {
-			_, err := svc.MintRefreshtoken("user-res-sid", clientID, "openid", []string{"https://api.example.com"}, "sid-42", 0)
+			_, err := svc.MintRefreshtoken("user-res-sid", clientID, "openid", []string{"https://api.example.com"}, session.Session{SID: "sid-42"})
 			Expect(err).NotTo(HaveOccurred())
 
 			rows, err := refresh_tokens_db.NewRefreshTokensDB(
@@ -118,9 +119,9 @@ var _ = Describe("refreshtoken.Service", func() {
 		})
 
 		It("mints a distinct token/family per call (fresh family per login)", func() {
-			a, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, "", 0)
+			a, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, session.Session{})
 			Expect(err).NotTo(HaveOccurred())
-			b, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, "", 0)
+			b, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, session.Session{})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(a).NotTo(Equal(b))
 		})
@@ -128,7 +129,7 @@ var _ = Describe("refreshtoken.Service", func() {
 
 	Describe("Rotate", func() {
 		It("rotates a valid token, carrying the login's user + scope forward and advancing the counter", func() {
-			token, err := svc.MintRefreshtoken("user-123", clientID, "openid email", nil, "", 0)
+			token, err := svc.MintRefreshtoken("user-123", clientID, "openid email", nil, session.Session{})
 			Expect(err).NotTo(HaveOccurred())
 
 			rot, err := svc.Rotate(clientID, token)
@@ -138,21 +139,40 @@ var _ = Describe("refreshtoken.Service", func() {
 			Expect(rot.Scope).To(Equal("openid email"))
 		})
 
-		It("carries the family's resource and sid forward on rotation, so a silent renewal keeps the same audience and session", func() {
+		It("carries the family's resource and sign-in forward on rotation, so a silent renewal keeps the same audience, session, auth_time, amr and idp", func() {
 			Expect(sessions_db.NewSessionsDB(&rmngctx.RmngContext{Context: context.Background()}).CreateSession(&sessions_db.SessionEntry{
 				SessionHash: "hash_sid-9", SID: "sid-9", UserID: "user-123", ExpiresAt: time.Now().Add(time.Hour).Unix(),
 			})).To(Succeed())
-			token, err := svc.MintRefreshtoken("user-123", clientID, "openid", []string{"https://api.example.com"}, "sid-9", 0)
+			login := session.Session{SID: "sid-9", UserID: "user-123", AuthTime: 1700000000, AMR: []string{"pwd"}, Provider: "rainmaker"}
+			token, err := svc.MintRefreshtoken("user-123", clientID, "openid", []string{"https://api.example.com"}, login)
 			Expect(err).NotTo(HaveOccurred())
 
 			rot, err := svc.Rotate(clientID, token)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(rot.Resources).To(Equal([]string{"https://api.example.com"}), "a rotation must keep the resources the login asked for")
-			Expect(rot.SID).To(Equal("sid-9"), "the rotated family must still name its session")
+			Expect(rot.Login).To(Equal(login), "the rotated family must still name its session and sign-in")
+
+			retried, err := svc.Rotate(clientID, token)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(retried.Login).To(Equal(login), "a lost-response retry renews the same sign-in")
+		})
+
+		It("renews a family that records no amr or idp, as one minted before they were recorded, without them rather than refusing it (negative)", func() {
+			token, err := svc.MintRefreshtoken("user-old", clientID, "openid", []string{"https://api.example.com"}, session.Session{AuthTime: 1600000000})
+			Expect(err).NotTo(HaveOccurred())
+			families, err := refresh_tokens_db.NewRefreshTokensDB(&rmngctx.RmngContext{Context: context.Background()}).ListByUser("user-old")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(families).To(HaveLen(1))
+			Expect(families[0].AMR).To(BeNil())
+			Expect(families[0].Provider).To(BeEmpty())
+
+			rot, err := svc.Rotate(clientID, token)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(rot.Login).To(Equal(session.Session{UserID: "user-old", AuthTime: 1600000000}))
 		})
 
 		It("chains: rotate twice in sequence, each advancing the counter", func() {
-			token, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, "", 0)
+			token, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, session.Session{})
 			Expect(err).NotTo(HaveOccurred())
 
 			first, err := svc.Rotate(clientID, token)
@@ -175,7 +195,7 @@ var _ = Describe("refreshtoken.Service", func() {
 		})
 
 		It("rejects a tampered token whose signature no longer matches (negative)", func() {
-			token, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, "", 0)
+			token, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, session.Session{})
 			Expect(err).NotTo(HaveOccurred())
 
 			_, err = svc.Rotate(clientID, tamper(token))
@@ -185,7 +205,7 @@ var _ = Describe("refreshtoken.Service", func() {
 
 		It("rejects a token for an unknown family (valid signature, no family row) (negative)", func() {
 			// Minted then the family deleted out from under it via RevokeFamily.
-			token, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, "", 0)
+			token, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, session.Session{})
 			Expect(err).NotTo(HaveOccurred())
 			_, err = svc.RevokeFamily(clientID, token)
 			Expect(err).NotTo(HaveOccurred())
@@ -197,7 +217,7 @@ var _ = Describe("refreshtoken.Service", func() {
 
 	Describe("per-client scoping", func() {
 		It("rejects a token presented under the wrong client (negative)", func() {
-			token, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, "", 0)
+			token, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, session.Session{})
 			Expect(err).NotTo(HaveOccurred())
 
 			_, err = svc.Rotate(otherClient, token)
@@ -209,9 +229,9 @@ var _ = Describe("refreshtoken.Service", func() {
 		})
 
 		It("keeps two clients' logins independent (rotating one does not affect the other)", func() {
-			mobile, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, "", 0)
+			mobile, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, session.Session{})
 			Expect(err).NotTo(HaveOccurred())
-			dashboard, err := svc.MintRefreshtoken("user-123", otherClient, "openid", nil, "", 0)
+			dashboard, err := svc.MintRefreshtoken("user-123", otherClient, "openid", nil, session.Session{})
 			Expect(err).NotTo(HaveOccurred())
 
 			_, err = svc.Rotate(clientID, mobile)
@@ -224,7 +244,7 @@ var _ = Describe("refreshtoken.Service", func() {
 
 	Describe("rotation grace (lost-response retry)", func() {
 		It("re-issues the current token when the just-spent token is replayed within the grace window", func() {
-			token, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, "", 0)
+			token, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, session.Session{})
 			Expect(err).NotTo(HaveOccurred())
 
 			rot, err := svc.Rotate(clientID, token)
@@ -243,7 +263,7 @@ var _ = Describe("refreshtoken.Service", func() {
 
 	Describe("reuse = theft", func() {
 		It("flags reuse and deletes the family when a token more than one step behind is replayed", func() {
-			token0, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, "", 0)
+			token0, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, session.Session{})
 			Expect(err).NotTo(HaveOccurred())
 			rot1, err := svc.Rotate(clientID, token0)
 			Expect(err).NotTo(HaveOccurred())
@@ -264,7 +284,7 @@ var _ = Describe("refreshtoken.Service", func() {
 	Describe("RevokeFamily", func() {
 		DescribeTable("binds the revocation to the presenting client",
 			func(presenter string, rotateFirst bool, revokeErr error, familyDead bool) {
-				token, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, "", 0)
+				token, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, session.Session{})
 				Expect(err).NotTo(HaveOccurred())
 				if rotateFirst {
 					rotated, err := svc.Rotate(clientID, token)
@@ -290,7 +310,7 @@ var _ = Describe("refreshtoken.Service", func() {
 		)
 
 		It("returns no family for a token whose family is already revoked", func() {
-			token, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, "", 0)
+			token, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, session.Session{})
 			Expect(err).NotTo(HaveOccurred())
 			_, err = svc.RevokeFamily(clientID, token)
 			Expect(err).NotTo(HaveOccurred())
@@ -298,7 +318,7 @@ var _ = Describe("refreshtoken.Service", func() {
 		})
 
 		It("refuses a forged token and revokes nothing (negative)", func() {
-			token, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, "", 0)
+			token, err := svc.MintRefreshtoken("user-123", clientID, "openid", nil, session.Session{})
 			Expect(err).NotTo(HaveOccurred())
 			_, err = svc.RevokeFamily(clientID, tamper(token))
 			Expect(err).To(MatchError(refresh_tokens_db.ErrRefreshInvalid))
@@ -328,7 +348,7 @@ var _ = Describe("refreshtoken.Service", func() {
 				{"user-123", otherClient, "openid offline_access", ""},
 				{"user-999", clientID, "openid", "sid-a"},
 			} {
-				_, err := svc.MintRefreshtoken(family.user, family.client, family.scope, nil, family.sid, 0)
+				_, err := svc.MintRefreshtoken(family.user, family.client, family.scope, nil, session.Session{SID: family.sid})
 				Expect(err).NotTo(HaveOccurred())
 			}
 		})
@@ -354,7 +374,7 @@ var _ = Describe("refreshtoken.Service", func() {
 		})
 
 		It("lists live offline grants only, leaving out one past its expiry that the TTL has not swept (negative)", func() {
-			_, err := svc.MintRefreshtoken("user-123", clientID, "openid offline_access", nil, "", 0)
+			_, err := svc.MintRefreshtoken("user-123", clientID, "openid offline_access", nil, session.Session{})
 			Expect(err).NotTo(HaveOccurred())
 			rows, err := svc.ListClientFamilies("user-123", clientID)
 			Expect(err).NotTo(HaveOccurred())
@@ -422,7 +442,7 @@ var _ = Describe("refreshtoken.Service", func() {
 			ceiling := time.Now().Add(time.Hour).Unix() // one hour, far below the 365-day token TTL
 			putCappedUserAgent("user-clamp", "sid_capped", ceiling)
 
-			_, err := svc.MintRefreshtoken("user-clamp", clientID, "openid", nil, "sid_capped", 0)
+			_, err := svc.MintRefreshtoken("user-clamp", clientID, "openid", nil, session.Session{SID: "sid_capped"})
 			Expect(err).NotTo(HaveOccurred())
 
 			fam := familyFor("user-clamp")
@@ -437,7 +457,7 @@ var _ = Describe("refreshtoken.Service", func() {
 		It("re-clamps on rotation, holding the invariant across a refresh", func() {
 			ceiling := time.Now().Add(time.Hour).Unix()
 			putCappedUserAgent("user-clamp2", "sid_capped2", ceiling)
-			token, err := svc.MintRefreshtoken("user-clamp2", clientID, "openid", nil, "sid_capped2", 0)
+			token, err := svc.MintRefreshtoken("user-clamp2", clientID, "openid", nil, session.Session{SID: "sid_capped2"})
 			Expect(err).NotTo(HaveOccurred())
 
 			_, err = svc.Rotate(clientID, token)
@@ -450,7 +470,7 @@ var _ = Describe("refreshtoken.Service", func() {
 		})
 
 		It("leaves a family with no sid unclamped at the full token TTL (the only unattached case)", func() {
-			_, err := svc.MintRefreshtoken("user-nosid", clientID, "openid", nil, "", 0)
+			_, err := svc.MintRefreshtoken("user-nosid", clientID, "openid", nil, session.Session{})
 			Expect(err).NotTo(HaveOccurred())
 			fam := familyFor("user-nosid")
 			Expect(fam.ExpiresOn).To(BeNumerically(">", time.Now().Add(refreshtoken.TokenTTL-time.Minute).Unix()),
@@ -459,7 +479,7 @@ var _ = Describe("refreshtoken.Service", func() {
 
 		It("refuses a rotation once the family's session has been signed out, and leaves no family (negative)", func() {
 			putCappedUserAgent("user-ended", "sid_ended", time.Now().Add(time.Hour).Unix())
-			token, err := svc.MintRefreshtoken("user-ended", clientID, "openid", nil, "sid_ended", 0)
+			token, err := svc.MintRefreshtoken("user-ended", clientID, "openid", nil, session.Session{SID: "sid_ended"})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(db().DeleteByUserAndSID("user-ended", "sid_ended")).To(Succeed())
 
@@ -472,7 +492,7 @@ var _ = Describe("refreshtoken.Service", func() {
 
 		It("keeps the family when the index still lists the row a re-sign-in retired ahead of the live one", func() {
 			putCappedUserAgent("user-reauth", "sid_reauth", time.Now().Add(time.Hour).Unix())
-			token, err := svc.MintRefreshtoken("user-reauth", clientID, "openid", nil, "sid_reauth", 0)
+			token, err := svc.MintRefreshtoken("user-reauth", clientID, "openid", nil, session.Session{SID: "sid_reauth"})
 			Expect(err).NotTo(HaveOccurred())
 			awscommon.SetDynamoDBClient(&staleIndex{
 				DynamoDBMock: awscommon.GetDynamoDBClient().(*mock.DynamoDBMock),
@@ -486,7 +506,7 @@ var _ = Describe("refreshtoken.Service", func() {
 
 		It("keeps the family at the plain TTL when the index lists only the row a re-sign-in retired", func() {
 			putCappedUserAgent("user-reauth2", "sid_reauth2", time.Now().Add(time.Hour).Unix())
-			token, err := svc.MintRefreshtoken("user-reauth2", clientID, "openid", nil, "sid_reauth2", 0)
+			token, err := svc.MintRefreshtoken("user-reauth2", clientID, "openid", nil, session.Session{SID: "sid_reauth2"})
 			Expect(err).NotTo(HaveOccurred())
 			awscommon.SetDynamoDBClient(&staleIndex{
 				DynamoDBMock: awscommon.GetDynamoDBClient().(*mock.DynamoDBMock),
@@ -504,7 +524,7 @@ var _ = Describe("refreshtoken.Service", func() {
 
 		It("rotates at the plain TTL when the session lookup fails, so a DynamoDB error never signs anyone out", func() {
 			putCappedUserAgent("user-dberr", "sid_dberr", time.Now().Add(time.Hour).Unix())
-			token, err := svc.MintRefreshtoken("user-dberr", clientID, "openid", nil, "sid_dberr", 0)
+			token, err := svc.MintRefreshtoken("user-dberr", clientID, "openid", nil, session.Session{SID: "sid_dberr"})
 			Expect(err).NotTo(HaveOccurred())
 			awscommon.SetDynamoDBClient(&mock.FailingIndexQuery{DynamoDBMock: backend.DBMock, IndexName: sessions_db.SessionsByUserIndex})
 

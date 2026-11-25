@@ -101,7 +101,7 @@ var _ = Describe("AuthFlowsDB", func() {
 		It("binds the subject and code on an unbound flow and returns the whole flow", func() {
 			Expect(db.CreateFlow(flow("fl1", now+600))).To(Succeed())
 
-			got, err := db.IssueCode("fl1", "u1", []string{"openid"}, "code-1", "sid-1", 1234)
+			got, err := db.IssueCode("fl1", "code-1", auth_flows_db.Login{Subject: "u1", GrantedScope: []string{"openid"}, SID: "sid-1", AuthTime: 1234})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(got.Subject).To(Equal("u1"))
 			Expect(got.GrantedScope).To(Equal([]string{"openid"}))
@@ -112,12 +112,32 @@ var _ = Describe("AuthFlowsDB", func() {
 			Expect(got.RedirectURI).To(Equal("https://app.example.com/cb"))
 		})
 
+		It("records the provider and amr of the sign-in, replacing the federation leg's provider", func() {
+			Expect(db.CreateFlow(flow("fl1", now+600))).To(Succeed())
+			Expect(db.SetUpstreamLeg("fl1", "google", "st", "nonce", "verifier")).To(Succeed())
+
+			got, err := db.IssueCode("fl1", "code-1", auth_flows_db.Login{Subject: "u1", GrantedScope: []string{"openid"}, Provider: "rainmaker", AMR: []string{"pwd"}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got.Provider).To(Equal("rainmaker"))
+			Expect(got.AMR).To(Equal([]string{"pwd"}))
+		})
+
+		It("keeps the federation leg's provider and records no amr for a sign-in that names neither (negative)", func() {
+			Expect(db.CreateFlow(flow("fl1", now+600))).To(Succeed())
+			Expect(db.SetUpstreamLeg("fl1", "google", "st", "nonce", "verifier")).To(Succeed())
+
+			got, err := db.IssueCode("fl1", "code-1", auth_flows_db.Login{Subject: "u1", GrantedScope: []string{"openid"}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got.Provider).To(Equal("google"))
+			Expect(got.AMR).To(BeNil())
+		})
+
 		It("returns ErrFlowNotFound and keeps the first subject on a bound flow", func() {
 			Expect(db.CreateFlow(flow("fl1", now+600))).To(Succeed())
-			_, err := db.IssueCode("fl1", "u1", []string{"openid"}, "code-1", "", 0)
+			_, err := db.IssueCode("fl1", "code-1", auth_flows_db.Login{Subject: "u1", GrantedScope: []string{"openid"}})
 			Expect(err).NotTo(HaveOccurred())
 
-			_, err = db.IssueCode("fl1", "u2", []string{"openid"}, "code-2", "", 0)
+			_, err = db.IssueCode("fl1", "code-2", auth_flows_db.Login{Subject: "u2", GrantedScope: []string{"openid"}})
 			Expect(err).To(MatchError(auth_flows_db.ErrFlowNotFound))
 
 			got, err := db.GetFlow("fl1")
@@ -129,12 +149,12 @@ var _ = Describe("AuthFlowsDB", func() {
 		It("returns ErrFlowNotFound on an expired flow", func() {
 			Expect(db.CreateFlow(flow("fl1", now-1))).To(Succeed())
 
-			_, err := db.IssueCode("fl1", "u1", []string{"openid"}, "code-1", "", 0)
+			_, err := db.IssueCode("fl1", "code-1", auth_flows_db.Login{Subject: "u1", GrantedScope: []string{"openid"}})
 			Expect(err).To(MatchError(auth_flows_db.ErrFlowNotFound))
 		})
 
 		It("returns ErrFlowNotFound and creates nothing for an unknown flow", func() {
-			_, err := db.IssueCode("missing", "u1", []string{"openid"}, "code-1", "", 0)
+			_, err := db.IssueCode("missing", "code-1", auth_flows_db.Login{Subject: "u1", GrantedScope: []string{"openid"}})
 			Expect(err).To(MatchError(auth_flows_db.ErrFlowNotFound))
 
 			_, err = db.GetFlow("missing")
@@ -158,7 +178,7 @@ var _ = Describe("AuthFlowsDB", func() {
 
 		It("fails on a flow whose subject is already bound", func() {
 			Expect(db.CreateFlow(flow("fl1", now+600))).To(Succeed())
-			_, err := db.IssueCode("fl1", "u1", []string{"openid"}, "code-1", "", 0)
+			_, err := db.IssueCode("fl1", "code-1", auth_flows_db.Login{Subject: "u1", GrantedScope: []string{"openid"}})
 			Expect(err).NotTo(HaveOccurred())
 
 			err = db.SetUpstreamLeg("fl1", "google", "st", "nonce", "verifier")
@@ -179,7 +199,7 @@ var _ = Describe("AuthFlowsDB", func() {
 	Describe("GetFlowByCode", func() {
 		It("resolves an issued code to its flow", func() {
 			Expect(db.CreateFlow(flow("fl1", now+600))).To(Succeed())
-			_, err := db.IssueCode("fl1", "u1", []string{"openid"}, "code-1", "", 0)
+			_, err := db.IssueCode("fl1", "code-1", auth_flows_db.Login{Subject: "u1", GrantedScope: []string{"openid"}})
 			Expect(err).NotTo(HaveOccurred())
 
 			got, err := db.GetFlowByCode("code-1")
@@ -237,7 +257,7 @@ var _ = Describe("auth flow expiry", func() {
 	It("gives an issued code its own ten minutes rather than the sign-in's remaining window", func() {
 		createFlow("flow-coded", 14*time.Minute)
 
-		flow, err := db.IssueCode("flow-coded", "user-1", []string{"openid"}, "the-code", "", 0)
+		flow, err := db.IssueCode("flow-coded", "the-code", auth_flows_db.Login{Subject: "user-1", GrantedScope: []string{"openid"}})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(flow.ExpiresOn).To(BeNumerically("~", time.Now().Add(auth_flows_db.CodeTTL).Unix(), 2))
 	})
@@ -247,7 +267,7 @@ var _ = Describe("auth flow expiry", func() {
 
 		_, err := db.GetFlow("flow-expired")
 		Expect(err).To(MatchError(auth_flows_db.ErrFlowExpired))
-		Expect(db.AwaitConsent("flow-expired", "user-1", []string{"openid"}, "sid-1", 100)).To(MatchError(auth_flows_db.ErrFlowNotFound))
+		Expect(db.AwaitConsent("flow-expired", auth_flows_db.Login{Subject: "user-1", GrantedScope: []string{"openid"}, SID: "sid-1", AuthTime: 100})).To(MatchError(auth_flows_db.ErrFlowNotFound))
 
 		flow, err := db.GetFlowIgnoringExpiry("flow-expired")
 		Expect(err).NotTo(HaveOccurred())
@@ -271,7 +291,7 @@ var _ = Describe("a sign-in held for consent", func() {
 		before, err := db.GetFlow("flow-held")
 		Expect(err).NotTo(HaveOccurred())
 
-		Expect(db.AwaitConsent("flow-held", "user-1", []string{"openid"}, "sid-1", 100)).To(Succeed())
+		Expect(db.AwaitConsent("flow-held", auth_flows_db.Login{Subject: "user-1", GrantedScope: []string{"openid"}, SID: "sid-1", AuthTime: 100})).To(Succeed())
 
 		flow, err := db.GetFlow("flow-held")
 		Expect(err).NotTo(HaveOccurred())
@@ -281,13 +301,14 @@ var _ = Describe("a sign-in held for consent", func() {
 		Expect(flow.ExpiresOn).To(Equal(before.ExpiresOn))
 	})
 
-	It("issues the code once consent is given, with a code's ten minutes", func() {
-		Expect(db.AwaitConsent("flow-held", "user-1", []string{"openid"}, "sid-1", 100)).To(Succeed())
+	It("issues the code once consent is given, with a code's ten minutes, keeping the sign-in's provider and amr", func() {
+		Expect(db.AwaitConsent("flow-held", auth_flows_db.Login{Subject: "user-1", GrantedScope: []string{"openid"}, SID: "sid-1", AuthTime: 100, Provider: "rainmaker", AMR: []string{"pwd"}})).To(Succeed())
 
 		flow, err := db.IssueConsentedCode("flow-held", "the-code", "sid-1")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(flow.Code).To(Equal("the-code"))
 		Expect(flow.Subject).To(Equal("user-1"))
+		Expect([]any{flow.Provider, flow.AMR}).To(Equal([]any{"rainmaker", []string{"pwd"}}))
 		Expect(flow.ExpiresOn).To(BeNumerically("~", time.Now().Add(auth_flows_db.CodeTTL).Unix(), 2))
 	})
 
@@ -302,7 +323,7 @@ var _ = Describe("a sign-in held for consent", func() {
 	})
 
 	It("issues no code to another session than the one that signed in, or to none (negative)", func() {
-		Expect(db.AwaitConsent("flow-held", "user-1", []string{"openid"}, "sid-1", 100)).To(Succeed())
+		Expect(db.AwaitConsent("flow-held", auth_flows_db.Login{Subject: "user-1", GrantedScope: []string{"openid"}, SID: "sid-1", AuthTime: 100})).To(Succeed())
 
 		for _, sid := range []string{"sid-2", ""} {
 			_, err := db.IssueConsentedCode("flow-held", "the-code", sid)
@@ -311,14 +332,14 @@ var _ = Describe("a sign-in held for consent", func() {
 	})
 
 	It("issues the code of a sign-in held with no session to a browser with none", func() {
-		Expect(db.AwaitConsent("flow-held", "user-1", []string{"openid"}, "", 100)).To(Succeed())
+		Expect(db.AwaitConsent("flow-held", auth_flows_db.Login{Subject: "user-1", GrantedScope: []string{"openid"}, AuthTime: 100})).To(Succeed())
 
 		_, err := db.IssueConsentedCode("flow-held", "the-code", "")
 		Expect(err).NotTo(HaveOccurred())
 	})
 
 	It("issues a held flow's code only once (negative)", func() {
-		Expect(db.AwaitConsent("flow-held", "user-1", []string{"openid"}, "sid-1", 100)).To(Succeed())
+		Expect(db.AwaitConsent("flow-held", auth_flows_db.Login{Subject: "user-1", GrantedScope: []string{"openid"}, SID: "sid-1", AuthTime: 100})).To(Succeed())
 		_, err := db.IssueConsentedCode("flow-held", "first", "sid-1")
 		Expect(err).NotTo(HaveOccurred())
 
@@ -337,7 +358,7 @@ var _ = Describe("a sign-in held for consent", func() {
 	})
 
 	It("ends a declined sign-in, so no code can be issued from it afterwards (negative)", func() {
-		Expect(db.AwaitConsent("flow-held", "user-1", []string{"openid"}, "sid-1", 100)).To(Succeed())
+		Expect(db.AwaitConsent("flow-held", auth_flows_db.Login{Subject: "user-1", GrantedScope: []string{"openid"}, SID: "sid-1", AuthTime: 100})).To(Succeed())
 
 		Expect(db.DeleteFlow("flow-held")).To(Succeed())
 
@@ -348,7 +369,7 @@ var _ = Describe("a sign-in held for consent", func() {
 	})
 
 	It("cannot rebind a held flow to someone else (negative)", func() {
-		Expect(db.AwaitConsent("flow-held", "user-1", []string{"openid"}, "sid-1", 100)).To(Succeed())
-		Expect(db.AwaitConsent("flow-held", "user-2", []string{"openid"}, "sid-2", 100)).To(MatchError(auth_flows_db.ErrFlowNotFound))
+		Expect(db.AwaitConsent("flow-held", auth_flows_db.Login{Subject: "user-1", GrantedScope: []string{"openid"}, SID: "sid-1", AuthTime: 100})).To(Succeed())
+		Expect(db.AwaitConsent("flow-held", auth_flows_db.Login{Subject: "user-2", GrantedScope: []string{"openid"}, SID: "sid-2", AuthTime: 100})).To(MatchError(auth_flows_db.ErrFlowNotFound))
 	})
 })

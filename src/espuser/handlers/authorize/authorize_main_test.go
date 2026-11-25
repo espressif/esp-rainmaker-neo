@@ -702,6 +702,27 @@ var _ = Describe("GET /oauth2/authorize with a session (SSO)", func() {
 		Expect(flow.SID).NotTo(BeEmpty(), "the flow carries the session id so the refresh family can be tied to it")
 	})
 
+	DescribeTable("answers from the session's own sign-in, since nobody authenticated on this request: the code carries the session's provider, auth_time and amr as recorded",
+		func(provider string, amr []string) {
+			rmngCtx := rmngctx.NewRmngContextWithCtx(context.Background(), nil)
+			signedIn := time.Now().Add(-time.Hour).Unix()
+			cookieValue, sid, err := session.NewService(rmngCtx).Establish(session.EstablishInput{
+				UserID: "user-sso-" + provider, Provider: provider, AuthTime: signedIn, AMR: amr,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			resp, err := handleAuthorizeRequest(context.Background(), withCookie(getRequest(pathAuthorize, validQuery(nil)), session.CookieName+"="+cookieValue))
+			Expect(err).NotTo(HaveOccurred())
+			loc, err := url.Parse(resp.Headers["Location"])
+			Expect(err).NotTo(HaveOccurred())
+			flow, err := auth_flows_db.NewAuthFlowsDB(rmngCtx).GetFlowByCode(loc.Query().Get("code"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect([]any{flow.SID, flow.AuthTime, flow.Provider, flow.AMR}).To(Equal([]any{sid, signedIn, provider, amr}))
+		},
+		Entry("a password session keeps pwd", "rainmaker", []string{"pwd"}),
+		Entry("a one-time code's session keeps otp", "otp", []string{"otp"}),
+	)
+
 	It("reads an empty resource as none requested: the code covers the client's default, not invalid_target (RFC 6749 s3.1)", func() {
 		cookie := establishSession("user-sso-empty-resource", time.Now().Unix())
 		req := withCookie(getRequest(pathAuthorize, validQuery(nil)), cookie)
@@ -1039,7 +1060,7 @@ var _ = Describe("GET /oauth2/federation/callback establishes the session", func
 		Expect(flow.AuthTime).To(BeNumerically("~", before, 5), "with nothing upstream naming the sign-in, it happened on this request")
 	})
 
-	It("records the whole sign-in on the session it rotates: the provider's cap, the upstream's auth_time, amr and acr, and the browser", func() {
+	It("records the whole sign-in on the session it rotates: the provider's cap, the upstream's auth_time and acr, and the browser, but never the upstream's amr", func() {
 		upstreamAuthTime := time.Now().Add(-10 * time.Minute).Unix()
 		setupUpstream(upstreamAuthTime, flowNonce)
 		rmngCtx := rmngctx.NewRmngContextWithCtx(context.Background(), nil)
@@ -1074,7 +1095,7 @@ var _ = Describe("GET /oauth2/federation/callback establishes the session", func
 		row := rows[0]
 		Expect(row).To(Equal(sessions_db.SessionEntry{
 			SessionHash: row.SessionHash, SID: prior.SID, UserID: userID, Provider: "up",
-			AuthTime: upstreamAuthTime, AMR: []string{"pwd", "mfa"}, ACR: upstreamACR,
+			AuthTime: upstreamAuthTime, ACR: upstreamACR,
 			ExpiresAt: upstreamAuthTime + providerSessionCap, MaxExpiresAt: upstreamAuthTime + providerSessionCap,
 			CookieExpiresAt: upstreamAuthTime + providerSessionCap, LastSeenAt: row.LastSeenAt,
 			Origin: session.OriginBrowser, CreatedAt: priorRows[0].CreatedAt, UserAgent: browserUA, IPAddress: browserIP,
@@ -1084,7 +1105,7 @@ var _ = Describe("GET /oauth2/federation/callback establishes the session", func
 		Expect(err).NotTo(HaveOccurred())
 		flow, err := auth_flows_db.NewAuthFlowsDB(rmngCtx).GetFlowByCode(loc.Query().Get("code"))
 		Expect(err).NotTo(HaveOccurred())
-		Expect([]any{flow.Subject, flow.SID, flow.AuthTime}).To(Equal([]any{userID, prior.SID, upstreamAuthTime}))
+		Expect([]any{flow.Subject, flow.SID, flow.AuthTime, flow.Provider, flow.AMR}).To(Equal([]any{userID, prior.SID, upstreamAuthTime, "up", []string(nil)}), "the code names the provider row and no method, since ESP User verified an upstream token, not a password")
 	})
 
 	DescribeTable("refuses an account the upstream vouched for that we cannot use, with one answer that names nobody (negative)",
@@ -1121,7 +1142,7 @@ var _ = Describe("GET /oauth2/federation/callback establishes the session", func
 		setupUpstream(time.Now().Unix(), flowNonce)
 		state := startLeg(true)
 		_, err := auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).
-			IssueCode("fl_sso", "someone", []string{"openid"}, "other-tabs-code", "", time.Now().Unix())
+			IssueCode("fl_sso", "other-tabs-code", auth_flows_db.Login{Subject: "someone", GrantedScope: []string{"openid"}, AuthTime: time.Now().Unix()})
 		Expect(err).NotTo(HaveOccurred())
 
 		resp := callback(auth.FlowCookieName+"=fl_sso", map[string]string{"code": "upstream-code", "state": state})

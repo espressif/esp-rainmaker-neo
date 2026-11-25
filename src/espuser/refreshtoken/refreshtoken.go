@@ -70,10 +70,15 @@ type Rotation struct {
 	Scope  string
 	// Resources are the sign-in's RFC 8707 resources, from which the renewed access token takes its one audience.
 	Resources []string
-	// SID is the parent browser session carried on the family; empty for an offline_access grant, or when the session write failed or the family predates sessions.
-	SID string
-	// AuthTime is the login's authentication time; zero on families minted before the field existed.
-	AuthTime int64
+	// Login is the sign-in the family records, so a renewal names the same session, authentication time, methods and provider; a field the family predates is zero, and SID is empty for an offline_access grant or when the session write failed.
+	Login session.Session
+}
+
+func rotationOf(family *refresh_tokens_db.FamilyEntry, token string) *Rotation {
+	return &Rotation{
+		Token: token, UserID: family.UserID, Scope: family.Scope, Resources: family.Resources,
+		Login: session.Session{SID: family.SID, UserID: family.UserID, AuthTime: family.AuthTime, AMR: family.AMR, Provider: family.Provider},
+	}
 }
 
 // claims are the signed fields a refresh token carries.
@@ -192,8 +197,8 @@ func withinRotationGrace(rotatedAt int64) bool {
 
 // MintRefreshtoken creates a new rotation family for a login: a family row at counter 0 and
 // the first signed token. The family carries user, scope and resources so a later Rotate
-// re-mints the access/id tokens exactly as this login asked for them. sid names the parent browser session ("" when the session write failed), so ending a session can find its families.
-func (s *Service) MintRefreshtoken(userID, clientID, scope string, resources []string, sid string, authTime int64) (token string, err error) {
+// re-mints the access/id tokens exactly as this login asked for them; login.SID lets ending a session find its families.
+func (s *Service) MintRefreshtoken(userID, clientID, scope string, resources []string, login session.Session) (token string, err error) {
 	familyID, err := randomID(familyIDBytes)
 	if err != nil {
 		return "", err
@@ -201,7 +206,7 @@ func (s *Service) MintRefreshtoken(userID, clientID, scope string, resources []s
 	// AdvanceCounter must not touch created_at: it is "connected since" and must survive every rotation.
 	now := time.Now().Unix()
 	// A code redeemed after sign-out still mints; Rotate refuses the family at its first refresh.
-	expires, _ := s.clampedExpiry(userID, sid)
+	expires, _ := s.clampedExpiry(userID, login.SID)
 	if err := s.db.CreateFamily(&refresh_tokens_db.FamilyEntry{
 		UserID:    userID,
 		ClientID:  clientID,
@@ -209,8 +214,10 @@ func (s *Service) MintRefreshtoken(userID, clientID, scope string, resources []s
 		Counter:   0,
 		Scope:     scope,
 		Resources: resources,
-		SID:       sid,
-		AuthTime:  authTime,
+		SID:       login.SID,
+		AuthTime:  login.AuthTime,
+		AMR:       login.AMR,
+		Provider:  login.Provider,
 		ExpiresOn: expires,
 		CreatedAt: now,
 		RotatedAt: now,
@@ -255,7 +262,7 @@ func (s *Service) Rotate(clientID, refreshToken string, precheck ...func(*refres
 			if err != nil {
 				return nil, err
 			}
-			return &Rotation{Token: token, UserID: family.UserID, Scope: family.Scope, Resources: family.Resources, SID: family.SID, AuthTime: family.AuthTime}, nil
+			return rotationOf(family, token), nil
 		}
 		// Any older (or stale-by-one past the grace) token is spent — reuse=theft, kill the family.
 		_ = s.db.DeleteFamily(c.UserID, c.ClientID, c.FamilyID)
@@ -281,7 +288,7 @@ func (s *Service) Rotate(clientID, refreshToken string, precheck ...func(*refres
 	if err != nil {
 		return nil, err
 	}
-	return &Rotation{Token: token, UserID: family.UserID, Scope: family.Scope, Resources: family.Resources, SID: family.SID, AuthTime: family.AuthTime}, nil
+	return rotationOf(family, token), nil
 }
 
 // parseTokenForClient is Rotate's prologue: verify the token, bind it to clientID, and load its

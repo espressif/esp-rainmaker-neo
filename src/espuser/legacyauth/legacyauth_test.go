@@ -17,6 +17,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/sessions_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/user_details_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/refreshtoken"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/session"
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
@@ -446,9 +447,9 @@ var _ = Describe("SigninWithPassword", func() {
 			Expect(err).NotTo(HaveOccurred())
 			userID, callerSID, otherSID = subjectOf(caller.AccessToken), sidOf(caller.AccessToken), sidOf(other.AccessToken)
 			tokens := refreshtoken.NewService(rmngCtx)
-			_, err = tokens.MintRefreshtoken(userID, legacyClientID, "openid", nil, "", 0)
+			_, err = tokens.MintRefreshtoken(userID, legacyClientID, "openid", nil, session.Session{})
 			Expect(err).NotTo(HaveOccurred())
-			_, err = tokens.MintRefreshtoken(userID, "assistant-client", "openid offline_access", nil, "", 0)
+			_, err = tokens.MintRefreshtoken(userID, "assistant-client", "openid offline_access", nil, session.Session{})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(sessionSIDs()).To(ConsistOf(callerSID, otherSID))
 		})
@@ -471,7 +472,7 @@ var _ = Describe("SigninWithPassword", func() {
 		secondAccount := func(phone string) string {
 			otherID, err := svc.oauth.ResolveOrCreateUserByContacts(rmngCtx, "", phone, nil)
 			Expect(err).NotTo(HaveOccurred())
-			_, err = refreshtoken.NewService(rmngCtx).MintRefreshtoken(otherID, legacyClientID, "openid", nil, "", 0)
+			_, err = refreshtoken.NewService(rmngCtx).MintRefreshtoken(otherID, legacyClientID, "openid", nil, session.Session{})
 			Expect(err).NotTo(HaveOccurred())
 			poolUser := cog.GetUserByUsername(testPoolID, "u@example.com")
 			poolUser.PhoneNumber = phone
