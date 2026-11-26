@@ -694,6 +694,27 @@ class EspUserBaseStack(Stack):
             description="ESP Admin User Pool Client ID"
         )
 
+        create_ssm_string_parameter(
+            self, "EspUserSupportURLParameter",
+            parameter_name=USER_SSM_PARAMETERS['ESP_USER_SUPPORT_URL'],
+            string_value="none",
+            description="Support page linked from the sign-in page: an https URL, or none to hide the link"
+        )
+
+        create_ssm_string_parameter(
+            self, "EspUserPrivacyURLParameter",
+            parameter_name=USER_SSM_PARAMETERS['ESP_USER_PRIVACY_URL'],
+            string_value="none",
+            description="Privacy Policy linked from the sign-in page: an https URL, or none to hide the link"
+        )
+
+        create_ssm_string_parameter(
+            self, "EspUserTermsURLParameter",
+            parameter_name=USER_SSM_PARAMETERS['ESP_USER_TERMS_URL'],
+            string_value="none",
+            description="Terms of Service linked from the sign-in page: an https URL, or none to hide the link"
+        )
+
     def _publish_end_user_pool_params(self) -> None:
         """Only the credentials the core-stack lambdas cannot discover at runtime; everything else
         about the upstream lives on its identity-provider registry row."""

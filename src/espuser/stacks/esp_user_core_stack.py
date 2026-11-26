@@ -37,7 +37,7 @@ ADMIN_EMAILS_ALLOWED_PATTERN = r"^\s*[^@\s,]+@[^@\s,]+\.[^@\s,]+(\s*,\s*[^@\s,]+
 
 class EspUserCoreStack(Stack):
     """Stack containing user APIs that depends on EspUserBaseStack"""
-    def __init__(self, scope: Construct, construct_id: str, admin_emails: list[str] = None, page_links: dict = None, **kwargs) -> None:
+    def __init__(self, scope: Construct, construct_id: str, admin_emails: list[str] = None, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         common_resources = CommonResources(
@@ -95,7 +95,7 @@ class EspUserCoreStack(Stack):
         sessions_api = SessionsAPI(self, "SessionsAPI", common_resources)
         revoke_api = RevokeAPI(self, "RevokeAPI", common_resources)
         clients_api = ClientsAPI(self, "ClientsAPI", common_resources)
-        authorize_api = AuthorizeAPI(self, "AuthorizeAPI", common_resources, page_links=page_links)
+        authorize_api = AuthorizeAPI(self, "AuthorizeAPI", common_resources)
         well_known_api = WellKnownAPI(self, "WellKnownAPI", common_resources)
 
         user_auth_api = UserAuthAPI(self, "UserAuthAPI", common_resources)

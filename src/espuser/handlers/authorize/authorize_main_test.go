@@ -1747,15 +1747,28 @@ var _ = Describe("GET /user/logout, the sign-out question", func() {
 })
 
 var _ = Describe("the footer links the operator configures", func() {
+	var backend *test_utils.EspUserBackend
 	BeforeEach(func() {
-		test_utils.SetupEspUserBackend(context.Background())
+		backend = test_utils.SetupEspUserBackend(context.Background())
 	})
 
+	expireFooterCache := func() { footerCheckedAt = time.Time{} }
+
 	setLinks := func(support, privacy, terms string) {
-		for name, value := range map[string]string{envSupportURL: support, envPrivacyURL: privacy, envTermsURL: terms} {
-			Expect(os.Setenv(name, value)).To(Succeed())
-			DeferCleanup(os.Unsetenv, name)
+		for env, value := range map[string]string{envSupportURLParam: support, envPrivacyURLParam: privacy, envTermsURLParam: terms} {
+			param := "/espuser/base/test-" + strings.ToLower(env)
+			test_utils.PutParam(context.Background(), backend.SSMMock, param, value)
+			Expect(os.Setenv(env, param)).To(Succeed())
+			DeferCleanup(os.Unsetenv, env)
 		}
+		expireFooterCache()
+		DeferCleanup(expireFooterCache)
+	}
+
+	linksOnLoginPage := func() *linksData {
+		resp, err := handleAuthorizeRequest(context.Background(), getRequest(pathLogin, nil))
+		Expect(err).NotTo(HaveOccurred())
+		return pageDataFrom(resp.Body).Links
 	}
 
 	It("hands every page the support, privacy and terms URLs, the error page included", func() {
@@ -1778,9 +1791,30 @@ var _ = Describe("the footer links the operator configures", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(pageDataFrom(resp.Body).Links).To(Equal(want))
 		},
-		Entry("some unset", "", "https://example.com/privacy", "", &linksData{Privacy: "https://example.com/privacy"}),
+		Entry("some unset", "none", "https://example.com/privacy", "none", &linksData{Privacy: "https://example.com/privacy"}),
+		Entry("all unset", "none", "none", "none", nil),
 		Entry("none https (negative)", "javascript:alert(1)", "http://example.com/privacy", "https://", nil),
 	)
+
+	It("still draws the page when a link cannot be read, leaving that link out until a read succeeds", func() {
+		setLinks("https://example.com/support", "https://example.com/privacy", "https://example.com/terms")
+		backend.SSMMock.GetParameterErrors[os.Getenv(envPrivacyURLParam)] = errors.New("throttled")
+		Expect(linksOnLoginPage()).To(Equal(&linksData{Support: "https://example.com/support", Terms: "https://example.com/terms"}))
+
+		delete(backend.SSMMock.GetParameterErrors, os.Getenv(envPrivacyURLParam))
+		Expect(linksOnLoginPage()).To(Equal(&linksData{Support: "https://example.com/support", Privacy: "https://example.com/privacy", Terms: "https://example.com/terms"}))
+	})
+
+	It("keeps the links for footerLinksTTL, then shows the operator's change", func() {
+		setLinks("none", "none", "none")
+		Expect(linksOnLoginPage()).To(BeNil())
+
+		test_utils.PutParam(context.Background(), backend.SSMMock, os.Getenv(envPrivacyURLParam), "https://example.com/privacy")
+		Expect(linksOnLoginPage()).To(BeNil())
+
+		footerCheckedAt = time.Now().Add(-footerLinksTTL)
+		Expect(linksOnLoginPage()).To(Equal(&linksData{Privacy: "https://example.com/privacy"}))
+	})
 })
 
 var _ = Describe("where /oauth2/authorize sends a browser with no session", func() {

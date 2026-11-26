@@ -5,11 +5,16 @@
 package main
 
 import (
+	"context"
 	"net/url"
 	"os"
+	"sync"
+	"time"
 
+	"github.com/espressif/esp-rainmaker-neo/src/awsutils/ssmutil"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/identity_providers_db"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 )
 
 // pageData describes the login to the page, embedded in it so the form renders at first paint with no second request.
@@ -38,20 +43,64 @@ type linksData struct {
 	Terms   string `json:"terms,omitempty"`
 }
 
-// The footer's pages belong to whoever runs the deployment, so they come from its config and never from code.
+// The footer's pages belong to whoever runs the deployment, so each is an SSM parameter the operator sets.
 const (
-	envSupportURL = "ESPUSER_SUPPORT_URL"
-	envPrivacyURL = "ESPUSER_PRIVACY_URL"
-	envTermsURL   = "ESPUSER_TERMS_URL"
+	envSupportURLParam = "ESPUSER_SUPPORT_URL_PARAM"
+	envPrivacyURLParam = "ESPUSER_PRIVACY_URL_PARAM"
+	envTermsURLParam   = "ESPUSER_TERMS_URL_PARAM"
 )
 
-// footerLinks reads the configured footer pages, keeping only absolute https URLs: "https://example.com/terms" is kept, "javascript:alert(1)" is dropped.
+// The footer is kept this long, so a sign-in page does not query SSM each time and an operator's change shows within minutes.
+const footerLinksTTL = 5 * time.Minute
+
+var (
+	footerMu        sync.Mutex
+	footerCached    *linksData
+	footerCheckedAt time.Time
+)
+
+// footerLinks is the configured footer pages, or nil when none is set; a failed read is not cached, so one throttled call does not hide a link for footerLinksTTL.
 func footerLinks() *linksData {
-	links := linksData{Support: httpsURL(os.Getenv(envSupportURL)), Privacy: httpsURL(os.Getenv(envPrivacyURL)), Terms: httpsURL(os.Getenv(envTermsURL))}
-	if links == (linksData{}) {
-		return nil
+	footerMu.Lock()
+	if !footerCheckedAt.IsZero() && time.Since(footerCheckedAt) < footerLinksTTL {
+		links := footerCached
+		footerMu.Unlock()
+		return links
 	}
-	return &links
+	footerMu.Unlock()
+
+	links, complete := readFooterLinks()
+	if complete {
+		footerMu.Lock()
+		footerCached, footerCheckedAt = links, time.Now()
+		footerMu.Unlock()
+	}
+	return links
+}
+
+// readFooterLinks keeps only absolute https URLs: "https://example.com/terms" is kept, "none" and "javascript:alert(1)" are dropped; complete is false when a link could not be read.
+func readFooterLinks() (links *linksData, complete bool) {
+	support, supportOK := footerLink(envSupportURLParam)
+	privacy, privacyOK := footerLink(envPrivacyURLParam)
+	terms, termsOK := footerLink(envTermsURLParam)
+	read := linksData{Support: support, Privacy: privacy, Terms: terms}
+	complete = supportOK && privacyOK && termsOK
+	if read == (linksData{}) {
+		return nil, complete
+	}
+	return &read, complete
+}
+
+// footerLink leaves out a link it cannot read rather than failing the page.
+func footerLink(envParam string) (string, bool) {
+	ctx := context.Background()
+	param := os.Getenv(envParam)
+	value, err := ssmutil.GetParameterWithCaching(ctx, param, false, false)
+	if err != nil && !ssmutil.IsParameterNotFound(err) {
+		rlog.Warn(ctx).Err(err).Str("parameter", param).Msg("sign-in page: footer link unreadable")
+		return "", false
+	}
+	return httpsURL(value), true
 }
 
 func httpsURL(raw string) string {

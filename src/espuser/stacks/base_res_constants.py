@@ -61,6 +61,10 @@ USER_SSM_PARAMETERS = {
     'ESP_USER_KMS_SIGNING_KEY_ARN': '/espuser/signing/kms-key-arn',
     # Dedicated HMAC secret for signing refresh tokens (SecureString). Isolated from the RS256 signing key; generated once at deploy and left untouched on redeploy.
     'ESP_USER_REFRESH_SECRET': '/espuser/signing/refresh-secret',
+    # The sign-in page's footer links, which the operator sets; "none" hides a link.
+    'ESP_USER_SUPPORT_URL': '/espuser/base/support-url',
+    'ESP_USER_PRIVACY_URL': '/espuser/base/privacy-url',
+    'ESP_USER_TERMS_URL': '/espuser/base/terms-url',
 }
 
 

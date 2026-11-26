@@ -283,7 +283,7 @@ The page is described in one block delivered with the HTML, `<script type="appli
 | `login_hint`, `idp` | Prefill the username, preselect a provider. Suggestions from the relying party, never decisions — nothing is authorized on them |
 | `restart_url` | Where "start again" points |
 | `consent`, `logout`, `signed_out`, `error` | Draw the consent screen, the sign-out question, the signed-out page or the terminal error instead of the form |
-| `links` | The operator's Support, Privacy and Terms pages for the footer, from `support_url`, `privacy_url` and `terms_url` under `espuser-core` in `rmng-inputs.json`; only absolute `https` URLs are passed, and an unset one is not drawn |
+| `links` | The operator's Support, Privacy and Terms pages for the footer, from the SSM parameters `/espuser/base/support-url`, `/espuser/base/privacy-url` and `/espuser/base/terms-url`, which the deploy creates as `none`; only absolute `https` URLs are passed, so `none` is not drawn, and the page reads them at most every five minutes, so a change shows within that |
 
 The login page reads the flow from its cookie and then the flow's client, and draws only the providers that client allows, under the client's registered name; one registry scan feeds the provider list. A flow that expired draws the "Start again" error screen and no form; a flow whose row is gone, or no cookie at all, leaves nothing to restart, so its error screen has no "Start again".
 

@@ -31,7 +31,7 @@ class AuthorizeAPI(Construct):
     against /v1/auth/otp/*. See espuser/docs/en/specs/authorize-code-flow.md.
     """
 
-    def __init__(self, scope: Construct, id: str, common_resources: CommonResources, page_links: dict = None, **kwargs) -> None:
+    def __init__(self, scope: Construct, id: str, common_resources: CommonResources, **kwargs) -> None:
         super().__init__(scope, id, **kwargs)
 
         region = Stack.of(self).region
@@ -91,6 +91,9 @@ class AuthorizeAPI(Construct):
             actions=["ssm:GetParameter"],
             resources=[
                 get_ssm_parameter_arn(USER_SSM_PARAMETERS['ESP_USER_REFRESH_SECRET'], region),
+                get_ssm_parameter_arn(USER_SSM_PARAMETERS['ESP_USER_SUPPORT_URL'], region),
+                get_ssm_parameter_arn(USER_SSM_PARAMETERS['ESP_USER_PRIVACY_URL'], region),
+                get_ssm_parameter_arn(USER_SSM_PARAMETERS['ESP_USER_TERMS_URL'], region),
             ],
         ))
 
@@ -104,8 +107,9 @@ class AuthorizeAPI(Construct):
                 # redirect_uri the hosted UI rejects with 400.
                 "ESPUSER_FEDERATION_CALLBACK_URL": f"{common_resources.esp_user_api_url}/oauth2/federation/callback",
                 "ESPUSER_REFRESH_SECRET_PARAM": USER_SSM_PARAMETERS['ESP_USER_REFRESH_SECRET'],
-                # Footer links on the sign-in page; one left unset is not drawn.
-                **{f"ESPUSER_{key.upper()}_URL": url for key, url in (page_links or {}).items() if url},
+                "ESPUSER_SUPPORT_URL_PARAM": USER_SSM_PARAMETERS['ESP_USER_SUPPORT_URL'],
+                "ESPUSER_PRIVACY_URL_PARAM": USER_SSM_PARAMETERS['ESP_USER_PRIVACY_URL'],
+                "ESPUSER_TERMS_URL_PARAM": USER_SSM_PARAMETERS['ESP_USER_TERMS_URL'],
             },
         )
 
