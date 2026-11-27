@@ -6,6 +6,7 @@ package smapi
 
 import (
 	"context"
+	"net/url"
 	"testing"
 	"time"
 
@@ -90,6 +91,42 @@ var _ = Describe("SMAPI client", func() {
 			_ = httpM.RegisterResponse(BaseURL+"/v1/vendors", "GET", 200, `{"vendors":[]}`)
 			_, err := NewClient(ctx, "cid", "tok").GetVendorID(ctx)
 			Expect(IsCallerError(err)).To(BeTrue())
+		})
+	})
+
+	Describe("VendorIDForSkill", func() {
+		const skillID = "amzn1.ask.skill.live"
+		ownedBy := func(vendorID string) string {
+			return BaseURL + "/v1/skills?" + url.Values{"vendorId": {vendorID}, "skillId": {skillID}}.Encode()
+		}
+
+		It("returns a profile's only vendor without listing its skills", func() {
+			_ = httpM.RegisterResponse(BaseURL+"/v1/vendors", "GET", 200, `{"vendors":[{"id":"M1ABC"}]}`)
+			Expect(NewClient(ctx, "cid", "tok").VendorIDForSkill(ctx, skillID)).To(Equal("M1ABC"))
+			Expect(httpM.Requests).To(HaveLen(1))
+		})
+
+		It("returns the vendor that owns the skill, not the profile's first", func() {
+			_ = httpM.RegisterResponse(BaseURL+"/v1/vendors", "GET", 200, `{"vendors":[{"id":"M1ABC"},{"id":"M2DEF"}]}`)
+			_ = httpM.RegisterResponse(ownedBy("M1ABC"), "GET", 200, `{"skills":[]}`)
+			_ = httpM.RegisterResponse(ownedBy("M2DEF"), "GET", 200, `{"skills":[{"skillId":"`+skillID+`"}]}`)
+			Expect(NewClient(ctx, "cid", "tok").VendorIDForSkill(ctx, skillID)).To(Equal("M2DEF"))
+		})
+
+		It("treats a skill none of the profile's vendors owns as the caller's fault", func() {
+			_ = httpM.RegisterResponse(BaseURL+"/v1/vendors", "GET", 200, `{"vendors":[{"id":"M1ABC"},{"id":"M2DEF"}]}`)
+			_ = httpM.RegisterResponse(ownedBy("M1ABC"), "GET", 200, `{"skills":[]}`)
+			_ = httpM.RegisterResponse(ownedBy("M2DEF"), "GET", 200, `{"skills":[]}`)
+			_, err := NewClient(ctx, "cid", "tok").VendorIDForSkill(ctx, skillID)
+			Expect(IsCallerError(err)).To(BeTrue())
+		})
+
+		It("surfaces a failed skill listing as Amazon's fault", func() {
+			_ = httpM.RegisterResponse(BaseURL+"/v1/vendors", "GET", 200, `{"vendors":[{"id":"M1ABC"},{"id":"M2DEF"}]}`)
+			_ = httpM.RegisterResponse(ownedBy("M1ABC"), "GET", 503, `{}`)
+			_, err := NewClient(ctx, "cid", "tok").VendorIDForSkill(ctx, skillID)
+			Expect(err).To(HaveOccurred())
+			Expect(IsCallerError(err)).To(BeFalse())
 		})
 	})
 

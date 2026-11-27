@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"os"
 	"testing"
 	"time"
@@ -275,13 +276,27 @@ var _ = Describe("Alexa Auto Cfg", func() {
 				Expect(setupStatus().Stage).To(Equal("updating"))
 			})
 
-			// Its redirect URIs were registered when it went live, so nothing is re-derived from a vendor.
-			It("keeps its registered redirect URIs instead of deriving new ones", func() {
+			// Its redirect URIs may be registered only on a client that linked it before, so every run registers them on the linking client.
+			It("registers the redirect URIs of the vendor that owns it", func() {
 				_ = httpM.RegisterResponse(smapi.BaseURL+"/v1/vendors", "GET", 200, `{"vendors":[{"id":"M1ABC"},{"id":"M2DEF"}]}`)
+				for vendorID, skills := range map[string]string{"M1ABC": `{"skills":[]}`, "M2DEF": `{"skills":[{"skillId":"` + live + `"}]}`} {
+					_ = httpM.RegisterResponse(smapi.BaseURL+"/v1/skills?"+url.Values{"vendorId": {vendorID}, "skillId": {live}}.Encode(), "GET", 200, skills)
+				}
 				_ = httpM.RegisterResponse(liveStatusURL, "GET", 200, `{"manifest":{"lastUpdateRequest":{"status":"SUCCEEDED"}}}`)
 				resp, _ := handleRequest(ctx, adminRequest(validBody()))
 				Expect(resp.StatusCode).To(Equal(http.StatusOK))
-				Expect(workerEvent().RedirectURIs).To(BeEmpty())
+				Expect(workerEvent().RedirectURIs).To(Equal(smapi.AccountLinkingRedirectURLs("M2DEF")))
+			})
+
+			It("refuses, starting no run, when no vendor of the connected account owns it", func() {
+				_ = httpM.RegisterResponse(smapi.BaseURL+"/v1/vendors", "GET", 200, `{"vendors":[{"id":"M1ABC"},{"id":"M2DEF"}]}`)
+				for _, vendorID := range []string{"M1ABC", "M2DEF"} {
+					_ = httpM.RegisterResponse(smapi.BaseURL+"/v1/skills?"+url.Values{"vendorId": {vendorID}, "skillId": {live}}.Encode(), "GET", 200, `{"skills":[]}`)
+				}
+				_ = httpM.RegisterResponse(liveStatusURL, "GET", 200, `{"manifest":{"lastUpdateRequest":{"status":"SUCCEEDED"}}}`)
+				resp, _ := handleRequest(ctx, adminRequest(validBody()))
+				Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
+				Expect(awscommon.GetLambdaClient().(*mock.LambdaMock).InvokeCalls).To(BeEmpty())
 			})
 
 			It("creates a new skill when these LWA credentials cannot reach the live one", func() {
