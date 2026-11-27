@@ -182,9 +182,38 @@ func doRequest(client httpclient.Client, req *http.Request) ([]byte, error) {
 
 // GetVendorID returns the profile's first vendor, the developer organisation a new skill is created under.
 func (c *Client) GetVendorID(ctx context.Context) (string, error) {
-	body, err := c.do(ctx, http.MethodGet, "/v1/vendors", nil)
+	vendorIDs, err := c.listVendorIDs(ctx)
 	if err != nil {
 		return "", err
+	}
+	return vendorIDs[0], nil
+}
+
+// VendorIDForSkill returns the vendor that owns skillID, which its account-linking redirect URLs are scoped to; a profile with one vendor needs no lookup, since it reaches only its own vendors' skills.
+func (c *Client) VendorIDForSkill(ctx context.Context, skillID string) (string, error) {
+	vendorIDs, err := c.listVendorIDs(ctx)
+	if err != nil {
+		return "", err
+	}
+	if len(vendorIDs) == 1 {
+		return vendorIDs[0], nil
+	}
+	for _, vendorID := range vendorIDs {
+		owns, err := c.vendorOwnsSkill(ctx, vendorID, skillID)
+		if err != nil {
+			return "", err
+		}
+		if owns {
+			return vendorID, nil
+		}
+	}
+	return "", rmerror.NewRMError(ErrVendorUnavailable, "no vendor of this LWA profile owns skill "+skillID)
+}
+
+func (c *Client) listVendorIDs(ctx context.Context) ([]string, error) {
+	body, err := c.do(ctx, http.MethodGet, "/v1/vendors", nil)
+	if err != nil {
+		return nil, err
 	}
 	var out struct {
 		Vendors []struct {
@@ -192,12 +221,38 @@ func (c *Client) GetVendorID(ctx context.Context) (string, error) {
 		} `json:"vendors"`
 	}
 	if err := json.Unmarshal(body, &out); err != nil {
-		return "", rmerror.NewRMError(err, "failed to parse vendor list")
+		return nil, rmerror.NewRMError(err, "failed to parse vendor list")
 	}
 	if len(out.Vendors) == 0 {
-		return "", rmerror.NewRMError(ErrVendorUnavailable, "no vendor found for this LWA profile")
+		return nil, rmerror.NewRMError(ErrVendorUnavailable, "no vendor found for this LWA profile")
 	}
-	return out.Vendors[0].ID, nil
+	vendorIDs := make([]string, 0, len(out.Vendors))
+	for _, vendor := range out.Vendors {
+		vendorIDs = append(vendorIDs, vendor.ID)
+	}
+	return vendorIDs, nil
+}
+
+func (c *Client) vendorOwnsSkill(ctx context.Context, vendorID, skillID string) (bool, error) {
+	query := url.Values{"vendorId": {vendorID}, "skillId": {skillID}}
+	body, err := c.do(ctx, http.MethodGet, "/v1/skills?"+query.Encode(), nil)
+	if err != nil {
+		return false, err
+	}
+	var out struct {
+		Skills []struct {
+			SkillID string `json:"skillId"`
+		} `json:"skills"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return false, rmerror.NewRMError(err, "failed to parse skill list")
+	}
+	for _, skill := range out.Skills {
+		if skill.SkillID == skillID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // CreateSkill creates a skill from a manifest and returns its skill id.

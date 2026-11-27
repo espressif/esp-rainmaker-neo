@@ -255,15 +255,19 @@ func handleAutoConfiguration(ctx context.Context, request events.APIGatewayProxy
 			stage = "created; the previous skill is not reachable with these LWA credentials"
 		}
 	}
-	// A reused live skill keeps the redirect URIs registered when it went live; only a new one needs a vendor, the profile's first.
 	existing := skillID != ""
-	var redirectURIs []string
+	var vendorID string
+	if existing {
+		vendorID, err = client.VendorIDForSkill(ctx, skillID)
+	} else {
+		vendorID, err = client.GetVendorID(ctx)
+	}
+	if err != nil {
+		return nil, rmerror.NewRMError(err, "Failed to resolve SMAPI vendor")
+	}
+	// Registered on every run, since a reused skill's URIs may sit only on a client that linked it before.
+	redirectURIs := smapi.AccountLinkingRedirectURLs(vendorID)
 	if !existing {
-		vendorID, err := client.GetVendorID(ctx)
-		if err != nil {
-			return nil, rmerror.NewRMError(err, "Failed to resolve SMAPI vendor")
-		}
-		redirectURIs = smapi.AccountLinkingRedirectURLs(vendorID)
 		skillID, err = client.CreateSkill(ctx, vendorID, smapi.MinimalSmartHomeManifest(req.SkillName, defaultPrivacyPolicyURL))
 		if err != nil {
 			return nil, rmerror.NewRMError(err, "Failed to create skill")
@@ -342,7 +346,6 @@ func runConfigWorker(ctx context.Context, ev configWorkerEvent) {
 			alexaClientID, alexaClientSecret, err = client.GetSkillCredentials(ctx, ev.SkillID)
 			return err
 		}) &&
-		// None when reusing the live skill without a named vendor: its URIs were registered when it went live.
 		(len(ev.RedirectURIs) == 0 || step("register the linking client's redirect URIs", func() error {
 			return alexa_skill.UpdateVAClientRedirectURIs(ctx, os.Getenv("OIDC_VA_CLIENT_ID"), ev.RedirectURIs)
 		})) &&
