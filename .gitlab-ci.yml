@@ -125,6 +125,7 @@ npm_audit:
   script:
     # Production dependencies only
     - cd dashboard && npm audit --omit=dev --audit-level=high
+    - cd "$CI_PROJECT_DIR/src/espuser/hosted-ui" && npm audit --omit=dev --audit-level=high
 
 # Deliberately a separate job from npm_audit rather than sharing one Alpine node
 # container: pip-audit resolves requirements.txt in a throwaway venv, and playwright
