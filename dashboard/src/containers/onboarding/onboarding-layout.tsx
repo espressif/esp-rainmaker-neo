@@ -32,7 +32,9 @@ export type OnboardingLayoutProps = Omit<
 
 function defaultBackgroundImageUrl(): string | undefined {
   const path = appConfig.customAuth?.onboardingLayoutBackgroundImage;
-  if (!path) {return undefined;}
+  if (!path) {
+    return undefined;
+  }
   return resolveAssetPath(path);
 }
 
@@ -69,25 +71,27 @@ export default function OnboardingLayout({
     heading ?? appConfig.customAuth?.onboardingHeading ?? undefined;
 
   return (
-    <EntryLayout
-      appName={appConfig.projectName}
-      // `undefined` while `projectName` names a preset; a fork omits it and the entry
-      // panel renders the configured assets instead.
-      logoAssets={presetFallbackLogoAssets}
-      darkMode={darkMode}
-      heading={resolvedHeading}
-      backgroundImageUrl={backgroundImageUrl}
-      disableBackgroundImage={showShowcase}
-      customRightPanel={
-        ShowcaseReel ? (
-          <Suspense fallback={null}>
-            <ShowcaseReel darkMode={darkMode} />
-          </Suspense>
-        ) : undefined
-      }
-      {...rest}
-    >
-      {children}
-    </EntryLayout>
+    <div className="onboarding-entry">
+      <EntryLayout
+        appName={appConfig.projectName}
+        // `undefined` while `projectName` names a preset; a fork omits it and the entry
+        // panel renders the configured assets instead.
+        logoAssets={presetFallbackLogoAssets}
+        darkMode={darkMode}
+        heading={resolvedHeading}
+        backgroundImageUrl={backgroundImageUrl}
+        disableBackgroundImage={showShowcase}
+        customRightPanel={
+          ShowcaseReel ? (
+            <Suspense fallback={null}>
+              <ShowcaseReel darkMode={darkMode} />
+            </Suspense>
+          ) : undefined
+        }
+        {...rest}
+      >
+        {children}
+      </EntryLayout>
+    </div>
   );
 }

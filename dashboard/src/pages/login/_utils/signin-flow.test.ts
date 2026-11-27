@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 import {
   INITIAL_SIGNIN_STATE,
-  shouldAutoSendOtp,
+  offersOtp,
   signinReducer,
   type SigninState,
 } from "./signin-flow";
@@ -21,7 +21,14 @@ describe("signinReducer", () => {
     expect(INITIAL_SIGNIN_STATE.step).toBe("identify");
   });
 
-  it("goes straight to the code screen when EMAIL_OTP is the only choice", () => {
+  it("records the address without a code sent", () => {
+    const state = advance([{ type: "identified", username: "a@esp.com" }]);
+    expect(state.username).toBe("a@esp.com");
+    expect(state.codeSent).toBe(false);
+    expect(state.session).toBeNull();
+  });
+
+  it("stays on the code screen when EMAIL_OTP is the only choice", () => {
     const state = advance([
       { type: "identified", username: "a@esp.com" },
       { type: "challenges", session: "s1", challenges: ["EMAIL_OTP"] },
@@ -34,7 +41,11 @@ describe("signinReducer", () => {
   it("still goes to the code screen when the admin also has a password", () => {
     const state = advance([
       { type: "identified", username: "a@esp.com" },
-      { type: "challenges", session: "s1", challenges: ["EMAIL_OTP", "PASSWORD"] },
+      {
+        type: "challenges",
+        session: "s1",
+        challenges: ["EMAIL_OTP", "PASSWORD"],
+      },
     ]);
     expect(state.step).toBe("otp");
     expect(state.challenges).toEqual(["EMAIL_OTP", "PASSWORD"]);
@@ -51,12 +62,28 @@ describe("signinReducer", () => {
   it("records the masked destination when a code is sent", () => {
     const state = advance([
       { type: "identified", username: "a@esp.com" },
-      { type: "challenges", session: "s1", challenges: ["EMAIL_OTP", "PASSWORD"] },
+      {
+        type: "challenges",
+        session: "s1",
+        challenges: ["EMAIL_OTP", "PASSWORD"],
+      },
       { type: "otpSent", session: "s2", destination: "a***@e***.com" },
     ]);
     expect(state.step).toBe("otp");
     expect(state.session).toBe("s2");
     expect(state.destination).toBe("a***@e***.com");
+    expect(state.codeSent).toBe(true);
+  });
+
+  it("forgets a sent code when the admin starts over with another address", () => {
+    const state = advance([
+      { type: "identified", username: "a@esp.com" },
+      { type: "otpSent", session: "s1", destination: "a***@e***.com" },
+      { type: "identified", username: "b@esp.com" },
+    ]);
+    expect(state.codeSent).toBe(false);
+    expect(state.session).toBeNull();
+    expect(state.username).toBe("b@esp.com");
   });
 
   it("falls back to the password form when the client rejects USER_AUTH", () => {
@@ -66,6 +93,7 @@ describe("signinReducer", () => {
     ]);
     expect(state.step).toBe("password");
     expect(state.username).toBe("a@esp.com");
+    expect(offersOtp(state.challenges)).toBe(false);
   });
 
   it("keeps the username but drops the session when it expires", () => {
@@ -82,7 +110,11 @@ describe("signinReducer", () => {
   it("returns to the choice screen from the code screen when both factors exist", () => {
     const state = advance([
       { type: "identified", username: "a@esp.com" },
-      { type: "challenges", session: "s1", challenges: ["EMAIL_OTP", "PASSWORD"] },
+      {
+        type: "challenges",
+        session: "s1",
+        challenges: ["EMAIL_OTP", "PASSWORD"],
+      },
       { type: "otpSent", session: "s2", destination: "a***@e***.com" },
       { type: "usePassword" },
     ]);
@@ -116,20 +148,17 @@ describe("signinReducer", () => {
   });
 });
 
-describe("shouldAutoSendOtp", () => {
-  it("auto-sends when EMAIL_OTP is the admin's only factor", () => {
-    expect(shouldAutoSendOtp(["EMAIL_OTP"])).toBe(true);
+describe("offersOtp", () => {
+  it("is true when EMAIL_OTP is offered", () => {
+    expect(offersOtp(["EMAIL_OTP"])).toBe(true);
+    expect(offersOtp(["EMAIL_OTP", "PASSWORD"])).toBe(true);
   });
 
-  it("auto-sends even when a password is offered too, since the code is the default", () => {
-    expect(shouldAutoSendOtp(["EMAIL_OTP", "PASSWORD"])).toBe(true);
+  it("is false when PASSWORD is the only factor", () => {
+    expect(offersOtp(["PASSWORD"])).toBe(false);
   });
 
-  it("does not auto-send when PASSWORD is the only factor", () => {
-    expect(shouldAutoSendOtp(["PASSWORD"])).toBe(false);
-  });
-
-  it("does not auto-send when Cognito offered nothing this app can drive", () => {
-    expect(shouldAutoSendOtp([])).toBe(false);
+  it("is false when Cognito offered nothing this app can drive", () => {
+    expect(offersOtp([])).toBe(false);
   });
 });

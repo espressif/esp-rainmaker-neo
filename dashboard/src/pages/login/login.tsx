@@ -19,6 +19,7 @@ import { preserveSearch } from "./_utils/preserve-search";
 import { useSigninFlow } from "./_hooks/use-signin-flow";
 import { AccountChip } from "./_components/account-chip";
 import { SigninAlerts } from "./_components/signin-alerts";
+import { PasswordLink } from "./_components/password-link";
 
 /**
  * Screen 1 — the remembered account. Greets the admin who has signed in on this
@@ -60,13 +61,11 @@ export default function Login() {
     flow.error,
   );
 
-  const isContinuing = flow.isStarting || flow.isSending;
-  // Shared by the Continue button and the account card. The pending guard is
-  // for the card: unlike the button, it has no loading state to swallow a
-  // second click, and a double `identify` would fire two Cognito calls.
+  const isContinuing = flow.isSending;
+  // Shared by the code button and the account card. The pending guard is for the card: it has no loading state to swallow a second click, and a double send would mail two codes.
   const continueAsRememberedAccount = () => {
     if (!isContinuing) {
-      flow.identify(rememberedEmail);
+      flow.continueWithCode(rememberedEmail);
     }
   };
 
@@ -75,10 +74,6 @@ export default function Login() {
       <OnboardingCard
         icon={<LogIn className="w-6 h-6" />}
         title={t("welcomeBack", "Welcome back")}
-        description={t(
-          "welcomeBackDescription",
-          "Continue with the account you last signed in with.",
-        )}
       >
         <SigninAlerts
           errorMessage={errorMessage}
@@ -101,7 +96,7 @@ export default function Login() {
               animateEndIconOnHover={true}
               onClick={continueAsRememberedAccount}
             >
-              {t("continue", "Continue")}
+              {t("emailMeCode", "Email me a code")}
             </Button>
 
             <Button
@@ -114,6 +109,10 @@ export default function Login() {
             >
               {t("chooseAnotherEmail", "Choose another email")}
             </Button>
+
+            <PasswordLink
+              onUsePassword={() => flow.continueWithPassword(rememberedEmail)}
+            />
           </div>
         </div>
       </OnboardingCard>

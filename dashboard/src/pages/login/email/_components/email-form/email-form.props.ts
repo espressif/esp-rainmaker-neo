@@ -8,5 +8,6 @@ export interface EmailFormProps {
   /** Prefill from the flow store, so Back-and-forth keeps the typed address. */
   defaultUsername: string;
   isSubmitting: boolean;
-  onSubmit: (username: string) => void;
+  onContinueWithCode: (username: string) => void;
+  onContinueWithPassword: (username: string) => void;
 }

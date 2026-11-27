@@ -50,11 +50,9 @@ export default function LoginEmail() {
       <OnboardingCard
         icon={<LogIn className="w-6 h-6" />}
         title={t("title", "Sign in")}
-        description={t(
-          "description",
-          "Enter your credentials to access your account",
-        )}
-        actions={hasRememberedAccount ? <BackToSignInLink to="/login" /> : undefined}
+        actions={
+          hasRememberedAccount ? <BackToSignInLink to="/login" /> : undefined
+        }
       >
         <SigninAlerts
           errorMessage={errorMessage}
@@ -63,8 +61,9 @@ export default function LoginEmail() {
 
         <EmailForm
           defaultUsername={username}
-          isSubmitting={flow.isStarting || flow.isSending}
-          onSubmit={flow.identify}
+          isSubmitting={flow.isSending}
+          onContinueWithCode={flow.continueWithCode}
+          onContinueWithPassword={flow.continueWithPassword}
         />
       </OnboardingCard>
     </OnboardingLayout>

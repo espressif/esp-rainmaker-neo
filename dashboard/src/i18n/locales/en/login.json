@@ -1,35 +1,31 @@
 {
-  "title": "Sign in",
-  "description": "Enter your credentials to access your account",
-  "welcomeBack": "Welcome back",
-  "welcomeBackDescription": "Continue with the account you last signed in with.",
-  "continue": "Continue",
   "chooseAnotherEmail": "Choose another email",
   "emailLabel": "Email",
   "emailPlaceholder": "Enter your email",
   "errorTitle": "Unable to login",
   "invalidCredentials": "Invalid username or password",
   "otp": {
-    "title": "Check your email",
-    "sentTo": "Enter the 8 digit code sent to {{email}}",
-    "resendIn": "Resend code in {{seconds}}s"
+    "sentTo": "Sent to <strong>{{email}}</strong>",
+    "resendIn": "Resend code in {{seconds}}s",
+    "title": "Check your email"
   },
   "otpLabel": "Verification code",
   "otpSubmit": "Verify",
   "resendCode": "Resend code",
-  "usePasswordInstead": "Sign in with password",
+  "usePasswordInstead": "Use a password instead",
   "password": {
-    "title": "Enter your password",
-    "description": "Sign in with the password for the account below.",
-    "emailCode": "Email me a code instead"
+    "description": "Signing in as <strong>{{email}}</strong>",
+    "title": "Enter your password"
   },
   "passwordLabel": "Password",
-  "passwordPlaceholder": "Enter your password",
-  "forgotPasswordLink": "Forgot password?",
+  "forgotPasswordLink": "Forgot or set a new password",
   "keepSignedInLabel": "Keep me signed in",
   "submit": "Sign in",
   "resetSuccessTitle": "Password updated",
   "resetSuccessMessage": "Your password has been updated. Sign in with your new password.",
   "setSuccessTitle": "Password set",
-  "setSuccessMessage": "Your password has been set. Sign in with it, or with a code, from now on."
+  "setSuccessMessage": "Your password has been set. Sign in with it, or with a code, from now on.",
+  "emailMeCode": "Email me a code",
+  "title": "Sign in",
+  "welcomeBack": "Welcome back"
 }

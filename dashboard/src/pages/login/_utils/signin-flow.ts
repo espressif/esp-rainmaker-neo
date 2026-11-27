@@ -26,6 +26,8 @@ export interface SigninState {
   challenges: ChallengeKind[];
   /** Cognito's masked delivery destination, e.g. `a***@e***.com`. */
   destination: string | null;
+  /** Whether a code has been emailed in this attempt; none is sent until the admin asks. */
+  codeSent: boolean;
 }
 
 export type SigninEvent =
@@ -33,7 +35,6 @@ export type SigninEvent =
   | { type: "challenges"; session: string; challenges: ChallengeKind[] }
   | { type: "otpSent"; session: string; destination: string }
   | { type: "usePassword" }
-  | { type: "useOtp" }
   | { type: "userAuthUnavailable" }
   | { type: "sessionExpired" }
   | { type: "restart" };
@@ -44,17 +45,11 @@ export const INITIAL_SIGNIN_STATE: SigninState = {
   session: null,
   challenges: [],
   destination: null,
+  codeSent: false,
 };
 
-/**
- * Whether the emailed code is available to this admin, so the caller should request
- * one immediately rather than asking which factor they want.
- *
- * The code is the default way in and the password is the opt-out, so the presence of
- * `PASSWORD` alongside it changes nothing — only its absence does, and then the
- * password form is the one path left.
- */
-export function shouldAutoSendOtp(challenges: ChallengeKind[]): boolean {
+/** Whether Cognito offers this admin the emailed code. */
+export function offersOtp(challenges: ChallengeKind[]): boolean {
   return challenges.includes("EMAIL_OTP");
 }
 
@@ -64,7 +59,7 @@ export function signinReducer(
 ): SigninState {
   switch (event.type) {
     case "identified":
-      return { ...state, username: event.username };
+      return { ...INITIAL_SIGNIN_STATE, username: event.username };
 
     case "challenges": {
       // Nothing to select against without an address — this can only be a stale
@@ -73,12 +68,8 @@ export function signinReducer(
         return state;
       }
       const challenges = event.challenges;
-      // The emailed code is the default way in, so an admin who can receive one is
-      // never asked to choose — the password is offered as an opt-out on the code
-      // screen instead. Only an admin Cognito will not send a code to needs the
-      // password form up front, which is also the honest fallback for an empty list:
-      // it is the one path that works on every pool.
-      const step: SigninStep = shouldAutoSendOtp(challenges) ? "otp" : "password";
+      // Without the email factor the password form is the one path left, also for an empty list.
+      const step: SigninStep = offersOtp(challenges) ? "otp" : "password";
       return { ...state, step, session: event.session, challenges };
     }
 
@@ -88,18 +79,16 @@ export function signinReducer(
         step: "otp",
         session: event.session,
         destination: event.destination,
+        codeSent: true,
       };
 
     case "usePassword":
       return { ...state, step: "password" };
 
-    case "useOtp":
-      return { ...state, step: "otp" };
-
     // The app client predates ALLOW_USER_AUTH, so the stack update has not landed yet.
     // Falling back keeps the dashboard working against either version of the stack.
     case "userAuthUnavailable":
-      return { ...state, step: "password" };
+      return { ...state, step: "password", challenges: ["PASSWORD"] };
 
     // The session is single-use and short-lived; the address is still good, so only
     // the session is discarded.
