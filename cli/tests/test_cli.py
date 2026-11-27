@@ -12,6 +12,7 @@ import json
 import os
 import sys
 import tomllib
+import types
 from pathlib import Path
 
 import click
@@ -2021,3 +2022,67 @@ def test_setup_auto_still_reads_the_old_smapi_keys(setup_auto):
 
     assert result.exit_code == 0, result.output
     assert calls[0] == ('PUT', LWA_CONNECTION, {'lwa_client_id': 'amzn1.application-oa2-client.x', 'lwa_client_secret': 's', 'lwa_refresh_token': 'Atzr|r'})
+
+
+# --- the ESP User API token -------------------------------------------------
+
+class _Narrowed:
+    status_code = 200
+    text = ''
+
+    def json(self):
+        return {'access_token': 'fresh', 'refresh_token': 'rt-2'}
+
+
+def _user_holding_user_api_token(expires_in):
+    """A signed-in User whose narrowed ESP User API token expires expires_in seconds from now, with the refreshes it sends recorded."""
+    import time
+
+    import jwt
+    from esp_morpheus.sdk.user import User
+
+    user = User('u', 'p', 'us-east-1', 'pool', 'https://neo.example.com', 'https://user.example.com', 'iot.example.com',
+                user_api_resource='https://user.example.com')
+    user.refresh_token = 'rt-1'
+    user.user_api_access_token = jwt.encode({'exp': int(time.time()) + expires_in}, 'k' * 32, algorithm='HS256')
+    sent = []
+
+    class Session:
+        def post(self, url, json):
+            sent.append((url, json))
+            return _Narrowed()
+
+    user._session = Session()
+    return user, sent
+
+
+def test_an_expired_user_api_token_is_narrowed_again():
+    """A run longer than one access-token lifetime keeps reaching the ESP User API instead of getting 401."""
+    user, sent = _user_holding_user_api_token(-1)
+    assert user.user_api_token() == 'fresh'
+    assert sent == [('https://user.example.com/v1/user/auth/token/refresh', {'refresh_token': 'rt-1', 'resource': 'https://user.example.com'})]
+    assert user.refresh_token == 'rt-2'
+
+
+def test_a_live_user_api_token_is_reused():
+    user, sent = _user_holding_user_api_token(600)
+    cached = user.user_api_access_token
+    assert user.user_api_token() == cached
+    assert sent == []
+
+
+# --- voice-assistant account linking -------------------------------------------
+
+@pytest.mark.parametrize('printer, client_id, secret_param', [
+    ('print_alexa_instructions', 'rainmaker-neo-alexa-client', '/rmng/alexa/esp-user-client-secret'),
+    ('print_gva_instructions', 'rainmaker-neo-gva-client', '/rmng/gva/esp-user-client-secret'),
+    ('print_smartthings_instructions', 'rainmaker-neo-smartthings-client', '/rmng/smartthings/esp-user-client-secret'),
+])
+def test_each_assistant_guide_names_its_own_client(capsys, printer, client_id, secret_param):
+    from esp_morpheus.cli import guide
+    settings = types.SimpleNamespace(raw={}, source='rmng-outputs.json', alexa_region_arns={},
+                                     default_alexa_arn=None, st_region_arns={}, gva_fulfillment_url=None)
+    getattr(guide, printer)(settings)
+    printed = capsys.readouterr().out
+    assert f'Client Id: {client_id}' in printed or f'Client ID: {client_id}' in printed
+    assert secret_param in printed

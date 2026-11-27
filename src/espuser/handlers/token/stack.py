@@ -79,8 +79,9 @@ class TokenAPI(Construct):
             actions=["dynamodb:Query"],
             resources=[get_table_index_arn(USER_TABLE_NAMES['SESSIONS'], USER_INDEX_NAMES['SESSIONS_BY_USER'], region)],
         ))
+        # PutItem: a native app's code exchange creates the app's own session row.
         token_lambda_role.add_to_policy(iam.PolicyStatement(
-            actions=["dynamodb:GetItem", "dynamodb:UpdateItem"],
+            actions=["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:PutItem"],
             resources=[get_table_arn(USER_TABLE_NAMES['SESSIONS'], region)],
         ))
 

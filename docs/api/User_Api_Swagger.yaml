@@ -18,18 +18,22 @@ info:
 
     Login methods (all end in OUR tokens; upstream credentials never reach clients):
 
-    - **Federated login (default)**: `GET /oauth2/authorize` starts a browser
-      authorization-code + PKCE flow. With a single enabled identity provider the
-      user is auto-redirected to it; the
-      broker exchanges the upstream code server-side and issues OUR authorization
-      code at the client's `redirect_uri`.
+    - **Sign-in page (default)**: `GET /oauth2/authorize` starts a browser
+      authorization-code + PKCE flow and sends the browser to `GET /user/login`,
+      which draws the providers the client allows: a password form checked by the
+      pool of an enabled `oidc` row whose `password_verifier` is `cognito` (`POST /user/login/password`),
+      a one-time code, or a button that redirects to the own page of an `oidc` provider naming no `password_verifier`.
+    - **Federated login**: an `oidc` provider's button, or `GET /oauth2/authorize`
+      itself when that provider is the only enabled one, sends the browser to the
+      provider; the broker exchanges the upstream code server-side and issues OUR
+      authorization code at the client's `redirect_uri`.
     - **Native password APIs** (`/v1/user/auth/*`): the main-era
       native surface. Credentials are verified against the bundled Cognito pool server-side and converted to our tokens.
 
     Token lifecycle after login:
 
     1. `POST /oauth2/token` (`grant_type=refresh_token`) - rotate the token set
-       (native `/v1/user/auth/token/refresh` is reuse-tolerant instead).
+       (native `/v1/user/auth/token/refresh` rotates the same way).
     2. Send `access_token` as a `Bearer` `Authorization` header on subsequent
        calls. To call the platform API you must first exchange the token for AWS
        credentials at `POST /v1/user/credentials` and SigV4-sign every request.
@@ -71,7 +75,10 @@ tags:
       Authorization, token issuance/rotation, userinfo, revocation, and sign-out — the endpoints every login method converges on.
   - name: Federated Login
     description:
-      The upstream legs of a browser login started at `/oauth2/authorize`, brokered to an upstream identity provider (Cognito hosted UI in the open-source deployment). Clients only ever receive ESP User tokens.
+      The provider's return leg of a browser login started at `/oauth2/authorize`, brokered to an upstream identity provider. Clients only ever receive ESP User tokens.
+  - name: Sign-in Pages
+    description:
+      Our sign-in, consent and sign-out pages, and the calls they make. Applications never call them.
   - name: User Auth
     description:
       The main-era native `/v1/user/auth/*` password surface, kept
@@ -79,8 +86,9 @@ tags:
       Cognito pool server-side; every token returned is an ESP User token.
   - name: Sessions
     description:
-      The authorization server's own browser session — sign-out, and a person's
-      list of the browsers they are signed in on.
+      The authorization server's own browser session — sign-out, a person's
+      list of the browsers they are signed in on, and the apps that hold
+      offline access.
   - name: Users
     description: User lookup.
   - name: Admin Clients
@@ -98,57 +106,147 @@ paths:
     get:
       summary: OpenID Provider metadata
       description:
-        OIDC discovery document — endpoint URLs and the `jwks_uri`. Public and
-        cacheable.
+        OIDC discovery document — endpoint URLs and the `jwks_uri`; `claims_supported` includes `amr` and `idp`. Public and
+        cacheable. Served at `<issuer>/.well-known/*` by the ESP User API, built per request;
+        revalidate with `If-None-Match` to get a 304 instead of the body.
       tags:
         - OIDC Discovery
       security: []
+      parameters:
+        - name: If-None-Match
+          in: header
+          required: false
+          description: The `ETag` from an earlier response.
+          schema:
+            type: string
+          example: '"3f2a9c1e0b7d4a6c8e5f1a2b3c4d5e6f"'
       responses:
         "200":
           description: Discovery metadata
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              example: "public, max-age=300, must-revalidate"
+            ETag:
+              schema:
+                type: string
+              example: '"3f2a9c1e0b7d4a6c8e5f1a2b3c4d5e6f"'
+            Access-Control-Allow-Origin:
+              schema:
+                type: string
+              example: "*"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/OpenIDConfiguration"
+        "304":
+          description: Not modified; the `If-None-Match` ETag is current. No body.
+        "500":
+          description: "`server_error`: the document could not be built from this deployment's configuration."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
 
   /.well-known/oauth-authorization-server:
     get:
       summary: OAuth 2.0 Authorization Server metadata
       description:
         OAuth 2.0 authorization server metadata for non-OIDC clients. Public and
-        cacheable.
+        cacheable. Served at `<issuer>/.well-known/*` by the ESP User API, built per request;
+        revalidate with `If-None-Match` to get a 304 instead of the body.
       tags:
         - OIDC Discovery
       security: []
+      parameters:
+        - name: If-None-Match
+          in: header
+          required: false
+          description: The `ETag` from an earlier response.
+          schema:
+            type: string
+          example: '"3f2a9c1e0b7d4a6c8e5f1a2b3c4d5e6f"'
       responses:
         "200":
           description: Authorization Server metadata
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              example: "public, max-age=300, must-revalidate"
+            ETag:
+              schema:
+                type: string
+              example: '"3f2a9c1e0b7d4a6c8e5f1a2b3c4d5e6f"'
+            Access-Control-Allow-Origin:
+              schema:
+                type: string
+              example: "*"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/AuthorizationServerMetadata"
+        "304":
+          description: Not modified; the `If-None-Match` ETag is current. No body.
+        "500":
+          description: "`server_error`: the document could not be built from this deployment's configuration."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
 
   /.well-known/jwks.json:
     get:
       summary: JSON Web Key Set
       description:
-        Public keys for verifying issued tokens. Public and cacheable.
+        Public keys for verifying issued tokens. Public and cacheable. Served at `<issuer>/.well-known/*` by the ESP User API, built per request;
+        revalidate with `If-None-Match` to get a 304 instead of the body.
       tags:
         - OIDC Discovery
       security: []
+      parameters:
+        - name: If-None-Match
+          in: header
+          required: false
+          description: The `ETag` from an earlier response.
+          schema:
+            type: string
+          example: '"3f2a9c1e0b7d4a6c8e5f1a2b3c4d5e6f"'
       responses:
         "200":
           description: JWK Set
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              example: "public, max-age=3600"
+            ETag:
+              schema:
+                type: string
+              example: '"3f2a9c1e0b7d4a6c8e5f1a2b3c4d5e6f"'
+            Access-Control-Allow-Origin:
+              schema:
+                type: string
+              example: "*"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/JWKS"
+        "304":
+          description: Not modified; the `If-None-Match` ETag is current. No body.
+        "500":
+          description: "`server_error`: the document could not be built from this deployment's configuration."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
 
   /oauth2/authorize:
     get:
       summary: Start browser login (authorization code + PKCE)
       description: |
-        Starts the authorization-code + PKCE (`S256`) login. Validates the client, the exact `redirect_uri` and PKCE, sets the `__Host-esp_flow_id` cookie, and sends the browser to the login: straight to `/oauth2/federation/start` when exactly one provider is enabled, to the OTP page in an OTP-only deployment, otherwise to `/oauth2/login`. On success the browser returns to `redirect_uri` with a single-use `code` and `state`.
+        Starts the authorization-code + PKCE (`S256`) login. It ends at `redirect_uri` with a single-use `code` and `state`.
 
         A live `__Host-esp_session` cookie skips the login and returns the code immediately (single sign-on), unless `prompt`, `max_age` or `id_token_hint` rule it out.
       tags:
@@ -178,8 +276,9 @@ paths:
           required: false
           description:
             Optional (RFC 6749 §4.1.1), space-delimited; include `openid` for an
-            id_token. Each requested scope must be within the client's allowed
-            scopes.
+            id_token. A scope outside the client's allowed scopes returns
+            `error=invalid_scope`. `offline_access` asks for a refresh token no sign-out
+            ends and always shows the consent screen (OIDC Core 1.0 §11).
           schema:
             type: string
             example: "openid email"
@@ -210,18 +309,22 @@ paths:
           in: query
           required: false
           description: |
-            RFC 8707 resource indicator: the API the access token is for, stamped into
-            `aud` on that token and on every token the resulting refresh family later
-            mints. Must appear in the client's `allowed_resources`, or the request is
-            rejected with `invalid_target`.
+            RFC 8707 resource indicators: the APIs this sign-in covers, one `resource`
+            parameter each. Every value must appear in the client's `allowed_resources`,
+            or the request redirects with `invalid_target`.
 
-            **Default when omitted:** `aud` is the `client_id`. **At most one** value; two
-            are refused rather than minting a token good at two APIs. An ID token's `aud`
-            is the `client_id` either way — it is a statement to that client.
+            **Omitted or empty:** the sign-in covers the client's `default_resource`; a client
+            without one is refused with `invalid_target`. Each access token is for exactly
+            one covered API, picked at `/oauth2/token`. An ID token's `aud` is the
+            `client_id` either way — it is a statement to that client.
+          style: form
+          explode: true
           schema:
-            type: string
-            format: uri
-          example: "https://api.accounts.espressif.com"
+            type: array
+            items:
+              type: string
+              format: uri
+          example: ["https://api.example.com"]
         - name: prompt
           in: query
           required: false
@@ -229,16 +332,7 @@ paths:
             OIDC Core §3.1.2.1. **Default when
             omitted:** a live session answers the request silently.
 
-            `none` never shows a prompt — it answers from the session or redirects back
-            with `error=login_required`. `login` forces re-authentication even with a live
-            session, and is carried to the upstream provider so it re-authenticates too.
-
-            `consent` and `select_account` are accepted, but this server does not yet
-            distinguish them from `login`: all three disable the session shortcut, and the
-            value is forwarded verbatim to the upstream provider. Neither renders a surface
-            of its own here — there is no consent screen, and account choice belongs to the
-            provider — so any difference you observe between them comes from the provider,
-            not from us.
+            `none` never shows a page (`login_required` or `consent_required` instead; `invalid_request` with any other value). `login` and `select_account` re-authenticate; `consent` always asks.
           schema:
             type: string
             example: "none"
@@ -269,19 +363,14 @@ paths:
       responses:
         "302":
           description: |
-            Redirect to the login UI (with a `flow_id` session cookie) — or, when
-            a live session satisfies `prompt`/`max_age`/`id_token_hint`,
-            straight back to `redirect_uri?code=…&state=…` with
-            no login surface at all. A post-validation error instead redirects to
-            `redirect_uri?error=<code>&state=<state>` (`invalid_scope`,
-            `invalid_target`, or `login_required` for a failed `prompt=none`).
+            To the sign-in page; with a live session, back to `redirect_uri` with `code` and `state`, or to the consent page. Errors found after `redirect_uri` is validated go back to it as `error` and `state`.
           headers:
             Location:
               schema:
                 type: string
             Set-Cookie:
               description:
-                Short-lived HttpOnly Secure SameSite=Lax flow_id cookie.
+                Short-lived HttpOnly Secure SameSite=Lax `__Host-esp_flow_id` cookie.
               schema:
                 type: string
         "400":
@@ -289,24 +378,40 @@ paths:
             invalid_request / unsupported_response_type / invalid client or
             redirect_uri — rendered on the service error page (not redirected).
           content:
-            application/json:
+            text/html:
               schema:
-                $ref: "#/components/schemas/OAuthError"
+                type: string
+        "500":
+          description: "`server_error` error page, not redirected; plain text when the page itself cannot be served."
+          content:
+            text/html:
+              schema:
+                type: string
+            text/plain:
+              schema:
+                type: string
 
-  /oauth2/federation/start:
+  /user/login/federation/start:
     get:
       summary: Redirect to an upstream identity provider
       description: |
-        Sends the browser to the upstream provider's login. Reads the flow from the `__Host-esp_flow_id` cookie, refuses a provider the client does not allow, and records this leg's own `state`, `nonce` and PKCE verifier on the flow. The client's values never reach the provider.
+        Sends the browser to an `oidc` provider's own sign-in page for the current sign-in, if the client allows that provider.
       tags:
-        - Federated Login
+        - Sign-in Pages
       security: []
       parameters:
         - name: provider
           in: query
           required: true
           description:
-            Provider name from the identity-provider registry (e.g. `cognito`).
+            An `oidc` row's name from the identity-provider registry (e.g. `google`).
+          schema:
+            type: string
+        - name: flow_id
+          in: query
+          required: true
+          description:
+            The sign-in the page's link was drawn for; it must equal the flow cookie.
           schema:
             type: string
         - name: __Host-esp_flow_id
@@ -324,9 +429,19 @@ paths:
                 type: string
         "400":
           description:
-            Missing/expired flow or unknown provider (HTML error page).
+            "`invalid_request`: missing or expired flow, or unknown provider; `flow_replaced`: `flow_id` is not this browser's current sign-in (HTML error page)."
           content:
             text/html:
+              schema:
+                type: string
+        "500":
+          description:
+            "`server_error`: the provider registry could not be read, or the provider's authorize URL could not be built (HTML error page; plain text when the page itself cannot be served)."
+          content:
+            text/html:
+              schema:
+                type: string
+            text/plain:
               schema:
                 type: string
 
@@ -334,15 +449,23 @@ paths:
     get:
       summary: Upstream provider callback
       description: |
-        The provider returns here after login. Verifies `state` against the flow, exchanges the upstream code, validates the upstream `id_token`, finds or creates the ESP User account, and redirects to the client's `redirect_uri` with a single-use `code`. Upstream tokens are discarded.
+        The provider returns here after sign-in. Finishes the sign-in and redirects to `redirect_uri` with a `code`, or to the consent page; upstream tokens are discarded.
+
+        A cancel at the provider goes back to the sign-in page when the client offers another way in, else to `redirect_uri` with `error=access_denied`. Any other error is a `400` page.
       tags:
         - Federated Login
       security: []
       parameters:
         - name: code
           in: query
-          required: true
-          description: Upstream authorization code.
+          required: false
+          description: Upstream authorization code; absent when the provider answers `error`.
+          schema:
+            type: string
+        - name: error
+          in: query
+          required: false
+          description: The provider's refusal, sent instead of `code`.
           schema:
             type: string
         - name: state
@@ -360,7 +483,7 @@ paths:
       responses:
         "302":
           description:
-            Redirect to the client's `redirect_uri` with `code` (+ `state`).
+            To `redirect_uri` with `code` and `state`, or to the consent page; after a cancel, to the sign-in page or to `redirect_uri` with `error=access_denied`.
           headers:
             Location:
               schema:
@@ -378,9 +501,26 @@ paths:
         "400":
           description:
             State/flow mismatch, a missing or different `__Host-esp_flow_id` cookie,
-            or upstream validation failure (HTML error page; no cookie is set).
+            upstream validation failure, or a provider `error` other than a cancel (HTML error page).
           content:
             text/html:
+              schema:
+                type: string
+        "403":
+          description:
+            "`access_denied`: no account of ours can take this person, such as one with no verified email or phone (HTML error page)."
+          content:
+            text/html:
+              schema:
+                type: string
+        "500":
+          description:
+            "`server_error`: the provider registry, the flow or the account could not be read or written, or the code could not be issued (HTML error page; plain text when the page itself cannot be served)."
+          content:
+            text/html:
+              schema:
+                type: string
+            text/plain:
               schema:
                 type: string
 
@@ -393,7 +533,7 @@ paths:
         - `refresh_token`: a new token set; the refresh token rotates
         - `client_credentials`: a confidential client's own access token; no user, refresh token or id token
 
-        Other grants return `unsupported_grant_type`. A confidential client authenticates with HTTP Basic (`401 invalid_client` on failure); a public client sends `client_id` with no secret.
+        Other grants return `unsupported_grant_type`. A confidential client authenticates with HTTP Basic (`client_secret_basic`) or with `client_id` and `client_secret` in the body (`client_secret_post`), Basic winning when both are sent (`401 invalid_client` on failure); a public client sends `client_id` with no secret.
       tags:
         - OAuth2 / OIDC Core
       security:
@@ -410,21 +550,91 @@ paths:
                 - $ref: "#/components/schemas/TokenClientCredentialsRequest"
               discriminator:
                 propertyName: grant_type
+            examples:
+              authorizationCode:
+                summary: authorization_code, public client with PKCE
+                value:
+                  grant_type: authorization_code
+                  code: "<authorization-code>"
+                  code_verifier: "<pkce-code-verifier>"
+                  client_id: rm_mobile
+                  redirect_uri: "com.example://callback"
+              authorizationCodeSecretPost:
+                summary: authorization_code, confidential client with client_secret_post
+                value:
+                  grant_type: authorization_code
+                  code: "<authorization-code>"
+                  client_id: example_web_client
+                  client_secret: "<client-secret>"
+                  redirect_uri: "https://app.example.com/callback"
+              refreshToken:
+                summary: refresh_token, no resource named
+                value:
+                  grant_type: refresh_token
+                  refresh_token: "<refresh-token>"
+                  client_id: rm_mobile
+              refreshTokenWithResource:
+                summary: refresh_token naming one resource the sign-in covers
+                description: The renewed access token's `aud` is this resource; a resource the sign-in does not cover returns `invalid_target` and leaves the refresh token unspent.
+                value:
+                  grant_type: refresh_token
+                  refresh_token: "<refresh-token>"
+                  client_id: rm_mobile
+                  resource: "https://account.example.com"
+              clientCredentials:
+                summary: client_credentials, credentials in the HTTP Basic header
+                value:
+                  grant_type: client_credentials
+                  scope: account.admin
+                  resource: "https://api.example.com"
       responses:
         "200":
-          description: "A fresh token set, including a new refresh token, sent with `Cache-Control: no-store` and `Pragma: no-cache` (RFC 6749 §5.1)."
+          description: "A fresh token set, including a new refresh token, sent with `Cache-Control: no-store` and `Pragma: no-cache` (RFC 6749 §5.1). `client_credentials` returns an access token only."
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/TokenSet"
+              examples:
+                userTokenSet:
+                  summary: authorization_code or refresh_token with openid in scope
+                  value:
+                    access_token: "<access-token>"
+                    token_type: Bearer
+                    expires_in: 3600
+                    refresh_token: "<refresh-token>"
+                    id_token: "<id-token>"
+                    scope: "openid email offline_access"
+                clientCredentials:
+                  summary: client_credentials
+                  value:
+                    access_token: "<access-token>"
+                    token_type: Bearer
+                    expires_in: 3600
         "400":
-          description: invalid_request / invalid_grant / unsupported_grant_type. A refresh token whose session has ended gets invalid_grant.
+          description: invalid_request / invalid_grant / invalid_scope / invalid_target / unauthorized_client / unsupported_grant_type. A refresh token whose session has ended gets invalid_grant.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/OAuthError"
+              examples:
+                invalidTarget:
+                  summary: refresh_token naming a resource the sign-in does not cover
+                  value:
+                    error: invalid_target
+                    error_description: "The requested resource is not part of this authorization."
+                invalidGrant:
+                  summary: unknown, expired, spent or revoked refresh token
+                  value:
+                    error: invalid_grant
+                    error_description: "The refresh token is invalid, expired, or revoked."
         "401":
-          description: invalid_client
+          description: invalid_client — unknown client, a confidential client with a bad or missing secret, or `client_credentials` with no client authentication.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+        "500":
+          description: server_error — the token set could not be issued; retry with backoff.
           content:
             application/json:
               schema:
@@ -434,7 +644,7 @@ paths:
     get:
       summary: OIDC UserInfo endpoint
       description: |
-        Returns the profile claims for the presented access token: `sub` always, `email` with the `email` or `profile` scope, `phone_number` with `phone`.
+        Returns the claims carried in the presented access token: `sub`, `user_id`, `is_admin` and `is_super_admin` always; `email` with the `email` or `profile` scope; `phone_number` with the `phone` or `profile` scope; `name`, `locale` and `picture` with the `profile` scope. A `client_credentials` token is refused with `401`.
       tags:
         - OAuth2 / OIDC Core
       security:
@@ -454,6 +664,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/OAuthError"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
     post:
       summary: OIDC UserInfo endpoint (POST variant)
       description: |
@@ -488,12 +700,14 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/OAuthError"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /oauth2/revoke:
     post:
       summary: OAuth token revocation endpoint
       description: |
-        Ends the login the refresh token belongs to: its whole refresh family, for that application only. An access token is accepted and ignored. Always `200`, even for an unknown token.
+        Ends the refresh token's whole login; only the client it was issued to may revoke it (RFC 7009 §2.1), and an access token or an unknown or already revoked token gets `200` (§2.2).
 
         The client identifies itself with HTTP Basic (confidential) or the `client_id` form field (public). Neither returns `400 invalid_request`; a bad secret or unknown client returns `401 invalid_client`.
       tags:
@@ -513,11 +727,21 @@ paths:
         "400":
           description:
             invalid_request — the `token` is missing, or neither Basic nor
-            `client_id` was supplied.
+            `client_id` was supplied. invalid_grant — the refresh token was
+            issued to another client (RFC 6749 §5.2).
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/OAuthError"
+              examples:
+                missingToken:
+                  value:
+                    error: invalid_request
+                    error_description: token is required.
+                anotherClientsToken:
+                  value:
+                    error: invalid_grant
+                    error_description: The token was not issued to this client.
         "401":
           description:
             invalid_client — unknown client, or a confidential client with a
@@ -526,6 +750,28 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/OAuthError"
+              example:
+                error: invalid_client
+                error_description: client authentication failed.
+        "503":
+          description:
+            temporarily_unavailable — the token may still work; retry later (RFC 7009 §2.2.1).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: temporarily_unavailable
+                error_description: The token could not be revoked; retry later.
+        "500":
+          description: server_error — the client could not be checked; nothing was revoked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: server_error
+                error_description: Internal server error.
 
   # ==========================================
   # GROUP 4: Authenticated User Profile
@@ -543,11 +789,10 @@ paths:
     get:
       summary: RP-Initiated Logout (OpenID Connect RP-Initiated Logout 1.0 §2)
       description: |
-        Signs this browser out: deletes every refresh family under its session, the session and its cookie, then redirects to `post_logout_redirect_uri`. When the identity provider has its own sign-out, the browser goes there first and comes back through `/oauth2/logout/done`.
+        Signs this browser out and redirects to `post_logout_redirect_uri`; unless `id_token_hint` names this session, the person confirms on `/user/logout` first (RP-Initiated Logout 1.0 §2).
 
         - Must be a top-level navigation; a `fetch` does not carry the `SameSite=Lax` session cookie.
-        - `post_logout_redirect_uri` must exactly match one registered for the client. Otherwise it is ignored and the response is `200 Signed out.`; the sign-out still happens.
-        - Access tokens already issued stay valid until they expire (up to an hour).
+        - Access tokens stay valid until they expire, and `offline_access` grants are not ended (OIDC Back-Channel Logout 1.0 §2.7).
       tags:
         - OAuth2 / OIDC Core
       security: []
@@ -567,7 +812,7 @@ paths:
           schema:
             type: string
           description:
-            The client whose registered list the return URL is checked against. Optional when an `id_token_hint` is sent, which names the client itself; when both are sent and `client_id` is not the hint's audience, the return URL is ignored (RP-Initiated Logout 1.0 §2). The sign-out happens either way.
+            The client whose registered return URLs apply. Optional with an `id_token_hint`; ignored when it is not the hint's audience.
         - name: post_logout_redirect_uri
           in: query
           required: false
@@ -582,14 +827,9 @@ paths:
           required: false
           schema:
             type: string
-          description: |
-            A previously issued ID token naming who is signing out. RECOMMENDED, not
-            required. A hint that verifies and names a **different** subject ends nothing —
-            ending a stranger's session on a stranger's say-so is the one outcome that must
-            not happen. A hint that cannot be verified at all is ignored and the sign-out
-            proceeds: omitting the parameter was always allowed, so refusing there would buy
-            nothing and cost every sign-out whose token had merely aged past its hour.
-            Expiry is deliberately not checked for the same reason. A verified hint also names the client when `client_id` is absent.
+          description:
+            The ID token issued to this client; one naming this session's subject and `sid` signs out without asking, expired or not.
+            One that does not verify forfeits the redirect back to the client (RP-Initiated Logout 1.0 §4).
         - name: state
           in: query
           required: false
@@ -601,14 +841,32 @@ paths:
             its request. Ignored when there is no validated destination to return to.
       responses:
         "302":
-          description: |
-            Redirect to the validated destination, or onward to the provider's end-session
-            endpoint. Clears the session cookie.
-        "200":
-          description:
-            Signed out, with nowhere validated to return to. Clears the session cookie.
+          description: To the validated destination (through the provider's end-session endpoint when it has one), or to `/user/logout` to ask the person or when there is no destination.
+          headers:
+            Location:
+              schema:
+                type: string
+                example: "../user/logout?client_id=esp-account-dashboard&post_logout_redirect_uri=https%3A%2F%2Faccounts.example.com%2Fsigned-out&state=xyz123"
+            Set-Cookie:
+              schema:
+                type: string
+                example: "__Host-esp_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0"
+            Referrer-Policy:
+              schema:
+                type: string
+                example: no-referrer
         "405":
           description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+        "500":
+          description: "`server_error`: the hint or the session could not be read, or the session could not be ended; nothing is signed out."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
     post:
       summary: RP-Initiated Logout (form POST)
       description: |
@@ -628,7 +886,6 @@ paths:
                 client_id: { type: string }
                 post_logout_redirect_uri: { type: string, format: uri }
                 state: { type: string }
-                ui_locales: { type: string }
             example:
               client_id: esp-account-dashboard
               post_logout_redirect_uri: https://accounts.example.com/signed-out
@@ -648,21 +905,416 @@ paths:
               schema:
                 $ref: "#/components/schemas/OAuthError"
 
-  /oauth2/logout/done:
+  /user/login:
+    get:
+      summary: The sign-in page
+      description: |
+        The sign-in page. Its page data (`<script type="application/json" id="esp-page-data">`) names the client and the providers it allows; applications never call it.
+
+        Without a live sign-in it shows an error, with "Start again" when there is a sign-in to restart.
+      tags:
+        - Sign-in Pages
+      security: []
+      parameters:
+        - in: cookie
+          name: __Host-esp_flow_id
+          required: false
+          schema:
+            type: string
+          description: The login in progress. Set by `/oauth2/authorize`.
+        - in: query
+          name: login_hint
+          required: false
+          schema:
+            type: string
+          description: Carried from `/oauth2/authorize`; prefills the username. Nothing is authorized on it.
+        - in: query
+          name: idp
+          required: false
+          schema:
+            type: string
+          description: Carried from `/oauth2/authorize`; preselects a provider. Nothing is authorized on it.
+      responses:
+        "200":
+          description: The sign-in application.
+          headers:
+            Content-Security-Policy:
+              schema:
+                type: string
+              description: "`default-src 'none'` with no remote origin permitted, and `frame-ancestors 'none'`."
+            Cache-Control:
+              schema:
+                type: string
+              description: Always `no-store`.
+          content:
+            text/html:
+              schema:
+                type: string
+        "400":
+          description: No flow cookie (`invalid_request`), or the sign-in expired or is gone (`expired_flow`); the error screen offers "Start again" when it can.
+          content:
+            text/html:
+              schema:
+                type: string
+        "500":
+          description: "`server_error`: the flow or its client could not be read, or the client allows no sign-in method; plain text when the page itself cannot be served."
+          content:
+            text/html:
+              schema:
+                type: string
+            text/plain:
+              schema:
+                type: string
+
+  /user/login/password:
+    post:
+      summary: Sign in with a password on the page
+      description: |
+        Checks the password with a provider that has a supported `password_verifier` and finishes the sign-in, answering where to send the browser. Never returns a token.
+      tags:
+        - Sign-in Pages
+      security: []
+      parameters:
+        - in: cookie
+          name: __Host-esp_flow_id
+          required: true
+          schema:
+            type: string
+          description: The login in progress.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [flow_id, username, password]
+              properties:
+                flow_id:
+                  type: string
+                  description: The `flow_id` the sign-in page was served with; it must be the flow cookie's.
+                provider:
+                  $ref: "#/components/schemas/PasswordProvider"
+                username:
+                  type: string
+                  description: The account email or phone number.
+                password:
+                  type: string
+                  format: password
+      responses:
+        "200":
+          description: |
+            Signed in: `redirect_to` is `redirect_uri` with `code` and `state`, or the consent page.
+          headers:
+            Set-Cookie:
+              description: The `__Host-esp_session` cookie (`Path=/; HttpOnly; Secure; SameSite=Lax`).
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+              description: Always `no-store`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RedirectResponse"
+              example:
+                redirect_to: https://app.example.com/cb?code=abc&state=xyz
+        "400":
+          description: "`expired_flow`: the sign-in must start again; `flow_replaced`: another sign-in replaced it; `invalid_request`: an unreadable body or unknown provider."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: flow_replaced
+                error_description: Another sign-in was started in this browser.
+        "401":
+          description: "`invalid_credentials`: a wrong password and an unknown account get the same answer, so the form is no account-existence oracle."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: invalid_credentials
+                error_description: Signin failed. Check your email and password, or reset your password.
+        "403":
+          description: "`unconfirmed_account`, `new_password_required`, `password_reset_required`: the account needs that step first; `provider_not_allowed`; `access_denied`: the account cannot sign in here."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: provider_not_allowed
+                error_description: This application does not allow signing in with that provider.
+        "500":
+          description: "`server_error`: something on our side failed, never a wrong password."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+
+  /user/login/restart:
+    get:
+      summary: Start the same sign-in again after it expired
+      description: |
+        Starts the expired sign-in again with the request the app sent.
+      tags:
+        - Sign-in Pages
+      security: []
+      parameters:
+        - in: cookie
+          name: __Host-esp_flow_id
+          required: true
+          schema:
+            type: string
+          description: The login to resume.
+      responses:
+        "302":
+          description: Redirect to `/oauth2/authorize` with the original parameters.
+          headers:
+            Location:
+              schema:
+                type: string
+        "400":
+          description: "`invalid_request` error page: no flow cookie, or nothing left to resume from."
+          content:
+            text/html:
+              schema:
+                type: string
+        "500":
+          description: "`server_error` error page: the flow could not be read; plain text when the page itself cannot be served."
+          content:
+            text/html:
+              schema:
+                type: string
+            text/plain:
+              schema:
+                type: string
+
+  /user/login/consent:
+    get:
+      summary: The consent screen for a client we do not ship
+      description: |
+        Asks the person to allow an app we do not ship, or one that sent `prompt=consent`; no code exists until they answer (RFC 6749 s10.2).
+      tags:
+        - Sign-in Pages
+      security: []
+      parameters:
+        - in: cookie
+          name: __Host-esp_flow_id
+          required: true
+          schema:
+            type: string
+          description: The sign-in waiting for consent.
+      responses:
+        "200":
+          description: The sign-in application, drawing the consent screen.
+          content:
+            text/html:
+              schema:
+                type: string
+        "400":
+          description: "`invalid_request` error page: no sign-in is waiting for consent."
+          content:
+            text/html:
+              schema:
+                type: string
+        "500":
+          description: "`server_error` error page: the sign-in could not be read; plain text when the page itself cannot be served."
+          content:
+            text/html:
+              schema:
+                type: string
+            text/plain:
+              schema:
+                type: string
+    post:
+      summary: Allow or cancel the client's access
+      description: |
+        Allow issues the held code to this browser's session; Cancel returns `access_denied` to the app. The page then goes to `redirect_to`.
+      tags:
+        - Sign-in Pages
+      security: []
+      parameters:
+        - in: cookie
+          name: __Host-esp_flow_id
+          required: true
+          schema:
+            type: string
+        - in: cookie
+          name: __Host-esp_session
+          required: false
+          schema:
+            type: string
+          description: The session that signed in. An Allow from a browser without it, or with another session, is answered `expired_flow`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision, flow_id]
+              properties:
+                decision:
+                  type: string
+                  enum: [allow, deny]
+                flow_id:
+                  type: string
+                  description: The `flow_id` the consent screen was served with; it must be the flow cookie's.
+      responses:
+        "200":
+          description: Where to send the browser.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              description: Always `no-store`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RedirectResponse"
+              example:
+                redirect_to: https://app.example.com/cb?code=abc&state=xyz
+        "400":
+          description: "`invalid_request`: not allow or deny, or no flow cookie; `flow_replaced`: another sign-in replaced it; `expired_flow`: nothing is waiting for an answer."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+        "500":
+          description: The answer could not be recorded (`server_error`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+
+  /user/logout:
+    get:
+      summary: The sign-out question
+      description: |
+        Asks the person to confirm a sign-out `/oauth2/logout` did not end on its own; the answer goes to `POST /user/logout`.
+      tags:
+        - Sign-in Pages
+      security: []
+      parameters:
+        - in: cookie
+          name: __Host-esp_session
+          required: false
+          schema:
+            type: string
+          description: The session the question is about. Absent, or naming no live session, means there is nothing to ask.
+        - in: query
+          name: client_id
+          required: false
+          schema:
+            type: string
+          description: Carried from `/oauth2/logout`, as are `post_logout_redirect_uri`, `id_token_hint`, `state` and `logout_hint`; this page reads none of them.
+      responses:
+        "200":
+          description: The sign-out question, or, with no session and no query, a signed-out page.
+          headers:
+            Content-Security-Policy:
+              schema:
+                type: string
+              description: "`default-src 'none'` with no remote origin permitted, and `frame-ancestors 'none'`."
+            Cache-Control:
+              schema:
+                type: string
+              description: Always `no-store`.
+          content:
+            text/html:
+              schema:
+                type: string
+              example: '<script type="application/json" id="esp-page-data">{"client":{},"providers":null,"otp_enabled":false,"logout":{"username":"person@example.com","csrf_token":"9jC0b2xWm1TQ2v8Yb1u4XwQx0b4c3kq7oR2sVn6pZ1E"}}</script>'
+        "302":
+          description: No live session, so nothing to ask; back to `/oauth2/logout` with the same query.
+          headers:
+            Location:
+              schema:
+                type: string
+                example: "/oauth2/logout?client_id=esp-account-dashboard&post_logout_redirect_uri=https%3A%2F%2Faccounts.example.com%2Fsigned-out"
+        "500":
+          description: "`server_error` page: the session could not be read; plain text when the page itself cannot be served."
+          content:
+            text/html:
+              schema:
+                type: string
+            text/plain:
+              schema:
+                type: string
+    post:
+      summary: The person's answer to the sign-out question
+      description: Sent only by the `/user/logout` page. Ends this browser's session and answers where to go next.
+      tags:
+        - Sign-in Pages
+      security: []
+      parameters:
+        - name: __Host-esp_session
+          in: cookie
+          required: false
+          schema:
+            type: string
+          description: The session to end; absent or ended means nothing to end.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [csrf_token]
+              properties:
+                csrf_token:
+                  type: string
+                  description: The `logout.csrf_token` the page was served with.
+                client_id: { type: string }
+                post_logout_redirect_uri: { type: string, format: uri }
+                id_token_hint: { type: string }
+                logout_hint: { type: string }
+                state: { type: string }
+            example:
+              csrf_token: 9jC0b2xWm1TQ2v8Yb1u4XwQx0b4c3kq7oR2sVn6pZ1E
+              client_id: esp-account-dashboard
+              post_logout_redirect_uri: https://accounts.example.com/signed-out
+              state: xyz123
+      responses:
+        "200":
+          description: Signed out, or nothing to end; `redirect_to` is the validated destination, empty when there is none.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RedirectResponse"
+              example:
+                redirect_to: https://accounts.example.com/signed-out?state=xyz123
+        "400":
+          description: "`invalid_request`: the body cannot be read."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+        "403":
+          description: "`invalid_request`: `csrf_token` is not this session's; nothing ends."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+        "500":
+          description: "`server_error`: the hint or the session could not be read, or its tokens could not be deleted; the session is left intact."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+
+  /oauth2/federation/logout/callback:
     get:
       summary: Return point for the upstream provider's sign-out
       description: |
-        Where the identity provider returns the browser after its own sign-out. Redirects to the `post_logout_redirect_uri` saved in the `__Host-esp_logout_to` cookie, or answers `200 Signed out.` when there is none. This is the one sign-out URL registered with the provider; applications never call it.
+        Where the provider returns the browser after its own sign-out; it continues to the saved destination, or to `/user/logout`.
       tags:
         - OAuth2 / OIDC Core
       security: []
       responses:
         "302":
-          description: Redirect to the remembered destination, clearing the memo cookie.
-        "200":
-          description: |
-            No memo, or one naming somewhere this server will not forward to: the sign-out
-            is reported complete rather than inventing a destination.
+          description: To the saved destination, or to `/user/logout` when there is none.
 
   /v1/user/sessions:
     get:
@@ -724,11 +1376,7 @@ paths:
                         clients:
                           type: array
                           items:
-                            type: object
-                            properties:
-                              client_id: { type: string }
-                              created_at: { type: integer, format: int64 }
-                              last_used: { type: integer, format: int64 }
+                            $ref: "#/components/schemas/ClientGrant"
               example:
                 sessions:
                   - session_id: sess_9fA2
@@ -740,7 +1388,7 @@ paths:
                     expires_at: 1759750000
                     cookie_expires_at: 1759750000
                     clients:
-                      - { client_id: esp-account-dashboard, created_at: 1725100000, last_used: 1725190000 }
+                      - { client_id: esp-account-dashboard, client_name: ESP Account, created_at: 1725100000, last_used: 1725190000 }
                   - session_id: sess_7bQ9
                     current: false
                     user_agent_type: Android app
@@ -750,7 +1398,7 @@ paths:
                     last_seen_at: 1725300000
                     expires_at: 1759860000
                     clients:
-                      - { client_id: user-pool-client, created_at: 1725000000, last_used: 1725300000 }
+                      - { client_id: rainmaker-neo-home-app-client, created_at: 1725000000, last_used: 1725300000 }
         "401":
           description: Missing, malformed, expired, or not an access token.
           content:
@@ -758,7 +1406,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/OAuthError"
         "403":
-          description: The token was not granted `account:sessions`.
+          description: The token lacks `account:sessions` (`insufficient_scope`), or its client is not first-party (`access_denied`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+        "500":
+          description: "`server_error`: the client registry or storage failed."
           content:
             application/json:
               schema:
@@ -766,7 +1420,7 @@ paths:
     delete:
       summary: Sign out everywhere
       description: |
-        Signs the person out of every user agent, including this one, by deleting every session and refresh family. Requires the `account:sessions` scope.
+        Signs the person out of every user agent, including this one; `offline_access` grants stay (OIDC Back-Channel Logout 1.0 §2.7). Requires the `account:sessions` scope.
       tags:
         - Sessions
       security:
@@ -781,7 +1435,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/OAuthError"
         "403":
-          description: The token was not granted `account:sessions`.
+          description: The token lacks `account:sessions` (`insufficient_scope`), or its client is not first-party (`access_denied`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+        "500":
+          description: "`server_error`: the client registry or storage failed; a retry finishes the sign-out."
           content:
             application/json:
               schema:
@@ -813,7 +1473,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/OAuthError"
         "403":
-          description: The token was not granted `account:sessions`.
+          description: The token lacks `account:sessions` (`insufficient_scope`), or its client is not first-party (`access_denied`).
           content:
             application/json:
               schema:
@@ -824,12 +1484,148 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/OAuthError"
+        "500":
+          description: "`server_error`: the client registry or storage failed; a retry finishes the sign-out."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+
+  /v1/user/connected-apps:
+    get:
+      summary: The apps that hold offline access
+      description: |
+        The clients holding a live `offline_access` grant for the person, one per client, most recently used first; a grant past its expiry is left out. Requires a first-party client's token with `account:sessions`.
+      tags:
+        - Sessions
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The caller's connected apps.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [connected_apps]
+                properties:
+                  connected_apps:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ClientGrant"
+              example:
+                connected_apps:
+                  - { client_id: rainmaker-neo-alexa-client, client_name: Alexa, created_at: 1725000000, last_used: 1725300000, scopes: [offline_access, openid] }
+                  - { client_id: mcp-oauth-client, created_at: 1725100000, last_used: 1725200000, scopes: [offline_access, openid] }
+        "401":
+          description: Missing, malformed, expired, or not an access token; a `client_credentials` token is refused here too.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: invalid_token
+                error_description: The access token is missing, expired, or invalid.
+        "403":
+          description: The token lacks `account:sessions` (`insufficient_scope`), or its client is not first-party (`access_denied`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: insufficient_scope
+                error_description: This token was not granted the account:sessions scope.
+        "405":
+          description: A method this resource does not offer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: invalid_request
+                error_description: Method not allowed.
+        "500":
+          description: The grants or the client registry could not be read.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: server_error
+                error_description: Internal server error.
+
+  /v1/user/connected-apps/{clientId}:
+    delete:
+      summary: Disconnect one app
+      description: |
+        Ends every login the client holds for the person, offline and session alike. Requires a first-party client's token with `account:sessions`.
+      tags:
+        - Sessions
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: clientId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The client's id, from `GET /v1/user/connected-apps`.
+          example: rainmaker-neo-alexa-client
+      responses:
+        "204":
+          description: The app was disconnected. No body.
+        "401":
+          description: Missing, malformed, expired, or not an access token; a `client_credentials` token is refused here too.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: invalid_token
+                error_description: The access token is missing, expired, or invalid.
+        "403":
+          description: The token lacks `account:sessions` (`insufficient_scope`), or its client is not first-party (`access_denied`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: insufficient_scope
+                error_description: This token was not granted the account:sessions scope.
+        "404":
+          description: The caller has no offline grant for this client; nothing is ended.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: invalid_request
+                error_description: No such connected app.
+        "405":
+          description: A method this resource does not offer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: invalid_request
+                error_description: Method not allowed.
+        "500":
+          description: The grants could not be read or changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: server_error
+                error_description: Internal server error.
 
   /v1/user/auth/token:
     post:
       summary: Password sign-in
       description: |
-        Signs in with `username` and `password`, verified against the bundled Cognito pool, and returns an ESP User token set.
+        Signs in with `username` and `password` against the named `provider` (or the first password provider) and returns an ESP User token set.
+        The sign-in covers every API the password client is granted (RFC 8707), and its access token is for the client's `default_resource`; `/v1/user/auth/token/refresh` with `resource` narrows it to another.
       tags:
         - User Auth
       security: []
@@ -839,6 +1635,12 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/LegacyTokenRequest"
+            examples:
+              passwordSignin:
+                summary: Password sign-in
+                value:
+                  username: user@example.com
+                  password: "<password>"
       responses:
         "200":
           description: "ESP User token set, sent with `Cache-Control: no-store` and `Pragma: no-cache` (RFC 6749 §5.1)."
@@ -847,7 +1649,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/TokenSet"
         "400":
-          description: "`Invalid request body`"
+          description: "`Invalid request body`, or `Unknown provider.`"
           content:
             application/json:
               schema:
@@ -856,10 +1658,20 @@ paths:
           description: |
             `Authentication failed` — wrong password, or no such account.
             `Signin failed. Account not verified — reset your password.` — correct password, account never verified.
+            `Signin failed. Password reset required — reset your password.` — correct password, account an administrator reset.
+            `Signin failed. This account needs a new password — contact support.` — correct temporary password, account an administrator created.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "403":
+          description: "`This application does not allow signing in with that provider.`: the Home app client does not allow it."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/user/auth/token/refresh:
     post:
@@ -875,6 +1687,17 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/LegacyRefreshRequest"
+            examples:
+              refresh:
+                summary: Refresh, no resource named
+                value:
+                  refresh_token: "<refresh-token>"
+              refreshWithResource:
+                summary: Refresh naming one resource the sign-in covers
+                description: The renewed access token's `aud` is this resource.
+                value:
+                  refresh_token: "<refresh-token>"
+                  resource: "https://account.example.com"
       responses:
         "200":
           description: "ESP User token set, sent with `Cache-Control: no-store` and `Pragma: no-cache` (RFC 6749 §5.1)."
@@ -883,9 +1706,21 @@ paths:
               schema:
                 $ref: "#/components/schemas/TokenSet"
         "400":
-          $ref: "#/components/responses/BadRequest"
+          description: |
+            `Invalid request body` (e.g. `resource` sent as an array), or an RFC 8707 refusal such as `The requested resource is not part of this authorization.`
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                resourceNotAuthorized:
+                  summary: Refresh naming a resource the sign-in does not cover
+                  value:
+                    message: "The requested resource is not part of this authorization."
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/user/auth/signup:
     post:
@@ -920,7 +1755,23 @@ paths:
                       Code sent. Existing RainMaker users must signin or reset
                       password.
         "400":
-          $ref: "#/components/responses/BadRequest"
+          description: A bad field, a refused address (`Failed to create user account`), a refused password (`Password does not meet the password requirements`), or `Unknown provider.`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: Password does not meet the password requirements
+        "409":
+          description: An account with this email or phone number already exists; sign in or reset the password.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: Account already exists. Signin or reset password.
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/user/auth/signup/verify:
     post:
@@ -943,6 +1794,8 @@ paths:
                 code:
                   type: string
                   description: Verification code Cognito delivered at signup.
+                provider:
+                  $ref: "#/components/schemas/PasswordProvider"
       responses:
         "200":
           description: "`Verified successfully. You can now login.`"
@@ -953,10 +1806,13 @@ paths:
         "400":
           description: |
             `Invalid code or RainMaker account already exists. Try signin or reset password.` — one answer for every failure: wrong, expired or empty code, an account that does not exist, and an account that is already confirmed. The product name appears only when the resolved provider is named RainMaker.
+            A `provider` that is not an enabled row whose `password_verifier` is `cognito` and that has a `client_id` is `Unknown provider.`.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/user/auth/password-recovery:
     post:
@@ -975,6 +1831,8 @@ paths:
                 username:
                   type: string
                   description: The account email or phone number.
+                provider:
+                  $ref: "#/components/schemas/PasswordProvider"
       responses:
         "200":
           description: Reset code sent.
@@ -985,11 +1843,19 @@ paths:
               example:
                 message: If your account exists, you will receive a code
         "400":
-          $ref: "#/components/responses/BadRequest"
+          description: A bad field (`Invalid request body`), a reset that could not start (`Failed to initiate password reset`), or `Unknown provider.`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/user/auth/password-recovery/confirmation:
     post:
       summary: Confirm password recovery
+      description: |
+        Resets the password with the mailed code, then signs out every session of the account; `offline_access` grants stay. An account whose sign-in asks for a second step such as MFA is reset with no session ended.
       tags:
         - User Auth
       security: []
@@ -1007,6 +1873,8 @@ paths:
                   type: string
                 new_password:
                   type: string
+                provider:
+                  $ref: "#/components/schemas/PasswordProvider"
       responses:
         "200":
           description: Password reset.
@@ -1015,27 +1883,40 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         "400":
-          $ref: "#/components/responses/BadRequest"
+          description: A wrong or expired code, or no such account (`Invalid verification code`); a refused password (`Password does not meet the password requirements`); or `Unknown provider.`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: Password does not meet the password requirements
+        "500":
+          description: The service could not start (`Internal server error`), or the password was reset but the sessions could not be signed out; the new password works.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: Password reset, but sessions could not be signed out
 
   /v1/user/auth/password:
     post:
       summary: Change password
       description: |
-        Changes the caller's password. Requires this issuer's access token and the current password. Other sessions stay signed in.
+        Changes the caller's password with the current one, then signs out every session, the caller's included, and disconnects every connected app, so the person signs in again with the new password. Requires an access token from this issuer for any of its APIs in the `Authorization: Bearer` header.
+        A token carrying `idp` changes that provider's password only when its `amr` contains `pwd`; a token without `idp` uses the default password provider.
       tags:
         - User Auth
-      security: []
+      security:
+        - bearerAuth: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [access_token, old_password, new_password]
+              required: [old_password, new_password]
               properties:
-                access_token:
-                  type: string
-                  description: Access token issued by this service.
                 old_password:
                   type: string
                 new_password:
@@ -1048,19 +1929,41 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         "400":
-          description: Missing field.
+          description: The body cannot be parsed.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: The bearer token is missing or invalid, or the old password is wrong.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: Password change failed
+        "403":
+          description: The token is valid but its sign-in used no password ESP User checks; the message names the provider it signed in through.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: You signed in through Google. This doesn't support password change.
+        "500":
+          description: The service could not start (`Internal server error`), or the password was changed but the sessions could not be signed out; the new password works.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: Password changed, but sessions could not be signed out
 
   /v1/user/auth/signout:
     post:
       summary: Sign out
       description: |
-        Ends the login the refresh token belongs to (its refresh family), the same as `/oauth2/revoke`. `global: "true"` is refused with `400`; sign out each login with its own refresh token.
+        Ends the login the refresh token belongs to, as `/oauth2/revoke` does for the RainMaker Home app client; a login that has already ended also answers `200`. `global: "true"` is refused with `400`.
       tags:
         - User Auth
       security: []
@@ -1080,16 +1983,50 @@ paths:
                     Accepted for compatibility; `"true"` is rejected with `400`.
       responses:
         "200":
-          description: Signed out.
-        "400":
-          description:
-            Refresh token missing, or a global signout was requested.
+          description: Signed out, or the login had already ended.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+              example:
+                message: Successfully signed out
+        "400":
+          description: The body cannot be parsed, the refresh token is missing, or a global sign-out was requested.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                missingToken:
+                  value:
+                    message: Refresh token is required
+                global:
+                  value:
+                    message: Global signout is not supported; sign out each session with its refresh token
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: The refresh token is forged or malformed, or was issued to another client.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: Invalid refresh token
+        "500":
+          description: The service could not start; nothing was signed out.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: Internal server error
+        "503":
+          description: The sign-out could not be recorded; the token still works, so retry.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: Sign-out failed; try again
 
   /v1/users/{userId}:
     parameters:
@@ -1115,8 +2052,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/GetUserResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: "`access_denied`: the token's client is not first-party; `Forbidden`: `userId` is neither `me` nor the caller."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/OAuthError"
+                  - $ref: "#/components/schemas/Error"
         "404":
           description: User not found
           content:
@@ -1199,6 +2146,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/admin/clients/{client_id}:
     parameters:
@@ -1247,12 +2196,20 @@ paths:
       responses:
         "200":
           description: Client deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: Client deleted
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/admin/credentials:
     post:
@@ -1282,9 +2239,41 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "500":
           description: Failed to assume the admin-creds role
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: Error assuming role
 
 components:
   schemas:
+    ClientGrant:
+      type: object
+      description: An application holding refresh grants, under a session or as a connected app.
+      required: [client_id]
+      properties:
+        client_id:
+          type: string
+        created_at:
+          type: integer
+          format: int64
+          description: When the earliest of these grants was made, epoch seconds; for an older grant with no record, absent under a session and its last refresh for a connected app.
+        last_used:
+          type: integer
+          format: int64
+          description: The most recent refresh of any of those grants, epoch seconds.
+        client_name:
+          type: string
+          description: The client's registered display name; absent when it registered none.
+        logo_uri:
+          type: string
+          description: The client's registered logo as an inline `data:image/...` URI; absent when it registered none.
+        scopes:
+          type: array
+          items:
+            type: string
+          description: Connected apps only. Every scope granted across the client's offline grants, sorted.
     CredsRequest:
       type: object
       properties:
@@ -1477,6 +2466,8 @@ components:
         password:
           type: string
           format: password
+        provider:
+          $ref: "#/components/schemas/PasswordProvider"
 
     LegacyRefreshRequest:
       type: object
@@ -1485,6 +2476,13 @@ components:
         refresh_token:
           type: string
           description: Refresh token from this surface; spent once redeemed.
+        resource:
+          type: string
+          format: uri
+          description:
+            The one API the renewed access token is for, from among those the
+            sign-in covers. Omitted or empty, the only covered API, else the default.
+          example: "https://account.example.com"
 
     LegacySignupRequest:
       type: object
@@ -1499,6 +2497,8 @@ components:
         password:
           type: string
           format: password
+        provider:
+          $ref: "#/components/schemas/PasswordProvider"
 
     TokenSet:
       type: object
@@ -1518,7 +2518,11 @@ components:
           description: Refresh token; rotated on each use.
         id_token:
           type: string
-          description: Present only if `openid` was requested.
+          description: Present only if `openid` was requested. Like the access token, it carries `amr` (RFC 8176 methods ESP User verified, e.g. `["pwd"]`; absent for a federated sign-in) and `idp` (the provider that authenticated the person) when known.
+        scope:
+          type: string
+          description: The granted scope, space-delimited, which can be narrower than the request (RFC 6749 §5.1). Absent for `client_credentials`.
+          example: "openid email offline_access"
 
     OAuthError:
       type: object
@@ -1539,6 +2543,15 @@ components:
             - invalid_scope
             - invalid_target
             - invalid_token
+            - access_denied
+            - server_error
+            - expired_flow
+            - flow_replaced
+            - unconfirmed_account
+            - new_password_required
+            - password_reset_required
+            - invalid_credentials
+            - provider_not_allowed
           example: "invalid_grant"
         error_description:
           type: string
@@ -1546,6 +2559,18 @@ components:
             Human-readable detail. Does not distinguish why the token was
             rejected.
           example: "The refresh token is invalid, expired, or revoked."
+
+    PasswordProvider:
+      type: string
+      description: A provider with a supported `password_verifier`; omitted, the first such provider by name. Any other name is `400` `Unknown provider.`.
+      example: cognito
+
+    RedirectResponse:
+      type: object
+      description: Where a page of the sign-in application sends the browser next; it never carries a token.
+      properties:
+        redirect_to:
+          type: string
 
     TokenClientCredentialsRequest:
       type: object
@@ -1566,6 +2591,14 @@ components:
           type: string
           enum: ["client_credentials"]
           example: "client_credentials"
+        client_id:
+          type: string
+          description: The client, when it authenticates in the body (`client_secret_post`) instead of HTTP Basic.
+          example: "example_service_client"
+        client_secret:
+          type: string
+          format: password
+          description: A confidential client's secret when it authenticates in the body (`client_secret_post`) instead of HTTP Basic.
         scope:
           type: string
           description: |
@@ -1579,14 +2612,14 @@ components:
           description: |
             RFC 8707 resource indicator: the API this token is for, stamped into `aud`.
             Must appear in the client's `allowed_resources` or the request is rejected
-            with `invalid_target`; a client with none registered may request none.
+            with `invalid_target`.
 
             **At most one.** Two `resource` values are rejected rather than producing a
             multi-audience token, so a leaked token is useful against exactly one API.
 
-            Omitted leaves `aud` as the `client_id`, which is the shape a caller that does
-            not use this extension sees.
-          example: "https://api.accounts.espressif.com"
+            **Omitted or empty:** the client's `default_resource`; a client without one is refused
+            with `invalid_target`.
+          example: "https://api.example.com"
 
     TokenCodeRequest:
       type: object
@@ -1598,7 +2631,6 @@ components:
       required:
         - grant_type
         - code
-        - client_id
         - redirect_uri
       properties:
         grant_type:
@@ -1618,19 +2650,30 @@ components:
           example: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
         client_id:
           type: string
-          description: Must equal the client that started the flow.
-          example: "user-pool-client"
+          description: Must equal the client that started the flow. Required unless the client authenticates with HTTP Basic.
+          example: "rainmaker-neo-home-app-client"
+        client_secret:
+          type: string
+          format: password
+          description: A confidential client's secret when it authenticates in the body (`client_secret_post`) instead of HTTP Basic.
         redirect_uri:
           type: string
           description: Must equal the redirect_uri used at authorize.
           example: "com.example://callback"
+        resource:
+          type: string
+          format: uri
+          description:
+            The one API this access token is for, from among those the sign-in
+            covers (RFC 8707 s2.2). Omitted or empty, the only covered API, else the client's
+            `default_resource`. At most one; otherwise `invalid_target`.
+          example: "https://api.example.com"
 
     TokenRefreshRequest:
       type: object
       required:
         - grant_type
         - refresh_token
-        - client_id
       properties:
         grant_type:
           type: string
@@ -1644,29 +2687,69 @@ components:
           example: "a1b2c3d4.9f8e7d6c..."
         client_id:
           type: string
-          description: The client the token was issued to. Required.
+          description: The client the token was issued to. Required unless the client authenticates with HTTP Basic.
           example: "rm_mobile"
+        client_secret:
+          type: string
+          format: password
+          description: A confidential client's secret when it authenticates in the body (`client_secret_post`) instead of HTTP Basic.
+        resource:
+          type: string
+          format: uri
+          description:
+            The one API the renewed access token is for, from among those the
+            sign-in covers (RFC 8707 s2.2). Omitted or empty, the only covered API, else the
+            client's `default_resource`. A refusal does not spend the refresh token.
+          example: "https://account.example.com"
 
     UserinfoResponse:
       type: object
       description: |
-        UserInfo claims. `sub` is always present; `email` / `phone_number`
-        appear only when the access token's scope allows them and the user has them set.
+        UserInfo claims, taken from the access token. `sub`, `user_id`, `is_admin`
+        and `is_super_admin` are always present; the profile claims appear only when
+        the access token's scope allows them and the user has them set.
       required:
         - sub
+        - user_id
+        - is_admin
+        - is_super_admin
       properties:
         sub:
           type: string
           description: The user's immutable user id (the token subject).
           example: "9aXb7cD..."
+        user_id:
+          type: string
+          description: The same value as `sub`.
+          example: "9aXb7cD..."
+        is_admin:
+          type: boolean
+          description: Always `false` for an ESP User access token.
+          example: false
+        is_super_admin:
+          type: boolean
+          description: Always `false` for an ESP User access token.
+          example: false
         email:
           type: string
           description: Present only with `email` / `profile` scope.
           example: "user@example.com"
         phone_number:
           type: string
-          description: Present only with `phone` scope.
+          description: Present only with `phone` / `profile` scope.
           example: "+15551234567"
+        name:
+          type: string
+          description: Present only with `profile` scope.
+          example: "Jane Doe"
+        locale:
+          type: string
+          description: Present only with `profile` scope.
+          example: "en-US"
+        picture:
+          type: string
+          description: Present only with `profile` scope.
+          example: "https://example.com/jane.png"
 
     RevokeRequest:
       type: object
@@ -1676,9 +2759,8 @@ components:
         token:
           type: string
           description:
-            The refresh token to revoke. Only this one token is invalidated, not
-            the other tokens from the same login. An access token here has no
-            effect.
+            The refresh token to revoke. Its whole refresh family, the login it
+            belongs to, is ended. An access token here has no effect.
           example: "a1b2c3d4.9f8e7d6c..."
         token_type_hint:
           type: string
@@ -1690,7 +2772,7 @@ components:
           description:
             Public client identifier (RFC 6749 §3.2.1) when not using the Basic
             header. A confidential client authenticates via Basic instead.
-          example: "user-pool-client"
+          example: "rainmaker-neo-home-app-client"
 
     GetUserResponse:
       type: object
@@ -1765,14 +2847,20 @@ components:
           type: array
           items:
             type: string
-            enum: ["openid", "email", "profile", "phone", "account:sessions"]
+            enum: ["openid", "email", "profile", "phone", "account:sessions", "offline_access"]
           example: ["openid", "profile", "email", "phone"]
         require_pkce:
           type: boolean
           description: Always true for public clients.
+        application_type:
+          type: string
+          enum: [web, native]
+          description: A native app's sign-in gets a session of its own, so a browser sign-out leaves it signed in (OIDC Dynamic Client Registration 1.0 s2). A native client must be public and may redirect only to its own URI scheme or an http loopback address.
         first_party:
           type: boolean
-          description: Whether this client is one the account ships itself; only a first-party client may manage a user's own sessions.
+          description: Whether this client is one the account ships itself. A first-party client signs in with no consent screen and may manage a user's own sessions.
+        logo_uri:
+          $ref: "#/components/schemas/LogoURI"
         allowed_resources:
           type: array
           description:
@@ -1789,6 +2877,14 @@ components:
           items:
             type: string
             format: uri
+        default_resource:
+          type: string
+          format: uri
+          description:
+            The one resource an access token is for when a request names no `resource`
+            (RFC 9068 s3). Must be one of `allowed_resources`. Absent means a request that
+            names no resource is refused with `invalid_target`.
+          example: https://api.example.com
         allowed_providers:
           type: array
           description:
@@ -1865,7 +2961,7 @@ components:
             effect today.
           items:
             type: string
-            enum: ["openid", "email", "profile", "phone", "account:sessions"]
+            enum: ["openid", "email", "profile", "phone", "account:sessions", "offline_access"]
           default: []
         require_pkce:
           type: boolean
@@ -1873,12 +2969,20 @@ components:
             Always true for public clients (forced server-side); applies to
             confidential clients as sent.
           default: false
+        application_type:
+          type: string
+          enum: [web, native]
+          default: web
+          description: native for an app installed on a device; each of its sign-ins then gets a session of its own, so a browser sign-out leaves it signed in. A native client must be public and may redirect only to its own URI scheme or an http loopback address.
         first_party:
           type: boolean
           description:
-            Mark this client as one the account ships itself. Only a first-party client may
-            manage a user's own sessions; leave false for third-party integrations.
+            Mark this client as one the account ships itself. A first-party client signs in with
+            no consent screen and may manage a user's own sessions; leave false for third-party
+            integrations, which the person is asked to allow on every sign-in.
           default: false
+        logo_uri:
+          $ref: "#/components/schemas/LogoURI"
         allowed_resources:
           type: array
           description:
@@ -1895,6 +2999,14 @@ components:
           items:
             type: string
             format: uri
+        default_resource:
+          type: string
+          format: uri
+          description:
+            The one resource an access token is for when a request names no `resource`
+            (RFC 9068 s3). Must be one of `allowed_resources`. Absent means a request that
+            names no resource is refused with `invalid_target`.
+          example: https://api.example.com
         allowed_providers:
           type: array
           description:
@@ -1942,14 +3054,20 @@ components:
           type: array
           items:
             type: string
-            enum: ["openid", "email", "profile", "phone", "account:sessions"]
+            enum: ["openid", "email", "profile", "phone", "account:sessions", "offline_access"]
         require_pkce:
           type: boolean
+        application_type:
+          type: string
+          enum: [web, native]
+          description: Replaces the stored type when sent; omitting it keeps the stored one. A native client must be public and may redirect only to its own URI scheme or an http loopback address.
         first_party:
           type: boolean
           description:
             Whether this client is one the account ships itself. PUT replaces it, so omitting
             it resets to false.
+        logo_uri:
+          $ref: "#/components/schemas/LogoURI"
         allowed_resources:
           type: array
           description:
@@ -1966,6 +3084,14 @@ components:
           items:
             type: string
             format: uri
+        default_resource:
+          type: string
+          format: uri
+          description:
+            The one resource an access token is for when a request names no `resource`
+            (RFC 9068 s3). Must be one of `allowed_resources`. Absent means a request that
+            names no resource is refused with `invalid_target`.
+          example: https://api.example.com
         allowed_providers:
           type: array
           description:
@@ -1974,6 +3100,11 @@ components:
             absent menu cannot sensibly mean none.
           items:
             type: string
+
+    LogoURI:
+      type: string
+      description: "The client's logo on the consent screen (RFC 7591 §2): a base64 PNG, JPEG or WebP `data:` URI of at most 4 KiB."
+      example: data:image/png;base64,iVBORw0KGgo=
 
     ClientCreateResponse:
       type: object

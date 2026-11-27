@@ -79,6 +79,12 @@ DASHBOARD_STAMP := build/.dashboard-build.stamp
 DASHBOARD_NPM_STAMP := $(DASHBOARD_DIR)/node_modules/.package-lock.json
 DASHBOARD_SRCS := $(shell find $(DASHBOARD_DIR) \( -name node_modules -o -name dist \) -prune -o -type f -print)
 
+# The sign-in page, embedded into the authorize Lambda with go:embed, so everything that compiles Go depends on its stamp.
+HOSTED_UI_DIR := src/espuser/hosted-ui
+HOSTED_UI_STAMP := build/.hosted-ui-build.stamp
+HOSTED_UI_NPM_STAMP := $(HOSTED_UI_DIR)/node_modules/.package-lock.json
+HOSTED_UI_SRCS := $(shell find $(HOSTED_UI_DIR) \( -name node_modules -o -name dist \) -prune -o -type f -print)
+
 # --- rmng-lint ---------------------------------------------------------------
 RMNG_LINT := build/rmng-lint
 LINT_SRCS := $(shell find src/tools/rmng-lint -name '*.go')
@@ -122,7 +128,7 @@ LAMBDA_PKGS := $(sort $(dir $(MAIN_FILES)))
 # Recursive rather than a plain prerequisite list so -j applies to the ~47 lambda links (and
 # their go_deps.sh dependency scans) however make itself was invoked — deploy/setup/synth all
 # depend on go_build, and none of their callers (CI, Jenkins, the /deploy skill) pass -j.
-go_build:  ## Build all Lambda binaries into build/<fn>/bootstrap
+go_build: $(HOSTED_UI_STAMP)  ## Build all Lambda binaries into build/<fn>/bootstrap
 	@$(GO_LAMBDA_ENV) go build -p $(BUILD_JOBS) $(GO_LAMBDA_FLAGS) $(LAMBDA_PKGS)
 	@$(MAKE) --no-print-directory -j$(BUILD_JOBS) $(BUILD_TARGETS) optional-build
 
@@ -160,6 +166,9 @@ $(foreach main_go,$(MAIN_FILES),$(eval $(call get_deps,$(main_go))))
 # Include the dependencies files in the build rules (use -include to ignore missing files)
 $(foreach main_go,$(MAIN_FILES),$(eval -include $(call main_to_target,$(main_go)).deps))
 
+# Not from the generated .deps: the bundle's content-hashed names stop existing at the next UI build, while the stamp's name is stable.
+build/authorize/$(BINARY_NAME): $(HOSTED_UI_STAMP)
+
 $(BUILD_TARGETS):
 	mkdir -p $(dir $@)
 	$(GO_LAMBDA_ENV) go build $(GO_LAMBDA_FLAGS) -o $@ ./$(dir $<)
@@ -173,6 +182,18 @@ $(DASHBOARD_NPM_STAMP): $(DASHBOARD_DIR)/package-lock.json $(DASHBOARD_DIR)/pack
 $(DASHBOARD_STAMP): $(DASHBOARD_NPM_STAMP) $(DASHBOARD_SRCS)
 	cd $(DASHBOARD_DIR) && npm run build
 	@mkdir -p $(dir $@) && touch $@
+
+$(HOSTED_UI_NPM_STAMP): $(HOSTED_UI_DIR)/package-lock.json $(HOSTED_UI_DIR)/package.json
+	cd $(HOSTED_UI_DIR) && npm ci
+	@touch $@
+
+$(HOSTED_UI_STAMP): $(HOSTED_UI_NPM_STAMP) $(HOSTED_UI_SRCS)
+	cd $(HOSTED_UI_DIR) && npm run build
+	@mkdir -p $(dir $@) && touch $@
+
+hosted-ui-build: $(HOSTED_UI_STAMP)  ## Build the sign-in page bundle
+hosted-ui-test: $(HOSTED_UI_NPM_STAMP)  ## Unit-test the sign-in page
+	cd $(HOSTED_UI_DIR) && npm test
 
 # .gitlab-ci.yml (dashboard_check) invokes this name directly.
 admin-dashboard-build: $(DASHBOARD_STAMP)  ## Build admin dashboard static assets
@@ -399,7 +420,7 @@ TEST_ARGS ?=
 # Scope ginkgo to rmng's own module. Submodules with their own go.mod (src/esp-cloud-common, src/mcp/proxy) are unreachable here — see TEST_SUBMODULES at the top.
 TEST_PACKAGES := ./src/... ./test/infra/...
 
-test: $(TEST_SUBMODULES:%=%-test)  ## Run ginkgo unit tests with coverage
+test: $(HOSTED_UI_STAMP) hosted-ui-test $(TEST_SUBMODULES:%=%-test) py-test  ## Run the sign-in page's and the Python unit tests, then the Go unit tests (ginkgo, with coverage)
 	@mkdir -p build/tests
 	@rm -f build/tests/*.txt
 	@go clean -testcache && TEST_OUTPUT_DIR=$(CURDIR)/build/tests ginkgo --tags "$(GO_BUILD_TAGS)" $(TEST_ARGS) --cover --output-dir=$(CURDIR)/build/coverage --coverprofile=coverage.out $(TEST_PACKAGES)
@@ -409,6 +430,9 @@ ifneq ($(OPTIONAL_MODULES),)
 	@echo "--- optional-module tests ---"
 	@GOWORK=$(SUPERPROJECT_GOWORK) TEST_OUTPUT_DIR=$(CURDIR)/build/tests ginkgo --tags "$(GO_BUILD_TAGS)" $(TEST_ARGS) $(OPTIONAL_MODULES_DIR)/...
 endif
+
+py-test:  ## Run the Python unit tests (no AWS or deployed stack needed)
+	pytest test/unittest -q
 
 # Generate one <name>-test target per TEST_SUBMODULES entry, each forwarding to that submodule's own `make test`.
 $(TEST_SUBMODULES:%=%-test): %-test: ; $(MAKE) -C $* test
@@ -463,8 +487,8 @@ githooks:  ## Point git at .githooks so the pre-commit secret scan runs
 
 # Pattern targets are deliberately absent: `%` is a literal filename in .PHONY, so listing
 # `deploy-%` there did nothing. They are phony in practice because no such file is produced.
-.PHONY: all help go_build optional-build admin-dashboard-build \
+.PHONY: all help go_build optional-build admin-dashboard-build hosted-ui-build hosted-ui-test \
 	deploy setup diff destroy synth publish outputs \
-	lint go-lint go-fmt py-lint vulncheck test itest itest-setup test-infra-destroy plantuml clean githooks \
+	lint go-lint go-fmt py-lint vulncheck test py-test itest itest-setup test-infra-destroy plantuml clean githooks \
 	update-mcp-schema \
 	$(TEST_SUBMODULES:%=%-test)

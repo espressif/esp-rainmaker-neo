@@ -1,132 +1,87 @@
-# Espressif user management
+# Espressif User Management
 
-A comprehensive, secure, and scalable user management system that can be integrated with any Espressif product. It is designed to be used across regions and AWS accounts.
+ESP User is the OAuth 2.1 and OpenID Connect authorization server of an ESP RainMaker Neo deployment. Every token an end user's application holds is issued here. A person can sign in with a password, a one-time code, or an external OpenID Connect provider; whichever they use, the application receives ESP User's own tokens and never the provider's.
 
+Admins sign in separately, directly against the admin Cognito user pool ([admin_auth.md](docs/specs/admin_auth.md)).
 
-## Table of Contents
+## Capabilities
 
-- [Espressif user management stack](#espressif-user-management-stack)
-  - [Table of Contents](#table-of-contents)
-  - [Inputs from user](#inputs-from-user)
-  - [Resources](#resources)
-    - [User](#user)
-    - [Admin](#admin)
-  - [Privacy and security](#privacy-and-security)
-  - [Flags](#flags)
-  - [Outputs](#outputs)
-  - [Security \& Privacy](#security--privacy)
-    - [Data Encryption](#data-encryption)
-- [🚀 Deployment \& Operations](#-deployment--operations)
-  - [Configuration](#configuration)
-    - [Environment Variables](#environment-variables)
-    - [Database Configuration](#database-configuration)
-      - [DynamoDB (Recommended)](#dynamodb-recommended)
-      - [PostgreSQL](#postgresql)
-  - [Deployment Options](#deployment-options)
-    - [AWS Serverless Deployment](#aws-serverless-deployment)
-    - [Docker Deployment](#docker-deployment)
-    - [Kubernetes Deployment](#kubernetes-deployment)
-  - [Monitoring \& Analytics](#monitoring--analytics)
-    - [User Statistics](#user-statistics)
-    - [Health Monitoring](#health-monitoring)
-    - [Audit Logging](#audit-logging)
-  - [Migration Tools](#migration-tools)
-    - [From Existing User System](#from-existing-user-system)
-    - [Gradual Migration](#gradual-migration)
-- [🔧 Customization \& Support](#-customization--support)
-  - [Template Customization](#template-customization)
-    - [Email Templates](#email-templates)
-    - [SMS Templates](#sms-templates)
-    - [Custom User Fields](#custom-user-fields)
-  - [Troubleshooting](#troubleshooting)
-    - [Common Issues](#common-issues)
-      - [1. Authentication Failures](#1-authentication-failures)
-      - [2. Database Connection Issues](#2-database-connection-issues)
-      - [3. Rate Limit Issues](#3-rate-limit-issues)
-      - [4. OAuth Integration Issues](#4-oauth-integration-issues)
-    - [Debug Mode](#debug-mode)
-    - [Performance Tuning](#performance-tuning)
-  - [Support \& Contributing](#support--contributing)
-    - [Getting Help](#getting-help)
-    - [Contributing](#contributing)
-      - [Development Setup](#development-setup)
-      - [Code Style](#code-style)
-    - [License](#license)
+| Capability | Specification |
+| --- | --- |
+| Authorization Code Grant with PKCE (RFC 6749, RFC 7636) | [authorize-code-flow.md](docs/specs/authorize-code-flow.md) |
+| Refresh Token Rotation and Reuse Detection (RFC 6749, RFC 9700) | [auth-flows.md](docs/specs/auth-flows.md) |
+| Client Credentials Grant (RFC 6749) | [auth-flows.md](docs/specs/auth-flows.md) |
+| Token Revocation (RFC 7009) | [auth-flows.md](docs/specs/auth-flows.md) |
+| UserInfo Endpoint (OpenID Connect Core 1.0) | [auth-flows.md](docs/specs/auth-flows.md) |
+| Discovery and Signing Keys (OpenID Connect Discovery 1.0, RFC 8414, RFC 7517) | [oidc-oauth2.md](docs/specs/oidc-oauth2.md) |
+| Audience-Restricted Access Tokens (RFC 8707) | [resource-indicators.md](docs/specs/resource-indicators.md) |
+| Single Sign-On Sessions (OpenID Connect Core 1.0) | [sso-sessions.md](docs/specs/sso-sessions.md) |
+| RP-Initiated Logout (OpenID Connect RP-Initiated Logout 1.0) | [sso-sessions.md](docs/specs/sso-sessions.md) |
+| Offline Access (OpenID Connect Core 1.0) | [sso-sessions.md](docs/specs/sso-sessions.md) |
+| User Consent for Third-Party Clients | [authorize-code-flow.md](docs/specs/authorize-code-flow.md) |
+| Brokered Sign-In with External OpenID Connect Providers | [federation.md](docs/specs/federation.md), [external-provider.md](docs/specs/external-provider.md) |
+| OAuth Client Registry | [admin-clients.md](docs/specs/admin-clients.md) |
+| Native Password API | [legacy-user-auth.md](docs/specs/legacy-user-auth.md) |
 
-## Inputs from user
+## Architecture
 
-- Default admin user email (can be changed later)
+```mermaid
+flowchart LR
+    apps["Client applications"] -->|"sign in, get tokens"| espuser["ESP User"]
+    espuser -->|"check credentials"| idps["Identity providers"]
+    espuser --- stores[("DynamoDB, KMS, SSM")]
+    apps -->|"access token"| apis["Resource servers"]
+    apis -.->|"signing keys (JWKS)"| espuser
+```
 
-## Resources
+ESP User runs as Go Lambda functions behind API Gateway. DynamoDB holds every piece of state, KMS holds the token-signing key, and SSM holds the published key set.
 
-### User
+- **One issuer for every sign-in.** ESP User verifies the upstream identity server-side and issues its own tokens, so upstream tokens never reach a client ([federation.md](docs/specs/federation.md)).
+- **One API per access token.** Each access token names exactly one resource server in `aud`, so a leaked token opens only that API ([resource-indicators.md](docs/specs/resource-indicators.md)).
+- **Refresh tokens rotate.** Every refresh returns a new refresh token, and presenting a spent one ends that login ([auth-flows.md](docs/specs/auth-flows.md)).
+- **The signing key never leaves KMS.** Resource servers verify tokens locally against the published key set and never call ESP User per request ([oidc-oauth2.md](docs/specs/oidc-oauth2.md)).
+- **Sign-in pages are served by ESP User itself,** from the same origin as the API. They keep an opaque session cookie for single sign-on and hand the application an authorization code, never a token ([sso-sessions.md](docs/specs/sso-sessions.md)).
 
-- Cognito User Pool
-- A default root admin user
-- APIs:
-  - User
-    - Signup (Can there be a link for verification?)
-    - Login (email/phone + password OR OTP based or SRP)
-    - Forgot and change password
-    - Update profile: locale, name, email, phone number, picture, preferences, custom data (can be set by each product)
-    - Get user
-    - MFA: enable, disable (TODO: required?)
-    - Signout
-    - Export/Email data
-    - Delete account
-    - Link accounts
-    - Get active sessions, revoke session (session_id, created_at, last_used, ip_address, user_agent, current)
-    - Publish events to be consumed by webhooks
+## Tokens
 
-TODO: Custom OAuth?
-TODO: Scope
+| Token | Format | Issued to | Lifetime |
+| --- | --- | --- | --- |
+| Access token | JWT, RS256 | One resource server, named in `aud` | 1 hour |
+| ID token | JWT, RS256 | The client application | 1 hour |
+| Refresh token | Signed string, opaque to clients | The client application | 365 days, renewed on every use |
 
-### Admin
+An access token authorizes API calls; an ID token only identifies the user to the client and is never sent to an API.
 
-- Cognito User Pool
-- Cognito User Pool Clients for dashboard and admin cli - TODO: configurable?
-- Cognito User Pool Domain - TODO: required?
-- A default admin user
-- APIs:
-  - Own account
-    - Same as [User](README.md#user)
-    - Change admin user
-  - User accounts
-    - User management CRUD (including search by tags, email, phone number, name, active users, created_at, ) (Includes cloud to cloud auth)
-    - RBAC for admins
-    - Admin editable custom data and tags per user
-    - User session logs
-    - Purge inactive users
-    - User groups?
-    - Aanlytics (active users, new users)
-  - Configuration
-    - Cognito domain CRUD for both pools (TODO: Required for admin pool?)
-    - App clients CRUD for both pools (Clients for apps, dashboard, CLI, alexa and gva - TODO: configurable?)
-    - Identity providers CRUD for user pool (Providers for google, apple, github, amazon, facebook, any other oidc provider)
-    - Email/SMS templates CRUD
-    - Email/SMS service logs
-    - SES mail sender CRUD
-  - Bulk user accounts
-    - Import users with password
-    - Bulk updates
-    - Gradual migration: user validation and creation against an existing system
+## Integrating
 
-TODO: Sub admin
+**A client application** is registered by an admin in the client registry ([admin-clients.md](docs/specs/admin-clients.md)) with its exact redirect URIs and the APIs it may call. It reads `/.well-known/openid-configuration`, signs the user in with the authorization code grant and PKCE, and names the API it needs with the `resource` parameter.
 
-## Privacy and security
-- PKCE for OAuth
-- Password policy
-- Data encryption
-- Data retention
-- Token expiration and rotation
+**A resource server** verifies every access token against ESP User's published keys, issuer and expiry, and accepts it only when `aud` names that server. The full checklist is in [resource-indicators.md](docs/specs/resource-indicators.md#what-a-resource-server-must-check).
 
-## Flags
-Keep flags for notify, etc.
+The HTTP contract for every endpoint is [User_Api_Swagger.yaml](../../docs/api/User_Api_Swagger.yaml).
 
-## Outputs
+## Code layout
 
-- API gateway URL
-- Admin Cognito OAuth ARN and URL
-- Admin Cognito user pool client Id and secret
-- User Cognito OAuth ARN and URL
-- User Cognito user pool client Id and secret
+| Path | Responsibility |
+| --- | --- |
+| `handlers/` | One Lambda per directory: `authorize`, `token`, `revoke`, `userinfo`, `sessions`, `well_known`, `publish_discovery`, `user_auth`, `user_common`, `clients`, `espuser_admin_creds` |
+| `auth/` | Sign-in completion, token minting and verification, resource selection |
+| `refreshtoken/` | Refresh-token issue, rotation, reuse detection and revocation |
+| `session/` | The authorization server's browser session |
+| `idp/` | External identity providers: provider registry and the brokered sign-in |
+| `legacyauth/` | The native password API |
+| `clients/` | OAuth client registry service |
+| `scope/` | Scope parsing and checks |
+| `sender/` | Sender address resolution for outgoing email |
+| `db/` | One package per DynamoDB table |
+| `hosted-ui/` | The sign-in, consent and sign-out pages, compiled into the `authorize` Lambda |
+| `stacks/` | CDK stacks |
+
+## Specifications
+
+- **Protocol:** [oidc-oauth2.md](docs/specs/oidc-oauth2.md), [authorize-code-flow.md](docs/specs/authorize-code-flow.md), [auth-flows.md](docs/specs/auth-flows.md), [resource-indicators.md](docs/specs/resource-indicators.md)
+- **Sessions and sign-out:** [sso-sessions.md](docs/specs/sso-sessions.md), [hosted-ui.md](docs/specs/hosted-ui.md)
+- **Identity providers:** [federation.md](docs/specs/federation.md), [external-provider.md](docs/specs/external-provider.md), [legacy-user-auth.md](docs/specs/legacy-user-auth.md), [email-sender.md](docs/specs/email-sender.md)
+- **Administration:** [admin-clients.md](docs/specs/admin-clients.md), [admin_auth.md](docs/specs/admin_auth.md)
+
+How ESP RainMaker Neo exchanges an ESP User access token for AWS credentials is in [user_auth.md](../../docs/en/specs/user_auth.md).

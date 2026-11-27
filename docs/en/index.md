@@ -24,6 +24,7 @@ specs/espuser/oidc-oauth2
 specs/espuser/authorize-code-flow
 specs/espuser/auth-flows
 specs/espuser/sso-sessions
+specs/espuser/hosted-ui
 specs/espuser/resource-indicators
 specs/espuser/federation
 specs/espuser/external-provider
@@ -178,6 +179,8 @@ behind that overview:
   token, userinfo and revoke endpoints.
 - [SSO Sessions](specs/espuser/sso-sessions.md) — the authorization server's own
   session: one row per sign-in, the session APIs, and sign-out.
+- [Hosted Sign-in Pages](specs/espuser/hosted-ui.md) — the sign-in, consent
+  and sign-out pages ESP User serves, and what each is told.
 - [Resource Indicators](specs/espuser/resource-indicators.md) — RFC 8707
   `resource`, and the audience it stamps into an access token.
 - [Brokered Federation](specs/espuser/federation.md) — upstream identity

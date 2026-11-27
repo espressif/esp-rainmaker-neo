@@ -5,24 +5,27 @@
 """Integration tests for the public OIDC/OAuth discovery documents and the pages a browser is sent
 to.
 
-These are things only a deployment can answer. The discovery documents are static S3 objects written
-by a lambda at deploy time, so what the code builds and what clients read are two different questions:
-a unit test asserts the value in the struct, only a request shows what is being served. The security
-headers are here for the same reason -- a handler setting a Content-Security-Policy proves nothing
-about what ships, because API Gateway, CloudFront and the Lambda response mapping can each drop a
-header on the way out, and a stripped CSP is invisible until somebody uses it.
+These are things only a deployment can answer. The well-known Lambda builds the discovery documents and
+API Gateway carries them out, so a unit test asserts what the handler sets and only a request shows
+what is served. The security headers are here for the same reason -- a handler setting a
+Content-Security-Policy proves nothing about what ships, because API Gateway and the Lambda response
+mapping can each drop a header on the way out, and a stripped CSP is invisible until somebody uses it.
 
 Not here, because the unit specs already own them: the CSP's exact contents, the nonce being fresh
 per render, display names being escaped, and the documents' cache lifetimes.
 
 Spec: espuser/docs/en/specs/oidc-aouth2.md, sso-sessions.md.
 """
+from urllib.parse import urlparse
+
 import pytest
 import requests
 
+from py_sdk.espuser_oauth import pkce_pair
 from test.itest.conftest import (
     SESSIONS_SCOPE,
     USER_API_GATEWAY_URL,
+    decode_jwt_claims,
     esp_user_base_outputs,
 )
 
@@ -37,14 +40,28 @@ OIDC_DOC = "/.well-known/openid-configuration"
 OAUTH_DOC = "/.well-known/oauth-authorization-server"
 
 STALE_DOC_HINT = (
-    "The documents are static S3 objects written by the publish_discovery lambda at deploy time. If "
-    "this fails after a code change, the stack needs redeploying (and the lambda's PublishVersion "
-    "bumped) -- the value in the Go source is not what clients read."
+    "The well-known Lambda builds these documents per request. If this fails after a code change, "
+    "espuser-core has not been redeployed -- the value in the Go source is not what clients read yet."
 )
 
 
 def _get(path):
     return requests.get(f"{ISSUER}{path}", timeout=15)
+
+
+LOGIN_PAGE_REDIRECT = "https://example.com/itest-login-page/callback"
+
+
+def _login_page(base, register_espuser_client):
+    """The sign-in page as a browser reaches it: through /oauth2/authorize, because /user/login describes
+    only a sign-in in progress and answers a bare request with the restart screen."""
+    client = register_espuser_client(client_name="itest login page", redirect_uris=[LOGIN_PAGE_REDIRECT])
+    _, challenge = pkce_pair()
+    return requests.Session().get(f"{base}/oauth2/authorize", params={
+        "response_type": "code", "client_id": client.client_id, "redirect_uri": LOGIN_PAGE_REDIRECT,
+        "scope": "openid email", "state": "itest-state",
+        "code_challenge": challenge, "code_challenge_method": "S256",
+    }, timeout=15)
 
 
 def test_openid_configuration():
@@ -81,6 +98,9 @@ def test_openid_configuration():
     # The sessions API refuses every token that did not ask for this scope, so a client that cannot
     # discover it will never ask.
     assert SESSIONS_SCOPE in doc.get("scopes_supported", []), \
+        f"{OIDC_DOC} advertises {doc.get('scopes_supported')}. {STALE_DOC_HINT}"
+    # OIDC Core 1.0 s11: a client discovers here that it may ask for a grant no sign-out ends.
+    assert "offline_access" in doc.get("scopes_supported", []), \
         f"{OIDC_DOC} advertises {doc.get('scopes_supported')}. {STALE_DOC_HINT}"
 
     # Every grant the server implements must be advertised, client_credentials included -- the
@@ -134,6 +154,50 @@ def test_jwks():
     assert key["alg"] == "RS256"
 
 
+def test_tokens_are_stamped_with_the_published_issuer(test_user1):
+    """Every relying party compares `iss` with the discovery document's issuer by exact string, so a
+    token minted under any other value is refused everywhere."""
+    if not USER_API_GATEWAY_URL:
+        pytest.skip("USER_API_GATEWAY_URL not configured")
+    signin = test_user1.signin()
+    assert signin.status_code == 200, signin.text
+    tokens = signin.json()
+    for kind in ("access_token", "id_token"):
+        assert decode_jwt_claims(tokens[kind])["iss"] == ISSUER, f"{kind} is not stamped with {ISSUER}"
+
+
+def test_the_documents_keep_their_caching_through_the_gateway():
+    """Verifiers rely on Cache-Control and a cheap 304 revalidation; API Gateway could drop either header
+    on the way out, which no unit spec can see."""
+    resp = _get('/.well-known/jwks.json')
+    assert resp.status_code == 200, resp.text
+    assert "max-age=3600" in resp.headers.get("Cache-Control", ""), resp.headers
+    etag = resp.headers.get("ETag")
+    assert etag, f"no ETag on the JWKS: {resp.headers}"
+    again = requests.get(f"{ISSUER}/.well-known/jwks.json", headers={"If-None-Match": etag}, timeout=15)
+    assert again.status_code == 304, f"{again.status_code} {again.text[:200]}"
+
+
+def test_the_documents_are_readable_from_a_browser():
+    """A browser relying party reads discovery before it can start a login; without CORS it gets the
+    200 and throws the body away."""
+    for path in (OIDC_DOC, "/.well-known/jwks.json"):
+        resp = requests.get(f"{ISSUER}{path}", headers={"Origin": "https://rp.example.com"}, timeout=15)
+        assert resp.status_code == 200, resp.text
+        assert resp.headers.get("Access-Control-Allow-Origin") == "*", f"{path} carries no CORS header"
+
+
+@pytest.mark.skipif(".execute-api." in urlparse(ISSUER).netloc, reason="the issuer is the API's own URL; no custom domain is mapped")
+def test_an_issuer_on_its_custom_domain_hosts_the_sign_in_it_advertises(register_espuser_client):
+    """On the ESP User API's custom domain, the issuer, the endpoints and the sign-in page share one host,
+    which is the one a person sees in the address bar."""
+    doc = _get(OIDC_DOC).json()
+    for field in ("authorization_endpoint", "token_endpoint", "end_session_endpoint"):
+        assert urlparse(doc[field]).netloc == urlparse(ISSUER).netloc, f"{field} {doc[field]} is not on {ISSUER}"
+    login = _login_page(ISSUER, register_espuser_client)
+    assert login.status_code == 200 and "text/html" in login.headers.get("Content-Type", ""), login.text[:200]
+
+
 # ── the headers a browser is actually served ──────────────────────────────────────
 # The login page is the one page of ours a person types a credential into, and the only place in this
 # system where a browser executes our markup. These assert what survives the gateway, never what the
@@ -141,8 +205,8 @@ def test_jwks():
 
 
 @pytest.mark.skipif(not USER_API_GATEWAY_URL, reason="EspUserApiUrl not configured")
-def test_the_login_page_keeps_its_security_headers_through_the_gateway():
-    resp = requests.get(f"{USER_API_GATEWAY_URL}/oauth2/login", timeout=15)
+def test_the_login_page_keeps_its_security_headers_through_the_gateway(register_espuser_client):
+    resp = _login_page(USER_API_GATEWAY_URL, register_espuser_client)
     assert resp.status_code == 200, f"{resp.status_code} {resp.text[:200]}"
     headers = {k.lower(): v for k, v in resp.headers.items()}
 

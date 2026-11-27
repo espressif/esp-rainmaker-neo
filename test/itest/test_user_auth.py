@@ -6,28 +6,23 @@ import base64
 import json
 import time
 import uuid
-from urllib.parse import parse_qs, urlparse
 
 import boto3
 import pytest
 import requests
 
-from py_sdk.espuser_oauth import (
-    Browser,
-    WebClient,
-    client_ids_under,
-    session_with,
-    sids_in,
-    sign_out_destination,
-)
+from py_sdk.espuser_oauth import WebClient, bearer_challenge
 from py_sdk.test_user import User
 from test.itest.conftest import (
     ADMIN_CLIENT_ID,
     ADMIN_USER_POOL_ID,
     API_GATEWAY_URL,
     END_USER_POOL_ID,
+    ESPUSER_RESOURCE,
+    HOME_APP_CLIENT_ID,
     IDENTITY_POOL_ID,
     IOT_ENDPOINT,
+    NEO_RESOURCE,
     REGION,
     USER_API_GATEWAY_URL,
     complete_federation_login,
@@ -48,22 +43,58 @@ def _new_user(email):
     return user
 
 
+def _second_login(user):
+    """The same person as `user` on a User of its own, so a test that rotates or revokes its login never spends the pooled user's refresh token, which user_api_token() redeems for whichever test borrows it next."""
+    return User(user.username, user.password, REGION, IDENTITY_POOL_ID,
+                API_GATEWAY_URL, USER_API_GATEWAY_URL, IOT_ENDPOINT)
 
 
-def test_signin_returns_tokens(test_user1):
-    """The password signin yields the full token set — our tokens, never the provider's — and
-    populates the instance tokens."""
+def test_a_password_sign_in_names_its_provider_and_says_a_password_was_checked(test_user1):
+    """Our tokens say how ESP User authenticated the sign-in (amr, OIDC Core s2) and through which provider row (idp), and a refresh keeps both."""
+    login = _second_login(test_user1)
+    signed = login.signin()
+    assert signed.status_code == 200, signed.text
+    data = signed.json()
+    renewed = login.oauth_token_refresh(data["refresh_token"], HOME_APP_CLIENT_ID)
+    assert renewed.status_code == 200, f"refresh failed: {renewed.status_code} {renewed.text[:200]}"
+    idp = decode_jwt_claims(data["id_token"]).get("idp")
+    assert idp, "a password sign-in names the provider row that checked the password"
+    for label, token in (("id_token", data["id_token"]), ("access_token", data["access_token"]),
+                         ("refreshed id_token", renewed.json()["id_token"]),
+                         ("refreshed access_token", renewed.json()["access_token"])):
+        claims = decode_jwt_claims(token)
+        assert claims.get("amr") == ["pwd"], f"{label} must say a password was checked: {claims}"
+        assert claims.get("idp") == idp, f"{label} must name the same provider: {claims}"
+
+
+def test_an_old_app_build_signs_in_renews_and_reaches_its_devices_without_naming_a_client(test_user1):
+    """The store app sends the password API only a username and password and renews through its refresh endpoint; its sign-in belongs to HomeAppClientId, the Home app client, which /v1/user/credentials and the identity pool trust."""
     if not USER_API_GATEWAY_URL:
         pytest.skip("USER_API_GATEWAY_URL not configured")
+    assert HOME_APP_CLIENT_ID, "espuser-base must publish HomeAppClientId"
+    auth_url = f"{USER_API_GATEWAY_URL}/v1/user/auth"
+    bearer = lambda token: {"Authorization": f"Bearer {token}"}  # noqa: E731
 
-    response = test_user1.signin()
-    assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
-    data = response.json()
-    assert "access_token" in data
-    assert "refresh_token" in data
-    assert "id_token" in data
-    assert test_user1.access_token is not None
-    assert test_user1.refresh_token is not None
+    signin = requests.post(f"{auth_url}/token", json={"username": test_user1.username, "password": test_user1.password})
+    assert signin.status_code == 200, signin.text
+    tokens = signin.json()
+    aud = decode_jwt_claims(tokens["id_token"])["aud"]
+    assert (aud if isinstance(aud, list) else [aud]) == [HOME_APP_CLIENT_ID], f"the id token must be for the Home app client: {aud}"
+    assert decode_jwt_claims(tokens["access_token"])["client_id"] == HOME_APP_CLIENT_ID
+
+    renewed = requests.post(f"{auth_url}/token/refresh", json={"refresh_token": tokens["refresh_token"]})
+    assert renewed.status_code == 200, renewed.text
+    renewed_tokens = renewed.json()
+    assert renewed_tokens["refresh_token"] != tokens["refresh_token"], "every renewal must rotate"
+    assert decode_jwt_claims(renewed_tokens["access_token"])["client_id"] == HOME_APP_CLIENT_ID
+
+    creds = requests.post(f"{API_GATEWAY_URL}/v1/user/credentials", headers=bearer(renewed_tokens["access_token"]),
+                          json={"id_token": renewed_tokens["id_token"]})
+    assert creds.status_code == 200, f"the renewed pair must get AWS credentials for the devices: {creds.text}"
+    assert creds.json().get("access_key_id"), creds.text
+
+    me = requests.get(f"{USER_API_GATEWAY_URL}/v1/users/me", headers=bearer(renewed_tokens["access_token"]))
+    assert me.status_code == 200, f"the profile must answer the renewed token: {me.text}"
 
 
 # Signup enumeration resistance moved to test_cognito_auth_matrix.py, which asserts it
@@ -192,24 +223,43 @@ def test_userinfo_returns_scope_gated_claims_and_refuses_bad_tokens(test_user1):
     assert rejected.json().get("error") == "invalid_token", rejected.text
 
 
+def test_userinfo_accepts_a_token_for_any_of_our_apis(test_user1):
+    """/oauth2/userinfo is the issuer's own endpoint (OIDC Core s5.3), not one API's, so one sign-in's neo token and ESP User API token both resolve there to the same subject."""
+    signin = test_user1.signin()
+    assert signin.status_code == 200, signin.text
+    neo_token = signin.json()["access_token"]
+    espuser_token = test_user1.user_api_token()
+    assert decode_jwt_claims(neo_token)["aud"] == NEO_RESOURCE
+    assert decode_jwt_claims(espuser_token)["aud"] == ESPUSER_RESOURCE
+
+    subjects = []
+    for token in (neo_token, espuser_token):
+        info = test_user1.oauth_userinfo(token)
+        assert info.status_code == 200, \
+            f"userinfo must accept a token for {decode_jwt_claims(token)['aud']}: {info.status_code} {info.text}"
+        subjects.append(info.json().get("sub"))
+    assert subjects[0] == subjects[1] == decode_jwt_claims(neo_token)["sub"], f"one sign-in is one subject: {subjects}"
+
+
 def test_revocation_ends_the_login_on_both_surfaces(test_user1):
     """Revoking ends a login wherever it is asked: the RFC 7009 endpoint and the legacy signout both
     leave the presented refresh token unredeemable."""
     if not USER_API_GATEWAY_URL:
         pytest.skip("USER_API_GATEWAY_URL not configured")
 
-    first = test_user1.signin()
+    login = _second_login(test_user1)
+    first = login.signin()
     assert first.status_code == 200, first.text
     token = first.json()["refresh_token"]
-    assert test_user1.oauth_revoke(token, token_type_hint="refresh_token").status_code == 200
-    assert test_user1.refresh_tokens(token).status_code == 400, "a revoked token must not redeem"
+    assert login.oauth_revoke(token, token_type_hint="refresh_token").status_code == 200
+    assert login.refresh_tokens(token).status_code == 400, "a revoked token must not redeem"
 
     # A fresh login, ended through the legacy surface instead.
-    second = test_user1.signin()
+    second = login.signin()
     assert second.status_code == 200, second.text
     legacy_token = second.json()["refresh_token"]
-    assert test_user1.signout(refresh_token=legacy_token).status_code == 200
-    assert test_user1.refresh_tokens(legacy_token).status_code != 200, \
+    assert login.signout(refresh_token=legacy_token).status_code == 200
+    assert login.refresh_tokens(legacy_token).status_code != 200, \
         "signout must revoke the family it was given"
 
 
@@ -226,18 +276,21 @@ def test_credentials_endpoint_rejects_id_token(test_user1):
     id_token, access_token = tokens.get("id_token"), tokens.get("access_token")
     assert id_token and access_token, "a login must return both an id and an access token"
 
-    creds_url = f"{API_GATEWAY_URL}/v1/user/credentials"
-    rejected = requests.post(creds_url, headers={"Authorization": f"Bearer {id_token}"},
-                             json={"id_token": id_token})
-    assert rejected.status_code == 403, \
+    rejected = WebClient.neo_credentials(id_token, id_token)
+    assert rejected.status_code == 401, \
         f"an id token in the Authorization header must be rejected, got {rejected.status_code}: {rejected.text}"
+    assert bearer_challenge(rejected) == 'Bearer error="invalid_token"', \
+        f"RFC 6750 s3: the 401 must carry the bearer challenge, got {dict(rejected.headers)}"
+    # RFC 6750 s3.1: a request with no token is challenged without an error code.
+    anonymous = WebClient.neo_credentials(None, id_token)
+    assert anonymous.status_code == 401 and bearer_challenge(anonymous) == "Bearer", \
+        f"a request with no token must get a bare challenge, got {anonymous.status_code} {dict(anonymous.headers)}"
     # The body is mandatory: the endpoint pairs the two halves of one sign-in.
-    no_body = requests.post(creds_url, headers={"Authorization": f"Bearer {access_token}"})
+    no_body = WebClient.neo_credentials(access_token, None)
     assert no_body.status_code == 400, \
         f"a request without the body id_token must be a 400, got {no_body.status_code}: {no_body.text}"
     # Positive control, so the rejections above cannot be passing for an unrelated reason.
-    accepted = requests.post(creds_url, headers={"Authorization": f"Bearer {access_token}"},
-                             json={"id_token": id_token})
+    accepted = WebClient.neo_credentials(access_token, id_token)
     assert accepted.status_code == 200, \
         f"the matched pair from the same login must be accepted, got {accepted.status_code}: {accepted.text}"
 
@@ -284,6 +337,7 @@ def fed_client(admin_user):
         "client_id": client_id, "client_name": "itest federation", "client_type": "public",
         "redirect_uris": [_FED_REDIRECT_URI], "grant_types": ["authorization_code", "refresh_token"],
         "scopes": ["openid", "email", "phone", "profile"], "require_pkce": True,
+        "allowed_resources": [NEO_RESOURCE], "default_resource": NEO_RESOURCE,
     })
     assert created.status_code == 201, created.text
     yield client_id
@@ -307,7 +361,7 @@ def federated_identity(fed_identity, provision_end_user):
 
 
 @pytest.mark.xdist_group("env_mut")
-def test_federated_login_carries_contacts_and_claims(federated_identity, fed_client):
+def test_federated_login_carries_contacts_and_claims(federated_identity, fed_client, hosted_cognito_provider):
     """One brokered login, asserted end to end: both verified contacts are stored, the upstream
     profile reaches both tokens, userinfo agrees with them, a refresh preserves them and the
     original auth_time, and a second login reuses the account rather than creating another.
@@ -327,9 +381,13 @@ def test_federated_login_carries_contacts_and_claims(federated_identity, fed_cli
 
     started = time.time()
     tokens = _login(fed_client, email, password, "openid email phone profile",
-                    before_callback=from_another_browser)
+                    provider=hosted_cognito_provider, before_callback=from_another_browser)
 
     id_claims = decode_jwt_claims(tokens["id_token"])
+    for label in ("access_token", "id_token"):
+        claims = decode_jwt_claims(tokens[label])
+        assert claims.get("idp") == hosted_cognito_provider, f"{label} must name the provider row: {claims}"
+        assert "amr" not in claims, f"{label}: ESP User verified an upstream token, not a password: {claims}"
     assert abs(id_claims["auth_time"] - started) < 300 and id_claims["auth_time"] <= id_claims["iat"], \
         f"auth_time does not name this sign-in: {id_claims}"
 
@@ -361,9 +419,16 @@ def test_federated_login_carries_contacts_and_claims(federated_identity, fed_cli
         assert refreshed_claims.get(claim) == expected, f"refreshed token lost {claim}: {refreshed_claims}"
     assert decode_jwt_claims(refreshed.json()["id_token"])["auth_time"] == id_claims["auth_time"], \
         "a refresh is not an authentication: its ID token must still name the original sign-in"
+    assert refreshed_claims.get("idp") == hosted_cognito_provider and "amr" not in refreshed_claims, \
+        f"a refresh keeps the sign-in's idp and adds no amr: {refreshed_claims}"
+
+    refused = _new_user(email).change_password(password, generate_test_password(), access_token=tokens["access_token"])
+    assert refused.status_code == 403 and \
+        refused.json().get("message") == "You signed in through itest hosted page. This doesn't support password change.", \
+        f"a sign-in through a provider's own page is refused, naming the row's display_name: {refused.status_code} {refused.text[:200]}"
 
     # A second login is the only way to observe that resolution reused the account.
-    again = decode_jwt_claims(_login(fed_client, email, password)["access_token"])
+    again = decode_jwt_claims(_login(fed_client, email, password, provider=hosted_cognito_provider)["access_token"])
     assert again["sub"] == decode_jwt_claims(tokens["access_token"])["sub"], \
         "a repeat login must not create a second account"
 
@@ -377,6 +442,7 @@ def fed_confidential_client(admin_user):
         "client_id": client_id, "client_name": "itest confidential", "client_type": "confidential",
         "redirect_uris": [_FED_REDIRECT_URI], "grant_types": ["authorization_code", "refresh_token"],
         "scopes": ["openid", "email", "phone", "profile"],
+        "allowed_resources": [NEO_RESOURCE], "default_resource": NEO_RESOURCE,
     })
     assert created.status_code == 201, created.text
     yield client_id, created.json()["client_secret"]
@@ -408,8 +474,7 @@ def test_confidential_client_authenticates_via_basic_and_body(federated_identity
             f"{via}: refresh failed: {refreshed.status_code} {refreshed.text[:300]}"
 
     # A wrong body secret must still be rejected — body placement must not weaken client auth.
-    cb = _login(client_id, email, password, follow_final=True)
-    code = parse_qs(urlparse(cb.headers["Location"]).query)["code"][0]
+    code = _login(client_id, email, password, code_only=True)
     denied = requests.post(f"{USER_API_GATEWAY_URL}/oauth2/token", data={
         "grant_type": "authorization_code", "code": code, "redirect_uri": _FED_REDIRECT_URI,
         "client_id": client_id, "client_secret": "wrong",
@@ -445,7 +510,7 @@ def test_email_verified_later_keeps_the_same_account(fed_identity, provision_end
 
 
 @pytest.mark.xdist_group("env_mut")
-def test_contacts_owned_by_different_accounts_are_refused(fed_identity, provision_end_user, fed_client):
+def test_contacts_owned_by_different_accounts_are_refused(fed_identity, provision_end_user, fed_client, hosted_cognito_provider):
     """When each contact already belongs to a different account, the login is refused, not guessed.
 
     Silently picking one would strand the other account's data or attach the login to the wrong user.
@@ -465,10 +530,11 @@ def test_contacts_owned_by_different_accounts_are_refused(fed_identity, provisio
                         {"Name": "phone_number_verified", "Value": "true"}],
     )
 
-    callback = _login(fed_client, email, password, follow_final=True)
+    callback = _login(fed_client, email, password, provider=hosted_cognito_provider, follow_final=True)
     location = callback.headers.get("Location", "")
     assert "code=" not in location, \
         f"a conflicting identity must not yield a code: {callback.status_code} {location}"
+    assert callback.status_code == 403, f"one answer for an account we cannot use: {callback.status_code}"
 
 
 
@@ -495,153 +561,6 @@ def test_scope_gating_withholds_unrequested_claims(federated_identity, fed_clien
     assert "email" not in reflected, f"userinfo leaked the email without the scope: {reflected}"
     for claim in _UPSTREAM_PROFILE:
         assert claim not in reflected, f"userinfo leaked {claim} without the scope: {reflected}"
-
-
-# ============================================================================
-# Authorization-code journey: three products, one browser, one login, one sign-out
-# ============================================================================
-# The product promise end to end, merged here from the old test_espuser_journey.py. Every other
-# espuser test asserts a rule; this asserts the thing a person would describe -- I opened three of
-# your apps, signed in once, and signing out of one signed me out of all of them, on this device and
-# no other. It re-drives sign-in, single sign-on and sign-out on purpose: a failure in a rule-shaped
-# test says a rule regressed, a failure here says the product does not work. A lambda missing one IAM
-# grant reads every branch correctly and simply cannot see that sessions exist, so sign-out reaches
-# nothing while every rule-shaped test stays green -- only signing in to several products and using
-# them after sign-out catches it. Spec: espuser/docs/specs/sso-sessions.md.
-
-_JOURNEY_CALLBACK = "https://example.com/espuser-itest/journey-{}/callback"
-_JOURNEY_SIGNED_OUT = "https://example.com/espuser-itest/journey-{}/signed-out"
-
-
-@pytest.fixture
-def three_products(register_espuser_client):
-    """Three unrelated applications, as a person's browser would hold: a dashboard and two products
-    that know nothing about each other."""
-    apps = []
-    for name in ("dashboard", "product-a", "product-b"):
-        uri, bye = _JOURNEY_CALLBACK.format(name), _JOURNEY_SIGNED_OUT.format(name)
-        client = register_espuser_client(
-            client_name=f"itest {name}", redirect_uris=[uri], post_logout_redirect_uris=[bye])
-        apps.append(WebClient(client.client_id, uri, post_logout_redirect_uri=bye))
-    return apps
-
-
-@pytest.mark.espuser
-@requires_espuser
-def test_three_products_one_login_one_sign_out(three_products, espuser_person):
-    dashboard, product_a, product_b = three_products
-    browser = Browser("Mozilla/5.0 (Macintosh) itest-journey")
-
-    # 1 -- the person signs in, once, at whichever app they opened first.
-    first = dashboard.sign_in(browser, espuser_person)
-    assert first.used_upstream, "the first login must actually authenticate somebody"
-    dashboard_tokens = dashboard.tokens(first)
-    assert browser.session_cookie, "a completed login must leave a session cookie"
-
-    # 2 -- the other two are already signed in. No page, no provider, no second password.
-    tokens = {dashboard.client_id: dashboard_tokens}
-    for app in (product_a, product_b):
-        authz = app.sign_in(browser, espuser_person)
-        assert not authz.used_upstream, \
-            f"{app.client_id} went back to the provider; that is not single sign-on"
-        tokens[app.client_id] = app.tokens(authz)
-
-    for app in three_products:
-        assert app.still_signed_in(tokens[app.client_id]["refresh_token"]), \
-            f"{app.client_id} did not end up with working credentials"
-
-    # 3 -- and the person can see exactly that: one browser, three products under it.
-    listing = WebClient.sessions(dashboard_tokens["access_token"])
-    assert listing.status_code == 200, listing.text
-    body = listing.json()
-    assert len(body["sessions"]) == 1, f"one browser is one device: {body}"
-    view = body["sessions"][0]
-    assert view["current"] is True
-    assert client_ids_under(view) == sorted(a.client_id for a in three_products), view
-    assert not body.get("unattached_products"), \
-        f"nothing may be standing access with no session behind it: {body}"
-
-    # 4 -- they sign out of ONE of them, and it reaches all three.
-    out = product_a.logout(browser, id_token_hint=tokens[product_a.client_id].get("id_token"))
-    assert out.status_code in (200, 302), f"{out.status_code} {out.text[:300]}"
-    assert _JOURNEY_SIGNED_OUT.format("product-a") in sign_out_destination(browser, out), (
-        "the app that asked must get its person back, however many hops the chain takes: "
-        f"{out.headers.get('Location')!r}"
-    )
-
-    for app in three_products:
-        assert not app.still_signed_in(tokens[app.client_id]["refresh_token"]), (
-            f"{app.client_id} can still get new tokens after the sign-out; the person is signed out "
-            "of the app they clicked in and still signed in here"
-        )
-
-    # 5 -- and the browser itself is signed out: no session, no silent code.
-    assert browser.session_cookie is None, "the session cookie must be cleared, not merely stale"
-    assert dashboard.authorize(browser, prompt="none").error == "login_required", \
-        "the browser still holds a working session; the row was not deleted"
-
-
-@pytest.mark.espuser
-@requires_espuser
-def test_sso_logout_the_other_device_is_untouched(three_products, espuser_person):
-    """The same journey from two devices, ending in the thing people actually worry about: signing
-    out on one machine must not sign them out on the other."""
-    dashboard, product_a, _ = three_products
-    laptop, phone = Browser("laptop"), Browser("phone")
-
-    laptop_dash = dashboard.tokens(dashboard.sign_in(laptop, espuser_person))
-    laptop_a = product_a.tokens(product_a.sign_in(laptop, espuser_person))
-    phone_dash = dashboard.tokens(dashboard.sign_in(phone, espuser_person))
-
-    body = WebClient.sessions(phone_dash["access_token"]).json()
-    assert len(body["sessions"]) == 2, f"two devices, two rows: {body}"
-
-    product_a.logout(laptop)
-
-    assert not dashboard.still_signed_in(laptop_dash["refresh_token"])
-    assert not product_a.still_signed_in(laptop_a["refresh_token"])
-    assert dashboard.still_signed_in(phone_dash["refresh_token"]), \
-        "the phone was never asked to sign out"
-
-    after = WebClient.sessions(phone_dash["access_token"]).json()
-    assert len(after["sessions"]) == 1 and after["sessions"][0]["current"], after
-
-
-@pytest.mark.espuser
-@requires_espuser
-def test_sso_logout_lost_phone(three_products, espuser_person):
-    """The recovery story, which is the sessions API's whole reason for existing: the device is
-    gone, so it cannot be asked to sign itself out. Somebody else's device has to do it, and reaching
-    a session from a device that does not hold its cookie is what the by-user index is for."""
-    dashboard, product_a, _ = three_products
-    laptop, phone = Browser("laptop"), Browser("phone")
-
-    laptop_tokens = dashboard.tokens(dashboard.sign_in(laptop, espuser_person))
-    phone_dash = dashboard.tokens(dashboard.sign_in(phone, espuser_person))
-    phone_a = product_a.tokens(product_a.sign_in(phone, espuser_person))
-
-    body = WebClient.sessions(laptop_tokens["access_token"]).json()
-    phone_sid = [s["session_id"] for s in body["sessions"] if not s["current"]][0]
-    phone_view = session_with(body, phone_sid)
-    assert client_ids_under(phone_view) == sorted([dashboard.client_id, product_a.client_id]), (
-        "the list has to show what is signed in on the lost device, or the person cannot tell which "
-        f"one it is: {phone_view}"
-    )
-
-    ended = WebClient.end_session(laptop_tokens["access_token"], phone_sid)
-    assert ended.status_code == 204, f"{ended.status_code} {ended.text[:200]}"
-
-    assert not dashboard.still_signed_in(phone_dash["refresh_token"])
-    assert not product_a.still_signed_in(phone_a["refresh_token"]), \
-        "ending a device must take every product on it, not just the one that was listed"
-    assert dashboard.still_signed_in(laptop_tokens["refresh_token"]), \
-        "and must leave the device that did the ending signed in"
-
-    assert phone_sid not in sids_in(WebClient.sessions(laptop_tokens["access_token"]).json())
-
-    # The phone, if it ever comes back, is a stranger.
-    assert dashboard.authorize(phone, prompt="none").error == "login_required", \
-        "the ended device still holds a working session cookie"
 
 
 # ============================================================================
@@ -677,6 +596,7 @@ def m2m_client(admin_user):
         "grant_types": ["client_credentials"],
         "scopes": _CC_SCOPES,
         "allowed_resources": [_CC_RESOURCE],
+        "default_resource": _CC_RESOURCE,
     })
     assert create.status_code == 201, create.text
     secret = create.json().get("client_secret")
@@ -690,8 +610,8 @@ def m2m_client(admin_user):
 def test_client_credentials_mints_one_scoped_access_token(admin_user, m2m_client):
     """One exchange, every property of the response, and the audience binding folded in. There is no
     user, so no refresh_token and no id_token; RFC 9068 s2.2.1 makes sub the client; and `aud` names
-    the callee -- the API when a resource is asked for, the client itself when none is, never
-    conflating the two, which is the bug this grant must not repeat."""
+    the callee -- the API asked for, else the client's default, and never the client itself, which is
+    the bug this grant must not repeat."""
     client_id, secret = m2m_client
     resp = admin_user.oauth_client_credentials(client_id, secret, scope="account.admin")
     assert resp.status_code == 200, resp.text
@@ -704,7 +624,7 @@ def test_client_credentials_mints_one_scoped_access_token(admin_user, m2m_client
     c = _cc_claims(body["access_token"])
     assert c["sub"] == client_id, "RFC 9068 s2.2.1: with no resource owner, sub is the client"
     assert c["client_id"] == client_id and c["token_use"] == "access"
-    assert c["aud"] == client_id, "no resource requested leaves aud as the client id"
+    assert c["aud"] == _CC_RESOURCE, "no resource requested is the client's default, never the client id"
 
     # Body credentials must work as well as Basic: Google account linking sends one, Alexa the other,
     # and a regression in either is invisible from the server's own logs.

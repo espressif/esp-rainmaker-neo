@@ -11,7 +11,6 @@ import (
 	"errors"
 	"net/http"
 	"os"
-	"time"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
@@ -31,7 +30,7 @@ import (
 )
 
 const (
-	pathFederationStart    = "/oauth2/federation/start"
+	pathFederationStart    = "/user/login/federation/start"
 	pathFederationCallback = "/oauth2/federation/callback"
 )
 
@@ -45,114 +44,87 @@ func newRegistry(ctx context.Context) (*idp.Registry, error) {
 }
 
 func handleFederationStart(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	flowID := rmngrequest.Cookie(request, flowCookieName)
+	flowID := rmngrequest.Cookie(request, auth.FlowCookieName)
 	providerName := request.QueryStringParameters["provider"]
-	if flowID == "" || providerName == "" {
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Missing flow or provider."), nil
+	if flowID == "" || providerName == "" || request.QueryStringParameters["flow_id"] == "" {
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Missing flow or provider.", ""), nil
+	}
+	// The link names the sign-in its page was drawn for; a newer sign-in in another tab took the cookie, and following it would finish that tab's app.
+	if request.QueryStringParameters["flow_id"] != flowID {
+		return errorPage(request, http.StatusBadRequest, oidc.RMErrFlowReplaced, "Another sign-in was started in this browser.", ""), nil
 	}
 
 	registry, err := newRegistry(ctx)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Msg("federation start: registry")
-		return errorPage(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
+		return errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.", ""), nil
 	}
-	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, nil)
-	flowsDB := auth_flows_db.NewAuthFlowsDB(rmngCtx)
-	flow, err := flowsDB.GetFlow(flowID)
+	svc, err := auth.NewOAuthUserAuthService(ctx)
 	if err != nil {
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Login session expired. Please try again."), nil
+		rlog.Error(ctx).Err(err).Msg("federation start: auth service")
+		return errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.", ""), nil
+	}
+	// allowed_providers is enforced HERE, not on the login page: the chooser only decides which buttons are drawn, and this URL can be typed. An unreadable client refuses rather than admits.
+	flow, err := svc.FlowAllowingProvider(ctx, flowID, providerName)
+	switch {
+	case errors.Is(err, auth.ErrProviderNotAllowed):
+		rlog.Warn(ctx).Str("provider", providerName).Msg("federation start: provider not allowed for this client")
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Unknown or unavailable provider.", ""), nil
+	case err != nil:
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Login session expired. Please try again.", ""), nil
 	}
 
 	provider, err := registry.Provider(providerName)
 	if err != nil || provider == nil {
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Unknown or unavailable provider."), nil
-	}
-
-	// allowed_providers is enforced HERE, not on the login page. The chooser only decides
-	// which buttons are drawn, and this endpoint is reachable by typing a provider name into
-	// the address bar -- a menu is not an access control. A client that registered
-	// "corporate IdP only" must not be enterable with a personal account by anyone who edits
-	// the URL. An unreadable registry refuses rather than admits: this is the gate.
-	if !clientAllowsProvider(ctx, rmngCtx, flow.ClientID, providerName) {
-		rlog.Warn(ctx).Str("client_id", flow.ClientID).Str("provider", providerName).
-			Msg("federation start: provider not allowed for this client")
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Unknown or unavailable provider."), nil
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Unknown or unavailable provider.", ""), nil
 	}
 
 	leg, err := registry.NewUpstreamLeg(flowID)
 	if err != nil {
-		return errorPage(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
+		return errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.", ""), nil
 	}
 	// Forward prompt/max_age upstream; otherwise the provider re-authenticates from its own cookie.
 	leg.Prompt, leg.MaxAge = flow.Prompt, flow.MaxAge
+	flowsDB := auth_flows_db.NewAuthFlowsDB(rmngctx.NewRmngContextWithCtx(ctx, nil))
 	if err := flowsDB.SetUpstreamLeg(flowID, providerName, leg.State, leg.Nonce, leg.PKCEVerifier); err != nil {
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Login session expired. Please try again."), nil
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Login session expired. Please try again.", ""), nil
 	}
 
 	url, err := provider.AuthorizeRedirectURL(ctx, leg)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Msg("federation start: authorize url")
-		return errorPage(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
+		return errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.", ""), nil
 	}
-	return events.APIGatewayProxyResponse{
-		StatusCode: http.StatusFound,
-		Headers:    map[string]string{"Location": url, "Cache-Control": "no-store"},
-	}, nil
+	return redirect(url), nil
 }
 
-// clientAllowsProvider reports whether the client that started this flow may use this
-// identity provider. An absent list means every provider (see clients.AllowsProvider); a
-// client we cannot read is refused, because failing open here would make the restriction
-// disappear on exactly the day the registry is unhealthy.
-func clientAllowsProvider(ctx context.Context, rmngCtx *rmngctx.RmngContext, clientID, providerName string) bool {
-	if clientID == "" {
-		return true
-	}
-	client, err := clients.NewService(rmngCtx).Get(clientID)
-	if err != nil || client == nil {
-		rlog.Error(ctx).Err(err).Str("client_id", clientID).Msg("federation start: client unreadable")
-		return false
-	}
-	return client.AllowsProvider(providerName)
-}
+// upstreamCancels are what a provider answers when the person backs out (Google's access_denied, Apple's user_cancelled_authorize): they go back to our page when the client has another way in there, else to the client with access_denied.
+var upstreamCancels = map[string]bool{oidc.OAuthErrAccessDenied: true, "user_cancelled_authorize": true}
 
 func handleFederationCallback(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	q := request.QueryStringParameters
-	if upstreamErr := q["error"]; upstreamErr != "" {
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrAccessDenied, "Upstream sign-in was not completed."), nil
-	}
-	code, state := q["code"], q["state"]
-	if code == "" || state == "" {
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Missing code or state."), nil
+	code, state, upstreamErr := q["code"], q["state"], q["error"]
+	if upstreamErr == "" && (code == "" || state == "") {
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Missing code or state.", ""), nil
 	}
 
 	registry, err := newRegistry(ctx)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Msg("federation callback: registry")
-		return errorPage(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
-	}
-
-	flowID, err := registry.FlowIDFromState(state)
-	if err != nil {
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Invalid or expired sign-in state."), nil
-	}
-	// RFC 6749 s10.12: the callback must come from the browser that started this flow, or an attacker's own sign-in can be finished in the victim's browser.
-	if rmngrequest.Cookie(request, flowCookieName) != flowID {
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Invalid sign-in state."), nil
+		return errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.", ""), nil
 	}
 	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, nil)
-	flow, err := auth_flows_db.NewAuthFlowsDB(rmngCtx).GetFlow(flowID)
-	if err != nil {
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Login session expired. Please try again."), nil
+	flow, refusal := callbackFlow(rmngCtx, registry, request, state)
+	if upstreamErr != "" {
+		return upstreamRefusal(ctx, request, registry, flow, upstreamErr), nil
 	}
-	// A state valid for one flow must not be spliceable onto another.
-	if flow.UpstreamState == "" || flow.UpstreamState != state {
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Invalid sign-in state."), nil
+	if refusal != "" {
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrInvalidRequest, refusal, ""), nil
 	}
 
 	provider, err := registry.Provider(flow.Provider)
 	if err != nil || provider == nil {
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Unknown or unavailable provider."), nil
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "Unknown or unavailable provider.", ""), nil
 	}
 
 	identity, err := provider.HandleCallback(ctx, code, idp.UpstreamLeg{
@@ -160,38 +132,27 @@ func handleFederationCallback(ctx context.Context, request events.APIGatewayProx
 	})
 	if err != nil {
 		rlog.Error(ctx).Err(err).Msg("federation callback: upstream verification failed")
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrAccessDenied, "Could not verify the upstream sign-in."), nil
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrAccessDenied, "Could not verify the upstream sign-in.", ""), nil
 	}
 
 	email, phone, err := identity.VerifiedContacts()
 	if err != nil {
-		return errorPage(http.StatusBadRequest, oidc.OAuthErrAccessDenied, "Your account has no verified email or phone."), nil
+		return errorPage(request, http.StatusForbidden, unusableAccount.Code, unusableAccount.Message, ""), nil
 	}
 
 	svc, err := auth.NewOAuthUserAuthService(ctx)
 	if err != nil {
-		return errorPage(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
+		return errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.", ""), nil
 	}
 	// Persisting the claims with the user is what lets the token endpoint stamp them without ever
 	// calling upstream.
 	userID, err := svc.ResolveOrCreateUserByContacts(rmngCtx, email, phone, &identity.Profile)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Msg("federation callback: resolve user")
-		// Says only that sign-in was refused: the page must not reveal who holds the id.
-		if errors.Is(err, auth.ErrUpstreamUserIDUnusable) {
-			return errorPage(http.StatusForbidden, oidc.OAuthErrAccessDenied, "This account cannot be signed in. Please contact support."), nil
+		if isUnusableAccount(err) {
+			return errorPage(request, http.StatusForbidden, unusableAccount.Code, unusableAccount.Message, ""), nil
 		}
-		return errorPage(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
-	}
-	// Our own session, so single sign-on stops depending on the upstream's cookie. Any
-	// failure here degrades to "no session": the login itself must never be blocked by the
-	// session layer, it only loses SSO until the next login.
-	sid, sessionCookie := "", ""
-	sess := session.NewService(rmngCtx)
-	// The upstream's auth_time is when the person signed in (OIDC Core s2); a provider that omits it authenticated them on this request.
-	authTime := identity.AuthTime
-	if authTime <= 0 {
-		authTime = time.Now().Unix()
+		return errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.", ""), nil
 	}
 	// The per-provider cap lives only on OIDC rows; other provider kinds fall back to the
 	// global cap (see idp.OIDCProvider.SessionMaxTTL on why this is a type assertion).
@@ -202,37 +163,93 @@ func handleFederationCallback(ctx context.Context, request events.APIGatewayProx
 	// The user agent is recorded HERE and nowhere else: this is the one request we know came
 	// from the browser itself, mid-redirect. A later API call arrives from the product's
 	// page and would describe whatever was calling, not who authenticated.
-	cookieValue, newSID, err := sess.Establish(session.EstablishInput{
-		UserID:                userID,
+	redirectTo, setCookie, err := svc.CompleteSignIn(ctx, flow, userID, auth.FirstPartyLogin{
 		Provider:              identity.Profile.Provider,
-		AuthTime:              authTime,
-		AMR:                   identity.AMR,
+		AuthTime:              identity.AuthTime,
 		ACR:                   identity.ACR,
 		ProviderMaxTTLSeconds: providerMaxTTL,
+		Origin:                session.OriginBrowser,
 		UserAgent:             utils.UserAgent(request),
 		IPAddress:             request.RequestContext.Identity.SourceIP,
-		// What this browser presented on the way in. Establish uses it to tell a
-		// re-authentication from a first login and retire the cookie being replaced.
-		PriorCookie: rmngrequest.Cookie(request, session.CookieName),
+		PriorCookie:           rmngrequest.Cookie(request, session.CookieName),
 	})
-	if err != nil {
-		rlog.Warn(ctx).Err(err).Msg("federation callback: session not established")
-	} else {
-		sid = newSID
-		sessionCookie = session.SetCookieHeader(cookieValue, sess.MaxAge())
-	}
-
-	redirectTo, err := svc.CompleteStartedAuthFlow(ctx, flowID, userID, sid, flow.RequestedScope, authTime)
-	if err != nil {
+	var resp events.APIGatewayProxyResponse
+	switch {
+	// The flow's conditional write refuses one that expired, or was finished by another tab, since it was read.
+	case errors.Is(err, auth_flows_db.ErrFlowNotFound):
+		resp = errorPage(request, http.StatusBadRequest, oidc.RMErrExpiredFlow, expiredFlowMessage, routeLocation(request, pathRestart))
+	case err != nil:
 		rlog.Error(ctx).Err(err).Msg("federation callback: issue code")
-		return errorPage(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
+		resp = errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.", "")
+	default:
+		// ConsentPath is relative to the sign-in page, and this redirect leaves from the callback.
+		if redirectTo == auth.ConsentPath {
+			redirectTo = routeLocation(request, pathConsent)
+		}
+		resp = redirect(redirectTo)
+		resp.Headers["Referrer-Policy"] = "no-referrer"
 	}
-	headers := map[string]string{"Location": redirectTo, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
-	if sessionCookie != "" {
-		headers["Set-Cookie"] = sessionCookie
+	if setCookie != "" {
+		resp.Headers["Set-Cookie"] = setCookie
 	}
-	return events.APIGatewayProxyResponse{
-		StatusCode: http.StatusFound,
-		Headers:    headers,
-	}, nil
+	return resp, nil
+}
+
+// callbackFlow refuses a state from no flow, a flow this browser did not start (RFC 6749 s10.12: an attacker's own sign-in finished in the victim's browser), or a state spliced from another flow.
+func callbackFlow(rmngCtx *rmngctx.RmngContext, registry *idp.Registry, request events.APIGatewayProxyRequest, state string) (*auth_flows_db.AuthFlow, string) {
+	flowID, err := registry.FlowIDFromState(state)
+	if err != nil {
+		return nil, "Invalid or expired sign-in state."
+	}
+	if rmngrequest.Cookie(request, auth.FlowCookieName) != flowID {
+		return nil, "Invalid sign-in state."
+	}
+	flow, err := auth_flows_db.NewAuthFlowsDB(rmngCtx).GetFlow(flowID)
+	if err != nil {
+		return nil, "Login session expired. Please try again."
+	}
+	if flow.UpstreamState == "" || flow.UpstreamState != state {
+		return nil, "Invalid sign-in state."
+	}
+	return flow, ""
+}
+
+// upstreamRefusal answers a provider that did not sign the person in, offering a way back only to this browser's own sign-in (flow is nil for any other).
+func upstreamRefusal(ctx context.Context, request events.APIGatewayProxyRequest, registry *idp.Registry, flow *auth_flows_db.AuthFlow, upstreamErr string) events.APIGatewayProxyResponse {
+	if flow == nil {
+		return errorPage(request, http.StatusBadRequest, oidc.OAuthErrAccessDenied, "Sign-in with that provider was not completed.", "")
+	}
+	if upstreamCancels[upstreamErr] {
+		return upstreamCancel(ctx, request, registry, flow)
+	}
+	return errorPage(request, http.StatusBadRequest, oidc.OAuthErrAccessDenied, "Sign-in with that provider was not completed.", routeLocation(request, pathRestart))
+}
+
+// upstreamCancel sends a person who backed out to our page when it offers another way in, else back to the client with access_denied, since /oauth2/authorize would only send them straight to the same provider again.
+func upstreamCancel(ctx context.Context, request events.APIGatewayProxyRequest, registry *idp.Registry, flow *auth_flows_db.AuthFlow) events.APIGatewayProxyResponse {
+	signInPage := redirect(routeLocation(request, pathLogin))
+	enabled, err := registry.EnabledEntries()
+	if err != nil {
+		rlog.Warn(ctx).Err(err).Msg("federation cancel: provider registry unreadable")
+		return signInPage
+	}
+	client, err := clients.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil)).Get(flow.ClientID)
+	if err != nil {
+		rlog.Warn(ctx).Err(err).Msg("federation cancel: client unreadable")
+		return signInPage
+	}
+	if buildPageData(enabled, client.AllowsProvider, "", nil, "", "").offersAnotherWay() {
+		return signInPage
+	}
+	svc, err := auth.NewOAuthUserAuthService(ctx)
+	if err != nil {
+		rlog.Error(ctx).Err(err).Msg("federation cancel: auth service")
+		return errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.", "")
+	}
+	errorRedirect, err := svc.EndFlowDenied(ctx, flow)
+	if err != nil {
+		rlog.Error(ctx).Err(err).Msg("federation cancel: end flow")
+		return errorPage(request, http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.", "")
+	}
+	return redirect(errorRedirect)
 }

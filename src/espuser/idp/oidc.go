@@ -103,7 +103,6 @@ var defaultAttributeMapping = map[string]string{
 	"locale":         "locale",
 	"picture":        "picture",
 	"auth_time":      "auth_time",
-	"amr":            "amr",
 	"acr":            "acr",
 }
 
@@ -171,27 +170,6 @@ func (p *OIDCProvider) upstreamNumClaim(claims jwt.MapClaims, ours string) int64
 	}
 }
 
-// upstreamStringsClaim reads a string-array claim (amr). A lone string counts as one entry.
-func (p *OIDCProvider) upstreamStringsClaim(claims jwt.MapClaims, ours string) []string {
-	switch v := claims[p.claimKey(ours)].(type) {
-	case []interface{}:
-		var out []string
-		for _, e := range v {
-			if s, ok := e.(string); ok && s != "" {
-				out = append(out, s)
-			}
-		}
-		return out
-	case string:
-		if v == "" {
-			return nil
-		}
-		return []string{v}
-	default:
-		return nil
-	}
-}
-
 // authTimeClaim prefers auth_time; a provider that omits it (the claim is optional unless
 // max_age was requested) gets the id token's iat, which on a fresh mint is the same moment.
 func (p *OIDCProvider) authTimeClaim(claims jwt.MapClaims) int64 {
@@ -235,7 +213,6 @@ func (p *OIDCProvider) HandleCallback(ctx context.Context, code string, leg Upst
 		PhoneNumber:   UpstreamClaim(claims, p.AttributeMapping, "phone_number"),
 		Profile:       ReadProfile(p.ProviderName, claims, p.AttributeMapping),
 		AuthTime:      p.authTimeClaim(claims),
-		AMR:           p.upstreamStringsClaim(claims, "amr"),
 		ACR:           UpstreamClaim(claims, p.AttributeMapping, "acr"),
 	}, nil
 }

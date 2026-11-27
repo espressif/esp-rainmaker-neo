@@ -32,9 +32,11 @@ type UpstreamIdentity struct {
 	// instead would assert an authentication that did not happen, in the permissive direction,
 	// on the exact value max_age and step-up are computed from.
 	AuthTime int64
-	AMR      []string
 	ACR      string
 }
+
+// ErrNoVerifiedContact is an upstream identity vouching for neither an email nor a phone, so no account can be found or opened for it.
+var ErrNoVerifiedContact = errors.New("no verified contact on the upstream identity")
 
 // VerifiedContacts returns every contact the upstream vouched for, so an account can be found by
 // either of them. Unverified values are dropped: identity is derived from a contact, so trusting one
@@ -47,7 +49,7 @@ func (id UpstreamIdentity) VerifiedContacts() (email, phone string, err error) {
 		phone = id.PhoneNumber
 	}
 	if email == "" && phone == "" {
-		return "", "", errors.New("no verified contact on the upstream identity")
+		return "", "", ErrNoVerifiedContact
 	}
 	return email, phone, nil
 }

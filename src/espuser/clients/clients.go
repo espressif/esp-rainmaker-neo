@@ -7,12 +7,15 @@
 package clients
 
 import (
+	"cmp"
 	"context"
 	"crypto/subtle"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/url"
-
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -38,6 +41,9 @@ var (
 	ErrClientAuthFailed = errors.New("client authentication failed")
 )
 
+// ErrNotFirstParty refuses a client that is not one of our own apps, or not registered at all, on the account's own endpoints.
+var ErrNotFirstParty = errors.New("client is not first-party")
+
 // Service manages the OAuth client registry.
 type Service struct {
 	db *oauth_clients_db.OAuthClientsDB
@@ -53,6 +59,7 @@ type ClientResponse struct {
 	ClientID                string   `json:"client_id"`
 	ClientName              string   `json:"client_name,omitempty"`
 	ClientType              string   `json:"client_type"`
+	ApplicationType         string   `json:"application_type"`
 	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
 	RedirectURIs            []string `json:"redirect_uris,omitempty"`
 	PostLogoutRedirectURIs  []string `json:"post_logout_redirect_uris,omitempty"`
@@ -60,13 +67,21 @@ type ClientResponse struct {
 	ResponseTypes           []string `json:"response_types"`
 	Scopes                  []string `json:"scopes,omitempty"`
 	AllowedResources        []string `json:"allowed_resources,omitempty"`
+	DefaultResource         string   `json:"default_resource,omitempty"`
 	AllowedProviders        []string `json:"allowed_providers,omitempty"`
 	RequirePKCE             bool     `json:"require_pkce"`
 	// FirstParty marks a client we ship ourselves; only a first-party client may manage a user's own sessions.
-	FirstParty   bool   `json:"first_party"`
+	FirstParty bool `json:"first_party"`
+	// LogoURI is the RFC 7591 s2 logo, held as a data: URI so the consent page can show it under img-src 'self' data:.
+	LogoURI      string `json:"logo_uri,omitempty"`
 	ClientSecret string `json:"client_secret,omitempty"`
 	CreatedAt    int64  `json:"created_at,omitempty"`
 	UpdatedAt    int64  `json:"updated_at,omitempty"`
+}
+
+// IsNative reports whether the client is a native app, whose login holds a session of its own.
+func (c *ClientResponse) IsNative() bool {
+	return c.ApplicationType == oauth_clients_db.ApplicationTypeNative
 }
 
 // AllowsRedirectURI reports whether uri exactly matches a registered redirect URI (no wildcards/prefixes — open-redirector defense, RFC 9700 §2.1).
@@ -127,28 +142,35 @@ type CreateInput struct {
 	ClientID               string
 	ClientName             string
 	ClientType             string
+	ApplicationType        string
 	RedirectURIs           []string
 	PostLogoutRedirectURIs []string
 	GrantTypes             []string
 	Scopes                 []string
 	AllowedResources       []string
+	DefaultResource        string
 	AllowedProviders       []string
 	RequirePKCE            *bool
 	FirstParty             bool
+	LogoURI                string
 }
 
 // UpdateInput is the full desired state of a client's mutable fields (PUT semantics): the
-// values here replace the stored ones wholesale, so an omitted field resets to empty/default.
+// values here replace the stored ones wholesale, so an omitted field resets to empty/default, except ApplicationType.
 type UpdateInput struct {
-	ClientName             string
+	ClientName string
+	// ApplicationType replaces the stored type when set; empty keeps it, because a seeded native app must not turn web on an update that omits the field.
+	ApplicationType        string
 	RedirectURIs           []string
 	PostLogoutRedirectURIs []string
 	GrantTypes             []string
 	Scopes                 []string
 	AllowedResources       []string
+	DefaultResource        string
 	AllowedProviders       []string
 	RequirePKCE            *bool
 	FirstParty             bool
+	LogoURI                string
 }
 
 // Create validates and persists a new client, generating a secret for confidential clients.
@@ -185,48 +207,47 @@ func (s *Service) IsRegistered(clientID string) (bool, error) {
 	return true, nil
 }
 
-// AuthenticateClient authenticates a client per RFC 6749 §2.3: a confidential client must present its matching secret, a public client must present none.
-func (s *Service) AuthenticateClient(clientID, clientSecret string) error {
+// AuthenticateClient authenticates a client per RFC 6749 §2.3 (a confidential client must present its matching secret, a public client none) and returns the client it read, so the caller need not read it again.
+func (s *Service) AuthenticateClient(clientID, clientSecret string) (*ClientResponse, error) {
 	if clientID == "" {
-		return ErrClientAuthFailed
+		return nil, ErrClientAuthFailed
 	}
 	entry, err := s.db.GetClient(clientID)
 	if err != nil {
 		if errors.Is(err, oauth_clients_db.ErrOAuthClientNotFound) {
-			return ErrClientNotFound
+			return nil, ErrClientNotFound
 		}
-		return err
+		return nil, err
 	}
 
 	if entry.ClientType == oauth_clients_db.ClientTypeConfidential {
 		// Constant-time compare to avoid leaking the secret via timing.
 		if clientSecret == "" || subtle.ConstantTimeCompare([]byte(clientSecret), []byte(entry.Secret)) != 1 {
-			return ErrClientAuthFailed
+			return nil, ErrClientAuthFailed
 		}
-		return nil
+	} else if clientSecret != "" {
+		return nil, ErrClientAuthFailed
 	}
-	if clientSecret != "" {
-		return ErrClientAuthFailed
-	}
-	return nil
+	client := toClient(entry, false)
+	return &client, nil
 }
 
 // AuthenticateForOAuth authenticates a client and maps the outcome to an OAuth response for the
 // token/revoke endpoints: errCode is the RFC 6749 §5.2 code ("" when authenticated), and internal
 // is true only for an unexpected (non-auth) error so the caller can pick 500 vs 401. Callers build
 // the actual response so the clients package stays free of the HTTP/response layer.
-func (s *Service) AuthenticateForOAuth(clientID, clientSecret string) (errCode string, internal bool) {
-	err := s.AuthenticateClient(clientID, clientSecret)
+func (s *Service) AuthenticateForOAuth(clientID, clientSecret string) (client *ClientResponse, errCode string, internal bool) {
+	client, err := s.AuthenticateClient(clientID, clientSecret)
 	switch {
 	case err == nil:
-		return "", false
+		return client, "", false
 	case errors.Is(err, ErrClientNotFound), errors.Is(err, ErrClientAuthFailed):
-		return oidc.OAuthErrInvalidClient, false
+		return nil, oidc.OAuthErrInvalidClient, false
 	default:
 		// An unexpected (non-auth) error — e.g. a DynamoDB failure reading the registry. Log it:
 		// the caller collapses this to a generic server_error, so this is the only record of the cause.
 		rlog.Error(context.TODO()).Err(err).Str("client_id", clientID).Msg("Client authentication failed on an internal error")
-		return oidc.OAuthErrServerError, true
+		return nil, oidc.OAuthErrServerError, true
 	}
 }
 
@@ -241,6 +262,38 @@ func (s *Service) Get(clientID string) (*ClientResponse, error) {
 	}
 	c := toClient(entry, false)
 	return &c, nil
+}
+
+// Display is how a client presents itself to a person: its registered name and logo, either of which may be empty.
+type Display struct {
+	Name    string
+	LogoURI string
+}
+
+// Displays returns each registered client's Display keyed by client id, in one read; an unregistered id is absent from the map.
+func (s *Service) Displays(clientIDs []string) (map[string]Display, error) {
+	ids := slices.Compact(slices.Sorted(slices.Values(clientIDs)))
+	entries, err := s.db.BatchGetDisplays(ids)
+	if err != nil {
+		return nil, rmerror.NewRMError(err, "failed to read client displays")
+	}
+	out := make(map[string]Display, len(entries))
+	for _, e := range entries {
+		out[e.ClientID] = Display{Name: e.ClientName, LogoURI: e.LogoURI}
+	}
+	return out, nil
+}
+
+// RequireFirstParty reads the client's registration on every call, so taking first-party standing away applies to its next request rather than when its tokens expire.
+func (s *Service) RequireFirstParty(clientID string) error {
+	client, err := s.Get(clientID)
+	if err != nil && !errors.Is(err, ErrClientNotFound) {
+		return err
+	}
+	if client == nil || !client.FirstParty {
+		return ErrNotFirstParty
+	}
+	return nil
 }
 
 // List returns every client. The stored secret is included only when getSecret is true.
@@ -264,13 +317,18 @@ func (s *Service) Update(clientID string, in UpdateInput) (*ClientResponse, erro
 		return nil, err
 	}
 	entry.ClientName = in.ClientName
+	if in.ApplicationType != "" {
+		entry.ApplicationType = in.ApplicationType
+	}
 	entry.RedirectURIs = in.RedirectURIs
 	entry.PostLogoutRedirectURIs = in.PostLogoutRedirectURIs
 	entry.GrantTypes = in.GrantTypes
 	entry.Scopes = in.Scopes
 	entry.AllowedResources = in.AllowedResources
+	entry.DefaultResource = in.DefaultResource
 	entry.AllowedProviders = in.AllowedProviders
 	entry.FirstParty = in.FirstParty
+	entry.LogoURI = in.LogoURI
 	// Public clients are forced to require PKCE; otherwise take what was sent (nil ⇒ false).
 	if entry.ClientType == oauth_clients_db.ClientTypePublic {
 		entry.RequirePKCE = utils.Ptr(true)
@@ -291,12 +349,21 @@ func (s *Service) Update(clientID string, in UpdateInput) (*ClientResponse, erro
 // AddRedirectURIs unions redirectURIs onto the client's redirect_uris set in one conditional
 // write (DynamoDB set-union dedups; no read-modify-write). Returns the client with the merged set.
 func (s *Service) AddRedirectURIs(clientID string, redirectURIs []string) (*ClientResponse, error) {
+	// The same rules as registration, checked before the write so one bad URI adds none of the batch.
+	for _, uri := range redirectURIs {
+		if err := validateRedirectURI("redirect_uris", uri); err != nil {
+			return nil, rmerror.NewRMError(ErrInvalidRedirectURI, err.Error())
+		}
+	}
 	merged, err := s.db.AddRedirectURIs(clientID, redirectURIs, time.Now().Unix())
 	if err != nil {
 		return nil, err
 	}
 	return &ClientResponse{ClientID: clientID, RedirectURIs: merged}, nil
 }
+
+// ErrInvalidRedirectURI is a redirect URI registration would refuse, so a caller can answer it as bad input.
+var ErrInvalidRedirectURI = errors.New("invalid redirect URI")
 
 // Delete permanently removes the client from the registry.
 func (s *Service) Delete(clientID string) error {
@@ -315,14 +382,17 @@ func buildEntry(in CreateInput) (*oauth_clients_db.OAuthClientEntry, error) {
 		ClientID:               clientID,
 		ClientName:             in.ClientName,
 		ClientType:             in.ClientType,
+		ApplicationType:        cmp.Or(in.ApplicationType, oauth_clients_db.ApplicationTypeWeb),
 		RedirectURIs:           in.RedirectURIs,
 		PostLogoutRedirectURIs: in.PostLogoutRedirectURIs,
 		GrantTypes:             in.GrantTypes,
 		Scopes:                 in.Scopes,
 		AllowedResources:       in.AllowedResources,
+		DefaultResource:        in.DefaultResource,
 		AllowedProviders:       in.AllowedProviders,
 		RequirePKCE:            in.RequirePKCE,
 		FirstParty:             in.FirstParty,
+		LogoURI:                in.LogoURI,
 	}
 	// Public clients must require PKCE — force it regardless of what was sent.
 	if entry.ClientType == oauth_clients_db.ClientTypePublic {
@@ -344,6 +414,16 @@ func validateEntry(e *oauth_clients_db.OAuthClientEntry) error {
 	default:
 		return rmerror.NewRMError(nil, fmt.Sprintf("client_type must be public or confidential, got %q", e.ClientType))
 	}
+	switch e.ApplicationType {
+	case "", oauth_clients_db.ApplicationTypeWeb, oauth_clients_db.ApplicationTypeNative:
+	default:
+		return rmerror.NewRMError(nil, fmt.Sprintf("application_type must be web or native, got %q", e.ApplicationType))
+	}
+	// RFC 8252 s8.4: a secret shipped inside an app is readable by anyone who has the app.
+	isNative := e.ApplicationType == oauth_clients_db.ApplicationTypeNative
+	if isNative && e.ClientType != oauth_clients_db.ClientTypePublic {
+		return rmerror.NewRMError(nil, fmt.Sprintf("application_type native requires client_type public, got %q: an app cannot keep a client secret", e.ClientType))
+	}
 	// Both redirect lists get the same treatment, because they are one rule: each names a URL
 	// this server will send a BROWSER to on a caller's say-so. A bad entry here is an open
 	// redirect wearing the issuer's own hostname -- the most credible phishing origin we own --
@@ -354,6 +434,13 @@ func validateEntry(e *oauth_clients_db.OAuthClientEntry) error {
 	} {
 		for _, uri := range uris {
 			if err := validateRedirectURI(field, uri); err != nil {
+				return err
+			}
+		}
+	}
+	if isNative {
+		for _, uri := range e.RedirectURIs {
+			if err := validateNativeRedirectURI(uri); err != nil {
 				return err
 			}
 		}
@@ -376,11 +463,17 @@ func validateEntry(e *oauth_clients_db.OAuthClientEntry) error {
 				"allowed_resource %q must be an absolute URI with a host and no fragment (e.g. https://api.example.com)", r))
 		}
 	}
+	if e.DefaultResource != "" && !collections.Contains(e.AllowedResources, e.DefaultResource) {
+		return rmerror.NewRMError(nil, fmt.Sprintf("default_resource %q must be one of allowed_resources", e.DefaultResource))
+	}
 	// A blank provider name would silently narrow the chooser to nothing matchable.
 	for _, p := range e.AllowedProviders {
 		if strings.TrimSpace(p) == "" {
 			return rmerror.NewRMError(nil, "allowed_providers may not contain a blank entry")
 		}
+	}
+	if err := ValidateLogoURI(e.LogoURI); err != nil {
+		return err
 	}
 	// Public clients are secretless and must require PKCE.
 	if e.ClientType == oauth_clients_db.ClientTypePublic {
@@ -393,6 +486,31 @@ func validateEntry(e *oauth_clients_db.OAuthClientEntry) error {
 		if e.RequirePKCE == nil || !*e.RequirePKCE {
 			return rmerror.NewRMError(nil, "public clients must require PKCE")
 		}
+	}
+	return nil
+}
+
+// maxLogoBytes keeps a client row, which the token and refresh paths read on every call, near one DynamoDB read unit; a provider logo takes the same limit.
+const maxLogoBytes = 4 * 1024
+
+// logoDataURI admits raster images only: SVG is a document that can carry script.
+var logoDataURI = regexp.MustCompile(`^data:image/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$`)
+
+// ValidateLogoURI accepts "" or an inline raster image: "data:image/png;base64,iVBORw0..." passes, "https://cdn.example.com/a.png" does not.
+func ValidateLogoURI(logo string) error {
+	if logo == "" {
+		return nil
+	}
+	m := logoDataURI.FindStringSubmatch(logo)
+	if m == nil {
+		return rmerror.NewRMError(nil, "logo_uri must be a data:image/png, jpeg or webp URI in base64")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(m[2])
+	if err != nil {
+		return rmerror.NewRMError(nil, "logo_uri is not valid base64")
+	}
+	if len(decoded) > maxLogoBytes {
+		return rmerror.NewRMError(nil, fmt.Sprintf("logo_uri may be at most %d KiB", maxLogoBytes/1024))
 	}
 	return nil
 }
@@ -463,6 +581,14 @@ func validateRedirectURI(field, uri string) error {
 	return nil
 }
 
+// validateNativeRedirectURI refuses https for a native app, whose redirect must be a private-use scheme or an http loopback address (OIDC Dynamic Client Registration 1.0 s2); validateRedirectURI has already confined http to loopback. "com.example.app:/cb" passes, "https://app.example.com/cb" does not.
+func validateNativeRedirectURI(uri string) error {
+	if u, err := url.Parse(uri); err == nil && strings.EqualFold(u.Scheme, "https") {
+		return rmerror.NewRMError(nil, fmt.Sprintf("redirect_uris %q is not allowed for a native application, which may only redirect to its own URI scheme or an http loopback address; register a web application for an https redirect", uri))
+	}
+	return nil
+}
+
 // toClient projects a storage row to the API view. getSecret includes the plaintext secret.
 func toClient(e *oauth_clients_db.OAuthClientEntry, getSecret bool) ClientResponse {
 	// Derived from the type unless the row states one. Storing it is how private_key_jwt
@@ -479,6 +605,7 @@ func toClient(e *oauth_clients_db.OAuthClientEntry, getSecret bool) ClientRespon
 		ClientID:                e.ClientID,
 		ClientName:              e.ClientName,
 		ClientType:              e.ClientType,
+		ApplicationType:         cmp.Or(e.ApplicationType, oauth_clients_db.ApplicationTypeWeb),
 		TokenEndpointAuthMethod: authMethod,
 		RedirectURIs:            e.RedirectURIs,
 		PostLogoutRedirectURIs:  e.PostLogoutRedirectURIs,
@@ -486,9 +613,11 @@ func toClient(e *oauth_clients_db.OAuthClientEntry, getSecret bool) ClientRespon
 		ResponseTypes:           []string{oidc.ResponseTypeCode},
 		Scopes:                  e.Scopes,
 		AllowedResources:        e.AllowedResources,
+		DefaultResource:         e.DefaultResource,
 		AllowedProviders:        e.AllowedProviders,
 		RequirePKCE:             derefBool(e.RequirePKCE),
 		FirstParty:              e.FirstParty,
+		LogoURI:                 e.LogoURI,
 		CreatedAt:               e.CreatedAt,
 		UpdatedAt:               e.UpdatedAt,
 	}

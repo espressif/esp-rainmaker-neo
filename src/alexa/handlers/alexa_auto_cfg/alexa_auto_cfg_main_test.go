@@ -37,11 +37,11 @@ func TestAlexaAutoCfg(t *testing.T) {
 }
 
 const (
-	vaClientID    = "va-client"
+	vaClientID    = "rainmaker-neo-alexa-client"
 	testRegion    = "us-east-1"
 	testSkillID   = "amzn1.ask.skill.test"
 	adminUserID   = "51bbf520-70a1-70ac-627f-07d1af2a930c"
-	vaSecretParam = "/rmng/base/esp-user-va-client-secret"
+	vaSecretParam = "/rmng/alexa/esp-user-client-secret"
 	skillFn       = "rmng-alexa-skill-" + testRegion
 	dummyUserID   = "test-dummy-user-id"
 )
@@ -61,7 +61,7 @@ func (c liveGrantFailsIn) AddPermission(ctx context.Context, params *lambda.AddP
 	return c.LambdaMock.AddPermission(ctx, params, optFns...)
 }
 
-// seedVAClient adds the espuser-oauth-clients table and seeds the va-client row the
+// seedVAClient adds the espuser-oauth-clients table and seeds Alexa's own client row the
 // worker registers Alexa's account-linking redirect URIs on.
 func seedVAClient(ctx context.Context) {
 	awscommon.GetDynamoDBClient().(*mock.DynamoDBMock).AddTable("espuser-oauth-clients", "client_id", "")
@@ -71,12 +71,12 @@ func seedVAClient(ctx context.Context) {
 		ClientName: "Voice Assistant",
 		ClientType: "confidential",
 		GrantTypes: []string{"authorization_code", "refresh_token"},
-		Scopes:     []string{"openid", "email", "phone", "profile"},
+		Scopes:     []string{"openid", "email", "phone", "profile", "offline_access"},
 	})
 	Expect(err).To(BeNil())
 }
 
-// vaClientURIs reads the seeded va-client row's currently registered redirect URIs.
+// vaClientURIs reads the seeded Alexa client row's currently registered redirect URIs.
 func vaClientURIs(ctx context.Context) []string {
 	c, err := clients.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil)).Get(vaClientID)
 	Expect(err).To(BeNil())
@@ -183,12 +183,12 @@ var _ = Describe("Alexa Auto Cfg", func() {
 		_, _ = test_utils.SetupTestAdminUser(ctx, adminUserID, "admin-email")
 		_, _ = test_utils.SetupTestNonAdminUser(ctx, dummyUserID, "dummy-email")
 
-		// Account linking needs the va-client row to register redirect URIs on, and the
+		// Account linking needs Alexa's client row to register redirect URIs on, and the
 		// client secret it authenticates with — both read at runtime, not from the env.
 		seedVAClient(ctx)
 		_, err := awscommon.GetSSMClient().PutParameter(ctx, &ssm.PutParameterInput{
 			Name:  aws.String(vaSecretParam),
-			Value: aws.String("va-client-secret"),
+			Value: aws.String("alexa-client-secret"),
 			Type:  ssmtypes.ParameterTypeSecureString,
 		})
 		Expect(err).To(BeNil())
@@ -320,7 +320,7 @@ var _ = Describe("Alexa Auto Cfg", func() {
 			Entry("profile has no vendor", 200, `{"vendors":[]}`, http.StatusBadRequest),
 		)
 
-		It("refuses before creating a skill when the va-client secret parameter is not configured", func() {
+		It("refuses before creating a skill when the linking client's secret parameter is not configured", func() {
 			os.Unsetenv("OIDC_VA_CLIENT_SECRET_PARAM")
 			DeferCleanup(os.Setenv, "OIDC_VA_CLIENT_SECRET_PARAM", vaSecretParam)
 			before := createSkillCalls()
@@ -536,7 +536,7 @@ var _ = Describe("Alexa Auto Cfg", func() {
 			Expect(*perm.Principal).To(Equal("alexa-connectedhome.amazon.com"))
 			Expect(lambdaMock.Permissions).NotTo(HaveKey(mock.PermissionKey(skillFn, alexa_skill.AlexaSetupStatementID(testSkillID))))
 
-			// Redirect URLs reached the OIDC va-client row.
+			// Redirect URLs reached Alexa's own OIDC client row.
 			Expect(vaClientURIs(ctx)).To(
 				ContainElement("https://pitangui.amazon.com/api/skill/link/M1ABC"))
 

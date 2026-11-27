@@ -39,6 +39,16 @@ type User struct {
 }
 
 func NewContextWithAPIRequest(ctx context.Context, request events.APIGatewayProxyRequest) *rmngctx.RmngContext {
+	ctx = auth.AddAcceptedAudiencesToCtx(ctx, rmngrequest.GetAcceptedAudiencesFromAPIRequest(request))
+	return newContextFromRequest(ctx, request, (*auth.OAuthUserAuthService).VerifyAccessToken)
+}
+
+// NewContextWithAnyAPIToken resolves the caller of the ESP User API's own endpoints, which take any of our user access tokens whatever API it is addressed to; which apps may call them is the handler's check.
+func NewContextWithAnyAPIToken(ctx context.Context, request events.APIGatewayProxyRequest) *rmngctx.RmngContext {
+	return newContextFromRequest(ctx, request, (*auth.OAuthUserAuthService).VerifyUserTokenForAnyAPI)
+}
+
+func newContextFromRequest(ctx context.Context, request events.APIGatewayProxyRequest, verify func(*auth.OAuthUserAuthService, string) (auth.TokenClaims, error)) *rmngctx.RmngContext {
 	factory := auth.NewAuthServiceFactory()
 
 	authService, identity, err := factory.CreateAuthServiceFromAPIRequest(ctx, request)
@@ -61,7 +71,7 @@ func NewContextWithAPIRequest(ctx context.Context, request events.APIGatewayProx
 		rlog.Error(ctx).Err(err).Msg("Failed to build user auth service")
 		return nil
 	}
-	claims, err := svc.VerifyAccessToken(token)
+	claims, err := verify(svc, token)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Msg("Bearer access token rejected")
 		return nil

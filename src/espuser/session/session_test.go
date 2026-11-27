@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -178,6 +179,33 @@ var _ = Describe("session service", func() {
 				"a front-channel event carries a Set-Cookie, so cookie_expires_at rolls with expires_at")
 			Expect(after.LastSeenAt).To(BeNumerically(">", aged.LastSeenAt))
 		})
+
+		It("peeks at a live session without moving either clock, and at an expired one not at all", func() {
+			cookie, sid, err := svc.Establish(session.EstablishInput{UserID: "u1", Provider: "cognito", AuthTime: 100})
+			Expect(err).NotTo(HaveOccurred())
+			before, err := entryFor(cookie)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(svc.Peek(cookie)).To(Equal(&session.Session{SID: sid, UserID: "u1", Provider: "cognito", AuthTime: 100}))
+			Expect(entryFor(cookie)).To(Equal(before), "a caller that re-sends no cookie must not roll the row")
+
+			expired := *before
+			expired.ExpiresAt = time.Now().Add(-time.Minute).Unix()
+			rewrite(&expired)
+			Expect(svc.Peek(cookie)).To(BeNil())
+			Expect(svc.Peek("")).To(BeNil())
+		})
+
+		It("tells a failed read apart from no session, which Peek cannot (negative)", func() {
+			cookie, _, err := svc.Establish(session.EstablishInput{UserID: "u1", Provider: "cognito", AuthTime: 100})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(svc.Find("never-issued")).To(BeNil())
+
+			awscommon.GetDynamoDBClient().(*mock.DynamoDBMock).NextGetItemError = errors.New("throttled")
+			sess, err := svc.Find(cookie)
+			Expect(err).To(MatchError(ContainSubstring("session: read failed")))
+			Expect(sess).To(BeNil())
+		})
 	})
 
 	Describe("BumpRetentionBySID — the back channel", func() {
@@ -301,6 +329,47 @@ var _ = Describe("session service", func() {
 		})
 	})
 
+	Describe("FindBySID", func() {
+		var svc *session.Service
+
+		BeforeEach(func() {
+			svc = session.NewService(rmngCtx())
+		})
+
+		It("finds the user's own session by sid and nobody else's (negative, cross-user)", func() {
+			_, sid, err := svc.Establish(session.EstablishInput{UserID: "u1", Provider: "up", AuthTime: time.Now().Unix()})
+			Expect(err).NotTo(HaveOccurred())
+
+			row, err := svc.FindBySID("u1", sid)
+			Expect(err).NotTo(HaveOccurred())
+			Expect([]string{row.UserID, row.SID, row.Provider}).To(Equal([]string{"u1", sid, "up"}))
+
+			_, err = svc.FindBySID("u2", sid)
+			Expect(err).To(MatchError(sessions_db.ErrSessionNotFound))
+		})
+	})
+
+	Describe("DeleteAllSessions", func() {
+		var svc *session.Service
+
+		BeforeEach(func() {
+			svc = session.NewService(rmngCtx())
+		})
+
+		It("ends every session of the user, browser and app alike, and no one else's", func() {
+			_, _, err := svc.Establish(session.EstablishInput{UserID: "u1"})
+			Expect(err).NotTo(HaveOccurred())
+			_, _, err = svc.Establish(session.EstablishInput{UserID: "u1", Origin: session.OriginApp})
+			Expect(err).NotTo(HaveOccurred())
+			_, otherSID, err := svc.Establish(session.EstablishInput{UserID: "u2"})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(svc.DeleteAllSessions("u1")).To(Succeed())
+			Expect(svc.ListSessions("u1")).To(BeEmpty())
+			Expect(svc.ListSessions("u2")).To(HaveExactElements(HaveField("SID", otherSID)))
+		})
+	})
+
 	Describe("re-authentication rotates the session (never adds one)", func() {
 		var svc *session.Service
 
@@ -394,5 +463,21 @@ var _ = Describe("session service", func() {
 			Expect(h).To(ContainSubstring(fmt.Sprintf("Max-Age=%d", 7200)))
 			Expect(strings.ToLower(h)).NotTo(ContainSubstring("domain"), "a Domain attribute voids the __Host- prefix")
 		})
+	})
+
+	Describe("the sign-out confirmation token", func() {
+		It("matches the cookie it was made from", func() {
+			Expect(session.IsLogoutCSRFToken("cookie-a", session.LogoutCSRFToken("cookie-a"))).To(BeTrue())
+		})
+
+		DescribeTable("refuses a token that is not this cookie's own (negative)",
+			func(cookieValue, token string) {
+				Expect(session.IsLogoutCSRFToken(cookieValue, token)).To(BeFalse())
+			},
+			Entry("another browser's token", "cookie-a", session.LogoutCSRFToken("cookie-b")),
+			Entry("no token", "cookie-a", ""),
+			Entry("not base64url", "cookie-a", "%%%"),
+			Entry("no cookie, which is what a cross-site POST carries", "", session.LogoutCSRFToken("")),
+		)
 	})
 })

@@ -11,11 +11,25 @@ from botocore.exceptions import ClientError
 
 from py_sdk.test_group import Group
 from py_sdk.test_user import user_log
+from src.espuser.stacks.base_res_constants import (
+    HOME_APP_CLIENT_ID,
+    SEEDED_CLIENT_APIS,
+    SEEDED_OAUTH_CLIENTS,
+)
+from src.rmneo.stacks.base_res_constants import (
+    ALEXA_OAUTH_CLIENT,
+    GVA_OAUTH_CLIENT,
+    SMART_THINGS_OAUTH_CLIENT,
+    VOICE_ASSISTANT_CLIENT_SECRET_PARAMS,
+)
 from test.itest.conftest import (
+    ESPUSER_RESOURCE,
     IOT_USER_ROLE_ARN,
+    NEO_RESOURCE,
     REGION,
     USER_API_GATEWAY_URL,
     accept_sharing_request_for,
+    rmng_outputs,
 )
 
 
@@ -444,6 +458,41 @@ def _find_client(admin_user, client_id, get_secret=False):
     listed = admin_user.list_oauth_clients(get_secret=get_secret)
     assert listed.status_code == 200, listed.text
     return next((c for c in listed.json()["clients"] if c["client_id"] == client_id), None)
+
+
+@pytest.mark.parametrize("stack, declared", [
+    ("rmng-alexa-cfg-core", ALEXA_OAUTH_CLIENT),
+    ("rmng-gva-core", GVA_OAUTH_CLIENT),
+    ("rmng-st-cfg-core", SMART_THINGS_OAUTH_CLIENT),
+])
+def test_each_assistant_stack_creates_its_own_client_on_neo(admin_user, stack, declared):
+    """One confidential client per voice assistant, created by that assistant's stack and entitled to neo by default; its secret is handed over as a SecureString, never a stack output."""
+    if not USER_API_GATEWAY_URL:
+        pytest.skip("USER_API_GATEWAY_URL not configured")
+    if stack not in rmng_outputs:
+        pytest.skip(f"{stack} is not deployed")
+    client_id = declared["client_id"]
+    client = _find_client(admin_user, client_id, get_secret=True)
+    assert client, f"{client_id} is not seeded"
+    assert client["client_type"] == declared["client_type"] and client["client_secret"]
+    assert NEO_RESOURCE in client["allowed_resources"] and client["default_resource"] == NEO_RESOURCE
+    handed_over = boto3.client("ssm", region_name=REGION).get_parameter(
+        Name=VOICE_ASSISTANT_CLIENT_SECRET_PARAMS[client_id], WithDecryption=True)["Parameter"]
+    assert handed_over["Type"] == "SecureString" and handed_over["Value"] == client["client_secret"]
+
+
+def test_the_deploy_seeds_the_home_app_as_a_first_party_client_of_both_apis(admin_user):
+    if not USER_API_GATEWAY_URL:
+        pytest.skip("USER_API_GATEWAY_URL not configured")
+    declared = next(c for c in SEEDED_OAUTH_CLIENTS if c["client_id"] == HOME_APP_CLIENT_ID)
+    client = _find_client(admin_user, HOME_APP_CLIENT_ID)
+    assert client, f"{HOME_APP_CLIENT_ID} is not seeded"
+    fields = ("client_type", "first_party", "require_pkce")
+    assert {f: client[f] for f in fields} == {f: declared[f] for f in fields}
+    assert set(declared["redirect_uris"]) <= set(client["redirect_uris"])
+    assert client.get("logo_uri", "").startswith("data:image/")
+    resources = [{"neo": NEO_RESOURCE, "espuser": ESPUSER_RESOURCE}[api] for api in SEEDED_CLIENT_APIS[HOME_APP_CLIENT_ID]]
+    assert set(resources) <= set(client["allowed_resources"]) and client["default_resource"] == resources[0]
 
 
 def test_admin_client_crud_lifecycle(admin_user):

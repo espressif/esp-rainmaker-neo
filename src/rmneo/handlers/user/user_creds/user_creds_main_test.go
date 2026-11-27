@@ -158,10 +158,10 @@ var _ = Describe("User Creds Main", func() {
 			Expect(response.StatusCode).To(Equal(403))
 		})
 
-		It("returns 403 when the header carries an id_token instead of an access token", func() {
+		It("returns 401 when the header carries an id_token instead of an access token", func() {
 			response := CallUserCredsHandler(ctx, buildRequest(testToken, testToken))
 
-			Expect(response.StatusCode).To(Equal(403))
+			expectInvalidTokenChallenge(response)
 		})
 
 		It("returns 403 for an id_token minted in a pool RMNG does not own", func() {
@@ -234,6 +234,37 @@ var _ = Describe("User Creds Main", func() {
 			Expect(response.StatusCode).To(Equal(403))
 		})
 
+		// RFC 6750 s3.1: a token for another API is invalid_token here, the same 401 the ESP User API gives.
+		// The API's names come from the request API Gateway delivered, not from the Lambda's environment.
+		throughDomain := func(access, id, domain string) events.APIGatewayProxyRequest {
+			GinkgoT().Setenv("ACCEPTED_AUDIENCES", "")
+			request := buildRequest(access, id)
+			request.RequestContext = events.APIGatewayProxyRequestContext{
+				APIID: "abc123", Stage: "prod", DomainName: domain,
+				Path: "/v1/user/credentials", ResourcePath: "/v1/user/credentials",
+			}
+			return request
+		}
+
+		It("accepts a token addressed to the custom domain the request came in on", func() {
+			access, id := tokenHarness.MintPair(testSub)
+			cognitoIdentityMock.AddTokenMapping(id, testIdentityId)
+
+			response := CallUserCredsHandler(ctx, throughDomain(access, id, strings.TrimPrefix(test_utils.TestAPIAudience, "https://")))
+
+			Expect(response.StatusCode).To(Equal(200))
+		})
+
+		It("returns 401 for an access token addressed to another API", func() {
+			access, id := tokenHarness.MintPair(testSub)
+			cognitoIdentityMock.AddTokenMapping(id, testIdentityId)
+
+			response := CallUserCredsHandler(ctx, throughDomain(access, id, "other-api.example.com"))
+
+			expectInvalidTokenChallenge(response)
+			Expect(cognitoIdentityMock.LastGetIdInput).To(BeNil())
+		})
+
 		It("refuses an access token in the body where an id_token belongs", func() {
 			access, _ := tokenHarness.MintPair(testSub)
 
@@ -245,6 +276,10 @@ var _ = Describe("User Creds Main", func() {
 		It("should return 401 when no bearer token is present (negative)", func() {
 			response := CallUserCredsHandler(ctx, events.APIGatewayProxyRequest{})
 			Expect(response.StatusCode).To(Equal(401))
+			// RFC 6750 s3.1: a request with no credentials gets the challenge but no error code.
+			Expect(response.Headers).To(HaveKeyWithValue("WWW-Authenticate", "Bearer"))
+			Expect(response.Headers).To(HaveKeyWithValue("Access-Control-Allow-Origin", "*"))
+			Expect(response.Body).To(MatchJSON(`{"message":"Unauthorized"}`))
 		})
 
 		It("refuses a token from an untrusted issuer (negative)", func() {
@@ -253,12 +288,12 @@ var _ = Describe("User Creds Main", func() {
 				"attacker", "https://evil.example.com", "access", false, false, "", "attacker",
 			)
 			response := CallUserCredsHandler(ctx, buildRequest(bogus, bogus))
-			Expect(response.StatusCode).To(Equal(401))
+			expectInvalidTokenChallenge(response)
 		})
 
 		It("should return 401 for a malformed token (negative)", func() {
 			response := CallUserCredsHandler(ctx, buildRequest("not.a.jwt", testToken))
-			Expect(response.StatusCode).To(Equal(401))
+			expectInvalidTokenChallenge(response)
 		})
 
 		// A delegated third-party token must not be exchangeable for role credentials. Refused
@@ -310,6 +345,14 @@ var _ = Describe("User Creds Main", func() {
 
 	})
 })
+
+// expectInvalidTokenChallenge pins the RFC 6750 s3.1 401 for a bearer that does not verify, with neo's body unchanged.
+func expectInvalidTokenChallenge(response events.APIGatewayProxyResponse) {
+	Expect(response.StatusCode).To(Equal(401))
+	Expect(response.Headers).To(HaveKeyWithValue("WWW-Authenticate", `Bearer error="invalid_token"`))
+	Expect(response.Headers).To(HaveKeyWithValue("Access-Control-Allow-Origin", "*"))
+	Expect(response.Body).To(MatchJSON(`{"message":"Unauthorized"}`))
+}
 
 func CallUserCredsHandler(ctx context.Context, request events.APIGatewayProxyRequest) events.APIGatewayProxyResponse {
 	response, err := handleRequest(ctx, request)

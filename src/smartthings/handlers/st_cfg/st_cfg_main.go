@@ -17,7 +17,6 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
-	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -38,22 +37,11 @@ const (
 	maxClientSecretLength = 1024
 )
 
-// SmartThings cloud-to-cloud OAuth callback URLs, one per SmartThings geo.
-// Registered on the shared OIDC va-client row so account linking works from
-// any SmartThings region (union semantics; Alexa/GVA URIs are preserved).
+// SmartThings cloud-to-cloud OAuth callback URLs, one per SmartThings geo, so account linking works from any SmartThings region.
 var stRedirectURIs = []string{
 	"https://c2c-us.smartthings.com/oauth/callback",
 	"https://c2c-eu.smartthings.com/oauth/callback",
 	"https://c2c-ap.smartthings.com/oauth/callback",
-}
-
-// updateVAClientRedirectURIs registers redirectURIs on the OIDC va-client registry row, shared by Alexa, GVA and SmartThings (union semantics; other fields preserved).
-func updateVAClientRedirectURIs(ctx context.Context, clientID string, redirectURIs []string) error {
-	svc := clients.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil))
-	if _, err := svc.AddRedirectURIs(clientID, redirectURIs); err != nil {
-		return rmerror.NewRMError(err, "failed to add OIDC va-client redirect URIs")
-	}
-	return nil
 }
 
 type STCfgRequest struct {
@@ -131,12 +119,12 @@ func handleStoreConfig(ctx context.Context, request events.APIGatewayProxyReques
 		return utils.APIGwRespJSON(http.StatusBadRequest, validationErr)
 	}
 
-	// Register the SmartThings callback URLs against the OIDC va-client registry row.
 	vaClientID := os.Getenv("OIDC_VA_CLIENT_ID")
 	if vaClientID == "" {
 		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("OIDC_VA_CLIENT_ID not configured"))
 	}
-	if err := updateVAClientRedirectURIs(ctx, vaClientID, stRedirectURIs); err != nil {
+	svc := clients.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil))
+	if _, err := svc.AddRedirectURIs(vaClientID, stRedirectURIs); err != nil {
 		rlog.Error(ctx).Err(err).Msg("failed to register SmartThings redirect URIs")
 		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("failed to store configuration"))
 	}

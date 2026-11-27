@@ -9,22 +9,24 @@ the same way. Cognito is one such row.
 
 | Field | Meaning |
 | --- | --- |
-| `provider_name` | Key; the value `/oauth2/federation/start?provider=` takes |
-| `type` | `oidc` for a brokered upstream, `otp` for a hosted login page |
+| `provider_name` | Key; the value `/user/login/federation/start?provider=` takes. Providers are listed, and a default among them is picked, in `provider_name` order |
+| `type` | `oidc` or `otp`. An `otp` row is a one-time code on our page; an `oidc` row signs in as its `password_verifier` says. A Cognito pool can be either: an `oidc` row with `password_verifier` `cognito` takes the password on our page, one without it is a button to the pool's own hosted UI |
+| `password_verifier` | On an `oidc` row, who checks a password typed on our page: `cognito` (Cognito `InitiateAuth` against the row's pool; needs a `client_id`). Unset, the row is a button to the provider's own page. Any other value, or the field on an `otp` row, offers neither |
 | `enabled` | Whether `/oauth2/authorize` offers it. Unset counts as disabled |
-| `display_name` | Label for the login chooser |
-| `issuer` | The provider's OIDC issuer; endpoints and keys are discovered from it |
-| `authorize_url` | Where a login begins: the upstream authorize endpoint, or the hosted page for an `otp` row |
+| `display_name` | The label of this provider's "Continue with" button or password form. Names the credential or the brand, never the vendor: nobody signing in knows what Cognito is |
+| `logo` | The image on this provider's button: a `data:image/png`, `jpeg` or `webp` base64 URI of at most 4 KiB, the same rule as a client's `logo_uri`, drawn as `<img>`. A row named `google`, `apple` or `github` gets that brand's own "Sign in with" button instead and ignores it; any other value is ignored and the button shows a plain shield |
+| `issuer` | The provider's OIDC issuer: the discovery base and the ID token `iss` check |
+| `authorize_url` | Where a login begins on an `oidc` row naming no `password_verifier`; absent, it comes from discovery. A row naming one, and an `otp` row, do not read it |
 | `client_id` | The one app client we hold for this provider |
 | `client_secret` | That client's secret |
-| `scopes` | Space-separated, requested on the upstream authorize |
-| `token_endpoint_auth` | How the client authenticates at the token endpoint: `client_secret_basic` or `client_secret_post` |
-| `password_grant` | Whether `client_id` also accepts a direct username/password exchange |
+| `scopes` | Space-separated, requested on the upstream authorize (default `openid email phone`) |
+| `token_endpoint_auth` | How the client authenticates at the token endpoint: `client_secret_basic` (default) or `client_secret_post` |
 | `attribute_mapping` | Our claim name → the provider's claim name; see [Attribute mapping](federation.md#attribute-mapping) |
-| `session_max_ttl_seconds` | Optional cap on OUR session's absolute lifetime for logins this provider authenticated — the operator's assertion of what the upstream sanctions (not discoverable over OIDC). Combined as `min(global, this)`, so a row can only shorten the deployment cap, never extend it. Unset ⇒ the global cap applies |
-| `end_session_url` | The provider's sign-out endpoint. Unset ⇒ the upstream hop is skipped entirely and only OUR session ends. See **Sign-out** below |
+| `session_max_ttl_seconds` | Optional cap on our session's retention for federated logins this provider authenticated: retention becomes `min(now + session.SessionTTLSeconds, auth_time + this)`. It is the operator's assertion of what the upstream sanctions (not discoverable over OIDC), and can only shorten retention |
+| `end_session_url` | The provider's sign-out endpoint. Unset ⇒ the upstream hop is skipped and only our session ends. See **Sign-out** below |
 | `end_session_redirect_param` | The query parameter that provider uses for "come back here afterwards". Defaults to `post_logout_redirect_uri`; Cognito names it `logout_uri` |
-| `token_url`, `userinfo_url`, `jwks_url` | Optional pins that override discovery |
+| `token_url`, `jwks_url` | Optional pins; absent, they come from discovery |
+| `userinfo_url` | Stored on the row; nothing reads it |
 
 Nothing else about a provider exists anywhere: no SSM parameters, no Lambda environment variables, no
 IAM grant naming it, no deploy step. Adding a provider is one write to this table.
@@ -52,7 +54,7 @@ provider-type branch in code.
 **Register with the provider — exactly one URL, forever:**
 
 ```
-{issuer}/oauth2/logout/done
+{issuer}/oauth2/federation/logout/callback
 ```
 
 That is this authorization server's sign-out return point, and it is the whole list. It does
@@ -69,15 +71,16 @@ registered refuses the hop, and sign-out silently stops ending the upstream sess
 
 1. `end_session_url` on the row — or leave unset and accept that only our session ends.
 2. `end_session_redirect_param`, if the provider does not use the OIDC-standard name.
-3. `{issuer}/oauth2/logout/done` registered with the provider. Once.
+3. `{issuer}/oauth2/federation/logout/callback` registered with the provider. Once.
 
 Then verify the way that matters: sign in, sign out, sign in again — the provider must ask for
 a password. If it does not, one of the three is missing.
 
 ## One confidential client per provider
 
-A provider is reached through exactly one app client, and it is confidential. The brokered
-authorization-code flow and the legacy password grant share it.
+A provider is reached through exactly one app client, and it is confidential. On a row whose `password_verifier` is
+`cognito` it serves the password sign-in on our page and the native `/v1/user/auth/*` surface; on an `oidc`
+row naming none, the brokered authorization-code flow.
 
 It is confidential because a public client can be driven by anyone who learns its id — client ids are
 not secret — which would expose sign-up, password reset and password sign-in on the provider's pool to
@@ -100,15 +103,14 @@ cached per issuer for the container lifetime. Its verify keys are then fetched f
 cached per URL, so upstream key rotation is picked up on cold start. A row may pin any of these as a
 URL, which a provider that publishes no discovery document needs and nothing else does.
 
-## The password grant
+## The password surface
 
-The legacy `/v1/user/auth/*` surface needs six things from a provider: password sign-in, sign-up,
+Our page's password form (`POST /user/login/password`) and the native `/v1/user/auth/*` surface need six things from a provider: password sign-in, sign-up,
 resend of a sign-up code, sign-up confirmation, password-reset start, and password-reset confirmation.
 All six are unauthenticated provider operations — they take the app client id and no AWS credential —
 which is what lets the surface work against a provider in any account.
 
-The first enabled provider that sets `password_grant` and carries a `client_id` serves the surface.
-When none does, it fails closed: the routes exist but authenticate nothing.
+The enabled row whose `password_verifier` is `cognito` and that has a `client_id`, named by a request's `provider`, or else the first such row by `provider_name`, serves it. Token refresh and sign-out reach no pool and take no `provider`. A named provider that is not such a row is refused with `400` `{"message":"Unknown provider."}`; when no row is, it fails closed: the routes exist but authenticate nothing.
 
 Operations that presume ownership of the provider's pool are not available. Nothing on this path is
 given a pool identifier, so an operation that would administer the pool has nothing to address.
@@ -117,7 +119,7 @@ role and is not offered.
 
 ## The bundled pool
 
-Our own CDK creates a Cognito pool and seeds it as one ordinary row, so a fresh deployment has a
+Our own CDK creates a Cognito pool and seeds it as one ordinary `oidc` row named `cognito` whose `password_verifier` is `cognito`, so a fresh deployment has a
 working login without manual configuration. It is a default, not a dependency: deleting the row leaves
 a system with no provider configured, and adding a different row is the same operation for Cognito as
 for anything else.

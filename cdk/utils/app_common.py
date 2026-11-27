@@ -3,12 +3,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
 import os
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import NamedTuple
 
 from aws_cdk import (
     ArnFormat,
@@ -488,7 +490,8 @@ def create_lambda_function(
 
     base_env = {
         "AWS_ACCOUNT_ID": Aws.ACCOUNT_ID,
-        "USER_CLIENT_ID": common_resources.esp_user_client_id if common_resources and hasattr(common_resources, 'esp_user_client_id') and common_resources.esp_user_client_id else "",
+        # rmng-core sets the first-party list; other stacks pin the ESP User client alone.
+        "USER_CLIENT_ID": (getattr(common_resources, 'first_party_client_ids', None) or getattr(common_resources, 'home_app_client_id', None) or "") if common_resources else "",
         "USER_JWKS_PARA_NAME": common_resources.esp_user_jwks if common_resources and hasattr(common_resources, 'esp_user_jwks') and common_resources.esp_user_jwks else "",
         "ADMIN_USER_POOL_ID": common_resources.esp_admin_user_pool_id if common_resources and hasattr(common_resources, 'esp_admin_user_pool_id') and common_resources.esp_admin_user_pool_id else "",
         "ADMIN_USER_POOL_CLIENT_ID": common_resources.esp_admin_user_pool_client_id if common_resources and hasattr(common_resources, 'esp_admin_user_pool_client_id') and common_resources.esp_admin_user_pool_client_id else "",
@@ -1260,7 +1263,8 @@ from botocore.config import Config
 # GetDomainNames/GetBasePathMappings hit API Gateway's account-region control plane, and the api + mcp discovery custom resources across stacks call it concurrently during a parallel deploy, self-throttling to TooManyRequestsException. Adaptive mode adds a client-side rate limiter plus exponential backoff with jitter, and the higher attempt cap rides out the throttle instead of failing the stack after the default 4 retries.
 _RETRY = Config(retries={'max_attempts': 10, 'mode': 'adaptive'})
 
-def _discover_rest(api_id):
+def _rest_mappings(api_id):
+    # Yields (domain, base_path) for every custom domain mapping of api_id, lazily so a caller can stop at the first.
     client = boto3.client('apigateway', config=_RETRY)
     for page in client.get_paginator('get_domain_names').paginate():
         for item in page.get('items', []):
@@ -1272,10 +1276,9 @@ def _discover_rest(api_id):
             for mapping in mappings.get('items', []):
                 if mapping.get('restApiId') == api_id:
                     raw_path = mapping.get('basePath', '')
-                    return candidate, ('' if raw_path in ('(none)', None) else raw_path)
-    return '', ''
+                    yield candidate, ('' if raw_path in ('(none)', None) else raw_path)
 
-def _discover_http(api_id):
+def _http_mappings(api_id):
     client = boto3.client('apigatewayv2', config=_RETRY)
     next_token = None
     while True:
@@ -1291,10 +1294,18 @@ def _discover_http(api_id):
                 continue
             for mapping in mappings.get('Items', []):
                 if mapping.get('ApiId') == api_id:
-                    return candidate, mapping.get('ApiMappingKey', '') or ''
+                    yield candidate, mapping.get('ApiMappingKey', '') or ''
         next_token = page.get('NextToken')
         if not next_token:
-            return '', ''
+            return
+
+def _only_mapping(mappings, api_id):
+    # The issuer is derived from this mapping, so picking one of several would let AWS's listing order decide every token's iss.
+    found = list(mappings)
+    if len(found) > 1:
+        names = ', '.join(f'{d}/{p}' if p else d for d, p in found)
+        raise Exception(f'API {api_id} has more than one custom domain mapping ({names}), so its issuer is ambiguous; keep exactly one')
+    return found[0] if found else ('', '')
 
 def handler(event, context):
     # Log the raw event first - carries ResponseURL, which unstick_custom_resource.py needs if this hangs.
@@ -1306,29 +1317,42 @@ def handler(event, context):
             props = event['ResourceProperties']
             api_id = props['ApiId']
             default_url = props['DefaultUrl']
-            if props['ApiType'] == 'REST':
-                domain_name, base_path = _discover_rest(api_id)
+            resource_path = props.get('ResourcePath', '')
+            mappings = _rest_mappings(api_id) if props['ApiType'] == 'REST' else _http_mappings(api_id)
+            if props.get('IsIssuer') == 'true':
+                domain_name, base_path = _only_mapping(mappings, api_id)
             else:
-                domain_name, base_path = _discover_http(api_id)
+                domain_name, base_path = next(mappings, ('', ''))
             print(f'Discovered domain={domain_name!r} base_path={base_path!r}')
             # Resolve the fallback here rather than with a CfnCondition: CloudFormation
             # forbids referencing resource attributes from the Conditions block.
+            execute_api_url = default_url.rstrip('/')
             if domain_name:
-                base_url = 'https://' + domain_name
                 # base_path is empty for a root mapping, so no trailing slash.
-                url = base_url + '/' + base_path if base_path else base_url
+                url = 'https://' + domain_name + ('/' + base_path if base_path else '')
             else:
-                url = default_url.rstrip('/')
-                base_url = default_url.rstrip('/')
+                url = execute_api_url
+            resource = url + resource_path
+            # The execute-api name stays accepted so tokens minted before a domain was mapped keep working.
+            audiences = ','.join(dict.fromkeys([execute_api_url + resource_path, resource]))
             cfnresponse.send(event, context, cfnresponse.SUCCESS,
-                             {'DomainName': domain_name, 'BasePath': base_path,
-                              'Url': url, 'BaseUrl': base_url}, physical_id)
+                             {'Url': url, 'Resource': resource, 'Audiences': audiences}, physical_id)
         else:
             cfnresponse.send(event, context, cfnresponse.SUCCESS, {}, physical_id)
     except Exception as e:
         print(f'Error: {str(e)}')
         cfnresponse.send(event, context, cfnresponse.FAILED, {}, physical_id)
 """
+
+
+class DiscoveredApi(NamedTuple):
+    """An API's addresses as discovered at deploy time; ``resource`` and ``audiences`` are its RFC 8707 names."""
+    # The custom domain's URL with its base path when one is mapped, else the execute-api URL; no trailing slash.
+    url: str
+    # The name clients request: url plus any resource path.
+    resource: str
+    # Comma-separated names an access token's aud may carry: the execute-api name and, when mapped, the domain's.
+    audiences: str
 
 
 def discover_api_custom_domain(
@@ -1339,17 +1363,18 @@ def discover_api_custom_domain(
     api_id: str,
     api_type: str,
     default_url: str,
-) -> tuple:
+    resource_path: str = "",
+    is_issuer: bool = False,
+) -> DiscoveredApi:
     """Discover the custom domain mapped to an API Gateway API at deploy time.
 
-    Returns ``(custom_domain, url, base_url)`` where ``custom_domain`` is "" when no
-    custom domain is mapped and the URLs fall back to ``default_url`` in that case.
-    ``url`` keeps the trailing slash; ``base_url`` omits it, for callers appending
-    "/path" suffixes.
+    ``resource_path`` is appended to both RFC 8707 names, e.g. "/v1/mcp" for a server whose resource is a path on its API.
 
     Discovery is used instead of a CfnParameter because a parameter the installer
     forgets to re-supply reverts to its default, which would silently drop the
     custom domain from outputs on upgrade. ``api_type`` is "REST" or "HTTP".
+
+    ``is_issuer`` marks ``url`` as the API's issuer, so the deploy fails when more than one custom domain is mapped to it; otherwise the first domain found is used. One mapping "sso.example.com" under "auth" -> "https://sso.example.com/auth"; none -> the execute-api URL.
     """
     if api_type not in ("REST", "HTTP"):
         raise ValueError(f"api_type must be 'REST' or 'HTTP', got {api_type!r}")
@@ -1384,20 +1409,342 @@ def discover_api_custom_domain(
         fn.node.default_child.override_logical_id(
             stable_logical_id("LambdaFunc", "api-custom-domain-discovery"))
 
-    resource = CustomResource(
-        scope, id,
-        service_token=fn.function_arn,
-        properties={"ApiId": api_id, "ApiType": api_type, "DefaultUrl": default_url,
-                    "RediscoverOn": _DISCOVERY_SALT},
-    )
+    properties = {"ApiId": api_id, "ApiType": api_type, "DefaultUrl": default_url,
+                  "ResourcePath": resource_path, "RediscoverOn": _DISCOVERY_SALT}
+    if is_issuer:
+        properties["IsIssuer"] = "true"
+
+    resource = CustomResource(scope, id, service_token=fn.function_arn, properties=properties)
     resource.node.default_child.override_logical_id(stable_logical_id("CustomResource", name))
 
     # The handler applies the fallback and returns the final URLs. CloudFormation
     # forbids referencing resource attributes from the Conditions block, so this cannot
     # be a CfnCondition on the discovered domain.
-    return (resource.get_att_string("DomainName"),
-            resource.get_att_string("Url"),
-            resource.get_att_string("BaseUrl"))
+    return DiscoveredApi(resource.get_att_string("Url"),
+                         resource.get_att_string("Resource"),
+                         resource.get_att_string("Audiences"))
+
+
+_CLIENT_RESOURCES_CODE = """
+import json
+import time
+import boto3
+import cfnresponse
+from botocore.exceptions import ClientError
+
+
+def _table(name):
+    return boto3.resource('dynamodb').Table(name)
+
+
+def _api_names(grant):
+    \"\"\"Every name the API accepts, its resource first; a grant without Audiences is its resource alone: {Resource: D, Audiences: "E,D"} -> [D, E].\"\"\"
+    audiences = [a for a in (grant.get('Audiences') or '').split(',') if a]
+    return list(dict.fromkeys([grant['Resource']] + audiences))
+
+
+def _changes(row, api_names, resource, make_default):
+    \"\"\"What granting an API adds to a client row, never removing or replacing: ({}, [D, E], D, True) -> allowed [D, E], default D.\"\"\"
+    changes = {}
+    allowed = list(row.get('allowed_resources') or [])
+    missing = [name for name in api_names if name not in allowed]
+    if missing:
+        changes['allowed_resources'] = allowed + missing
+    if make_default and not row.get('default_resource'):
+        changes['default_resource'] = resource
+    return changes
+
+
+def _grant(table, client_id, api_names, resource, make_default):
+    \"\"\"False when the client does not exist. The write is conditioned on the row's updated_at, which every registry write moves, so an edit made in between is reread rather than lost.\"\"\"
+    for _ in range(5):
+        row = table.get_item(Key={'client_id': client_id}, ConsistentRead=True).get('Item')
+        if row is None:
+            return False
+        changes = _changes(row, api_names, resource, make_default)
+        if not changes:
+            return True
+        changes['updated_at'] = int(time.time())
+        names = {'#' + attr: attr for attr in changes}
+        values = {':' + attr: value for attr, value in changes.items()}
+        if 'updated_at' in row:
+            guard = '#updated_at = :seen_updated_at'
+            values[':seen_updated_at'] = row['updated_at']
+        else:
+            guard = 'attribute_not_exists(#updated_at)'
+        try:
+            table.update_item(
+                Key={'client_id': client_id},
+                UpdateExpression='SET ' + ', '.join(f'#{attr} = :{attr}' for attr in changes),
+                ExpressionAttributeNames=names,
+                ExpressionAttributeValues=values,
+                ConditionExpression='attribute_exists(client_id) AND ' + guard,
+            )
+            return True
+        except ClientError as e:
+            if e.response['Error']['Code'] != 'ConditionalCheckFailedException':
+                raise
+    raise Exception(client_id + ' kept changing while its resources were granted')
+
+
+def handler(event, context):
+    # Log the raw event first - carries ResponseURL, which unstick_custom_resource.py needs if this hangs.
+    print("CR_EVENT " + json.dumps(event))
+    physical_id = event.get('PhysicalResourceId')
+    try:
+        if event['RequestType'] in ['Create', 'Update']:
+            props = event['ResourceProperties']
+            grants = props['Grants']
+            # An unresolved name would register a resource no request can ever name.
+            for g in grants:
+                if not g['Resource']:
+                    raise Exception('no resource to grant ' + g['ClientId'])
+            table = _table(props['TableName'])
+            # A client an operator deleted is reported, not re-created without its secret.
+            skipped = [g['ClientId'] for g in grants
+                       if not _grant(table, g['ClientId'], _api_names(g), g['Resource'], g['Default'] == 'true')]
+            print(f'Granted {len(grants) - len(skipped)}, skipped {skipped}')
+            cfnresponse.send(event, context, cfnresponse.SUCCESS, {'Skipped': ','.join(skipped)}, physical_id)
+        else:
+            # Removing a resource is an operator's decision, so deleting the stack takes none away.
+            cfnresponse.send(event, context, cfnresponse.SUCCESS, {}, physical_id)
+    except Exception as e:
+        print(f'Error: {str(e)}')
+        cfnresponse.send(event, context, cfnresponse.FAILED, {}, physical_id)
+"""
+
+
+def grant_client_resources(scope: Construct, id: str, *, name: str, table_name: str, grants: list) -> CustomResource:
+    """Add an API's RFC 8707 names to registered OAuth clients once the API is discovered.
+
+    ``grants`` is [(client_id, api, make_default)] with ``api`` a DiscoveredApi: the client gets every name in ``api.audiences`` (split by the handler, as it is a token until deploy) and ``api.resource`` as its default when ``make_default``. A name is only ever added, and a client's default is set only when it has none, so an operator's own entries survive every deploy. Re-runs whenever a granted name changes, e.g. when a custom domain is mapped.
+    """
+    stack = Stack.of(scope)
+    shared_id = "ClientResourceGrantShared"
+    fn = stack.node.try_find_child(shared_id)
+    if fn is None:
+        role = iam.Role(
+            stack, f"{shared_id}Role",
+            assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
+            managed_policies=[
+                iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "service-role/AWSLambdaBasicExecutionRole"),
+            ],
+        )
+        role.node.default_child.override_logical_id(
+            stable_logical_id("IAMRole", "client-resource-grant"))
+        role.add_to_policy(iam.PolicyStatement(
+            actions=["dynamodb:GetItem", "dynamodb:UpdateItem"],
+            resources=[get_table_arn(table_name, stack.region)],
+        ))
+
+        fn = lambda_.Function(
+            stack, shared_id,
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            handler="index.handler",
+            role=role,
+            code=lambda_.Code.from_inline(_CLIENT_RESOURCES_CODE),
+            timeout=Duration.seconds(60),
+        )
+        fn.node.default_child.override_logical_id(
+            stable_logical_id("LambdaFunc", "client-resource-grant"))
+
+    resource = CustomResource(
+        scope, id,
+        service_token=fn.function_arn,
+        properties={
+            "TableName": table_name,
+            "Grants": [{"ClientId": client_id, "Resource": api.resource, "Audiences": api.audiences,
+                        "Default": "true" if make_default else "false"}
+                       for client_id, api, make_default in grants],
+        },
+    )
+    resource.node.default_child.override_logical_id(stable_logical_id("CustomResource", name))
+    return resource
+
+
+# Creates each client in SEEDED_CLIENTS, and on an existing one fills in only the declared fields, redirects and scopes it lacks.
+_SEED_OAUTH_CLIENTS_CODE = """
+import json, os, time, secrets, boto3, urllib3
+from botocore.exceptions import ClientError
+
+http = urllib3.PoolManager()
+CLIENTS = json.loads(os.environ["SEEDED_CLIENTS"])
+SECRET_PARAMS = json.loads(os.environ["SECRET_PARAMS"])
+SECRET_ATTRIBUTES = json.loads(os.environ["SECRET_ATTRIBUTES"])
+# Stored as string sets, which the redirect registration ADDs to; a list there would make that fail.
+SET_FIELDS = ("redirect_uris", "post_logout_redirect_uris")
+
+def _table():
+    # The Lambda runs in the target region, so boto3 resolves it from AWS_REGION.
+    return boto3.resource("dynamodb").Table(os.environ["TABLE_NAME"])
+
+def _ssm():
+    return boto3.client("ssm")
+
+def send(event, context, status, data=None):
+    body = json.dumps({
+        "Status": status, "Reason": "See CloudWatch " + context.log_stream_name,
+        "PhysicalResourceId": "seed-oauth-clients", "StackId": event["StackId"],
+        "RequestId": event["RequestId"], "LogicalResourceId": event["LogicalResourceId"],
+        "Data": data or {},
+    }).encode("utf-8")
+    http.request("PUT", event["ResponseURL"], body=body, headers={"content-type": ""})
+
+def _fill_in(table, declared, declares_scopes):
+    # if_not_exists: a value already on the row, whoever set it, is never replaced. Redirects are a set and scopes a list the seed only adds to.
+    sets = [f for f in SET_FIELDS if declared.get(f)]
+    row = table.get_item(Key={"client_id": declared["client_id"]}, ConsistentRead=True).get("Item", {})
+    # A row written outside the registry API can hold these as a list, which ADD cannot extend; it gets the union back as a set, if no registry write moved updated_at since the read.
+    listed = [f for f in sets if isinstance(row.get(f), list)]
+    added = [f for f in sets if f not in listed]
+    # A client that declares its scopes gets back the ones it lacks after its stored list, under the same updated_at guard; a defaulted client's scopes stay if_not_exists.
+    stored_scopes = list(row.get("scopes") or [])
+    missing_scopes = [s for s in declared["scopes"] if s not in stored_scopes]
+    rewritten = listed + (["scopes"] if declares_scopes and "scopes" in row and missing_scopes else [])
+    fields = [f for f in declared if f != "client_id" and f not in SET_FIELDS and f not in rewritten]
+    assignments = [f"#{f} = if_not_exists(#{f}, :{f})" for f in fields] + [f"#{f} = :{f}" for f in rewritten]
+    names = {"#" + f: f for f in fields + sets + rewritten}
+    values = {":" + f: declared[f] for f in fields}
+    values.update({":" + f: set(row[f]) | set(declared[f]) for f in listed})
+    values.update({":" + f: set(declared[f]) for f in added})
+    if "scopes" in rewritten:
+        values[":scopes"] = stored_scopes + missing_scopes
+    condition = "attribute_exists(client_id)"
+    if rewritten:
+        names["#updated_at"] = "updated_at"
+        assignments.append("#updated_at = :now")
+        values[":now"] = int(time.time())
+        if "updated_at" in row:
+            condition += " AND #updated_at = :seen_updated_at"
+            values[":seen_updated_at"] = row["updated_at"]
+        else:
+            condition += " AND attribute_not_exists(#updated_at)"
+    expression = "SET " + ", ".join(assignments)
+    if added:
+        expression += " ADD " + ", ".join(f"#{f} :{f}" for f in added)
+    table.update_item(
+        Key={"client_id": declared["client_id"]},
+        UpdateExpression=expression,
+        ExpressionAttributeNames=names,
+        ExpressionAttributeValues=values,
+        ConditionExpression=condition,
+    )
+
+def handler(event, context):
+    # Log the raw event first - carries ResponseURL, which unstick_custom_resource.py needs if this hangs.
+    print("CR_EVENT " + json.dumps(event))
+    try:
+        data = {}
+        if event["RequestType"] != "Delete":
+            table = _table()
+            now = int(time.time())
+            for c in CLIENTS:
+                declared = dict(c)
+                declares_scopes = "scopes" in declared
+                declared.setdefault("scopes", ["openid", "email", "phone", "profile"])
+                item = dict(declared, created_at=now, updated_at=now)
+                for f in SET_FIELDS:
+                    if f in item:
+                        item[f] = set(item[f])
+                # Confidential clients get a generated plaintext secret (retrievable via list get_secret).
+                if item["client_type"] == "confidential":
+                    item["secret"] = secrets.token_urlsafe(32)
+                try:
+                    table.put_item(Item=item, ConditionExpression="attribute_not_exists(client_id)")
+                except ClientError as e:
+                    if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                        raise
+                    _fill_in(table, declared, declares_scopes)
+            # Return the current confidential-client secrets (minted above or from a prior deploy)
+            # so the stack can surface them; read them back rather than trust the local values. A
+            # confidential client with no secret means a stale row predating its confidential config
+            # (a secret is never filled in) — fail loudly rather than emit an empty secret,
+            # which SSM rejects with an opaque PutParameter error.
+            for cid, attribute in SECRET_ATTRIBUTES.items():
+                row = table.get_item(Key={"client_id": cid}).get("Item", {})
+                secret = row.get("secret", "")
+                if not secret:
+                    raise Exception(cid + " has no secret; delete the stale row so it is re-seeded as confidential")
+                data[attribute] = secret
+            # The registry holds the secret; this copy is how an operator gets it into an assistant's console, refreshed whenever the seed runs.
+            for cid, param in SECRET_PARAMS.items():
+                secret = table.get_item(Key={"client_id": cid}).get("Item", {}).get("secret", "")
+                if not secret:
+                    raise Exception(cid + " has no secret; delete the stale row so it is re-seeded as confidential")
+                _ssm().put_parameter(Name=param, Value=secret, Type="SecureString", Overwrite=True)
+        send(event, context, "SUCCESS", data)
+    except Exception as e:
+        print("seed error:", e)
+        send(event, context, "FAILED")
+"""
+
+
+def seed_oauth_clients(scope: Construct, id: str, *, name: str, table_name: str, clients: list,
+                       secret_params: dict | None = None, secret_attributes: dict | None = None) -> CustomResource:
+    """Create the OAuth clients a stack owns in the ESP User registry; an existing client only gains the declared fields and redirects it lacks, so a re-deploy never replaces an admin's value.
+
+    A client that declares scopes regains its declared scopes on every seed run, so an operator may add scopes to it but not remove them; any other client's scopes are never touched.
+
+    ``secret_params`` names the SecureString each confidential client's secret is handed over in, and ``secret_attributes`` the custom-resource attribute that returns it: {"mcp-oauth-client": "McpClientSecret"}. Re-runs whenever a declared client changes.
+    """
+    stack = Stack.of(scope)
+    secret_params = secret_params or {}
+    clients_json = json.dumps(clients, sort_keys=True)
+    role = iam.Role(
+        scope, f"{id}Role",
+        assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
+        managed_policies=[
+            iam.ManagedPolicy.from_aws_managed_policy_name(
+                "service-role/AWSLambdaBasicExecutionRole"),
+        ],
+    )
+    role.node.default_child.override_logical_id(stable_logical_id("IAMRole", name))
+    role.add_to_policy(iam.PolicyStatement(
+        actions=["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:UpdateItem"],
+        resources=[get_table_arn(table_name, stack.region)],
+    ))
+    if secret_params:
+        role.add_to_policy(iam.PolicyStatement(
+            actions=["ssm:PutParameter"],
+            resources=[get_ssm_parameter_arn(param, stack.region) for param in secret_params.values()],
+        ))
+
+    fn = lambda_.Function(
+        scope, f"{id}Function",
+        runtime=lambda_.Runtime.PYTHON_3_12,
+        handler="index.handler",
+        role=role,
+        timeout=Duration.seconds(120),
+        environment={"SEEDED_CLIENTS": clients_json, "TABLE_NAME": table_name,
+                     "SECRET_PARAMS": json.dumps(secret_params),
+                     "SECRET_ATTRIBUTES": json.dumps(secret_attributes or {})},
+        code=lambda_.Code.from_inline(_SEED_OAUTH_CLIENTS_CODE),
+    )
+    fn.node.default_child.override_logical_id(stable_logical_id("LambdaFunc", name))
+
+    resource = CustomResource(
+        scope, id,
+        service_token=fn.function_arn,
+        properties={
+            "ClientsHash": hashlib.sha256(clients_json.encode()).hexdigest(),
+            # Bump when the handler changes, so deployments whose clients are unchanged re-run it.
+            "SeedVersion": 4,
+        },
+    )
+    resource.node.default_child.override_logical_id(stable_logical_id("CustomResource", name))
+    return resource
+
+
+def create_oauth_client(scope: Construct, id: str, *, name: str, table_name: str, client: dict,
+                        secret_param: str, api: DiscoveredApi) -> CustomResource:
+    """Create one confidential client a stack owns, hand its secret over in the SecureString ``secret_param``, and make ``api`` its default, so a deployment without that stack carries no client."""
+    seed = seed_oauth_clients(scope, id, name=name, table_name=table_name, clients=[client],
+                              secret_params={client["client_id"]: secret_param})
+    grant = grant_client_resources(scope, f"{id}Resources", name=f"{name}-resources", table_name=table_name,
+                                   grants=[(client["client_id"], api, True)])
+    grant.node.add_dependency(seed)
+    return seed
 
 
 _IOT_DOMAIN_DISCOVERY_CODE = """

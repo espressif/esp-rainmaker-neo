@@ -11,8 +11,8 @@ rejected with 401 ("token was issued for a different client"). To call
 ``/v1/mcp``, tests must present a token minted through the OAuth proxy's
 authorization-code flow.
 
-These helpers run that flow programmatically (replacing the browser step with a
-scripted Cognito hosted-UI login) and cache the resulting tokens per user, since
+These helpers run that flow programmatically (a scripted password sign-in on
+ESP User's own sign-in page) and cache the resulting tokens per user, since
 the flow is expensive. The token exchange yields both an ID token (carries
 ``custom:user_id`` → direct authorizer path) and an access token (no
 ``custom:user_id`` → AdminGetUser fallback path), so both authorizer paths stay
@@ -65,11 +65,11 @@ def initiate_authorize(client_id, code_challenge):
 
 
 def complete_cognito_login(cognito_url, username, password):
-    """Complete the Cognito hosted UI login in a headless browser and return the final
-    localhost callback URL carrying the authorization code.
+    """Sign in with the password on ESP User's own sign-in page in a headless browser and return
+    the final localhost callback URL carrying the authorization code.
 
-    A browser rather than a form POST: the hosted UI's sign-in submit requires the
-    device-fingerprint fields its own JavaScript computes, and rejects a bare POST with 403.
+    A browser rather than a POST, because this is the path a person takes: the page the authorize
+    URL lands on, its form, and its consent screen.
     """
     playwright_sync = __import__("playwright.sync_api", fromlist=["sync_playwright"])
 
@@ -78,15 +78,10 @@ def complete_cognito_login(cognito_url, username, password):
         try:
             context = browser.new_context()
             page = context.new_page()
-            page.goto(cognito_url, wait_until="domcontentloaded")
-            if "amazoncognito.com" not in page.url:
-                base = page.url.split("/oauth2/", 1)[0]
-                page.goto(f"{base}/oauth2/federation/start?provider=cognito",
-                          wait_until="domcontentloaded")
-            assert "amazoncognito.com" in page.url, f"expected the hosted UI, on {page.url}"
-
-            page.locator("#signInFormUsername").locator("visible=true").first.fill(username)
-            page.locator("#signInFormPassword").locator("visible=true").first.fill(password)
+            page.goto(cognito_url, wait_until="load")
+            page.wait_for_selector("#username", timeout=10000)
+            page.fill("#username", username)
+            page.fill("#password", password)
 
             callback_holder = {}
 
@@ -95,10 +90,14 @@ def complete_cognito_login(cognito_url, username, password):
                     callback_holder["url"] = request.url
 
             page.on("request", _capture)
-            page.locator("input[name=signInSubmitButton]").locator("visible=true").first.click()
+            page.click("button[type=submit]")
             for _ in range(300):
                 if "url" in callback_holder:
                     break
+                # The MCP proxy is a third-party client, so ESP User asks before issuing its code; exact, because a clicked Allow becomes a disabled "Allowing…".
+                allow = page.get_by_role("button", name="Allow", exact=True)
+                if "/user/login/consent" in page.url and allow.is_visible():
+                    allow.click()
                 page.wait_for_timeout(100)
 
             assert "url" in callback_holder, \
@@ -132,8 +131,9 @@ def exchange_code_for_tokens(auth_code, code_verifier, client_id):
 def fetch_mcp_tokens(user):
     """Run the full CIMD + PKCE OAuth flow for ``user`` and return the token bundle.
 
-    The bundle contains ``access_token`` and ``id_token`` (both minted for
-    ``mcp-oauth-client``, so both pass the MCP authorizer's client binding).
+    The bundle contains ``access_token`` and ``id_token``. The proxy requests its own RFC 8707
+    resource, so the access token's aud is the MCP server's; the id token is for the client and
+    the MCP server refuses it.
     """
     code_verifier, code_challenge = generate_pkce_pair()
     client_id = fetch_test_cimd_client_id()

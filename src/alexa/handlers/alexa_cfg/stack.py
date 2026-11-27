@@ -20,6 +20,7 @@ from app_common import (
 )
 from arn_utils import get_ssm_parameter_prefix_arn, get_table_arn
 from src.espuser.stacks.base_res_constants import USER_TABLE_NAMES
+from src.rmneo.stacks.base_res_constants import ALEXA_CLIENT_ID
 
 
 class AlexaCfgAPI(Construct):
@@ -32,7 +33,7 @@ class AlexaCfgAPI(Construct):
         function_name = "alexa_cfg"
         alexa_cfg_lambda_role = create_base_lambda_role(self, function_name, common_resources)
 
-        # Read + update the OIDC va-client registry row to (re)register Alexa's redirect URIs.
+        # Read + update Alexa's own client row to (re)register its redirect URIs.
         alexa_cfg_lambda_role.add_to_policy(iam.PolicyStatement(
             actions=[
                 "dynamodb:GetItem",
@@ -85,7 +86,7 @@ class AlexaCfgAPI(Construct):
             environment={
                 "USER_ISSUER": common_resources.esp_user_issuer,
                 "RMNG_REGION": region,
-                "OIDC_VA_CLIENT_ID": common_resources.esp_user_va_client_id
+                "OIDC_VA_CLIENT_ID": ALEXA_CLIENT_ID,
             }
         )
 

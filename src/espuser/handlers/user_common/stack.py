@@ -33,11 +33,12 @@ class UserCommonAPI(Construct):
         function_name = "user_common"
         user_common_lambda_role = create_base_lambda_role(self, function_name, common_resources)
 
-        # GetItem reads the caller's user_details row for GET /v1/users/{userId}.
+        # GetItem reads the caller's user_details row and the calling client's registration (first-party check) for GET /v1/users/{userId}.
         user_common_lambda_role.add_to_policy(iam.PolicyStatement(
             actions=["dynamodb:GetItem"],
             resources=[
                 get_table_arn(USER_TABLE_NAMES['USER_DETAILS'], region),
+                get_table_arn(USER_TABLE_NAMES['OAUTH_CLIENTS'], region),
             ]
         ))
 

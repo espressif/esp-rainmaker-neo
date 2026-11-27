@@ -29,10 +29,11 @@ type Authenticator func(ctx context.Context, req events.APIGatewayV2HTTPRequest)
 // UserResolver looks up a project-specific user by their user_id (the token sub).
 type UserResolver func(ctx context.Context, userID string) (UserContext, error)
 
-// oidcAuthState holds the ESP User OIDC issuer/client, the JWKS param, and the resolver.
+// oidcAuthState holds the ESP User OIDC issuer, the audiences it accepts, the JWKS param, and the resolver.
 type oidcAuthState struct {
-	issuer       string
-	clientID     string
+	issuer string
+	// audiences are this server's RFC 8707 names, its /v1/mcp URL on each host it answers on; a client id is never one (RFC 9068 s4).
+	audiences    []string
 	jwksParaName string
 	resolver     UserResolver
 
@@ -40,11 +41,11 @@ type oidcAuthState struct {
 	jwks jwk.Set
 }
 
-// NewOIDCAuthenticator creates an Authenticator that validates ESP User OIDC JWTs (iss==issuer, aud==clientID) against the JWKS in jwksParamName and resolves the token's sub (== opaque user_id) to a user via the provided UserResolver.
-func NewOIDCAuthenticator(issuer, clientID, jwksParamName string, resolver UserResolver) Authenticator {
+// NewOIDCAuthenticator creates an Authenticator that validates ESP User OIDC JWTs (iss==issuer, aud one of audiences) against the JWKS in jwksParamName and resolves the token's sub (== opaque user_id) to a user via the provided UserResolver. No audiences refuses every token.
+func NewOIDCAuthenticator(issuer string, audiences []string, jwksParamName string, resolver UserResolver) Authenticator {
 	state := &oidcAuthState{
 		issuer:       strings.TrimRight(issuer, "/"),
-		clientID:     clientID,
+		audiences:    audiences,
 		jwksParaName: jwksParamName,
 		resolver:     resolver,
 	}
@@ -108,10 +109,8 @@ func (s *oidcAuthState) authenticate(ctx context.Context, request events.APIGate
 	if err := jwtutil.AssertTokenUse(claims, jwtutil.TokenUseAccess); err != nil {
 		return nil, fmt.Errorf("invalid token: %w", err)
 	}
-	if s.clientID != "" {
-		if err := jwtutil.AssertAudience(claims, s.clientID); err != nil {
-			return nil, err
-		}
+	if err := jwtutil.AssertAudience(claims, s.audiences...); err != nil {
+		return nil, err
 	}
 
 	userID, _ := claims["sub"].(string)

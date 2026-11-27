@@ -166,6 +166,7 @@ func seedOIDCKeys(ctx context.Context, m *mock.MockSSM, priv *rsa.PrivateKey, is
 
 	os.Setenv("USER_ISSUER", issuer)
 	os.Setenv("USER_JWKS_PARA_NAME", EspUserJWKSParam)
+	os.Setenv("ACCEPTED_AUDIENCES", TestAPIAudience)
 	os.Unsetenv("SSM_" + strings.ToUpper(EspUserJWKSParam))
 }
 

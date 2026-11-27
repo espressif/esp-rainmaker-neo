@@ -30,9 +30,9 @@ func TestGVACfg(t *testing.T) {
 	RunSpecs(t, "GVA Config Suite")
 }
 
-const vaClientID = "va-client"
+const vaClientID = "rainmaker-neo-gva-client"
 
-// seedVAClient adds the espuser-oauth-clients table and seeds the confidential va-client row Alexa/GVA update.
+// seedVAClient adds the espuser-oauth-clients table and seeds Google Home's confidential client row the handler updates.
 func seedVAClient(ctx context.Context) {
 	awscommon.GetDynamoDBClient().(*mock.DynamoDBMock).AddTable("espuser-oauth-clients", "client_id", "")
 	svc := clients.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil))
@@ -46,7 +46,7 @@ func seedVAClient(ctx context.Context) {
 	Expect(err).To(BeNil())
 }
 
-// vaClientURIs reads the seeded va-client row's currently registered redirect URIs.
+// vaClientURIs reads the seeded client row's currently registered redirect URIs.
 func vaClientURIs(ctx context.Context) []string {
 	c, err := clients.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil)).Get(vaClientID)
 	Expect(err).To(BeNil())
@@ -115,7 +115,7 @@ var _ = Describe("GVA Config", func() {
 			ssmMock := awscommon.GetSSMClient().(*mock.MockSSM)
 			Expect(ssmMock.Parameters[gva.GVASSMServiceAccountJSONParam]).NotTo(BeNil())
 
-			// Validate that the redirect URI is registered on the OIDC va-client row
+			// Validate that the redirect URI is registered on its own OIDC client
 			Expect(vaClientURIs(ctx)).To(Equal([]string{
 				"https://oauth-redirect.googleusercontent.com/r/test-project-id", // Auto-calculated from project_id
 			}))
@@ -204,7 +204,7 @@ var _ = Describe("GVA Config", func() {
 			ssmMock := awscommon.GetSSMClient().(*mock.MockSSM)
 			Expect(ssmMock.Parameters[gva.GVASSMServiceAccountJSONParam]).NotTo(BeNil())
 
-			// Verify the OIDC va-client redirect URIs contain the new project URI (unioned onto existing)
+			// Verify the client's redirect URIs contain the new project URI (unioned onto existing)
 			Expect(vaClientURIs(ctx)).To(ContainElement("https://oauth-redirect.googleusercontent.com/r/updated-project-id"))
 		})
 
@@ -263,8 +263,8 @@ var _ = Describe("GVA Config", func() {
 			os.Setenv("OIDC_VA_CLIENT_ID", vaClientID)
 		})
 
-		It("should fail when the OIDC va-client cannot be resolved", func() {
-			// Remove the seeded va-client row so the registry read fails.
+		It("should fail when its OIDC client cannot be resolved", func() {
+			// Remove the seeded client row so the registry write fails.
 			Expect(clients.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil)).Delete(vaClientID)).To(BeNil())
 			requestBody, _ := json.Marshal(req)
 			request.Body = string(requestBody)
@@ -272,7 +272,7 @@ var _ = Describe("GVA Config", func() {
 			response, err := handler(ctx, request)
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusInternalServerError))
-			Expect(response.Body).To(ContainSubstring("failed to update OIDC va-client"))
+			Expect(response.Body).To(ContainSubstring("failed to update the OIDC client"))
 		})
 	})
 

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The account's own session-management surface: which browsers am I signed in on, what is
-// signed in on each, and end one or all of them.
+// signed in on each, and end one or all of them; and the connected apps that hold offline access.
 //
 // Two tables answer this together. Sessions are keyed by the SHA-256 of the cookie, which
 // cannot be derived from a sid, so reaching one from anywhere but the browser holding it needs
@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -29,6 +28,7 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/refreshtoken"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/scope"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/session"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/signout"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
@@ -37,17 +37,21 @@ import (
 )
 
 const (
-	pathSessions = "/v1/user/sessions"
-	pathLogout   = "/oauth2/logout"
-	// pathLogoutDone is where the upstream provider hands the browser back: a distinct exact
-	// route from pathLogout.
-	pathLogoutDone = "/oauth2/logout/done"
+	pathSessions      = "/v1/user/sessions"
+	pathConnectedApps = "/v1/user/connected-apps"
+	pathSession       = pathSessions + "/{sessionId}"
+	pathConnectedApp  = pathConnectedApps + "/{clientId}"
+	pathLogout        = "/oauth2/logout"
+	// pathFederationLogoutCallback is where the upstream provider hands the browser back after its own sign-out, the sign-out twin of /oauth2/federation/callback.
+	pathFederationLogoutCallback = "/oauth2/federation/logout/callback"
+	// pathUserLogout takes the person's yes from the sign-out page as a POST; its GET, the page itself, is the authorize Lambda's.
+	pathUserLogout = "/user/logout"
 )
 
 // SessionView is one browser. Clients are nested under it rather than listed beside it because that is the shape of the thing: you do not sign out of an application, you sign out of a browser, and every application opened in it goes with it.
 type SessionView struct {
 	SID string `json:"session_id"`
-	// Current marks the session this request's own token was minted under, so a UI can label it and warn before ending it. False when the token carries no sid: it predates sessions, or the session write failed.
+	// Current marks the session this request's own token was minted under, so a UI can label it and warn before ending it. False when the token carries no sid: it is an offline_access grant, it predates sessions, or the session write failed.
 	Current bool `json:"current"`
 	// UserAgentType is the readable rendering of UserAgent, derived at render time rather than stored so the parser can improve without a migration.
 	UserAgentType string `json:"user_agent_type"`
@@ -69,7 +73,7 @@ type SessionView struct {
 	Clients         []ClientView `json:"clients"`
 }
 
-// ClientView is one application holding a live refresh family under a session.
+// ClientView is one application holding live refresh families: under its session in the session list, or as a connected app when its grants are offline.
 type ClientView struct {
 	ClientID string `json:"client_id"`
 	// CreatedAt is when this application first got tokens under this login; LastUsed is the
@@ -78,6 +82,35 @@ type ClientView struct {
 	// list is standing access, not presence, and the UI must not imply otherwise.
 	CreatedAt int64 `json:"created_at,omitempty"`
 	LastUsed  int64 `json:"last_used,omitempty"`
+	// ClientName and LogoURI are the client's registered name and logo, so a person recognises the app rather than its id; absent when it registered none.
+	ClientName string `json:"client_name,omitempty"`
+	LogoURI    string `json:"logo_uri,omitempty"`
+	// Scopes is what a connected app was granted across its offline grants; never set on an app under a session.
+	Scopes []string `json:"scopes,omitempty"`
+}
+
+// withDisplays fills each app's registered name and logo in one read; a failed read leaves them out, because the list is complete without them.
+func withDisplays(ctx context.Context, rmngCtx *rmngctx.RmngContext, lists ...[]ClientView) {
+	var ids []string
+	for _, list := range lists {
+		for _, app := range list {
+			ids = append(ids, app.ClientID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	displays, err := clients.NewService(rmngCtx).Displays(ids)
+	if err != nil {
+		rlog.Warn(ctx).Err(err).Msg("sessions: read client names and logos")
+		return
+	}
+	for _, list := range lists {
+		for i := range list {
+			display := displays[list[i].ClientID]
+			list[i].ClientName, list[i].LogoURI = display.Name, display.LogoURI
+		}
+	}
 }
 
 type listResponse struct {
@@ -138,6 +171,11 @@ func handleList(ctx context.Context, rmngCtx *rmngctx.RmngContext, identity auth
 			Clients:         clients,
 		})
 	}
+	lists := make([][]ClientView, 0, len(out.Sessions))
+	for _, view := range out.Sessions {
+		lists = append(lists, view.Clients)
+	}
+	withDisplays(ctx, rmngCtx, lists...)
 	return utils.APIGwRespJSON(http.StatusOK, out)
 }
 
@@ -147,40 +185,27 @@ func handleList(ctx context.Context, rmngCtx *rmngctx.RmngContext, identity auth
 // indistinguishable: a 403 would confirm that the sid exists, turning this endpoint into an
 // oracle for guessing valid session identifiers.
 func handleDeleteOne(ctx context.Context, rmngCtx *rmngctx.RmngContext, identity auth.TokenClaims, sid string) events.APIGatewayProxyResponse {
-	// Families first. If the session delete succeeded and this failed, the browser would
-	// hold no session but its applications would keep refreshing -- signed out of the login
-	// but not of anything it opened, which is the worse half to leave behind.
-	if _, err := refreshtoken.NewService(rmngCtx).DeleteFamiliesBySID(identity.Subject, sid); err != nil {
-		rlog.Error(ctx).Err(err).Msg("sessions: delete families")
-		return oidc.OAuthErrorResp(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.")
-	}
-	switch err := session.NewService(rmngCtx).DeleteSessionBySID(identity.Subject, sid); {
+	switch err := signout.NewService(rmngCtx).EndSession(identity.Subject, sid); {
 	case err == nil:
 		return noContent()
 	case errors.Is(err, sessions_db.ErrSessionNotFound):
 		return oidc.OAuthErrorResp(http.StatusNotFound, oidc.OAuthErrInvalidRequest, "No such session.")
 	default:
-		rlog.Error(ctx).Err(err).Msg("sessions: delete session")
+		rlog.Error(ctx).Err(err).Msg("sessions: end session")
 		return oidc.OAuthErrorResp(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.")
 	}
 }
 
-// handleDeleteAll is "sign out everywhere", and it means everywhere: this browser included.
-// Signing a person out of every user agent except the one they are asking from would be a
-// different feature wearing this one's name.
+// handleDeleteAll is "sign out everywhere", this browser included; offline_access grants stay, because OIDC Back-Channel Logout 1.0 s2.7 keeps them through logout.
 func handleDeleteAll(ctx context.Context, rmngCtx *rmngctx.RmngContext, identity auth.TokenClaims) events.APIGatewayProxyResponse {
-	if err := refreshtoken.NewService(rmngCtx).RevokeAllForUser(identity.Subject); err != nil {
-		rlog.Error(ctx).Err(err).Msg("sessions: delete all families")
-		return oidc.OAuthErrorResp(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.")
-	}
-	if err := session.NewService(rmngCtx).DeleteAllSessions(identity.Subject); err != nil {
-		rlog.Error(ctx).Err(err).Msg("sessions: delete all sessions")
+	if err := signout.NewService(rmngCtx).EndAllSessions(identity.Subject); err != nil {
+		rlog.Error(ctx).Err(err).Msg("sessions: sign out everywhere")
 		return oidc.OAuthErrorResp(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.")
 	}
 	return noContent()
 }
 
-// noContent is the success shape for both deletes: a bodyless 204. Built by hand rather than
+// noContent is the success shape for every delete: a bodyless 204. Built by hand rather than
 // through utils.APIGwRespJSON because that always attaches a JSON body and Content-Type, and a
 // 204 must carry neither.
 //
@@ -201,54 +226,63 @@ func noContent() events.APIGatewayProxyResponse {
 }
 
 func handleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	path := strings.TrimRight(request.Path, "/")
-
-	if path == pathLogoutDone {
-		return handleLogoutDone(ctx, request)
-	}
-	if path == pathLogout {
+	switch request.Resource {
+	case pathLogout:
 		return handleLogout(ctx, request)
+	case pathFederationLogoutCallback:
+		return handleFederationLogoutCallback(ctx, request)
+	case pathUserLogout:
+		return handleLogoutConfirm(ctx, request)
+	case pathSessions, pathSession, pathConnectedApps, pathConnectedApp:
+		return handleAccountRequest(ctx, request), nil
 	}
-	if !strings.HasPrefix(path, pathSessions) {
-		return oidc.OAuthErrorResp(http.StatusNotFound, oidc.OAuthErrInvalidRequest, "Not found."), nil
-	}
+	return oidc.OAuthErrorResp(http.StatusNotFound, oidc.OAuthErrInvalidRequest, "Not found."), nil
+}
 
-	rmngCtx := user.NewContextWithAPIRequest(ctx, request)
+// handleAccountRequest serves the routes that share one gate: a user token from a first-party client, granted account:sessions.
+func handleAccountRequest(ctx context.Context, request events.APIGatewayProxyRequest) events.APIGatewayProxyResponse {
+	rmngCtx := user.NewContextWithAnyAPIToken(ctx, request)
 	identity := user.ClaimsFrom(rmngCtx)
 	if identity.Subject == "" {
 		rlog.Info(ctx).Msg("sessions: token rejected")
-		return oidc.OAuthUnauthorizedResp(), nil
+		return oidc.OAuthUnauthorizedResp()
 	}
 	// First-party is a client-registration attribute, not a token claim, so revoking a client's standing takes effect on its next call rather than when its tokens expire.
 	// A registry failure is ours (500); a valid token from a non-first-party client is authenticated but not allowed (403), since 401 invalid_token would make it retry with an identical token forever.
-	client, err := clients.NewService(rmngCtx).Get(identity.ClientID)
-	if err != nil && !errors.Is(err, clients.ErrClientNotFound) {
-		rlog.Error(ctx).Err(err).Str("client_id", identity.ClientID).Msg("sessions: client registry read failed")
-		return oidc.OAuthErrorResp(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
-	}
-	if client == nil || !client.FirstParty {
+	if err := clients.NewService(rmngCtx).RequireFirstParty(identity.ClientID); err != nil {
+		if !errors.Is(err, clients.ErrNotFirstParty) {
+			rlog.Error(ctx).Err(err).Str("client_id", identity.ClientID).Msg("sessions: client registry read failed")
+			return oidc.OAuthErrorResp(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error.")
+		}
 		rlog.Info(ctx).Str("client_id", identity.ClientID).Msg("sessions: refused non-first-party client")
-		return oidc.OAuthErrorResp(http.StatusForbidden, oidc.OAuthErrAccessDenied, "This client may not manage sessions."), nil
+		return oidc.OAuthErrorResp(http.StatusForbidden, oidc.OAuthErrAccessDenied, "This client may not manage sessions.")
 	}
 	if !scope.Has(identity.Scope, scope.Sessions) {
-		return forbidden(), nil
+		return forbidden()
 	}
 
-	// Empty for the collection path; API Gateway always sets it on the {sessionId} resource.
-	sid := request.PathParameters["sessionId"]
-
-	switch request.HTTPMethod {
-	case http.MethodGet:
-		if sid == "" {
-			return handleList(ctx, rmngCtx, identity), nil
+	switch request.Resource {
+	case pathSessions:
+		switch request.HTTPMethod {
+		case http.MethodGet:
+			return handleList(ctx, rmngCtx, identity)
+		case http.MethodDelete:
+			return handleDeleteAll(ctx, rmngCtx, identity)
 		}
-	case http.MethodDelete:
-		if sid == "" {
-			return handleDeleteAll(ctx, rmngCtx, identity), nil
+	case pathSession:
+		if request.HTTPMethod == http.MethodDelete {
+			return handleDeleteOne(ctx, rmngCtx, identity, request.PathParameters["sessionId"])
 		}
-		return handleDeleteOne(ctx, rmngCtx, identity, sid), nil
+	case pathConnectedApps:
+		if request.HTTPMethod == http.MethodGet {
+			return handleListConnectedApps(ctx, rmngCtx, identity)
+		}
+	case pathConnectedApp:
+		if request.HTTPMethod == http.MethodDelete {
+			return handleDisconnectApp(ctx, rmngCtx, identity, request.PathParameters["clientId"])
+		}
 	}
-	return oidc.OAuthErrorResp(http.StatusMethodNotAllowed, oidc.OAuthErrInvalidRequest, "Method not allowed."), nil
+	return oidc.OAuthErrorResp(http.StatusMethodNotAllowed, oidc.OAuthErrInvalidRequest, "Method not allowed.")
 }
 
 func main() {

@@ -28,8 +28,8 @@ const (
 	ccScopes   = "account.admin credits.consume"
 )
 
-// seedConfidentialClient registers a confidential client and returns its one-time secret.
-func seedConfidentialClient(clientID string, allowedResources []string) string {
+// seedConfidentialClient registers a confidential client, its default the given one, and returns its one-time secret.
+func seedConfidentialClient(clientID string, allowedResources []string, defaultResource string) string {
 	svc := clients.NewService(rmngctx.NewRmngContextWithCtx(context.Background(), nil))
 	res, err := svc.Create(clients.CreateInput{
 		ClientID:         clientID,
@@ -38,6 +38,7 @@ func seedConfidentialClient(clientID string, allowedResources []string) string {
 		GrantTypes:       []string{"client_credentials"},
 		Scopes:           strings.Fields(ccScopes),
 		AllowedResources: allowedResources,
+		DefaultResource:  defaultResource,
 	})
 	Expect(err).NotTo(HaveOccurred())
 	Expect(res.ClientSecret).NotTo(BeEmpty())
@@ -79,10 +80,11 @@ func ccRequest(headers map[string]string, kv map[string]string) events.APIGatewa
 
 var _ = Describe("OAuth token endpoint (client_credentials grant)", func() {
 	var secret string
+	var backend *test_utils.EspUserBackend
 
 	BeforeEach(func() {
-		test_utils.SetupEspUserBackend(context.Background())
-		secret = seedConfidentialClient(ccClientID, []string{ccResource})
+		backend = test_utils.SetupEspUserBackend(context.Background())
+		secret = seedConfidentialClient(ccClientID, []string{ccResource, ccOtherAPI}, ccResource)
 	})
 
 	Describe("the happy path", func() {
@@ -95,6 +97,7 @@ var _ = Describe("OAuth token endpoint (client_credentials grant)", func() {
 			// and there is no user here -- the client already holds credentials it can present
 			// again. An ID token describes a human, and there is none; a machine client is not
 			// registered for `openid` either, so asking for one is refused a step earlier.
+			backend.DBMock.ProfileReset()
 			resp, err := handleTokenRequest(context.Background(), ccRequest(
 				basicAuth(ccClientID, secret),
 				map[string]string{"grant_type": "client_credentials", "scope": "account.admin"},
@@ -119,6 +122,10 @@ var _ = Describe("OAuth token endpoint (client_credentials grant)", func() {
 			Expect(claims["client_id"]).To(Equal(ccClientID))
 			Expect(claims["sub"]).To(Equal(ccClientID), "RFC 9068 s2.2.1: with no resource owner, sub is the client")
 			Expect(claims["exp"]).NotTo(BeNil())
+
+			profile := backend.DBMock.ProfileGet()
+			readCnt, writeCnt := profile.TotalCounts()
+			Expect([]int{readCnt, writeCnt}).To(Equal([]int{1, 0}), "the client row read to authenticate is the only read")
 		})
 
 		It("accepts client_secret_post as well as Basic", func() {
@@ -161,11 +168,38 @@ var _ = Describe("OAuth token endpoint (client_credentials grant)", func() {
 			Expect(claims["aud"]).NotTo(Equal(claims["client_id"]))
 		})
 
-		It("falls back to aud = client_id when no resource is requested", func() {
-			// RFC 8707 is an optional extension; a caller that does not use it must still get
-			// today's shape rather than a token with no audience at all.
+		It("is for the client's default resource when none is requested (RFC 9068 s3)", func() {
 			claims := mint(map[string]string{"scope": "account.admin"})
-			Expect(claims["aud"]).To(Equal(ccClientID))
+			Expect(claims["aud"]).To(Equal(ccResource))
+		})
+
+		It("reads an empty resource as none requested, so the token is for the default (RFC 6749 s3.2)", func() {
+			claims := mint(map[string]string{"scope": "account.admin", "resource": ""})
+			Expect(claims["aud"]).To(Equal(ccResource))
+		})
+
+		It("is for the one resource named when another resource value is empty", func() {
+			resp, err := handleTokenRequest(context.Background(), events.APIGatewayProxyRequest{
+				HTTPMethod: "POST", Path: pathToken, Headers: basicAuth(ccClientID, secret),
+				Body: "grant_type=client_credentials&scope=account.admin&resource=&resource=" + url.QueryEscape(ccOtherAPI),
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(200), resp.Body)
+			raw, _ := decodeBody[map[string]any](resp)["access_token"].(string)
+			Expect(unverifiedClaims(raw)["aud"]).To(Equal(ccOtherAPI))
+		})
+
+		It("honours the resource named in a JSON body, never silently minting for the default", func() {
+			headers := basicAuth(ccClientID, secret)
+			headers["Content-Type"] = "application/json"
+			resp, err := handleTokenRequest(context.Background(), events.APIGatewayProxyRequest{
+				HTTPMethod: "POST", Path: pathToken, Headers: headers,
+				Body: `{"grant_type":"client_credentials","scope":"account.admin","resource":"` + ccOtherAPI + `"}`,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(200), resp.Body)
+			raw, _ := decodeBody[map[string]any](resp)["access_token"].(string)
+			Expect(unverifiedClaims(raw)["aud"]).To(Equal(ccOtherAPI))
 		})
 
 		It("grants only the scopes asked for", func() {
@@ -239,19 +273,31 @@ var _ = Describe("OAuth token endpoint (client_credentials grant)", func() {
 			// any API simply by asking.
 			resp, _ := handleTokenRequest(context.Background(), ccRequest(
 				basicAuth(ccClientID, secret),
-				map[string]string{"grant_type": "client_credentials", "scope": "account.admin", "resource": ccOtherAPI},
+				map[string]string{"grant_type": "client_credentials", "scope": "account.admin", "resource": "https://api.unregistered.example.com"},
 			))
 			Expect(resp.StatusCode).To(Equal(400), resp.Body)
 			Expect(decodeBody[map[string]any](resp)["error"]).To(Equal("invalid_target"))
 		})
 
 		It("rejects any resource when the client registered none", func() {
-			s2 := seedConfidentialClient("rm_svc_nores", nil)
+			s2 := seedConfidentialClient("rm_svc_nores", nil, "")
 			resp, _ := handleTokenRequest(context.Background(), ccRequest(
 				basicAuth("rm_svc_nores", s2),
 				map[string]string{"grant_type": "client_credentials", "scope": "account.admin", "resource": ccResource},
 			))
 			Expect(decodeBody[map[string]any](resp)["error"]).To(Equal("invalid_target"))
+		})
+
+		It("refuses a request naming no resource when the client has no default, never minting for the client id", func() {
+			s2 := seedConfidentialClient("rm_svc_nodefault", []string{ccResource}, "")
+			resp, _ := handleTokenRequest(context.Background(), ccRequest(
+				basicAuth("rm_svc_nodefault", s2),
+				map[string]string{"grant_type": "client_credentials", "scope": "account.admin"},
+			))
+			Expect(resp.StatusCode).To(Equal(400))
+			Expect(decodeBody[map[string]string](resp)).To(Equal(map[string]string{
+				"error": "invalid_target", "error_description": "A resource is required: this client has no default resource.",
+			}))
 		})
 
 		It("never mints a multi-audience token", func() {

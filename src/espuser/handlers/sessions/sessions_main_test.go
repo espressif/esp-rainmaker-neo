@@ -16,7 +16,9 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/refresh_tokens_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/sessions_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/scope"
+	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/jwtutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
@@ -56,7 +58,7 @@ func tokenFor(userID, scopes, sid string) string {
 // tokenForClient is tokenFor with the issuing client named, for exercising the first-party pin with a third-party audience.
 func tokenForClient(userID, clientID, scopes, sid string) string {
 	minter := jwtutil.NewMinter(backend.Issuer, backend.SigningKey, oidc.SigningKeyID)
-	token, err := minter.AccessToken(userID, clientID, scopes, "", "", jwtutil.Contact{}, sid)
+	token, err := minter.AccessToken(userID, clientID, scopes, "https://api.example.com", jwtutil.UserClaims{SID: sid})
 	Expect(err).NotTo(HaveOccurred())
 	return token
 }
@@ -64,7 +66,7 @@ func tokenForClient(userID, clientID, scopes, sid string) string {
 // machineToken mints a client_credentials (machine) access token: the right scope and even the first-party client id, but no human behind it.
 func machineToken(scopes string) string {
 	minter := jwtutil.NewMinter(backend.Issuer, backend.SigningKey, oidc.SigningKeyID)
-	token, err := minter.ClientCredentialsToken(dashboardClient, scopes, "")
+	token, err := minter.ClientCredentialsToken(dashboardClient, scopes, "https://api.example.com")
 	Expect(err).NotTo(HaveOccurred())
 	return token
 }
@@ -99,14 +101,16 @@ func foreignIssuerToken(userID string) string {
 }
 
 func req(method, path, token string) events.APIGatewayProxyRequest {
-	r := events.APIGatewayProxyRequest{HTTPMethod: method, Path: path}
+	r := events.APIGatewayProxyRequest{HTTPMethod: method, Path: path, Resource: path}
 	if token != "" {
 		r.Headers = map[string]string{"Authorization": "Bearer " + token}
 	}
-	// API Gateway sets the {sessionId} path parameter from the matched resource; these tests
-	// drive handleRequest directly, so populate it from the last path segment.
+	// API Gateway names the matched route template in Resource and fills its path parameter; these tests drive handleRequest directly, so both come from the path.
 	if id := strings.TrimPrefix(path, pathSessions+"/"); id != path && id != "" && !strings.Contains(id, "/") {
-		r.PathParameters = map[string]string{"sessionId": id}
+		r.Resource, r.PathParameters = pathSession, map[string]string{"sessionId": id}
+	}
+	if id := strings.TrimPrefix(path, pathConnectedApps+"/"); id != path && id != "" && !strings.Contains(id, "/") {
+		r.Resource, r.PathParameters = pathConnectedApp, map[string]string{"clientId": id}
 	}
 	return r
 }
@@ -137,6 +141,20 @@ func putFamily(userID, clientID, familyID, sid string) {
 		UserID: userID, ClientID: clientID, FamilyID: familyID,
 		ClientFamily: clientID + "#" + familyID,
 		SID:          sid, CreatedAt: now, RotatedAt: now, ExpiresOn: now + 86400,
+	})).To(Succeed())
+}
+
+// putOfflineFamily writes an offline_access grant as the token endpoint mints one: no sid.
+func putOfflineFamily(userID, clientID, familyID string) {
+	now := time.Now().Unix()
+	putGrant(userID, clientID, familyID, now, now)
+}
+
+// putGrant writes an offline_access grant with explicit clocks, so ordering and folding are spec inputs.
+func putGrant(userID, clientID, familyID string, createdAt, rotatedAt int64) {
+	Expect(refresh_tokens_db.NewRefreshTokensDB(rctx()).CreateFamily(&refresh_tokens_db.FamilyEntry{
+		UserID: userID, ClientID: clientID, FamilyID: familyID, Scope: "openid offline_access",
+		CreatedAt: createdAt, RotatedAt: rotatedAt, ExpiresOn: time.Now().Unix() + 86400,
 	})).To(Succeed())
 }
 
@@ -203,6 +221,37 @@ var _ = Describe("GET /v1/user/sessions", func() {
 		Expect(bySID[sidPhone].Clients).To(HaveLen(1))
 		Expect(bySID[sidMac].UserAgentType).To(Equal("Chrome on macOS"))
 		Expect(bySID[sidPhone].UserAgentType).To(Equal("Safari on iPhone"))
+	})
+
+	It("names each app under its session and shows its logo from its registration, never its secret", func() {
+		Expect(oauth_clients_db.NewOAuthClientsDB(rctx()).CreateClient(&oauth_clients_db.OAuthClientEntry{
+			ClientID: "secvuln-web", ClientName: "ESP SecVuln", ClientType: oauth_clients_db.ClientTypeConfidential,
+			Secret: "s3cret-secvuln", LogoURI: "data:image/png;base64,iVBORw0KGgo=",
+		})).To(Succeed())
+
+		resp := call(http.MethodGet, pathSessions, tokenFor(me, scope.Sessions, sidMac))
+		Expect(resp.Body).NotTo(ContainSubstring("s3cret-secvuln"))
+		for _, s := range listBody(resp).Sessions {
+			for _, app := range s.Clients {
+				if app.ClientID == "secvuln-web" {
+					Expect([]string{app.ClientName, app.LogoURI}).To(Equal([]string{"ESP SecVuln", "data:image/png;base64,iVBORw0KGgo="}), "in session %s", s.SID)
+					continue
+				}
+				Expect(app.ClientName).To(BeEmpty(), "%s registered no name", app.ClientID)
+			}
+			Expect(s.Clients).NotTo(ContainElement(HaveField("Scopes", Not(BeEmpty()))), "scopes belong to connected apps only")
+		}
+	})
+
+	It("still lists every session, without names, when the registrations cannot be read (negative)", func() {
+		token := tokenFor(me, scope.Sessions, sidMac)
+		awscommon.SetDynamoDBClient(&mock.FailingBatchGetItem{DynamoDBMock: backend.DBMock, TableName: "espuser-oauth-clients"})
+		DeferCleanup(awscommon.SetDynamoDBClient, backend.DBMock)
+
+		resp := call(http.MethodGet, pathSessions, token)
+		Expect(resp.StatusCode).To(Equal(http.StatusOK), resp.Body)
+		Expect(listBody(resp).Sessions).To(HaveLen(2))
+		Expect(resp.Body).NotTo(ContainSubstring("client_name"))
 	})
 
 	It("marks the session this very token was minted under, and only that one", func() {
@@ -323,9 +372,16 @@ var _ = Describe("the five negatives, on every session endpoint", func() {
 			To(Equal(http.StatusUnauthorized))
 	})
 
+	It("accepts a token addressed to another of our APIs: the account's own endpoints take any of them", func() {
+		minter := jwtutil.NewMinter(backend.Issuer, backend.SigningKey, oidc.SigningKeyID)
+		token, err := minter.AccessToken(me, dashboardClient, scope.Sessions, "https://other.example.com", jwtutil.UserClaims{SID: sidMac})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(call(http.MethodGet, pathSessions, token).StatusCode).To(Equal(http.StatusOK))
+	})
+
 	It("401s an id token replayed as an access token (negative, token substitution)", func() {
 		minter := jwtutil.NewMinter(backend.Issuer, backend.SigningKey, oidc.SigningKeyID)
-		idToken, err := minter.IDToken(me, "esp-account-dashboard", "", 0, jwtutil.Contact{}, sidMac)
+		idToken, err := minter.IDToken(me, "esp-account-dashboard", 0, jwtutil.UserClaims{SID: sidMac})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(call(http.MethodGet, pathSessions, idToken).StatusCode).To(Equal(http.StatusUnauthorized))
 	})
@@ -393,6 +449,17 @@ var _ = Describe("DELETE /v1/user/sessions", func() {
 		body := listBody(call(http.MethodGet, pathSessions, tokenFor(me, scope.Sessions, sidMac)))
 		Expect(body.Sessions).To(BeEmpty())
 		Expect(familyClientIDs(me)).To(BeEmpty(), "every family must be gone, not orphaned")
+	})
+
+	It("keeps offline_access grants through sign-out-everywhere and ends every session family, with or without a sid", func() {
+		putFamily(me, "legacy-app", "fam_nosid", "")
+		putOfflineFamily(me, "voice-assistant", "fam_offline")
+
+		Expect(call(http.MethodDelete, pathSessions, tokenFor(me, scope.Sessions, sidMac)).StatusCode).
+			To(Equal(http.StatusNoContent))
+
+		Expect(listBody(call(http.MethodGet, pathSessions, tokenFor(me, scope.Sessions, sidMac))).Sessions).To(BeEmpty())
+		Expect(familyClientIDs(me)).To(ConsistOf("voice-assistant"), "only the offline grant survives")
 	})
 
 	It("leaves another user untouched by sign-out-everywhere (negative, cross-user)", func() {

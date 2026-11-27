@@ -12,7 +12,9 @@
 package session
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -20,6 +22,7 @@ import (
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/sessions_db"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/secretutil"
 )
@@ -29,6 +32,9 @@ import (
 // prefix — so another API Gateway on the shared execute-api hostname cannot shadow ours
 // (session fixation). The name survives the move to a real domain unchanged.
 const CookieName = "__Host-esp_session"
+
+// SignOutPage is where /oauth2/logout asks the person before ending their session, relative to /oauth2/logout.
+const SignOutPage = "../user/logout"
 
 const (
 	// SessionTTLSeconds is the rolling inactivity window: how long a user agent stays "known" after
@@ -55,6 +61,11 @@ type Session struct {
 	UserID   string
 	Provider string
 	AuthTime int64
+	AMR      []string
+}
+
+func sessionOf(entry *sessions_db.SessionEntry) *Session {
+	return &Session{SID: entry.SID, UserID: entry.UserID, Provider: entry.Provider, AuthTime: entry.AuthTime, AMR: entry.AMR}
 }
 
 // Service reads and writes sessions.
@@ -217,12 +228,36 @@ func (s *Service) Lookup(cookieValue string) *Session {
 		}
 		return nil
 	}
-	return &Session{SID: entry.SID, UserID: entry.UserID, Provider: entry.Provider, AuthTime: entry.AuthTime}
+	return sessionOf(entry)
+}
+
+// Peek is Lookup without the retention roll, for a caller whose response does not re-issue the cookie; it fails to nil the same way.
+func (s *Service) Peek(cookieValue string) *Session {
+	sess, err := s.Find(cookieValue)
+	if err != nil {
+		rlog.Warn(s.ctx.Context).Err(err).Msg("session: peek failed")
+	}
+	return sess
+}
+
+// Find is Peek for a caller that must tell a failed read apart from no session: (nil, nil) means none, (nil, err) means the row could not be read.
+func (s *Service) Find(cookieValue string) (*Session, error) {
+	if cookieValue == "" {
+		return nil, nil
+	}
+	entry, err := sessions_db.NewSessionsDB(s.ctx).GetSession(hashCookie(cookieValue))
+	if errors.Is(err, sessions_db.ErrSessionNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, rmerror.NewRMError(err, "session: read failed")
+	}
+	return sessionOf(entry), nil
 }
 
 // BumpRetentionBySID rolls a user agent's expires_at forward from a BACK-channel token event and
 // returns the new expires_at so the token path can clamp the refresh family's expiry to it.
-// Returns sessions_db.ErrSessionNotFound when the session has ended, and (0, nil) when sid is empty (a pre-feature family) or the session cannot be confirmed either way; cookie_expires_at is never touched here.
+// Returns sessions_db.ErrSessionNotFound when the session has ended, and (0, nil) when sid is empty (an offline_access grant, or a family minted after a failed session write or before sessions) or the session cannot be confirmed either way; cookie_expires_at is never touched here.
 func (s *Service) BumpRetentionBySID(userID, sid string) (expiresAt int64, err error) {
 	if sid == "" {
 		return 0, nil
@@ -246,6 +281,24 @@ func (s *Service) ListSessions(userID string) ([]sessions_db.SessionEntry, error
 	return sessions_db.NewSessionsDB(s.ctx).ListByUser(userID)
 }
 
+// FindBySID reads the user's session named sid; sessions_db.ErrSessionNotFound when there is none, the cross-user case included.
+func (s *Service) FindBySID(userID, sid string) (*sessions_db.SessionEntry, error) {
+	return sessions_db.NewSessionsDB(s.ctx).GetByUserAndSID(userID, sid)
+}
+
+// DeleteNativeAppSession ends the user's cookie-less app row named sid and leaves a browser row alone, because a browser's cookie can still sign in.
+func (s *Service) DeleteNativeAppSession(userID, sid string) error {
+	db := sessions_db.NewSessionsDB(s.ctx)
+	row, err := db.GetByUserAndSID(userID, sid)
+	if err != nil {
+		return err
+	}
+	if row.Origin != OriginApp {
+		return nil
+	}
+	return db.DeleteSession(row.SessionHash)
+}
+
 // DeleteSessionBySID ends one session the user owns. sessions_db.ErrSessionNotFound when no
 // such session exists for the caller -- the cross-user case included.
 func (s *Service) DeleteSessionBySID(userID, sid string) error {
@@ -255,6 +308,26 @@ func (s *Service) DeleteSessionBySID(userID, sid string) error {
 // DeleteAllSessions ends every session the user has -- sign out everywhere.
 func (s *Service) DeleteAllSessions(userID string) error {
 	return sessions_db.NewSessionsDB(s.ctx).DeleteAllForUser(userID)
+}
+
+// LogoutCSRFToken is keyed by the cookie value, which only this browser holds, so another site can neither read nor compute it, and it stops matching once the cookie rotates.
+func LogoutCSRFToken(cookieValue string) string {
+	return base64.RawURLEncoding.EncodeToString(logoutMAC(cookieValue))
+}
+
+// IsLogoutCSRFToken reports whether token is LogoutCSRFToken(cookieValue), in constant time.
+func IsLogoutCSRFToken(cookieValue, token string) bool {
+	got, err := base64.RawURLEncoding.DecodeString(token)
+	if cookieValue == "" || err != nil {
+		return false
+	}
+	return hmac.Equal(got, logoutMAC(cookieValue))
+}
+
+func logoutMAC(cookieValue string) []byte {
+	mac := hmac.New(sha256.New, []byte(cookieValue))
+	mac.Write([]byte("espuser logout confirmation"))
+	return mac.Sum(nil)
 }
 
 func hashCookie(cookieValue string) string {

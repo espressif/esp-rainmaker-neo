@@ -188,6 +188,22 @@ def test_alexa_discovery_friendly_name(user_with_1_dev_each_in_2_groups, alexa_r
     assert light2['friendlyName'] == 'Bedroom Light', f"region {region}: expected 'Bedroom Light' but got '{light2['friendlyName']}'"
 
 
+def test_alexa_rejects_a_token_for_another_api(test_user1, alexa_region_arn):
+    """The skill accepts only tokens addressed to neo (RFC 9068 s4), so the same person's ESP User API token discovers nothing and the directive fails."""
+    region, arn = alexa_region_arn
+    signin = test_user1.signin()
+    assert signin.status_code == 200, signin.text
+    test_user1.alexa_set_lambda_arn(arn)
+
+    accepted = test_user1.alexa_discover_devices(region=region)
+    assert accepted.get("event", {}).get("header", {}).get("name") == "Discover.Response", \
+        f"region {region}: the neo token must discover: {accepted}"
+
+    refused = test_user1.alexa_discover_devices(region=region, token=test_user1.user_api_token())
+    assert "event" not in refused, f"region {region}: a token addressed to the ESP User API must not discover: {refused}"
+    assert "invalid token audience" in refused.get("errorMessage", ""), f"region {region}: {refused}"
+
+
 def test_alexa_control(user_with_1_dev_each_in_2_groups, alexa_region_arn):
     device1, device2, group1_id, group2_id, test_user1 = user_with_1_dev_each_in_2_groups
     region, arn = alexa_region_arn
@@ -406,7 +422,7 @@ def _restore_lwa_connection(value):
 
 
 def _remove_mock_redirect_uris(admin):
-    """Drop the mock vendor's account-linking URIs from every OAuth client. The configuration API only ever adds redirect URIs (Alexa, GVA and SmartThings share va-client), so a restore cannot take back what a mock run added."""
+    """Drop the mock vendor's account-linking URIs from every OAuth client. The configuration API only ever adds redirect URIs to a client, so a restore cannot take back what a mock run added."""
     listed = admin.list_oauth_clients()
     assert listed.status_code == 200, listed.text
     for client in listed.json()['clients']:

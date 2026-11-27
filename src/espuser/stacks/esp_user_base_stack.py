@@ -2,8 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import hashlib
-import json
 import os
 import sys
 
@@ -18,7 +16,6 @@ from aws_cdk import (
     aws_iam as iam,
     aws_kms as kms,
     aws_lambda as lambda_,
-    aws_s3 as s3,
 )
 from constructs import Construct
 
@@ -31,22 +28,26 @@ from app_common import (
     create_cognito_user_pool_domain,
     create_kms_signing_key,
     create_rest_api,
-    create_s3_bucket,
     create_ssm_string_parameter,
     create_write_once_secret,
     discover_api_custom_domain,
     discover_cognito_custom_domain,
     discover_cognito_email_configuration,
+    grant_client_resources,
+    seed_oauth_clients,
 )
 from gsi_infra import GsiInfraCore, GsiReadinessGate, ManagedTable
 
 from ..handlers.publish_discovery.stack import PublishDiscovery
 from .base_res_constants import (
+    HOME_APP_CLIENT_ID,
+    SEEDED_CLIENT_SECRET_ATTRIBUTES,
     SEEDED_OAUTH_CLIENTS,
     USER_COGNITO_DOMAIN_PREFIXES,
     USER_INDEX_NAMES,
     USER_SSM_PARAMETERS,
     USER_TABLE_NAMES,
+    seeded_client_grants,
 )
 
 
@@ -66,7 +67,6 @@ class CreateCommonBaseResources(Construct):
             common_resources=common_resources,
         )
 
-        self.user_api_base_res = self.esp_user_api.root.add_resource("user")
         self.admin_api_base_res = self.esp_user_api.root.add_resource("admin")
 
         self.jwks_fetcher_lambda = lambda_.Function(
@@ -213,87 +213,16 @@ class CreateUserTables(Construct):
         self._seed_oauth_clients()
 
     def _seed_oauth_clients(self) -> None:
-        """Seed the ESP-User OIDC client registry (espuser-oauth-clients) for the current
-        first-party apps. Inline custom-resource, idempotent conditional PutItem per client
-        (an existing client is left untouched), so a re-deploy never clobbers admin edits."""
+        """Seed the ESP-User OIDC client registry (espuser-oauth-clients) for the clients this deployment ships.
 
-        seeded_clients_json = json.dumps(SEEDED_OAUTH_CLIENTS, sort_keys=True)
-        seeded_clients_hash = hashlib.sha256(seeded_clients_json.encode()).hexdigest()
-
-        stack = Stack.of(self)
-        table_name = USER_TABLE_NAMES['OAUTH_CLIENTS']
-        table_arn = f"arn:aws:dynamodb:{stack.region}:{stack.account}:table/{table_name}"
-        seed_fn = lambda_.Function(
-            self, "SeedOAuthClientsFunction",
-            runtime=lambda_.Runtime.PYTHON_3_12,
-            handler="index.handler",
-            timeout=Duration.seconds(120),
-            environment={"SEEDED_CLIENTS": seeded_clients_json},
-            code=lambda_.Code.from_inline("""
-import json, os, time, secrets, boto3, urllib3
-from botocore.exceptions import ClientError
-
-http = urllib3.PoolManager()
-# First-party OIDC clients, injected from SEEDED_OAUTH_CLIENTS (base_res_constants.py).
-CLIENTS = json.loads(os.environ["SEEDED_CLIENTS"])
-
-def send(event, context, status, data=None):
-    body = json.dumps({
-        "Status": status, "Reason": "See CloudWatch " + context.log_stream_name,
-        "PhysicalResourceId": "seed-oauth-clients", "StackId": event["StackId"],
-        "RequestId": event["RequestId"], "LogicalResourceId": event["LogicalResourceId"],
-        "Data": data or {},
-    }).encode("utf-8")
-    http.request("PUT", event["ResponseURL"], body=body, headers={"content-type": ""})
-
-def handler(event, context):
-    try:
-        data = {}
-        if event["RequestType"] != "Delete":
-            # The Lambda runs in the target region, so boto3 resolves it from AWS_REGION.
-            table = boto3.resource("dynamodb").Table("%s")
-            now = int(time.time())
-            for c in CLIENTS:
-                item = dict(c)
-                item.setdefault("scopes", ["openid", "email", "phone", "profile"])
-                item.update({"created_at": now, "updated_at": now})
-                # Confidential clients get a generated plaintext secret (retrievable via list get_secret).
-                if item["client_type"] == "confidential":
-                    item["secret"] = secrets.token_urlsafe(32)
-                # Conditional create: a client that already exists is left untouched (no-op).
-                try:
-                    table.put_item(Item=item, ConditionExpression="attribute_not_exists(client_id)")
-                except ClientError as e:
-                    if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
-                        raise
-            # Return the current confidential-client secrets (minted above or from a prior deploy)
-            # so the stack can surface them; read them back rather than trust the local values. A
-            # confidential client with no secret means a stale row predating its confidential config
-            # (conditional PutItem never overwrites it) — fail loudly rather than emit an empty secret,
-            # which SSM rejects with an opaque PutParameter error.
-            for cid in ("va-client", "mcp-oauth-client"):
-                row = table.get_item(Key={"client_id": cid}).get("Item", {})
-                secret = row.get("secret", "")
-                if not secret:
-                    raise Exception(cid + " has no secret; delete the stale row so it is re-seeded as confidential")
-                data["VaClientSecret" if cid == "va-client" else "McpClientSecret"] = secret
-        send(event, context, "SUCCESS", data)
-    except Exception as e:
-        print("seed error:", e)
-        send(event, context, "FAILED")
-""" % (table_name,)),  # noqa: UP031 - the handler source is full of braces, so .format would need every one escaped
-        )
-        seed_fn.add_to_role_policy(iam.PolicyStatement(
-            actions=["dynamodb:PutItem", "dynamodb:GetItem"],
-            resources=[table_arn],
-        ))
-
-        self.seed_oauth_clients_cr = CustomResource(
-            self, "SeedOAuthClients", service_token=seed_fn.function_arn,
-            properties={
-                "ClientsHash": seeded_clients_hash,
-                "SeedVersion": 1,
-            },
+        A missing client is created; an existing one only gains the declared fields and redirects it lacks. A client that declares scopes regains its declared scopes on every seed run, so an operator may add scopes to it but not remove them; any other client's scopes are never touched.
+        """
+        self.seed_oauth_clients_cr = seed_oauth_clients(
+            self, "SeedOAuthClients",
+            name="espuser-oauth-clients-seed",
+            table_name=USER_TABLE_NAMES['OAUTH_CLIENTS'],
+            clients=SEEDED_OAUTH_CLIENTS,
+            secret_attributes=SEEDED_CLIENT_SECRET_ATTRIBUTES,
         )
         self.seed_oauth_clients_cr.node.add_dependency(self.oauth_clients_table)
 
@@ -304,62 +233,15 @@ def handler(event, context):
                                  physical_id="seed-refresh-secret")
 
 class CreateDiscoveryStorage(Construct):
-    """Storage for the static OIDC/OAuth discovery documents.
+    """The OIDC signing key and the JWKS published from it.
 
-    Tier 1 (default): a bucket whose objects are publicly readable over HTTPS at
-    the S3 REST endpoint, so the issuer can be the S3 URL and no CloudFront is
-    needed. Tier 2 (custom domain) front this bucket with CloudFront/OAC later;
-    that does not change this storage. See espuser/docs/en/specs/oidc-oauth2.md.
-
-    `api_base` is the API Gateway base URL the `/oauth2/*` endpoints live on; it
-    is advertised in the discovery documents, which are served from the issuer
-    (S3) host — the two hosts differ.
-
-    The KMS signing key lives here too, so the key and the JWKS that advertises it are created
-    and destroyed together.
+    The discovery documents are not stored anywhere: the well-known Lambda builds them per request
+    from the issuer and serves them, with the JWKS from SSM, at the ESP User API's /.well-known/*.
+    The key and the JWKS that advertises it are created and destroyed together. See
+    src/espuser/docs/specs/oidc-oauth2.md.
     """
-    def __init__(self, scope: Construct, id: str, *, common_resources, api_base: str, **kwargs) -> None:
+    def __init__(self, scope: Construct, id: str, *, common_resources, **kwargs) -> None:
         super().__init__(scope, id, **kwargs)
-
-        region = Stack.of(self).region
-
-        # public=True for the AnyPrincipal grant on .well-known/ below.
-        self.discovery_bucket = create_s3_bucket(
-            self, "DiscoveryBucket", common_resources, "oauth",
-            public=True,
-            # Browsers fetch these two documents with JavaScript, so a public object is not
-            # enough: without CORS the request succeeds and the browser discards the response,
-            # which surfaces to a user as "could not reach the sign-in service" even though the
-            # object returned 200. Every OIDC relying party running in a browser reads
-            # /.well-known/openid-configuration before it can start a login, so this is not
-            # optional for any of them.
-            #
-            # `*` is correct here rather than an origin allowlist: these documents are public by
-            # specification and are already world-readable over plain HTTPS, so naming origins
-            # would restrict nothing an attacker could not read with curl, while guaranteeing
-            # that each new product must edit this stack before it can sign anyone in. Nothing
-            # here is credentialed — no cookies, no Authorization header — so there is no
-            # ambient authority for a hostile origin to borrow.
-            cors=[s3.CorsRule(
-                allowed_methods=[s3.HttpMethods.GET, s3.HttpMethods.HEAD],
-                allowed_origins=["*"],
-                allowed_headers=["*"],
-                exposed_headers=["ETag"],
-                max_age=86400,
-            )],
-            removal_policy=RemovalPolicy.DESTROY,
-            auto_delete_objects=True,
-        )
-
-        self.discovery_bucket.add_to_resource_policy(iam.PolicyStatement(
-            actions=["s3:GetObject"],
-            resources=[self.discovery_bucket.arn_for_objects(".well-known/*")],
-            principals=[iam.AnyPrincipal()],
-        ))
-
-        # Account-Regional Namespace means AWS composes the physical name, so read it off the bucket
-        # rather than recomposing it here — this resolves to a CFN token, not a literal.
-        self.issuer = f"https://{self.discovery_bucket.bucket_name}.s3.{region}.amazonaws.com"
 
         self.signing_key = create_kms_signing_key(
             self, "OIDCSigningKey",
@@ -374,11 +256,11 @@ class CreateDiscoveryStorage(Construct):
             description="ARN of the KMS asymmetric key that signs ESP User OIDC tokens",
         )
 
+    def publish(self, *, common_resources, issuer: str) -> None:
+        """Record `issuer` and publish the JWKS to SSM."""
+        self.issuer = issuer
         self.publish_discovery = PublishDiscovery(
             self, "PublishDiscovery", common_resources,
-            discovery_bucket=self.discovery_bucket,
-            issuer=self.issuer,
-            api_base=api_base,
             signing_kms_key=self.signing_key,
         )
 
@@ -392,7 +274,7 @@ class CreateEndUserPoolResources(Construct):
     can drive sign-up or password reset against the pool.
     """
     def __init__(self, scope: Construct, id: str, *, federation_callback_url: str,
-                 logout_done_url: str, **kwargs) -> None:
+                 federation_logout_callback_url: str, **kwargs) -> None:
         super().__init__(scope, id, **kwargs)
         region = Stack.of(scope).region
 
@@ -430,7 +312,7 @@ class CreateEndUserPoolResources(Construct):
                 # UpdateUserPoolClient replaces a client's whole configuration: a manual
                 # edit that forgets one field silently drops the callback URL and every
                 # login fails with redirect_mismatch.
-                logout_urls=[logout_done_url],
+                logout_urls=[federation_logout_callback_url],
             ),
             generate_secret=True,
             refresh_token_validity=Duration.days(3650),
@@ -553,34 +435,35 @@ class EspUserBaseStack(Stack):
             jwks_fetcher_lambda=self.common_base_resources.jwks_fetcher_lambda
         )
 
-        # Resolved before the end-user pool and CreateDiscoveryStorage so both the identity
-        # providers' callback and the published .well-known documents advertise the custom-domain
-        # /oauth2/* endpoints when one is mapped.
-        self.api_custom_domain, esp_user_api_url, esp_user_api_base_url = discover_api_custom_domain(
+        self.discovery_storage = CreateDiscoveryStorage(
+            self, "CreateDiscoveryStorage",
+            common_resources=self.common_resources,
+        )
+
+        # Resolved before the end-user pool, so its callbacks use the custom-domain /oauth2/* endpoints.
+        # The issuer is the API's one custom domain, else its own execute-api URL; the deploy fails when more than one domain is mapped.
+        esp_user_api = discover_api_custom_domain(
             self, "EspUserApiCustomDomainDiscovery",
             name="espuser-api-custom-domain-discovery",
             api_id=self.common_base_resources.esp_user_api.rest_api_id,
             api_type="REST",
             default_url=self.common_base_resources.esp_user_api.url,
+            is_issuer=True,
         )
 
-        # base_url has no trailing slash, so the "/path" suffix joins correctly whether or not a
+        # url has no trailing slash, so the "/path" suffix joins correctly whether or not a
         # custom domain is mapped. Federated sign-in breaks if this host is not the one the IdPs
         # are registered against, so it has to be the resolved hostname, not the execute-api one.
-        federation_callback_url = f"{esp_user_api_base_url}/oauth2/federation/callback"
-        logout_done_url = f"{esp_user_api_base_url}/oauth2/logout/done"
+        federation_callback_url = f"{esp_user_api.url}/oauth2/federation/callback"
+        federation_logout_callback_url = f"{esp_user_api.url}/oauth2/federation/logout/callback"
         self.end_user_pool = CreateEndUserPoolResources(
             self, "CreateEndUserPoolResources",
             federation_callback_url=federation_callback_url,
-            logout_done_url=logout_done_url,
+            federation_logout_callback_url=federation_logout_callback_url,
         )
         self._publish_end_user_pool_params()
 
-        self.discovery_storage = CreateDiscoveryStorage(
-            self, "CreateDiscoveryStorage",
-            common_resources=self.common_resources,
-            api_base=esp_user_api_url,
-        )
+        self.discovery_storage.publish(common_resources=self.common_resources, issuer=esp_user_api.url)
 
         self.gsi_readiness = GsiReadinessGate(
             self, "GsiReadiness",
@@ -615,8 +498,27 @@ class EspUserBaseStack(Stack):
         self._seed_identity_providers()
 
         CfnOutput(self, "EspUserApiUrl",
-            value=esp_user_api_url,
+            value=esp_user_api.url,
             description="ESP User API Gateway URL"
+        )
+
+        CfnOutput(self, "EspUserApiResource",
+            value=esp_user_api.resource,
+            description="RFC 8707 resource a client requests to get an access token for the ESP User API"
+        )
+
+        espuser_client_resources = grant_client_resources(
+            self, "EspUserApiClientResources",
+            name="espuser-api-client-resources",
+            table_name=USER_TABLE_NAMES['OAUTH_CLIENTS'],
+            grants=[(client_id, esp_user_api, is_default)
+                    for client_id, is_default in seeded_client_grants('espuser')],
+        )
+        espuser_client_resources.node.add_dependency(self.common_base_resources.user_tables.seed_oauth_clients_cr)
+
+        CfnOutput(self, "EspUserApiAudiences",
+            value=esp_user_api.audiences,
+            description="Comma-separated audiences the ESP User API accepts in an access token"
         )
 
         CfnOutput(self, "EspUserIssuer",
@@ -627,7 +529,7 @@ class EspUserBaseStack(Stack):
         # discover_api_custom_domain returns the base with no trailing slash (both the
         # custom-domain and the rstrip'd default branch), so the separator has to be explicit —
         # interpolating the path directly yielded `...espressif.comoauth2/token`.
-        oauth2_base = f"{esp_user_api_url}/oauth2"
+        oauth2_base = f"{esp_user_api.url}/oauth2"
 
         CfnOutput(self, "EspUserAuthorizeUrl",
             value=f"{oauth2_base}/authorize",
@@ -646,9 +548,9 @@ class EspUserBaseStack(Stack):
             description="User OAuth2 Revoke URL"
         )
 
-        CfnOutput(self, "EspUserClientId",
-            value="user-pool-client",
-            description="ESP User Client ID"
+        CfnOutput(self, "HomeAppClientId",
+            value=HOME_APP_CLIENT_ID,
+            description="RainMaker Home app client ID: its browser sign-in uses it and the password API issues to it"
         )
 
         CfnOutput(self, "EspMcpClientId",
@@ -659,16 +561,6 @@ class EspUserBaseStack(Stack):
         CfnOutput(self, "EspMcpClientSecret",
             value=self.common_base_resources.user_tables.seed_oauth_clients_cr.get_att_string("McpClientSecret"),
             description="ESP User MCP OAuth Client Secret [visibility:private]"
-        )
-
-        CfnOutput(self, "EspVaClientId",
-            value="va-client",
-            description="ESP User Voice Assistant Client ID"
-        )
-
-        CfnOutput(self, "EspVaClientSecret",
-            value=self.common_base_resources.user_tables.seed_oauth_clients_cr.get_att_string("VaClientSecret"),
-            description="ESP User Voice Assistant Client Secret [visibility:private]"
         )
 
         CfnOutput(self, "EspAdminCognitoAuthorizerId",
@@ -756,7 +648,7 @@ class EspUserBaseStack(Stack):
         create_ssm_string_parameter(
             self, "EspUserApiUrlParameter",
             parameter_name=USER_SSM_PARAMETERS['ESP_USER_API_URL'],
-            string_value=esp_user_api_url,
+            string_value=esp_user_api.url,
             description="ESP User API Gateway URL"
         )
 
@@ -768,10 +660,10 @@ class EspUserBaseStack(Stack):
         )
 
         create_ssm_string_parameter(
-            self, "EspUserClientIdParameter",
-            parameter_name=USER_SSM_PARAMETERS['ESP_USER_CLIENT_ID'],
-            string_value="user-pool-client",
-            description="ESP User Client ID"
+            self, "HomeAppClientIdParameter",
+            parameter_name=USER_SSM_PARAMETERS['HOME_APP_CLIENT_ID'],
+            string_value=HOME_APP_CLIENT_ID,
+            description="RainMaker Home app client ID"
         )
 
         create_ssm_string_parameter(
@@ -789,20 +681,6 @@ class EspUserBaseStack(Stack):
         )
 
         create_ssm_string_parameter(
-            self, "EspVaClientIdParameter",
-            parameter_name=USER_SSM_PARAMETERS['ESP_VA_CLIENT_ID'],
-            string_value="va-client",
-            description="ESP VA Client ID"
-        )
-
-        create_ssm_string_parameter(
-            self, "EspVaClientSecretParameter",
-            parameter_name=USER_SSM_PARAMETERS['ESP_VA_CLIENT_SECRET'],
-            string_value=self.common_base_resources.user_tables.seed_oauth_clients_cr.get_att_string("VaClientSecret"),
-            description="ESP VA Client Secret"
-        )
-
-        create_ssm_string_parameter(
             self, "EspAdminUserPoolIdParameter",
             parameter_name=USER_SSM_PARAMETERS['ESP_ADMIN_USER_POOL_ID'],
             string_value=self.admin_base_resources.admin_user_pool.user_pool_id,
@@ -814,6 +692,27 @@ class EspUserBaseStack(Stack):
             parameter_name=USER_SSM_PARAMETERS['ESP_ADMIN_USER_POOL_CLIENT_ID'],
             string_value=self.admin_base_resources.admin_client.user_pool_client_id,
             description="ESP Admin User Pool Client ID"
+        )
+
+        create_ssm_string_parameter(
+            self, "EspUserSupportURLParameter",
+            parameter_name=USER_SSM_PARAMETERS['ESP_USER_SUPPORT_URL'],
+            string_value="none",
+            description="Support page linked from the sign-in page: an https URL, or none to hide the link"
+        )
+
+        create_ssm_string_parameter(
+            self, "EspUserPrivacyURLParameter",
+            parameter_name=USER_SSM_PARAMETERS['ESP_USER_PRIVACY_URL'],
+            string_value="none",
+            description="Privacy Policy linked from the sign-in page: an https URL, or none to hide the link"
+        )
+
+        create_ssm_string_parameter(
+            self, "EspUserTermsURLParameter",
+            parameter_name=USER_SSM_PARAMETERS['ESP_USER_TERMS_URL'],
+            string_value="none",
+            description="Terms of Service linked from the sign-in page: an https URL, or none to hide the link"
         )
 
     def _publish_end_user_pool_params(self) -> None:
@@ -885,13 +784,15 @@ def handler(event, context):
             table.put_item(Item={
                 'provider_name': 'cognito',
                 'type': 'oidc',
+                # Its password is typed on our page and checked against this pool, so it is never a redirect.
+                'password_verifier': 'cognito',
                 'enabled': existing.get('enabled', True) if existing else True,
-                'display_name': 'Cognito',
+                # The button label names the credential, not the vendor: nobody signing in knows what Cognito is.
+                'display_name': 'Email / password',
                 'issuer': os.environ['COGNITO_ISSUER'],
                 'client_id': os.environ['COGNITO_CLIENT_ID'],
                 'scopes': 'openid profile email phone aws.cognito.signin.user.admin',
                 'client_secret': os.environ['COGNITO_CLIENT_SECRET'],
-                'password_grant': True,
                 'token_endpoint_auth': 'client_secret_basic',
                 # Cognito's sign-out is not the OIDC-standard end_session_endpoint: it lives on the
                 # hosted-UI domain and names its return parameter logout_uri, not
@@ -919,10 +820,8 @@ def handler(event, context):
             properties={
                 "Issuer": self.end_user_pool.issuer,
                 "ClientId": self.end_user_pool.broker_client.user_pool_client_id,
-                # 7: the cognito row gained end_session_url + end_session_redirect_param so
-                # /oauth2/logout ends Cognito's own session. The seed re-runs only when a property
-                # here changes, so the bump is what refreshes the existing row.
-                "SeedVersion": "7",
+                # 9: the built-in row is an oidc row whose password_verifier is cognito.
+                "SeedVersion": "9",
             },
         )
         cr.node.add_dependency(self.gsi_readiness)

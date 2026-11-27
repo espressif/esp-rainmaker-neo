@@ -12,26 +12,37 @@ package legacyauth
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/cognitoutil"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/identity_providers_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/user_details_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/idp"
-	"github.com/espressif/esp-rainmaker-neo/src/espuser/refreshtoken"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/session"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/signout"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
+	cognitotypes "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// Reuses the seeded first-party client so legacy tokens are not a distinct audience.
-const legacyClientID = "user-pool-client"
+// The RainMaker Home app's seeded client (HOME_APP_CLIENT_ID in base_res_constants.py), so the app's password sign-ins keep renewing once it signs in through the browser with the same client.
+const legacyClientID = "rainmaker-neo-home-app-client"
 
 const legacyScope = "openid email phone"
+
+// amrPassword is RFC 8176's method for a password ESP User checked.
+const amrPassword = "pwd"
+
+// challengeNewPasswordRequired is Cognito's name for "this account has never set its own password".
+const challengeNewPasswordRequired = "NEW_PASSWORD_REQUIRED"
 
 type Service struct {
 	cognito *cognitoutil.CognitoService
@@ -40,6 +51,8 @@ type Service struct {
 	providerName string
 	// Read like the browser flow's, so both logins of one person reach the same account.
 	attributeMapping map[string]string
+	// caller is the verified access token NewServiceForCaller was given; only it may change a password, since it names whose.
+	caller *auth.TokenClaims
 }
 
 // IsRainMakerProvider reports whether the resolved provider is RainMaker's own, so user-facing
@@ -50,37 +63,150 @@ func (s *Service) IsRainMakerProvider() bool {
 
 // ErrNoPasswordProvider means no enabled provider advertises a password client, so this surface has
 // nothing to authenticate against.
-var ErrNoPasswordProvider = errors.New("legacyauth: no enabled provider offers a password grant")
+var ErrNoPasswordProvider = errors.New("legacyauth: no enabled provider has a password our page can check")
+
+// ErrProviderNotFound refuses a named provider whose password our page cannot check, rather than falling back to another pool and another account.
+var ErrProviderNotFound = errors.New("legacyauth: named provider is not one whose password our page can check")
 var ErrUserNotConfirmed = errors.New("legacyauth: account is not confirmed")
+
+// ErrNewPasswordRequired means the password was right but an admin created the account and it must choose its own.
+var ErrNewPasswordRequired = errors.New("legacyauth: the account must choose a new password")
+
+// ErrPasswordResetRequired means the password was right but an admin reset the account, so it must set a new one through forgot password.
+var ErrPasswordResetRequired = errors.New("legacyauth: the account must reset its password")
+
+// ErrSecondStepRequired means the password was right but the pool asks for a step this surface cannot take, such as an MFA code.
+var ErrSecondStepRequired = errors.New("legacyauth: the pool asks for a second step")
+
+// What a refused password sign-in tells the person, shared by the native API and the sign-in page so both say what to do next.
+const (
+	UnconfirmedAccountMessage    = "Signin failed. Account not verified — reset your password."
+	NewPasswordRequiredMessage   = "Signin failed. This account needs a new password — contact support."
+	PasswordResetRequiredMessage = "Signin failed. Password reset required — reset your password."
+	InvalidCredentialsMessage    = "Signin failed. Check your email and password, or reset your password."
+	ProviderNotAllowedMessage    = "This application does not allow signing in with that provider."
+)
+
+// NoPasswordToChangeMessage names the provider a refused password change signed in through: "Google" -> "You signed in through Google. This doesn't support password change."
+func NoPasswordToChangeMessage(provider string) string {
+	return "You signed in through " + provider + ". This doesn't support password change."
+}
+
+// ErrAuthenticationFailed is the credential being refused, deliberately without saying why, so the form cannot test whether an address is registered.
+var ErrAuthenticationFailed = errors.New("legacyauth: authentication failed")
+
+// ErrPasswordRefused means the pool's password policy refused a new password, which the caller can fix, unlike the failures each route answers with one sentence.
+var ErrPasswordRefused = errors.New("legacyauth: the password does not meet the pool's policy")
+
+// ErrSessionsNotEnded means the provider changed the password but the account's sessions could not all be signed out, so the caller must not report the change as failed.
+var ErrSessionsNotEnded = errors.New("legacyauth: password changed but the sessions were not signed out")
+
+// ErrNoPasswordToChange means the caller's sign-in used no password ESP User checks, so there is none for this route to change.
+var ErrNoPasswordToChange = errors.New("legacyauth: the sign-in used no password this route can change")
+
+// NoPasswordToChangeError is ErrNoPasswordToChange carrying the name of the provider the caller signed in through, for the refusal message.
+type NoPasswordToChangeError struct {
+	Provider string
+}
+
+func (e *NoPasswordToChangeError) Error() string {
+	return ErrNoPasswordToChange.Error() + ": " + e.Provider
+}
+
+func (e *NoPasswordToChangeError) Unwrap() error { return ErrNoPasswordToChange }
+
+// ErrNoVerifiedCaller means ChangePassword ran on a service built without a verified caller, so nothing names whose password to change.
+var ErrNoVerifiedCaller = errors.New("legacyauth: no verified caller to change the password of")
 
 // ErrAccountAlreadyUsable means a duplicate signup authenticated an existing confirmed account, so
 // the caller owns it and should sign in rather than wait for a verification code. Not a failure —
 // the handler still answers 201, only with a different message.
 var ErrAccountAlreadyUsable = errors.New("legacyauth: account already exists and is usable")
 
-// NewService resolves the password app client from the provider registry, so the upstream may live in
-// any account and needs no deployment wiring here.
-func NewService(ctx context.Context) (*Service, error) {
-	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, nil)
-	entries, err := identity_providers_db.NewIdentityProvidersDB(rmngCtx).ListEnabled()
+// NewService resolves the password app client from the provider registry; an empty providerName takes the first by name.
+func NewService(ctx context.Context, providerName string) (*Service, error) {
+	provider, err := passwordProvider(ctx, providerName)
 	if err != nil {
-		return nil, rmerror.NewRMError(err, "legacyauth: failed to read the provider registry")
+		return nil, err
 	}
-	var provider *identity_providers_db.ProviderEntry
-	for i := range entries {
-		if entries[i].OffersPasswordGrant() {
-			provider = &entries[i]
-			break
-		}
-	}
-	if provider == nil {
-		return nil, ErrNoPasswordProvider
-	}
-	// The app client is confidential, so Cognito demands SECRET_HASH on every call below.
 	oauth, err := auth.NewOAuthUserAuthService(ctx)
 	if err != nil {
 		return nil, rmerror.NewRMError(err, "legacyauth: failed to build token issuer")
 	}
+	return newService(provider, oauth), nil
+}
+
+// NewServiceForCaller builds the service for the provider whose password the caller's sign-in may change, keeping the caller's claims for ChangePassword; the caller's access token must already be verified.
+// The token's idp decides: a password sign-in reaches that row and any other is a NoPasswordToChangeError; a token without idp takes the default password row, the first by name.
+func NewServiceForCaller(ctx context.Context, caller auth.TokenClaims) (*Service, error) {
+	oauth, err := auth.NewOAuthUserAuthService(ctx)
+	if err != nil {
+		return nil, rmerror.NewRMError(err, "legacyauth: failed to build token issuer")
+	}
+	provider, err := callerPasswordProvider(ctx, caller)
+	if err != nil {
+		return nil, err
+	}
+	svc := newService(provider, oauth)
+	svc.caller = &caller
+	return svc, nil
+}
+
+// callerPasswordProvider returns the row whose password the caller's sign-in may change, reading the registry once to both decide and name the provider in a refusal.
+func callerPasswordProvider(ctx context.Context, caller auth.TokenClaims) (*identity_providers_db.ProviderEntry, error) {
+	if caller.Provider == "" {
+		return passwordProvider(ctx, "")
+	}
+	signedInWithPassword := slices.Contains(caller.AMR, amrPassword)
+	entries, err := enabledProviders(ctx)
+	if err != nil {
+		if signedInWithPassword {
+			return nil, err
+		}
+		rlog.Warn(ctx).Err(err).Msg("password change: refusing a sign-in without a password, named by its idp since the registry is unreadable")
+		return nil, &NoPasswordToChangeError{Provider: caller.Provider}
+	}
+	i := slices.IndexFunc(entries, func(e identity_providers_db.ProviderEntry) bool { return e.ProviderName == caller.Provider })
+	if i < 0 {
+		return nil, &NoPasswordToChangeError{Provider: caller.Provider}
+	}
+	if !signedInWithPassword || !entries[i].OurPageTakesPassword() {
+		name := entries[i].DisplayName
+		if name == "" {
+			name = entries[i].ProviderName
+		}
+		return nil, &NoPasswordToChangeError{Provider: name}
+	}
+	return &entries[i], nil
+}
+
+func enabledProviders(ctx context.Context) ([]identity_providers_db.ProviderEntry, error) {
+	entries, err := identity_providers_db.NewIdentityProvidersDB(rmngctx.NewRmngContextWithCtx(ctx, nil)).ListEnabled()
+	if err != nil {
+		return nil, rmerror.NewRMError(err, "legacyauth: failed to read the provider registry")
+	}
+	return entries, nil
+}
+
+// passwordProvider returns the enabled row whose password our page takes, named by providerName or else the first by name.
+func passwordProvider(ctx context.Context, providerName string) (*identity_providers_db.ProviderEntry, error) {
+	entries, err := enabledProviders(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range entries {
+		if entries[i].OurPageTakesPassword() && (providerName == "" || entries[i].ProviderName == providerName) {
+			return &entries[i], nil
+		}
+	}
+	if providerName != "" {
+		return nil, ErrProviderNotFound
+	}
+	return nil, ErrNoPasswordProvider
+}
+
+func newService(provider *identity_providers_db.ProviderEntry, oauth *auth.OAuthUserAuthService) *Service {
+	// The app client is confidential, so Cognito demands SECRET_HASH on every call below.
 	return &Service{
 		// The provider's pool may live in another region than this deployment; InitiateAuth must
 		// reach that region's Cognito endpoint, so the client is built for the issuer's region.
@@ -88,7 +214,7 @@ func NewService(ctx context.Context) (*Service, error) {
 		oauth:            oauth,
 		providerName:     provider.ProviderName,
 		attributeMapping: provider.AttributeMapping,
-	}, nil
+	}
 }
 
 // regionFromCognitoIssuer extracts the AWS region from a Cognito issuer URL of the form
@@ -107,38 +233,103 @@ func regionFromCognitoIssuer(issuer string) string {
 	return ""
 }
 
+// SigninWithPassword covers every resource the password client may request, since this API takes no resource; a refresh narrows the access token to one of them.
 func (s *Service) SigninWithPassword(ctx context.Context, username, password string) (*auth.UserTokens, error) {
-	if username == "" || password == "" {
-		return nil, rmerror.NewRMError(nil, "username and password are required")
-	}
-	login, err := s.cognito.InitiateAuth(ctx, &cognitoutil.LoginRequest{Username: username, Password: password})
-	if err != nil || !login.Success {
-		if auth.IsUserNotConfirmedError(err) {
-			return nil, ErrUserNotConfirmed
-		}
-		return nil, rmerror.NewRMError(err, "authentication failed")
-	}
-	email, phone, err := verifiedContacts(login.IDToken)
+	client, err := clients.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil)).Get(legacyClientID)
 	if err != nil {
-		return nil, err
+		return nil, rmerror.NewRMError(err, "legacyauth: password client unreadable")
 	}
-	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, nil)
-	userID, err := s.oauth.ResolveOrCreateUserByContacts(rmngCtx, email, phone, s.loginProfile(login.IDToken))
+	// Checked before the password reaches the pool, as the sign-in page does, so a client limited to other providers cannot be signed in through this one.
+	if !client.AllowsProvider(s.providerName) {
+		return nil, auth.ErrProviderNotAllowed
+	}
+	userID, err := s.Authenticate(ctx, username, password)
 	if err != nil {
 		return nil, err
 	}
 	// A cookie-less (app) user agent, so this legacy login is listed on the user agent screen and its
 	// families are reachable by sid, even though a ROPC client holds no browser and gets no SSO.
 	// auth_time is now (Establish defaults it): the authentication happened here, not upstream.
-	return s.oauth.MintTokenSetForFirstPartyLogin(ctx, userID, legacyClientID, legacyScope, auth.FirstPartyLogin{
-		Provider: s.providerName,
-		AMR:      []string{"pwd"},
-		Origin:   session.OriginApp,
+	return s.oauth.MintTokenSetForClient(ctx, userID, client, legacyScope, auth.FirstPartyLogin{
+		AllAllowedResources: true,
+		Provider:            s.providerName,
+		AMR:                 []string{amrPassword},
+		Origin:              session.OriginApp,
 	})
 }
 
-func (s *Service) RefreshLegacy(ctx context.Context, refreshToken string) (*auth.UserTokens, error) {
-	return s.oauth.RefreshToken(ctx, legacyClientID, refreshToken)
+// SigninToFlow is SigninWithPassword for our sign-in page: it finishes the browser's flow with a code or a consent hold, never tokens, and checks the flow's client allows this provider before the password reaches the pool.
+func (s *Service) SigninToFlow(ctx context.Context, flowID, username, password string, login auth.FirstPartyLogin) (redirectTo, setCookie string, err error) {
+	flow, err := s.oauth.FlowAllowingProvider(ctx, flowID, s.providerName)
+	if err != nil {
+		return "", "", err
+	}
+	userID, err := s.Authenticate(ctx, username, password)
+	if err != nil {
+		return "", "", err
+	}
+	login.Provider = s.providerName
+	login.AMR = []string{amrPassword}
+	return s.oauth.CompleteSignIn(ctx, flow, userID, login)
+}
+
+// Authenticate checks the credential and resolves the person, the part the native API and the sign-in page share.
+func (s *Service) Authenticate(ctx context.Context, username, password string) (string, error) {
+	// A blank field is a failed sign-in like any other, never a server error.
+	if username == "" || password == "" {
+		return "", ErrAuthenticationFailed
+	}
+	login, err := s.cognito.InitiateAuth(ctx, &cognitoutil.LoginRequest{Username: username, Password: password})
+	if err != nil || !login.Success {
+		if auth.IsUserNotConfirmedError(err) {
+			return "", ErrUserNotConfirmed
+		}
+		// Cognito raises this only once the password matches, so naming it tells a caller nothing they did not already hold.
+		if errors.As(err, new(*cognitotypes.PasswordResetRequiredException)) {
+			return "", ErrPasswordResetRequired
+		}
+		if login != nil && login.ChallengeName == challengeNewPasswordRequired {
+			return "", ErrNewPasswordRequired
+		}
+		if login != nil && login.ChallengeName != "" {
+			return "", ErrSecondStepRequired
+		}
+		if err == nil {
+			return "", ErrAuthenticationFailed
+		}
+		if isCredentialRefusal(err) {
+			// Wrapped so the handler's log names the cause; callers still match only ErrAuthenticationFailed.
+			return "", fmt.Errorf("%w: %w", ErrAuthenticationFailed, err)
+		}
+		return "", rmerror.NewRMError(err, "legacyauth: the pool could not check the password")
+	}
+	email, phone, err := verifiedContacts(login.IDToken)
+	if err != nil {
+		return "", err
+	}
+	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, nil)
+	return s.oauth.ResolveOrCreateUserByContacts(rmngCtx, email, phone, s.loginProfile(login.IDToken))
+}
+
+// isCredentialRefusal is the pool turning this person away, a pre-auth trigger's no included; a NotAuthorizedException about the app client's secret is the deployment's fault instead.
+func isCredentialRefusal(err error) bool {
+	var notAuthorized *cognitotypes.NotAuthorizedException
+	if errors.As(err, &notAuthorized) {
+		message := strings.ToLower(notAuthorized.ErrorMessage())
+		return !strings.Contains(message, "secret hash") && !strings.Contains(message, "secret_hash")
+	}
+	var notFound *cognitotypes.UserNotFoundException
+	var triggerRefused *cognitotypes.UserLambdaValidationException
+	return errors.As(err, &notFound) || errors.As(err, &triggerRefused)
+}
+
+// RefreshLegacy renews a password sign-in; resource narrows the access token to one of its resources, or "" to let the sign-in decide.
+func (s *Service) RefreshLegacy(ctx context.Context, refreshToken, resource string) (*auth.UserTokens, error) {
+	client, err := clients.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil)).Get(legacyClientID)
+	if err != nil {
+		return nil, rmerror.NewRMError(err, "legacyauth: password client unreadable")
+	}
+	return s.oauth.RefreshToken(ctx, client, refreshToken, resource)
 }
 
 // Signup registers the credential with the provider. No user_id is returned: ids are opaque and are
@@ -167,6 +358,9 @@ func (s *Service) Signup(ctx context.Context, email, phone, password string) err
 			_ = s.cognito.ResendSignupCode(ctx, username)
 			return nil
 		}
+		if auth.IsPasswordPolicyError(err) {
+			return fmt.Errorf("%w: %w", ErrPasswordRefused, err)
+		}
 		return rmerror.NewRMError(err, "signup failed")
 	}
 	return nil
@@ -191,25 +385,46 @@ func (s *Service) ForgotPassword(ctx context.Context, username string) error {
 	return nil
 }
 
+// ConfirmForgotPassword resets the password, then signs out every session of the account the pool's verified contacts name, which is the account sign-in reaches and not whichever account holds the typed username.
 func (s *Service) ConfirmForgotPassword(ctx context.Context, username, code, newPassword string) error {
 	if err := s.cognito.ConfirmForgotPassword(ctx, username, code, newPassword); err != nil {
+		if auth.IsPasswordPolicyError(err) {
+			return fmt.Errorf("%w: %w", ErrPasswordRefused, err)
+		}
 		return rmerror.NewRMError(err, "password recovery confirmation failed")
 	}
-	return nil
+	login, err := s.cognito.InitiateAuth(ctx, &cognitoutil.LoginRequest{Username: username, Password: newPassword})
+	if err != nil {
+		return rmerror.NewRMError(fmt.Errorf("%w: %w", ErrSessionsNotEnded, err), "legacyauth: sign-in with the new password failed")
+	}
+	if login.IDToken == "" {
+		rlog.Warn(ctx).Str("challenge", login.ChallengeName).Msg("password reset: the pool answered the new password with a challenge, so the account could not be confirmed and no sessions were ended")
+		return nil
+	}
+	email, phone, err := verifiedContacts(login.IDToken)
+	if err != nil {
+		return rmerror.NewRMError(fmt.Errorf("%w: %w", ErrSessionsNotEnded, err), "legacyauth: the reset account could not be identified")
+	}
+	userID, err := s.oauth.UserIDByVerifiedContacts(ctx, email, phone)
+	if err != nil {
+		return rmerror.NewRMError(fmt.Errorf("%w: %w", ErrSessionsNotEnded, err), "legacyauth: the reset account could not be identified")
+	}
+	if userID == "" {
+		// A pool user who never signed in has no account and so no sessions.
+		return nil
+	}
+	return endSessionsWithoutConnectedApps(ctx, userID)
 }
 
-// ChangePassword re-authenticates with the old password to obtain a provider access token, because
-// the client holds our tokens and the provider will not accept one. The caller's own access token is
-// verified first: it names whose password is being changed, so an unverified one would let anyone
-// repassword anyone.
-func (s *Service) ChangePassword(ctx context.Context, accessToken, oldPassword, newPassword string) error {
-	if accessToken == "" || oldPassword == "" || newPassword == "" {
-		return rmerror.NewRMError(nil, "access token, old password and new password are required")
+// ChangePassword re-authenticates with the old password to obtain a provider access token, because the client holds our tokens and the provider will not accept one; it changes only the password of the caller NewServiceForCaller was given.
+func (s *Service) ChangePassword(ctx context.Context, oldPassword, newPassword string) error {
+	if s.caller == nil {
+		return ErrNoVerifiedCaller
 	}
-	info, err := s.oauth.ParseUserInfoFromToken(ctx, accessToken)
-	if err != nil {
-		return rmerror.NewRMError(err, "legacyauth: access token rejected")
+	if oldPassword == "" || newPassword == "" {
+		return rmerror.NewRMError(nil, "old password and new password are required")
 	}
+	info := s.caller.UserInfo()
 	username := info.Email
 	if username == "" {
 		username = info.PhoneNumber
@@ -225,6 +440,22 @@ func (s *Service) ChangePassword(ctx context.Context, accessToken, oldPassword, 
 	if err := s.cognito.ChangePassword(ctx, login.AccessToken, oldPassword, newPassword); err != nil {
 		return rmerror.NewRMError(err, "legacyauth: password change rejected")
 	}
+	return endSessionsAndConnectedApps(ctx, s.caller.Subject)
+}
+
+// endSessionsWithoutConnectedApps signs the person out of every browser and app after a password reset; their connected apps stay, because forgetting a password says nothing about who else holds it.
+func endSessionsWithoutConnectedApps(ctx context.Context, userID string) error {
+	if err := signout.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil)).EndAllSessions(userID); err != nil {
+		return rmerror.NewRMError(fmt.Errorf("%w: %w", ErrSessionsNotEnded, err), "legacyauth: sessions not ended")
+	}
+	return nil
+}
+
+// endSessionsAndConnectedApps signs the person out everywhere and disconnects every connected app after a password change, which they make when they think someone else knows the old one.
+func endSessionsAndConnectedApps(ctx context.Context, userID string) error {
+	if err := signout.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil)).EndAllSessionsAndConnectedApps(userID); err != nil {
+		return rmerror.NewRMError(fmt.Errorf("%w: %w", ErrSessionsNotEnded, err), "legacyauth: sessions and connected apps not ended")
+	}
 	return nil
 }
 
@@ -237,7 +468,7 @@ func (s *Service) Signout(ctx context.Context, refreshToken string) error {
 	if refreshToken == "" {
 		return nil
 	}
-	return refreshtoken.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil)).RevokeFamily(refreshToken)
+	return signout.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil)).RevokeFamily(legacyClientID, refreshToken)
 }
 
 // Read unverified because we obtained this token ourselves

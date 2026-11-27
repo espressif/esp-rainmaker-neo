@@ -16,8 +16,9 @@ from app_common import (
     create_lambda_function,
     get_or_create_api_resource,
 )
-from arn_utils import get_ssm_parameter_arn, get_table_arn
+from arn_utils import get_ssm_parameter_arn, get_table_arn, get_table_index_arn
 from src.espuser.stacks.base_res_constants import (
+    USER_INDEX_NAMES,
     USER_SSM_PARAMETERS,
     USER_TABLE_NAMES,
 )
@@ -26,9 +27,10 @@ from src.espuser.stacks.base_res_constants import (
 class RevokeAPI(Construct):
     """OAuth 2.0 token-revocation endpoint (POST /oauth2/revoke, RFC 7009).
 
-    Wires the revoke Go Lambda. Per D13 it revokes only the refresh token and its family
-    (access tokens are short-lived JWTs, never tracked). Returns a uniform 200 so it is
-    not a token-validity oracle. See espuser/docs/en/specs/auth-flows.md (Revoke endpoint).
+    Wires the revoke Go Lambda. Per D13 it revokes the refresh token and its family
+    (access tokens are short-lived JWTs, never tracked), and removes the app's cookie-less
+    session row when the revoked login was the last one under it. Returns a uniform 200 so it is
+    not a token-validity oracle, except 400 invalid_grant for another client's token and 503 when storage fails, so the client keeps the token and retries. See src/espuser/docs/specs/auth-flows.md (Revoke endpoint).
     """
 
     def __init__(self, scope: Construct, id: str, common_resources: CommonResources, **kwargs) -> None:
@@ -38,14 +40,26 @@ class RevokeAPI(Construct):
         function_name = "revoke"
         revoke_lambda_role = create_base_lambda_role(self, function_name, common_resources)
 
-        # Refresh-token family table: revoke deletes the family the presented token identifies (DeleteItem).
+        # Refresh-token family table: revoke reads the token's family to check its client (GetItem), deletes it (DeleteItem), and lists the user's families (Query) to see whether another login still holds its session.
         revoke_lambda_role.add_to_policy(iam.PolicyStatement(
             actions=[
+                "dynamodb:GetItem",
                 "dynamodb:DeleteItem",
+                "dynamodb:Query",
             ],
             resources=[
                 get_table_arn(USER_TABLE_NAMES['REFRESH_TOKENS'], region),
             ],
+        ))
+
+        # Revoking an app's last login removes its cookie-less session row: find it through the by-user index (Query), check its origin (GetItem), delete it (DeleteItem).
+        revoke_lambda_role.add_to_policy(iam.PolicyStatement(
+            actions=["dynamodb:GetItem", "dynamodb:DeleteItem"],
+            resources=[get_table_arn(USER_TABLE_NAMES['SESSIONS'], region)],
+        ))
+        revoke_lambda_role.add_to_policy(iam.PolicyStatement(
+            actions=["dynamodb:Query"],
+            resources=[get_table_index_arn(USER_TABLE_NAMES['SESSIONS'], USER_INDEX_NAMES['SESSIONS_BY_USER'], region)],
         ))
 
         # Read the refresh-secret (SecureString) HMAC key to verify the presented refresh token before revoking its family.

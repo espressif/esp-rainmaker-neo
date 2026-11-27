@@ -286,6 +286,27 @@ func (db *SessionsDB) ListByUser(userID string) ([]SessionEntry, error) {
 	return sessions, nil
 }
 
+// GetByUserAndSID reads the user's session row named sid, expired or not; ErrSessionNotFound when the user has none by that sid.
+func (db *SessionsDB) GetByUserAndSID(userID, sid string) (*SessionEntry, error) {
+	if sid == "" {
+		return nil, ErrSessionNotFound
+	}
+	hashes, err := db.sessionHashesForUser(userID, sid)
+	if err != nil {
+		return nil, err
+	}
+	for _, hash := range hashes {
+		row, found, err := db.sessions.Get(db.Ctx.Context, db.sessions.Key(hash))
+		if err != nil {
+			return nil, rmerror.NewRMError(err, "failed to read session")
+		}
+		if found {
+			return &row, nil
+		}
+	}
+	return nil, ErrSessionNotFound
+}
+
 // DeleteByUserAndSID ends one named session. Scoped by user_id as well as sid so a caller
 // can only ever reach their own -- the ownership check is the query, not a comparison the
 // handler could forget to write.

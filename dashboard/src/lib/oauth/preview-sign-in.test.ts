@@ -13,7 +13,6 @@ vi.mock('@/api/oauth-clients', () => ({
 }))
 vi.mock('@/lib/config', () => ({
   getAuthorizeUrl: () => 'https://auth.example.com/oauth2/authorize',
-  getVaClientId: () => 'va-client',
 }))
 vi.mock('@/lib/auth', () => ({
   generatePkceParams: () => Promise.resolve({ verifier: 'verifier', challenge: 'challenge', state: 'state' }),
@@ -33,9 +32,11 @@ const registered: OAuthClient = {
   grant_types: ['authorization_code', 'refresh_token'],
   scopes: ['openid', 'email', 'profile'],
   allowed_resources: ['https://api.example.com'],
+  default_resource: 'https://api.example.com',
   allowed_providers: ['cognito'],
   require_pkce: false,
   first_party: true,
+  logo_uri: 'data:image/png;base64,AAAA',
   client_secret: 'secret',
   created_at: 1,
   updated_at: 2,
@@ -56,7 +57,7 @@ describe('openPreviewSignIn', () => {
   })
 
   it('sends every mutable field back when it adds the preview callback', async () => {
-    await openPreviewSignIn()
+    await openPreviewSignIn('va-client')
 
     expect(oauthClientsApi.update).toHaveBeenCalledTimes(1)
     const [clientId, body] = vi.mocked(oauthClientsApi.update).mock.calls[0]
@@ -68,9 +69,11 @@ describe('openPreviewSignIn', () => {
       grant_types: ['authorization_code', 'refresh_token'],
       scopes: ['openid', 'email', 'profile'],
       allowed_resources: ['https://api.example.com'],
+      default_resource: 'https://api.example.com',
       allowed_providers: ['cognito'],
       require_pkce: false,
       first_party: true,
+      logo_uri: 'data:image/png;base64,AAAA',
     })
   })
 })

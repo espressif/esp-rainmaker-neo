@@ -82,9 +82,12 @@ func SetupESPUserTokenHarness(ctx context.Context) *ESPUserTokenHarness {
 	return &ESPUserTokenHarness{server: server, minter: minter}
 }
 
+// TestAPIAudience is the resource the harness's access tokens are for.
+const TestAPIAudience = "https://api.example.com"
+
 // Mint returns a signed RS256 access token whose sub is userID.
 func (h *ESPUserTokenHarness) Mint(userID string) string {
-	token, err := h.minter.AccessToken(userID, "rm_mobile", "openid", "", "", jwtutil.Contact{})
+	token, err := h.minter.AccessToken(userID, "rm_mobile", "openid", TestAPIAudience, jwtutil.UserClaims{})
 	gomega.Expect(err).NotTo(gomega.HaveOccurred())
 	return token
 }
@@ -101,10 +104,10 @@ func (h *ESPUserTokenHarness) MintPair(userID string) (accessToken, idToken stri
 func (h *ESPUserTokenHarness) MintPairForClient(userID, clientID string) (accessToken, idToken string) {
 	authEventID := jwtutil.NewAuthEventID()
 
-	access, err := h.minter.AccessToken(userID, clientID, "openid", authEventID, "", jwtutil.Contact{})
+	access, err := h.minter.AccessToken(userID, clientID, "openid", TestAPIAudience, jwtutil.UserClaims{AuthEventID: authEventID})
 	gomega.Expect(err).NotTo(gomega.HaveOccurred())
 
-	id, err := h.minter.IDToken(userID, clientID, authEventID, 0, jwtutil.Contact{})
+	id, err := h.minter.IDToken(userID, clientID, 0, jwtutil.UserClaims{AuthEventID: authEventID})
 	gomega.Expect(err).NotTo(gomega.HaveOccurred())
 
 	return access, id

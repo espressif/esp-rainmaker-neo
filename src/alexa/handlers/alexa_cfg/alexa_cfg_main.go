@@ -6,12 +6,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"strings"
 
 	alexa_skill "github.com/espressif/esp-rainmaker-neo/src/alexa"
 	"github.com/espressif/esp-rainmaker-neo/src/awsutils/ssmutil"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/principal"
 	"github.com/espressif/esp-rainmaker-neo/src/rmneo/user"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
@@ -64,16 +66,17 @@ func handleAlexaCfg(ctx context.Context, request events.APIGatewayProxyRequest) 
 		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus("Missing skill ID")), nil
 	}
 
-	// Register Alexa's redirect URIs against the OIDC va-client registry row.
 	vaClientID := os.Getenv("OIDC_VA_CLIENT_ID")
 	if vaClientID == "" {
 		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("OIDC_VA_CLIENT_ID not configured")), nil
 	}
-
 	err = alexa_skill.UpdateVAClientRedirectURIs(ctx, vaClientID, req.RedirectURIs)
-	if err != nil {
+	switch {
+	case errors.Is(err, clients.ErrInvalidRedirectURI):
+		return utils.APIGwRespJSON(http.StatusBadRequest, utils.NewAPIStatus(rmerror.TopMessage(err))), nil
+	case err != nil:
 		rlog.Error(ctx).Err(err).Send()
-		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Failed to update OIDC va-client")), nil
+		return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Failed to update the OIDC client")), nil
 	}
 
 	// Store client ID and secret
@@ -155,13 +158,12 @@ func handleGetAlexaCfg(ctx context.Context) (events.APIGatewayProxyResponse, err
 		response.SkillID = skillID
 	}
 
-	// Get redirect URIs from the OIDC va-client registry row.
 	vaClientID := os.Getenv("OIDC_VA_CLIENT_ID")
 	if vaClientID != "" {
 		callbackURLs, err := alexa_skill.VAClientRedirectURIs(ctx, vaClientID)
 		if err != nil {
 			rlog.Error(ctx).Err(err).Send()
-			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Failed to get OIDC va-client redirect URIs")), nil
+			return utils.APIGwRespJSON(http.StatusInternalServerError, utils.NewAPIStatus("Failed to get the OIDC client's redirect URIs")), nil
 		}
 		response.RedirectURIs = callbackURLs
 	}

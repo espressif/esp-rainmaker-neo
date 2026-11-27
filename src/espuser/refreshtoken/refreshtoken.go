@@ -20,6 +20,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -67,14 +68,17 @@ type Rotation struct {
 	Token  string
 	UserID string
 	Scope  string
-	// Resource pins the audience of the access token minted alongside this rotation, so a
-	// renewal is addressed exactly where the original login asked for.
-	Resource string
-	// SID is the parent browser session carried on the family (empty on families minted
-	// before sessions existed).
-	SID string
-	// AuthTime is the login's authentication time; zero on families minted before the field existed.
-	AuthTime int64
+	// Resources are the sign-in's RFC 8707 resources, from which the renewed access token takes its one audience.
+	Resources []string
+	// Login is the sign-in the family records, so a renewal names the same session, authentication time, methods and provider; a field the family predates is zero, and SID is empty for an offline_access grant or when the session write failed.
+	Login session.Session
+}
+
+func rotationOf(family *refresh_tokens_db.FamilyEntry, token string) *Rotation {
+	return &Rotation{
+		Token: token, UserID: family.UserID, Scope: family.Scope, Resources: family.Resources,
+		Login: session.Session{SID: family.SID, UserID: family.UserID, AuthTime: family.AuthTime, AMR: family.AMR, Provider: family.Provider},
+	}
 }
 
 // claims are the signed fields a refresh token carries.
@@ -162,7 +166,7 @@ func expiresOn() int64 {
 // and returns min(now + TokenTTL, expires_at). The bump and the clamp together hold
 // expires_at >= every live family's expires_on by construction, for every provider -- a
 // provider cap that shortens expires_at genuinely ends the app logins opened through it,
-// instead of orphaning them. A family with no sid (pre-feature) stays unclamped.
+// instead of orphaning them. A family with no sid (an offline_access grant, or a session family minted after a failed session write or before sessions) stays unclamped.
 //
 // A bump error degrades to the plain TTL rather than failing the mint: a login must never be
 // blocked by the session layer. It is logged because a persistent failure (an IAM misgrant on
@@ -192,9 +196,9 @@ func withinRotationGrace(rotatedAt int64) bool {
 }
 
 // MintRefreshtoken creates a new rotation family for a login: a family row at counter 0 and
-// the first signed token. The family carries user, scope and resource so a later Rotate
-// re-mints the access/id tokens exactly as this login asked for them. sid names the parent browser session ("" when the session write failed), so ending a session can find its families.
-func (s *Service) MintRefreshtoken(userID, clientID, scope, resource, sid string, authTime int64) (token string, err error) {
+// the first signed token. The family carries user, scope and resources so a later Rotate
+// re-mints the access/id tokens exactly as this login asked for them; login.SID lets ending a session find its families.
+func (s *Service) MintRefreshtoken(userID, clientID, scope string, resources []string, login session.Session) (token string, err error) {
 	familyID, err := randomID(familyIDBytes)
 	if err != nil {
 		return "", err
@@ -202,16 +206,18 @@ func (s *Service) MintRefreshtoken(userID, clientID, scope, resource, sid string
 	// AdvanceCounter must not touch created_at: it is "connected since" and must survive every rotation.
 	now := time.Now().Unix()
 	// A code redeemed after sign-out still mints; Rotate refuses the family at its first refresh.
-	expires, _ := s.clampedExpiry(userID, sid)
+	expires, _ := s.clampedExpiry(userID, login.SID)
 	if err := s.db.CreateFamily(&refresh_tokens_db.FamilyEntry{
 		UserID:    userID,
 		ClientID:  clientID,
 		FamilyID:  familyID,
 		Counter:   0,
 		Scope:     scope,
-		Resource:  resource,
-		SID:       sid,
-		AuthTime:  authTime,
+		Resources: resources,
+		SID:       login.SID,
+		AuthTime:  login.AuthTime,
+		AMR:       login.AMR,
+		Provider:  login.Provider,
 		ExpiresOn: expires,
 		CreatedAt: now,
 		RotatedAt: now,
@@ -256,7 +262,7 @@ func (s *Service) Rotate(clientID, refreshToken string, precheck ...func(*refres
 			if err != nil {
 				return nil, err
 			}
-			return &Rotation{Token: token, UserID: family.UserID, Scope: family.Scope, Resource: family.Resource, SID: family.SID, AuthTime: family.AuthTime}, nil
+			return rotationOf(family, token), nil
 		}
 		// Any older (or stale-by-one past the grace) token is spent — reuse=theft, kill the family.
 		_ = s.db.DeleteFamily(c.UserID, c.ClientID, c.FamilyID)
@@ -282,7 +288,7 @@ func (s *Service) Rotate(clientID, refreshToken string, precheck ...func(*refres
 	if err != nil {
 		return nil, err
 	}
-	return &Rotation{Token: token, UserID: family.UserID, Scope: family.Scope, Resource: family.Resource, SID: family.SID, AuthTime: family.AuthTime}, nil
+	return rotationOf(family, token), nil
 }
 
 // parseTokenForClient is Rotate's prologue: verify the token, bind it to clientID, and load its
@@ -290,14 +296,14 @@ func (s *Service) Rotate(clientID, refreshToken string, precheck ...func(*refres
 // client-mismatch errors are already framed.
 func (s *Service) parseTokenForClient(clientID, refreshToken string) (claims, *refresh_tokens_db.FamilyEntry, error) {
 	if refreshToken == "" || clientID == "" {
-		return claims{}, nil, rmerror.NewRMError(nil, "client id and refresh token are required")
+		return claims{}, nil, rmerror.NewRMError(refresh_tokens_db.ErrRefreshInvalid, "client id and refresh token are required")
 	}
 	c, err := s.parseToken(refreshToken)
 	if err != nil {
-		return claims{}, nil, rmerror.NewRMError(err, "invalid refresh token")
+		return claims{}, nil, rmerror.NewRMError(errors.Join(refresh_tokens_db.ErrRefreshInvalid, err), "invalid refresh token")
 	}
 	if c.ClientID != clientID {
-		return claims{}, nil, rmerror.NewRMError(nil, "refresh token client mismatch")
+		return claims{}, nil, rmerror.NewRMError(refresh_tokens_db.ErrRefreshClientMismatch, "refresh token client mismatch")
 	}
 	family, err := s.db.GetFamily(c.UserID, c.ClientID, c.FamilyID)
 	if err != nil {
@@ -306,30 +312,20 @@ func (s *Service) parseTokenForClient(clientID, refreshToken string) (claims, *r
 	return c, family, nil
 }
 
-// RevokeFamily terminates the whole family a token belongs to — the /oauth2/revoke endpoint
-// (RFC 7009 §2.1: revoking a token MAY revoke the underlying grant), sign-out, and detected
-// theft all end the login by deleting its family row. An unparseable token is a no-op error.
-func (s *Service) RevokeFamily(refreshToken string) error {
-	c, err := s.parseToken(refreshToken)
+// RevokeFamily ends the family a token belongs to (RFC 7009 s2.1: revoking a token MAY revoke the underlying grant) and returns it, or nil when it was already gone.
+// A token issued to another client is refused with ErrRefreshClientMismatch and an empty or forged one with ErrRefreshInvalid; any other error is a storage failure.
+func (s *Service) RevokeFamily(clientID, refreshToken string) (*refresh_tokens_db.FamilyEntry, error) {
+	c, family, err := s.parseTokenForClient(clientID, refreshToken)
+	if errors.Is(err, refresh_tokens_db.ErrRefreshNotFound) {
+		return nil, nil
+	}
 	if err != nil {
-		return rmerror.NewRMError(err, "invalid refresh token")
+		return nil, rmerror.NewRMError(err, "failed to revoke refresh token family")
 	}
 	if err := s.db.DeleteFamily(c.UserID, c.ClientID, c.FamilyID); err != nil {
-		return rmerror.NewRMError(err, "failed to revoke refresh token family")
+		return nil, rmerror.NewRMError(err, "failed to revoke refresh token family")
 	}
-	return nil
-}
-
-// RevokeAllForUser ends every session for a user — "sign out everywhere", password reset, or
-// compromise response — by deleting all their family rows in one user-partition query.
-func (s *Service) RevokeAllForUser(userID string) error {
-	if userID == "" {
-		return rmerror.NewRMError(nil, "user id is required")
-	}
-	if err := s.db.DeleteAllForUser(userID); err != nil {
-		return rmerror.NewRMError(err, "failed to revoke user refresh tokens")
-	}
-	return nil
+	return family, nil
 }
 
 // ListFamilies returns every refresh family the user holds -- one per application per login --
@@ -338,10 +334,47 @@ func (s *Service) ListFamilies(userID string) ([]refresh_tokens_db.FamilyEntry, 
 	return s.db.ListByUser(userID)
 }
 
-// DeleteFamiliesBySID ends every family opened through one browser session, and reports how
-// many went. This is what makes one sign-out reach every product opened in that browser.
+// DeleteFamiliesBySID ends every family opened through one session and reports how many went; families with no sid are left alone, since nothing proves they belong to it.
 func (s *Service) DeleteFamiliesBySID(userID, sid string) (int, error) {
-	return s.db.DeleteBySID(userID, sid)
+	if sid == "" {
+		return 0, nil
+	}
+	families, err := s.db.ListByUser(userID)
+	if err != nil {
+		return 0, err
+	}
+	families = slices.DeleteFunc(families, func(family refresh_tokens_db.FamilyEntry) bool { return family.SID != sid })
+	if err := s.DeleteFamilies(families); err != nil {
+		return 0, err
+	}
+	return len(families), nil
+}
+
+// DeleteFamilies deletes the given families one by one and stops at the first failure, so a caller can retry and finish.
+func (s *Service) DeleteFamilies(families []refresh_tokens_db.FamilyEntry) error {
+	for i := range families {
+		if err := s.db.DeleteFamily(families[i].UserID, families[i].ClientID, families[i].FamilyID); err != nil {
+			return rmerror.NewRMError(err, "failed to delete a refresh token family")
+		}
+	}
+	return nil
+}
+
+// ListOfflineFamilies returns the user's live offline_access grants, the families the connected apps list shows; one past its expiry is left out although the table's TTL has not swept it yet.
+func (s *Service) ListOfflineFamilies(userID string) ([]refresh_tokens_db.FamilyEntry, error) {
+	families, err := s.db.ListByUser(userID)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().Unix()
+	return slices.DeleteFunc(families, func(family refresh_tokens_db.FamilyEntry) bool {
+		return !family.IsOffline() || family.IsExpired(now)
+	}), nil
+}
+
+// ListClientFamilies returns every family one client holds for the user.
+func (s *Service) ListClientFamilies(userID, clientID string) ([]refresh_tokens_db.FamilyEntry, error) {
+	return s.db.ListByUserAndClient(userID, clientID)
 }
 
 // IsReuse reports whether an error from Rotate is the reuse/theft signal.

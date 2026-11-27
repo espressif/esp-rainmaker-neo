@@ -6,7 +6,7 @@
 
 The deploy sweep runs every group in a wave concurrently, so a wrong wave is not a slow
 deploy — it is a group deploying before the group whose outputs it reads. Run with
-`pytest test/scripts/`; no AWS credentials and no deployed stack needed.
+`pytest test/unittest/`; no AWS credentials and no deployed stack needed.
 """
 import os
 import sys

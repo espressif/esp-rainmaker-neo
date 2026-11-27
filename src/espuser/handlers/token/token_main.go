@@ -6,13 +6,13 @@ package main
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/oauth_clients_db"
+	"github.com/espressif/esp-rainmaker-neo/src/utils"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/collections"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
@@ -36,8 +36,7 @@ type TokenRequest struct {
 	CodeVerifier string `json:"code_verifier,omitempty"`
 	RedirectURI  string `json:"redirect_uri,omitempty"`
 	Scope        string `json:"scope,omitempty"`
-	// Resource is the RFC 8707 identifier of the API the token is for. Optional; omitted
-	// leaves the audience as the client id, which is what every caller sees today.
+	// Resource is the one RFC 8707 resource this access token is for; omitted, the sign-in or the client's default decides.
 	Resource string `json:"resource,omitempty"`
 }
 
@@ -57,38 +56,52 @@ func handleToken(ctx context.Context, request events.APIGatewayProxyRequest) (ev
 	if basicID, secret, ok := rmngrequest.BasicClientCreds(request); ok {
 		req.ClientID, clientSecret = basicID, secret
 	}
+	var client *clients.ClientResponse
 	if req.ClientID != "" {
-		if resp, authed := authClient(ctx, req.ClientID, clientSecret); !authed {
+		var resp events.APIGatewayProxyResponse
+		var authed bool
+		if client, resp, authed = authClient(ctx, req.ClientID, clientSecret); !authed {
 			return resp, nil
 		}
 	}
 
+	// One token is for one API (RFC 8707 s2.2); a client that needs two asks twice. Only a form body can repeat the parameter, so a JSON body's single value is taken as decoded.
+	resourceValues := []string{req.Resource}
+	if rmngrequest.IsFormRequest(request) {
+		resourceValues = rmngrequest.FormValues(request, "resource")
+	}
+	resource, err := auth.RequestedResourceForTokenRequest(resourceValues)
+	if resp, refused := resourceRefusal(err); refused {
+		return resp, nil
+	}
+	req.Resource = resource
+
 	switch req.GrantType {
 	case oidc.GrantRefreshToken:
-		return handleRefreshTokenGrant(ctx, req)
+		return handleRefreshTokenGrant(ctx, req, client)
 	case oidc.GrantAuthorizationCode:
-		return handleAuthorizationCodeGrant(ctx, req)
+		return handleAuthorizationCodeGrant(ctx, req, client, auth.UserAgentInfo{UserAgent: utils.UserAgent(request), IPAddress: request.RequestContext.Identity.SourceIP})
 	case oidc.GrantClientCredentials:
-		return handleClientCredentialsGrant(ctx, request, req)
+		return handleClientCredentialsGrant(ctx, req, client)
 	default:
 		// token-exchange is a separate later slice.
 		return oidc.OAuthErrorResp(http.StatusBadRequest, oidc.OAuthErrUnsupportedGrantType, "Unsupported grant_type."), nil
 	}
 }
 
-// authClient authenticates the client via the registry and, on failure, returns the OAuth error
+// authClient authenticates the client via the registry and returns it; on failure it returns the OAuth error
 // response (500 for an internal error, else 401 invalid_client) with authed=false.
-func authClient(ctx context.Context, clientID, clientSecret string) (events.APIGatewayProxyResponse, bool) {
+func authClient(ctx context.Context, clientID, clientSecret string) (*clients.ClientResponse, events.APIGatewayProxyResponse, bool) {
 	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, nil)
-	errCode, internal := clients.NewService(rmngCtx).AuthenticateForOAuth(clientID, clientSecret)
+	client, errCode, internal := clients.NewService(rmngCtx).AuthenticateForOAuth(clientID, clientSecret)
 	if errCode == "" {
-		return events.APIGatewayProxyResponse{}, true
+		return client, events.APIGatewayProxyResponse{}, true
 	}
 	status := http.StatusUnauthorized
 	if internal {
 		status = http.StatusInternalServerError
 	}
-	return oidc.OAuthErrorResp(status, errCode, "client authentication failed."), false
+	return nil, oidc.OAuthErrorResp(status, errCode, "client authentication failed."), false
 }
 
 // handleClientCredentialsGrant issues a token to the client itself (RFC 6749 s4.4).
@@ -96,17 +109,9 @@ func authClient(ctx context.Context, clientID, clientSecret string) (events.APIG
 // The caller has already been authenticated above -- but only if it presented a client_id.
 // This grant IS client authentication, so an anonymous request must be refused here rather
 // than falling through as one with no client.
-func handleClientCredentialsGrant(ctx context.Context, request events.APIGatewayProxyRequest, req TokenRequest) (events.APIGatewayProxyResponse, error) {
-	if req.ClientID == "" {
+func handleClientCredentialsGrant(ctx context.Context, req TokenRequest, client *clients.ClientResponse) (events.APIGatewayProxyResponse, error) {
+	if client == nil {
 		return oidc.OAuthErrorResp(http.StatusUnauthorized, oidc.OAuthErrInvalidClient, "client authentication failed."), nil
-	}
-
-	rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, nil)
-	client, err := clients.NewService(rmngCtx).Get(req.ClientID)
-	if err != nil {
-		// Authentication already succeeded, so an error here is not "unknown client".
-		rlog.Error(ctx).Err(err).Str("client_id", req.ClientID).Msg("Failed to read client for client_credentials")
-		return oidc.OAuthErrorResp(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
 	}
 
 	// A public client authenticates by presenting nothing, which is no authentication at
@@ -131,17 +136,15 @@ func handleClientCredentialsGrant(ctx context.Context, request events.APIGateway
 			"One or more requested scopes are not registered for this client."), nil
 	}
 
-	resource, resp, ok := resolveResource(request, req, client)
-	if !ok {
-		return resp, nil
-	}
-
 	svc, err := auth.NewOAuthUserAuthService(ctx)
 	if err != nil {
 		rlog.Error(ctx).Err(err).Msg("Failed to build auth service")
 		return oidc.OAuthErrorResp(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
 	}
-	tokens, err := svc.MintClientCredentialsToken(ctx, req.ClientID, scope, resource)
+	tokens, err := svc.MintClientCredentialsToken(ctx, client, scope, req.Resource)
+	if resp, refused := resourceRefusal(err); refused {
+		return resp, nil
+	}
 	if err != nil {
 		rlog.Error(ctx).Err(err).Str("client_id", req.ClientID).Msg("Failed to mint client_credentials token")
 		return oidc.OAuthErrorResp(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
@@ -149,35 +152,16 @@ func handleClientCredentialsGrant(ctx context.Context, request events.APIGateway
 	return oidc.OAuthTokenResp(tokens), nil
 }
 
-// resolveResource validates the RFC 8707 resource parameter against the client's registry
-// entry. Returns the audience to stamp, or an error response.
-//
-// Exactly one resource is permitted. A multi-audience token is one credential that opens two
-// doors, so a leak costs twice what it should; a client needing two APIs asks twice
-// (src/espuser/docs/specs/resource-indicators.md).
-func resolveResource(request events.APIGatewayProxyRequest, req TokenRequest, client *clients.ClientResponse) (string, events.APIGatewayProxyResponse, bool) {
-	values := rmngrequest.FormValues(request, "resource")
-	if len(values) > 1 {
-		return "", oidc.OAuthErrorResp(http.StatusBadRequest, oidc.OAuthErrInvalidTarget,
-			"Only one resource may be requested; a token is never issued for two audiences."), false
+// resourceRefusal answers an RFC 8707 refusal with invalid_target and a description that tells the client what to fix.
+func resourceRefusal(err error) (events.APIGatewayProxyResponse, bool) {
+	description, ok := auth.ResourceRefusal(err)
+	if !ok {
+		return events.APIGatewayProxyResponse{}, false
 	}
-	resource := req.Resource
-	if len(values) == 1 {
-		resource = values[0]
-	}
-	if resource == "" {
-		return "", events.APIGatewayProxyResponse{}, true
-	}
-	// Absent allowed_resources means none, never any -- otherwise the parameter enforces
-	// nothing for exactly the clients nobody configured.
-	if !client.AllowsResource(resource) {
-		return "", oidc.OAuthErrorResp(http.StatusBadRequest, oidc.OAuthErrInvalidTarget,
-			"This client is not registered for the requested resource."), false
-	}
-	return resource, events.APIGatewayProxyResponse{}, true
+	return oidc.OAuthErrorResp(http.StatusBadRequest, oidc.OAuthErrInvalidTarget, description), true
 }
 
-func handleAuthorizationCodeGrant(ctx context.Context, req TokenRequest) (events.APIGatewayProxyResponse, error) {
+func handleAuthorizationCodeGrant(ctx context.Context, req TokenRequest, client *clients.ClientResponse, userAgent auth.UserAgentInfo) (events.APIGatewayProxyResponse, error) {
 	// code_verifier is not required here: whether one is needed depends on the code's PKCE
 	// binding, which ExchangeAuthCode enforces (RFC 9700 §2.1.1 downgrade protection).
 	if req.Code == "" || req.ClientID == "" || req.RedirectURI == "" {
@@ -190,7 +174,10 @@ func handleAuthorizationCodeGrant(ctx context.Context, req TokenRequest) (events
 		return oidc.OAuthErrorResp(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
 	}
 
-	tokens, err := svc.ExchangeAuthCode(ctx, req.Code, req.CodeVerifier, req.ClientID, req.RedirectURI)
+	tokens, err := svc.ExchangeAuthCode(ctx, client, req.Code, req.CodeVerifier, req.RedirectURI, req.Resource, userAgent)
+	if resp, refused := resourceRefusal(err); refused {
+		return resp, nil
+	}
 	if err != nil {
 		// Unknown / expired / consumed code, client-or-redirect mismatch, and PKCE failure all collapse to invalid_grant (no oracle).
 		rlog.Error(ctx).Err(err).Msg("Authorization code exchange rejected")
@@ -200,7 +187,7 @@ func handleAuthorizationCodeGrant(ctx context.Context, req TokenRequest) (events
 	return oidc.OAuthTokenResp(tokens), nil
 }
 
-func handleRefreshTokenGrant(ctx context.Context, req TokenRequest) (events.APIGatewayProxyResponse, error) {
+func handleRefreshTokenGrant(ctx context.Context, req TokenRequest, client *clients.ClientResponse) (events.APIGatewayProxyResponse, error) {
 	if req.ClientID == "" || req.RefreshToken == "" {
 		return oidc.OAuthErrorResp(http.StatusBadRequest, oidc.OAuthErrInvalidRequest, "client_id and refresh_token are required."), nil
 	}
@@ -211,15 +198,11 @@ func handleRefreshTokenGrant(ctx context.Context, req TokenRequest) (events.APIG
 		return oidc.OAuthErrorResp(http.StatusInternalServerError, oidc.OAuthErrServerError, "Internal server error."), nil
 	}
 
-	tokens, err := svc.RefreshToken(ctx, req.ClientID, req.RefreshToken)
-	if errors.Is(err, auth.ErrResourceNoLongerAllowed) {
-		// NOT invalid_grant: the token is fine, the entitlement behind it is gone. Saying
-		// invalid_grant would send a client into a retry loop against a token that will never
-		// work again; invalid_target names the actual problem, and the remedy is a fresh
-		// authorization without that resource.
-		rlog.Warn(ctx).Str("client_id", req.ClientID).Msg("Refresh refused: resource no longer allowed")
-		return oidc.OAuthErrorResp(http.StatusBadRequest, oidc.OAuthErrInvalidTarget,
-			"This login was issued for a resource the client may no longer request. Start a new authorization."), nil
+	tokens, err := svc.RefreshToken(ctx, client, req.RefreshToken, req.Resource)
+	// invalid_target, not invalid_grant: the token is still good, so retrying it is not the remedy.
+	if resp, refused := resourceRefusal(err); refused {
+		rlog.Warn(ctx).Err(err).Str("client_id", req.ClientID).Msg("Refresh refused on its resource")
+		return resp, nil
 	}
 	if err != nil {
 		// Unknown / expired / spent / revoked all collapse to invalid_grant (no reuse oracle).

@@ -828,7 +828,18 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: |
+            The access token is missing or does not verify. Carries an RFC 6750 bearer challenge, which API Gateway delivers as `x-amzn-Remapped-WWW-Authenticate`.
+          headers:
+            WWW-Authenticate:
+              description: '`Bearer` when no token was sent; `Bearer error="invalid_token"` when it does not verify.'
+              schema:
+                type: string
+              example: 'Bearer error="invalid_token"'
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "403":
           description:
             The `id_token` does not belong to the authenticated caller, or comes
@@ -2953,33 +2964,6 @@ paths:
                   auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs"
                   client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-xyz%40your-fcm-project-id.iam.gserviceaccount.com"
                   universe_domain: "googleapis.com"
-              Alexa:
-                summary: Alexa skill
-                value:
-                  client_id: "amzn1.application-oa2-client.<client-id>"
-                  client_secret: "amzn1.oa2-cs.v1.<client-secret>"
-                  skill_id: "amzn1.ask.skill.<skill-id>"
-                  manufacturer_name: "Espressif"
-                  redirect_uris:
-                    - "https://pitangui.amazon.com/api/skill/link/<skill-link-id>"
-                    - "https://layla.amazon.com/api/skill/link/<skill-link-id>"
-                    - "https://alexa.amazon.co.jp/api/skill/link/<skill-link-id>"
-              GVA:
-                summary: Google Voice Assistant
-                value:
-                  type: "service_account"
-                  project_id: "your-gva-project-id"
-                  private_key_id: "abc123def456789"
-                  private_key:
-                    "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE
-                    KEY-----\n"
-                  client_email: "homegraph-sa@your-gva-project-id.iam.gserviceaccount.com"
-                  client_id: "104567890123456789012"
-                  auth_uri: "https://accounts.google.com/o/oauth2/auth"
-                  token_uri: "https://oauth2.googleapis.com/token"
-                  auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs"
-                  client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/homegraph-sa%40your-gva-project-id.iam.gserviceaccount.com"
-                  universe_domain: "googleapis.com"
       responses:
         "201":
           description: Integration successfully registered
@@ -3024,10 +3008,6 @@ paths:
                     integration_type: "apns_sandbox"
                   - integration_id: "gcm_your-fcm-project-id"
                     integration_type: "gcm"
-                  - integration_id: "alexa_default"
-                    integration_type: "alexa"
-                  - integration_id: "gva_your-gva-project-id"
-                    integration_type: "gva"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -3067,33 +3047,6 @@ paths:
                     integration_id: "gcm_your-fcm-project-id"
                     integration_type: "gcm"
                     project_id: "your-fcm-project-id"
-                Alexa:
-                  value:
-                    integration_id: "alexa_default"
-                    integration_type: "alexa"
-                    client_id: "amzn1.application-oa2-client.<client-id>"
-                    skill_id: "amzn1.ask.skill.<skill-id>"
-                    manufacturer_name: "Espressif"
-                    redirect_uris:
-                      - "https://pitangui.amazon.com/api/skill/link/<skill-link-id>"
-                      - "https://layla.amazon.com/api/skill/link/<skill-link-id>"
-                      - "https://alexa.amazon.co.jp/api/skill/link/<skill-link-id>"
-                GVA:
-                  value:
-                    integration_id: "gva_your-gva-project-id"
-                    integration_type: "gva"
-                    type: "service_account"
-                    project_id: "your-gva-project-id"
-                    private_key_id: "abc123def456789"
-                    client_email: "homegraph-sa@your-gva-prod.iam.gserviceaccount.com"
-                    client_id: "104567890123456789012"
-                    auth_uri: "https://accounts.google.com/o/oauth2/auth"
-                    token_uri: "https://oauth2.googleapis.com/token"
-                    auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs"
-                    client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/homegraph-sa%your-gva-prod.iam.gserviceaccount.com"
-                    universe_domain: "googleapis.com"
-                    redirect_uris:
-                      - "https://oauth-redirect.googleusercontent.com/r/your-gva-prod"
         "404":
           description: Integration not found
           content:
@@ -3156,37 +3109,6 @@ paths:
                   auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs"
                   client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-xyz%40your-fcm-project-id.iam.gserviceaccount.com"
                   universe_domain: "googleapis.com"
-              Alexa:
-                summary: Rotate Alexa client secret
-                value:
-                  client_id: "amzn1.application-oa2-client.6b3c8e2a4f5d4b9c8a7e2f1d3b5a8c6e"
-                  client_secret: "amzn1.oa2-cs.v1.<client-secret>"
-                  skill_id: "amzn1.ask.skill.f5e4d3c2-b1a0-9876-5432-1fedcba98765"
-                  redirect_uris:
-                    - "https://pitangui.amazon.com/api/skill/link/<skill-link-id>"
-                    - "https://layla.amazon.com/api/skill/link/<skill-link-id>"
-                    - "https://alexa.amazon.co.jp/api/skill/link/<skill-link-id>"
-              GVA:
-                summary: Rotate GVA service-account key
-                description: |
-                  Provide a new HomeGraph service-account JSON. `project_id`
-                  must match the existing integration; rotating typically
-                  means a new `private_key_id` + `private_key` for the same
-                  `client_email`.
-                value:
-                  type: "service_account"
-                  project_id: "your-gva-project-id"
-                  private_key_id: "rotated_xyz987"
-                  private_key:
-                    "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE
-                    KEY-----\n"
-                  client_email: "homegraph-sa@your-gva-prod.iam.gserviceaccount.com"
-                  client_id: "104567890123456789012"
-                  auth_uri: "https://accounts.google.com/o/oauth2/auth"
-                  token_uri: "https://oauth2.googleapis.com/token"
-                  auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs"
-                  client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/homegraph-sa%40your-gva-project-id.iam.gserviceaccount.com"
-                  universe_domain: "googleapis.com"
       responses:
         "200":
           description: Credentials updated successfully
@@ -3228,13 +3150,16 @@ paths:
         "500":
           $ref: "#/components/responses/InternalServerError"
 
+  # NOTE (not rendered): Alexa, Google Home and SmartThings are configured through
+  # their own paths below, not through the push-only /v1/admin/integrations tree
+  # above; their credentials live in SSM, not in an integration record.
   /v1/admin/integrations/alexa/configuration:
     post:
       summary: Configure the Alexa integration manually
       description: |
         Manual setup: stores the credentials of a skill the operator built in the Alexa
         console (AcceptGrant client id/secret and skill id), registers `redirect_uris` on
-        the voice-assistant OIDC client, and grants the skill Lambda's invoke permission
+        Alexa's own OIDC client, and grants the skill Lambda's invoke permission
         to `skill_id` in every Alexa region. On success it clears any automatic-setup
         status (`config_status`), since that no longer describes the deployment. Admin only.
       tags:
@@ -3264,7 +3189,18 @@ paths:
               schema:
                 $ref: "#/components/schemas/AlexaCfgResponse"
         "400":
-          $ref: "#/components/responses/BadRequest"
+          description: A required field is missing, or a redirect URI fails registration's checks
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                missingSkillId:
+                  value:
+                    message: "Missing skill ID"
+                invalidRedirectUri:
+                  value:
+                    message: 'redirect_uris "http://example.com/link" may use http only for loopback (localhost, 127.0.0.1, ::1); use https'
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -3275,8 +3211,8 @@ paths:
     get:
       summary: Get the Alexa configuration and automatic-setup status
       description: |
-        Returns the stored configuration (never the client secret) and, when an automatic
-        setup has run, its status as `config_status`. While an automatic setup is still
+        Returns the stored configuration (never the client secret), the redirect URIs on
+        Alexa's own OIDC client and, when an automatic setup has run, its status as `config_status`. While an automatic setup is still
         running on a deployment with no stored credentials yet, this answers 200 with only
         `manufacturer_name` and `config_status`, so pollers can follow the run instead of
         seeing a 404. The same holds when only an Amazon account is connected
@@ -3344,7 +3280,7 @@ paths:
         returns the skill id immediately with `status: IN_PROGRESS`; the rest runs in the
         background (Alexa builds take 30-60s each, beyond the 29s request limit): grant a
         setup-only invoke permission, set the events + Smart Home endpoint manifest and
-        wait for its build, register `redirect_uris` on the voice-assistant OIDC client,
+        wait for its build, register `redirect_uris` on Alexa's own OIDC client,
         and set account linking against the ESP User provider. Only then does it make the
         skill live: replace the deployment's invoke permission and store its AcceptGrant
         credentials, so a failed run leaves a working skill untouched.
@@ -3534,10 +3470,43 @@ paths:
         "500":
           $ref: "#/components/responses/InternalServerError"
 
-  # NOTE (not rendered): SmartThings is configured through this dedicated
-  # path (served by the st_cfg Lambda), not through the unified
-  # /v1/admin/integrations tree above — its credentials live in SSM, not
-  # in an integration record.
+  /v1/admin/integrations/gva/configuration:
+    post:
+      summary: Configure Google Home integration
+      description: |
+        Stores the HomeGraph service-account key and registers
+        `https://oauth-redirect.googleusercontent.com/r/<project_id>` on Google
+        Home's own OIDC client. Admin only.
+      tags:
+        - Google Voice Assistant
+      security:
+        - sigv4: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GVACfgRequest"
+      responses:
+        "200":
+          description: Configuration stored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GVACfgResponse"
+        "400":
+          description: The service-account key is invalid, or the redirect URI built from its `project_id` fails registration's checks
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
   /v1/admin/integrations/smartthings/configuration:
     post:
       summary: Configure SmartThings integration
@@ -3545,7 +3514,7 @@ paths:
         Stores the SmartThings Schema App OAuth credentials (client ID and
         client secret). Also registers the three SmartThings OAuth callback
         URLs (`https://c2c-us.smartthings.com/oauth/callback`, `c2c-eu`,
-        `c2c-ap`) on the voice-assistant OIDC client. Admin only.
+        `c2c-ap`) on SmartThings' own OIDC client. Admin only.
       tags:
         - SmartThings
       security:
@@ -4524,7 +4493,7 @@ components:
       required: true
       schema:
         type: string
-        enum: [apns, apns_sandbox, gcm, alexa, gva]
+        enum: [apns, apns_sandbox, gcm]
       description: |
         Integration type for `POST /v1/admin/integrations`.
 
@@ -4534,7 +4503,7 @@ components:
       required: false
       schema:
         type: string
-        enum: [apns, apns_sandbox, gcm, alexa, gva, webhook]
+        enum: [apns, apns_sandbox, gcm, webhook]
       description: |
         Optional integration type filter. If omitted, all configured
         integrations across all types are returned.
@@ -5532,8 +5501,6 @@ components:
       oneOf:
         - $ref: "#/components/schemas/PushApnsConfigRequest"
         - $ref: "#/components/schemas/PushGcmConfigRequest"
-        - $ref: "#/components/schemas/AlexaCfgRequest"
-        - $ref: "#/components/schemas/GVACfgRequest"
 
     IntegrationConfigResponse:
       description: |
@@ -5542,8 +5509,6 @@ components:
       oneOf:
         - $ref: "#/components/schemas/PushApnsConfigResponse"
         - $ref: "#/components/schemas/PushGcmConfigResponse"
-        - $ref: "#/components/schemas/AlexaCfgGetResponse"
-        - $ref: "#/components/schemas/GVACfgGetResponse"
 
     RegisterIntegrationResponse:
       type: object
@@ -5584,7 +5549,7 @@ components:
           example: "apns_sandbox_com.company.app"
         integration_type:
           type: string
-          enum: [apns, apns_sandbox, gcm, alexa, gva, webhook]
+          enum: [apns, apns_sandbox, gcm, webhook]
           example: "apns_sandbox"
 
     ListPublicIntegrationsResponse:
@@ -5691,8 +5656,7 @@ components:
           items:
             type: string
           description:
-            List of redirect URIs to register on the voice-assistant OIDC client
-            client
+            Redirect URIs to register on Alexa's own OIDC client
         client_id:
           type: string
           description: Alexa Skill client ID to store in SSM Parameter Store
@@ -5737,7 +5701,7 @@ components:
           items:
             type: string
           description:
-            OAuth redirect URIs registered on the voice-assistant OIDC client
+            OAuth redirect URIs registered on Alexa's own OIDC client
         manufacturer_name:
           type: string
           description:

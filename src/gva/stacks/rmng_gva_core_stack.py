@@ -10,9 +10,20 @@ from aws_cdk import (
 )
 from constructs import Construct
 
-from app_common import CommonResources, create_api_deployment
+from app_common import (
+    CommonResources,
+    DiscoveredApi,
+    create_api_deployment,
+    create_oauth_client,
+)
+from src.espuser.stacks.base_res_constants import USER_TABLE_NAMES
 from src.gva.handlers.core import GVAActionCore
-from src.rmneo.stacks.base_res_constants import SSM_PARAMETERS
+from src.rmneo.stacks.base_res_constants import (
+    GVA_CLIENT_ID,
+    GVA_OAUTH_CLIENT,
+    SSM_PARAMETERS,
+    VOICE_ASSISTANT_CLIENT_SECRET_PARAMS,
+)
 
 
 class RMNGGVACoreStack(Stack):
@@ -70,8 +81,8 @@ class RMNGGVACoreStack(Stack):
         # the claim stack documents.
         common_resources.esp_user_issuer = ssm.StringParameter.value_for_string_parameter(
             self, SSM_PARAMETERS['ESP_USER_ISSUER'])
-        common_resources.esp_user_client_id = ssm.StringParameter.value_for_string_parameter(
-            self, SSM_PARAMETERS['ESP_USER_CLIENT_ID'])
+        common_resources.home_app_client_id = ssm.StringParameter.value_for_string_parameter(
+            self, SSM_PARAMETERS['HOME_APP_CLIENT_ID'])
         common_resources.esp_user_jwks = ssm.StringParameter.value_for_string_parameter(
             self, SSM_PARAMETERS['ESP_USER_JWKS'])
         common_resources.esp_admin_user_pool_id = ssm.StringParameter.value_for_string_parameter(
@@ -84,10 +95,6 @@ class RMNGGVACoreStack(Stack):
         # construct lived in rmng-core.
         common_resources.identity_pool_id = ssm.StringParameter.value_for_string_parameter(
             self, SSM_PARAMETERS['IDENTITY_POOL_ID'])
-        # The config API registers Google's account-linking redirect URIs on the
-        # shared voice-assistant OIDC client, so it needs that client's id.
-        common_resources.esp_user_va_client_id = ssm.StringParameter.value_for_string_parameter(
-            self, SSM_PARAMETERS['ESP_USER_VA_CLIENT_ID'])
 
         self.gva_action_core = GVAActionCore(
             self, "GVAActionCore", common_resources,
@@ -95,6 +102,20 @@ class RMNGGVACoreStack(Stack):
             integrations_resource_id=integrations_resource_id,
             admin_integrations_resource_id=admin_integrations_resource_id,
         )
+
+        neo_api = DiscoveredApi(
+            ssm.StringParameter.value_for_string_parameter(self, SSM_PARAMETERS['API_GATEWAY_URL']),
+            ssm.StringParameter.value_for_string_parameter(self, SSM_PARAMETERS['RMNG_API_RESOURCE']),
+            ssm.StringParameter.value_for_string_parameter(self, SSM_PARAMETERS['RMNG_API_AUDIENCES']))
+        create_oauth_client(
+            self, "GVAOAuthClient",
+            name="gva-oauth-client",
+            table_name=USER_TABLE_NAMES['OAUTH_CLIENTS'],
+            client=GVA_OAUTH_CLIENT,
+            secret_param=VOICE_ASSISTANT_CLIENT_SECRET_PARAMS[GVA_CLIENT_ID],
+            api=neo_api,
+        )
+        CfnOutput(self, "EspGvaClientId", value=GVA_CLIENT_ID, description="ESP User Google Home Client ID")
 
         # Publish the GVA methods to the shared API's prod stage — rmng-base owns that
         # stage and snapshotted it before these methods existed. See create_api_deployment.

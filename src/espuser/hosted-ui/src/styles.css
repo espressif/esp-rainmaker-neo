@@ -1,0 +1,544 @@
+/*
+ * SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+:root {
+  color-scheme: dark;
+  --page:          #0A0A0B;
+  --card:          #18181B;
+  --card-edge:     rgb(255 255 255 / 9%);
+  --input:         #1C1C1F;
+  --method-bg:              #1C1C1F;
+  --method-border:          #2A2A2E;
+  --method-hover:           #212125;
+  --border:        #2A2A2E;
+  /* A filled panel inside the card, such as the consent screen's list. */
+  --tonal:         #1C1C1F;
+  /* The brand share in the tint of the consent list's stay-connected row; dark needs more to show. */
+  --stay-connected-tint:  11%;
+  --method-selected-bg:     #232327;
+  --method-selected-border: #82828C;
+  /* Input edges need 3:1 against the card (WCAG 1.4.11); --border is decorative. */
+  --field-border:  #6A6A73;
+  --text:          #F2F2F3;
+  --text-2:        #A8A8B0;
+  --text-3:        #82828C;
+  /* Text straight on the page, under the card: the light page is darker than its card, so it needs its own shade. */
+  --page-text:     var(--text-3);
+  --brand:         #D4402A;
+  --brand-hover:   #C23A26;
+  --on-brand:      #FFFFFF;
+  /* The main action: brand red on dark, slate on light. */
+  --primary:       var(--brand);
+  --primary-hover: var(--brand-hover);
+  /* The code card, and the badge holding its icon. */
+  --code-bg:          var(--card);
+  --code-icon-bg:     color-mix(in srgb, var(--brand) 14%, transparent);
+  --code-icon-border: transparent;
+  --code-icon:        var(--brand);
+  --disabled:      #3A3A40;
+  --disabled-text: #A8A8B0;
+  /* Not brand red: a focus ring in the button's colour makes a focused input look pressed. */
+  --focus:         #6E8BFF;
+  --error:         #FF5C5C;
+  --warning:       #F2B53C;
+  /* Google's own dark-theme button colours. */
+  --google-bg:     #131314;
+  --google-border: #8E918F;
+  --google-text:   #E3E3E3;
+  --google-hover:  #1B1B1C;
+  --apple-bg:      #FFFFFF;
+  --apple-text:    #000000;
+  --apple-border:  transparent;
+  --github-bg:     #24292F;
+  --github-text:   #FFFFFF;
+  --github-border: var(--card-edge);
+  --focus-ring:    0 0 0 4px color-mix(in srgb, var(--focus) 18%, transparent);
+  --card-shadow:   inset 0 1px 0 rgb(255 255 255 / 6%), 0 0 0 1px rgb(0 0 0 / 40%), 0 24px 64px -20px rgb(0 0 0 / 80%);
+  --field-hover:   #85858F;
+  /* The background arcs and the red band that travels along them. */
+  --arc:           rgb(255 255 255 / 6%);
+  --arc-flow:      rgb(231 53 44 / 45%);
+  --radius:        10px;
+  --ease:          cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* Follows the system setting: a slate palette, white surfaces lifted by shadow, and one neutral style for every brand button. */
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --page:          #F1F5F9;
+    --card:          #FFFFFF;
+    --card-edge:     transparent;
+    --card-shadow:   0 20px 25px -5px rgb(0 0 0 / 5%), 0 8px 10px -6px rgb(0 0 0 / 3%);
+    --input:         #FFFFFF;
+    --method-bg:              #F8FAFC;
+    --method-border:          #E2E8F0;
+    --method-hover:           #F1F5F9;
+    --border:        #E2E8F0;
+    --tonal:         #F8FAFC;
+    --stay-connected-tint:  6%;
+    --method-selected-bg:     #FFFFFF;
+    --method-selected-border: #0F172A;
+    --field-border:  #8792A2;
+    --field-hover:   #64748B;
+    --text:          #0F172A;
+    --text-2:        #475569;
+    --text-3:        #64748B;
+    --page-text:     #475569;
+    --brand:         #C8402B;
+    --brand-hover:   #B03823;
+    --primary:       #0F172A;
+    --primary-hover: #1E293B;
+    --disabled:      #E2E8F0;
+    --disabled-text: #64748B;
+    /* The text colour rather than an accent, so a focused field reads as active, not as an error. */
+    --focus:         #0F172A;
+    --error:         #C62828;
+    --warning:       #9A5B00;
+    --google-bg:     #FFFFFF;
+    --google-border: #E2E8F0;
+    --google-text:   #0F172A;
+    --google-hover:  #F8FAFC;
+    /* Apple and GitHub drop their solid fills here and match Google's neutral pill. */
+    --apple-bg:      #FFFFFF;
+    --apple-text:    #0F172A;
+    --apple-border:  #E2E8F0;
+    --github-bg:     #FFFFFF;
+    --github-text:   #0F172A;
+    --github-border: #E2E8F0;
+    --focus-ring:    0 0 0 3px rgb(15 23 42 / 10%);
+    --code-bg:          #F8FAFC;
+    --code-icon-bg:     #FFFFFF;
+    --code-icon-border: #E2E8F0;
+    --code-icon:        #0F172A;
+    --arc:           rgb(15 23 42 / 7%);
+    --arc-flow:      rgb(200 64 43 / 30%);
+  }
+}
+
+* { box-sizing: border-box; }
+
+/* Fieldsets are only a disable switch; min-width: 0 lets one shrink inside a grid column. */
+fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+/* Only the cursor changes: a whole panel dimmed mid-request reads as broken. */
+fieldset:disabled { cursor: progress; }
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--text);
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100dvh;
+  /* Flex, not grid + place-items: center, which shrinks the card to its narrowest form. */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 16px;
+}
+
+/* The app root is body's flex item, so it needs a width for the frame's min(880px, 100%) to resolve; it sits above the arcs. */
+#root {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* The card and its footer share one width: full for two columns, narrow for one. */
+.frame { width: min(880px, 100%); }
+.frame--narrow { width: min(430px, 100%); }
+
+.card {
+  position: relative;
+  background: var(--card);
+  border: 1px solid var(--card-edge);
+  border-radius: 16px;
+  box-shadow: var(--card-shadow);
+  padding: 32px;
+  overflow: hidden;
+}
+
+@property --arc-reach { syntax: '<percentage>'; inherits: false; initial-value: 0%; }
+.arcs { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+.arcs i {
+  position: absolute; width: 62vmax; height: 62vmax;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%20900%20900%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.3%22%3E%3Ccircle%20cx%3D%220%22%20cy%3D%22900%22%20r%3D%22140%22/%3E%3Ccircle%20cx%3D%220%22%20cy%3D%22900%22%20r%3D%22210%22/%3E%3Ccircle%20cx%3D%220%22%20cy%3D%22900%22%20r%3D%22280%22/%3E%3Ccircle%20cx%3D%220%22%20cy%3D%22900%22%20r%3D%22350%22/%3E%3Ccircle%20cx%3D%220%22%20cy%3D%22900%22%20r%3D%22420%22/%3E%3Ccircle%20cx%3D%220%22%20cy%3D%22900%22%20r%3D%22490%22/%3E%3Ccircle%20cx%3D%220%22%20cy%3D%22900%22%20r%3D%22560%22/%3E%3Ccircle%20cx%3D%220%22%20cy%3D%22900%22%20r%3D%22630%22/%3E%3Ccircle%20cx%3D%220%22%20cy%3D%22900%22%20r%3D%22700%22/%3E%3Ccircle%20cx%3D%220%22%20cy%3D%22900%22%20r%3D%22770%22/%3E%3Ccircle%20cx%3D%220%22%20cy%3D%22900%22%20r%3D%22840%22/%3E%3Ccircle%20cx%3D%220%22%20cy%3D%22900%22%20r%3D%22910%22/%3E%3Ccircle%20cx%3D%220%22%20cy%3D%22900%22%20r%3D%22980%22/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%20900%20900%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.3%22%3E%3Ccircle%20cx%3D%220%22%20cy%3D%22900%22%20r%3D%22140%22/%3E%3Ccircle%20cx%3D%220%22%20cy%3D%22900%22%20r%3D%22210%22/%3E%3Ccircle%20cx%3D%220%22%20cy%3D%22900%22%20r%3D%22280%22/%3E%3Ccircle%20cx%3D%220%22%20cy%3D%22900%22%20r%3D%22350%22/%3E%3Ccircle%20cx%3D%220%22%20cy%3D%22900%22%20r%3D%22420%22/%3E%3Ccircle%20cx%3D%220%22%20cy%3D%22900%22%20r%3D%22490%22/%3E%3Ccircle%20cx%3D%220%22%20cy%3D%22900%22%20r%3D%22560%22/%3E%3Ccircle%20cx%3D%220%22%20cy%3D%22900%22%20r%3D%22630%22/%3E%3Ccircle%20cx%3D%220%22%20cy%3D%22900%22%20r%3D%22700%22/%3E%3Ccircle%20cx%3D%220%22%20cy%3D%22900%22%20r%3D%22770%22/%3E%3Ccircle%20cx%3D%220%22%20cy%3D%22900%22%20r%3D%22840%22/%3E%3Ccircle%20cx%3D%220%22%20cy%3D%22900%22%20r%3D%22910%22/%3E%3Ccircle%20cx%3D%220%22%20cy%3D%22900%22%20r%3D%22980%22/%3E%3C/svg%3E") center / contain no-repeat;
+  background:
+    radial-gradient(circle at 0 100%, transparent var(--arc-reach), var(--arc-flow) calc(var(--arc-reach) + 4%), transparent calc(var(--arc-reach) + 12%)),
+    var(--arc);
+  animation: arc-flow 18s linear infinite;
+}
+.arcs i:first-child { left: 0; bottom: 0; }
+/* Half a cycle apart, so the two corners never pulse together. */
+.arcs i:last-child { right: 0; top: 0; transform: rotate(180deg); animation-delay: -9s; }
+@keyframes arc-flow { from { --arc-reach: -15%; } to { --arc-reach: 140%; } }
+
+.page-foot {
+  display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap;
+  margin-top: 20px; padding: 0 4px; font-size: 12.5px; color: var(--page-text);
+}
+.page-foot nav { display: flex; gap: 18px; }
+.page-foot a { color: var(--page-text); text-decoration: none; }
+.page-foot a:hover { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
+.page-foot a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+
+/* The one piece of colour on an otherwise monochrome card. */
+.card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: linear-gradient(90deg, #6E5BFF, #C13584, var(--brand));
+}
+
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+
+/* The wordmark is one SVG, sized by height so its own proportions decide the width. */
+.wordmark { flex: none; display: flex; align-items: center; min-height: 28px; color: var(--text); }
+/* An explicit ratio: an auto-width inline SVG claims 300px and would squeeze the client pill beside it. */
+.wordmark svg { height: 24px; width: auto; aspect-ratio: 116.84 / 21.04; display: block; }
+
+/* The app being signed in to: as wide as its name up to just over half the bar, then cut with an ellipsis. */
+.client {
+  display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 55%; margin: 0;
+  padding: 4px 10px 4px 4px; border: 1px solid var(--border); border-radius: 999px;
+  font-size: 13px; font-weight: 550; color: var(--text-2);
+}
+.client-tile {
+  flex: none; width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center;
+  background: var(--tonal); color: var(--text-3);
+}
+.client-tile svg { width: 14px; height: 14px; }
+.client-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+h1 { font-size: 28px; font-weight: 600; margin: 20px 0 20px; letter-spacing: -0.02em; }
+
+.columns { display: grid; grid-template-columns: 1fr 1fr; gap: 36px; align-items: start; }
+
+.methods { display: flex; flex-direction: column; gap: 14px; }
+
+.method {
+  position: relative;
+  display: flex; align-items: center; gap: 12px;
+  width: 100%; padding: 14px 16px;
+  background: var(--method-bg);
+  border: 1px solid var(--method-border);
+  border-radius: var(--radius);
+  color: var(--text); font-size: 15px; text-align: left; cursor: pointer;
+  transition: background 140ms var(--ease), border-color 140ms var(--ease), transform 140ms var(--ease);
+}
+.method:hover { background: var(--method-hover); }
+.method:active { transform: translateY(1px); }
+a.method { text-decoration: none; }
+.method[aria-pressed="true"] { border-color: var(--method-selected-border); background: var(--method-selected-bg); }
+.method[aria-pressed="true"]::before {
+  content: "";
+  position: absolute; left: 0; top: 10px; bottom: 10px;
+  width: 3px; border-radius: 0 3px 3px 0; background: var(--brand);
+}
+
+.method .mark { width: 20px; height: 20px; flex: none; display: grid; place-items: center; }
+.method .mark .provider-logo { width: 20px; height: 20px; object-fit: contain; border-radius: 4px; }
+
+/* Each brand's own sign-in button, from its published guidelines: a 40px pill, the mark beside "Sign in with …". */
+.social {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  height: 40px; padding: 0 12px; border-radius: 9999px; border: 1px solid transparent;
+  font-family: "Roboto", system-ui, sans-serif; font-weight: 500; font-size: 14px; letter-spacing: 0.25px;
+  text-decoration: none; transition: filter 140ms var(--ease);
+}
+.social:hover { filter: brightness(0.96); }
+.social:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.social--google { background: var(--google-bg); border-color: var(--google-border); color: var(--google-text); }
+.social--google:hover { filter: none; background: var(--google-hover); }
+/* Apple asks for black on light and white on dark. */
+.social--apple { background: var(--apple-bg); border-color: var(--apple-border); color: var(--apple-text); }
+.social--github { background: var(--github-bg); border-color: var(--github-border); color: var(--github-text); }
+
+/* Ours, not a brand's: an icon, what happens, and a chevron, so it reads as a step rather than another pill. */
+.code-option {
+  display: flex; align-items: center; gap: 14px; width: 100%; padding: 12px 14px 12px 12px;
+  background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text); font: inherit; text-align: left; cursor: pointer;
+  transition: background 140ms var(--ease), border-color 140ms var(--ease), box-shadow 140ms var(--ease);
+}
+.code-option:hover { background: var(--tonal); border-color: var(--method-selected-border); }
+.code-option:active { transform: translateY(1px); }
+.code-option:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.code-option-icon {
+  flex: none; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px;
+  background: var(--code-icon-bg); border: 1px solid var(--code-icon-border); color: var(--code-icon);
+}
+.code-option-text { flex: 1; display: grid; gap: 2px; min-width: 0; }
+.code-option-title { font-size: 14.5px; font-weight: 600; }
+.code-option-hint { font-size: 12.5px; color: var(--text-3); }
+.code-option .chevron { flex: none; color: var(--text-3); transition: transform 140ms var(--ease); }
+.code-option:hover .chevron { transform: translateX(2px); color: var(--text-2); }
+
+.or {
+  display: flex; align-items: center; gap: 12px; margin: 4px 0;
+  color: var(--text-2); font-size: 13px;
+}
+.or::before, .or::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+
+.field { margin-bottom: 20px; }
+
+.field label { display: block; margin-bottom: 8px; font-size: 13.5px; font-weight: 550; letter-spacing: 0.005em; color: var(--text); }
+
+.control { position: relative; display: flex; }
+input[type="text"], input[type="password"] {
+  width: 100%; padding: 13px 14px;
+  background: var(--input); color: var(--text);
+  border: 1px solid var(--field-border); border-radius: var(--radius);
+  font-size: 15px;
+  transition: border-color 140ms var(--ease), box-shadow 140ms var(--ease);
+}
+input:hover { border-color: var(--field-hover); }
+/* A transparent outline, not none: forced-colours mode drops the ring and paints the outline. */
+input:focus-visible {
+  outline: 2px solid transparent; border-color: var(--focus);
+  box-shadow: var(--focus-ring);
+}
+input[aria-invalid="true"] { border-color: var(--error); }
+
+/* Chrome ignores background-color on autofill; an inset shadow is the only way to cover it. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px var(--input) inset;
+  -webkit-text-fill-color: var(--text);
+  caret-color: var(--text);
+  transition: background-color 9999s ease-out;
+}
+
+/* A visible focus ring on every control: the UA default is near-invisible on a dark page. */
+.method:focus-visible,
+.primary:focus-visible,
+.secondary:focus-visible,
+.link:focus-visible,
+.reveal:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius);
+}
+
+/* Room for the reveal button so the last typed characters stay visible. */
+.control:has(.reveal) input { padding-right: 46px; }
+.control:has(.caps) input { padding-right: 130px; }
+
+.reveal {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  background: none; border: 0; color: var(--text-2); cursor: pointer;
+  padding: 8px; border-radius: 8px; display: grid; place-items: center;
+}
+.reveal:hover { color: var(--text); }
+
+/* Absolute, so Caps Lock appearing never resizes or moves the field. */
+.caps {
+  position: absolute; right: 42px; top: 50%; transform: translateY(-50%);
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+  color: var(--warning); pointer-events: none; white-space: nowrap;
+}
+/* The field is narrow on a phone; the glyph alone still says it. */
+@media (max-width: 420px) { .caps-text { display: none; } }
+
+/* Empty, it takes no room, so the form keeps its rhythm until there is something to say. */
+.assist { margin: -12px 0 20px; font-size: 13px; line-height: 1.45; display: flex; align-items: flex-start; gap: 7px; }
+.assist:empty { margin: 0; }
+/* Atop the choices, where the list's own gap already spaces it. */
+.methods .assist { margin: 0; }
+.assist svg { flex: none; margin-top: 1.5px; }
+.assist--error   { color: var(--error); }
+.assist--warning { color: var(--warning); }
+
+.consent { text-align: center; }
+.consent-parties { display: flex; align-items: center; justify-content: center; gap: 14px; margin: 24px 0 18px; }
+.consent-tile {
+  width: 56px; height: 56px; border-radius: 14px; flex: none;
+  display: grid; place-items: center; overflow: hidden;
+  background: var(--tonal); color: var(--text-2); border: 1px solid var(--border);
+}
+.consent-tile img { width: 100%; height: 100%; object-fit: cover; }
+.consent-link { color: var(--text-3); }
+.consent-title { font-size: 20px; font-weight: 600; margin: 0 0 8px; letter-spacing: -0.01em; }
+.consent-lede { margin: 0 0 14px; font-size: 15px; color: var(--text-2); }
+.consent-lede strong { color: var(--text); font-weight: 600; overflow-wrap: anywhere; }
+.consent-account {
+  display: inline-flex; align-items: center; gap: 8px; margin: 0 0 20px;
+  padding: 4px 12px 4px 4px; border: 1px solid var(--border); border-radius: 999px;
+  font-size: 13px; color: var(--text); max-width: 100%; word-break: break-all;
+}
+.consent-avatar {
+  width: 24px; height: 24px; border-radius: 50%; flex: none; display: grid; place-items: center;
+  background: var(--brand); color: var(--on-brand); font-size: 12px; font-weight: 600;
+}
+.grants {
+  list-style: none; margin: 0 0 20px; padding: 4px 16px; text-align: left;
+  background: var(--tonal); border-radius: var(--radius);
+}
+.grants li { padding: 10px 0; font-size: 14px; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
+.grants li + li { border-top: 1px solid var(--border); }
+.grant-label { font-weight: 600; color: var(--text); }
+.grant-detail { color: var(--text-2); }
+/* offline_access closes the list as a tinted row, because it is how long access lasts rather than more data the app reads. */
+.grants li.grant-stay-connected {
+  flex-direction: row; align-items: center; gap: 16px;
+  margin: 4px -16px -4px; padding: 13px 16px 14px;
+  border-top: 1px solid color-mix(in srgb, var(--brand) 26%, var(--border));
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: color-mix(in srgb, var(--brand) var(--stay-connected-tint), var(--tonal));
+}
+.grant-stay-connected-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.grant-stay-connected-icon {
+  width: 36px; height: 36px; flex: none; border-radius: 50%; display: grid; place-items: center;
+  color: var(--brand); background: var(--card); border: 1px solid color-mix(in srgb, var(--brand) 30%, var(--border));
+}
+/* Cancel first and Allow last, so the button that grants access sits where a reader finishes. */
+.consent-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+/* A redirect under way: the provider's mark circled by a turning ring, in place of the choices. */
+.leaving { display: grid; justify-items: center; align-content: center; text-align: center; margin-top: 20px; cursor: progress; }
+.leaving h1 { font-size: 22px; margin: 26px 0 6px; letter-spacing: -0.01em; }
+.leaving-hint { margin: 0; font-size: 14px; color: var(--text-2); }
+.leaving-mark {
+  position: relative; width: 72px; height: 72px; display: grid; place-items: center; border-radius: 50%;
+  background: var(--tonal); border: 1px solid var(--border); color: var(--text);
+}
+.leaving-mark svg { width: 28px; height: 28px; }
+.leaving-mark::after {
+  content: ""; position: absolute; inset: -7px; border-radius: 50%;
+  border: 2px solid transparent; border-top-color: var(--brand); border-right-color: var(--brand);
+  animation: spin 900ms linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* The consent screen's layout without its logo row, so the heading takes that row's room. */
+.panel.logout h1 { margin-top: 28px; }
+
+.primary {
+  width: 100%; padding: 14px 16px;
+  background: var(--primary); color: var(--on-brand);
+  border: 0; border-radius: var(--radius);
+  font-size: 15px; font-weight: 600; cursor: pointer;
+  transition: background 140ms var(--ease), transform 140ms var(--ease), box-shadow 200ms var(--ease);
+}
+.primary:hover { background: var(--primary-hover); }
+.primary:hover:not(:disabled) { box-shadow: 0 6px 20px -8px var(--primary); }
+.primary:active { transform: translateY(1px); }
+/* Desaturated, not faded: a faded fill still looks pressable. */
+.primary:disabled {
+  background: var(--disabled); color: var(--disabled-text);
+  cursor: not-allowed; transform: none;
+}
+
+.secondary {
+  width: 100%; padding: 14px 16px;
+  background: transparent; color: var(--text);
+  border: 1px solid var(--field-border); border-radius: var(--radius);
+  font-size: 15px; font-weight: 600; cursor: pointer;
+  transition: background 140ms var(--ease);
+}
+.secondary:hover:not(:disabled) { background: var(--method-hover); }
+.secondary:disabled { color: var(--disabled-text); cursor: not-allowed; }
+
+.link { background: none; border: 0; color: var(--text-2); font-size: 13px; cursor: pointer; padding: 0; }
+.link:hover { color: var(--text); }
+
+.back-line { margin: 20px 0 0; text-align: center; font-size: 13.5px; color: var(--text-3); }
+.back-line .link { font-size: inherit; font-weight: 600; color: var(--text); }
+.back-line .link:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+.form-links {
+  display: flex; justify-content: space-between; gap: 16px;
+  margin-top: 18px; flex-wrap: wrap;
+}
+.form-links--single { justify-content: center; }
+
+/* The indent balances the spacing after the last digit, so the code sits centred. */
+.code input { font: 600 24px ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: 0.5em; text-indent: 0.5em; text-align: center; }
+
+.terminal { text-align: center; max-width: 420px; margin: 0 auto; }
+/* The card draws no heading of its own here, so this one keeps the sign-out question's distance from the wordmark. */
+.terminal h1 { font-size: 20px; margin-top: 28px; }
+.terminal .primary { margin-top: 20px; }
+.terminal-hint { color: var(--text-2); font-size: 14px; }
+.terminal-code { color: var(--text-3); font-size: 12px; margin-top: 22px; }
+
+.lede { margin: 4px 0 22px; font-size: 14.5px; color: var(--text-2); }
+.lede strong { color: var(--text); font-weight: 600; }
+/* An address takes its own line, so it never splits at a hyphen, and breaks mid-word only when it is wider than the line. */
+.address { display: block; word-break: break-all; }
+
+.password-rules { margin: 8px 0 0; font-size: 12.5px; color: var(--text-3); line-height: 1.5; }
+
+.agreement { margin: 16px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--text-3); text-align: center; }
+.agreement a { color: var(--text-2); text-underline-offset: 2px; }
+.agreement a:hover { color: var(--text); }
+
+/* Motion only explains a relationship, and only transforms and opacity, so nothing shifts under the cursor. */
+.card { animation: card-in 380ms var(--ease) both; }
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.985); }
+}
+
+.card::before { transform-origin: left; animation: sweep 620ms var(--ease) 140ms both; }
+@keyframes sweep { from { transform: scaleX(0); } }
+
+/* Contents follow the card rather than arriving with it, so the eye lands on the card first. */
+.wordmark, .client { animation: rise 420ms var(--ease) 120ms both; }
+h1         { animation: rise 420ms var(--ease) 180ms both; }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+
+/* Rows stagger in, capped at six so the last one never waits noticeably. */
+.method { animation: rise 340ms var(--ease) both; }
+.method:nth-child(1) { animation-delay: 200ms; }
+.method:nth-child(2) { animation-delay: 245ms; }
+.method:nth-child(3) { animation-delay: 290ms; }
+.method:nth-child(4) { animation-delay: 335ms; }
+.method:nth-child(5) { animation-delay: 380ms; }
+.method:nth-child(n+6) { animation-delay: 420ms; }
+
+.panel { animation: enter 220ms var(--ease) both; }
+@keyframes enter { from { opacity: 0; transform: translateY(8px); } }
+
+/* An error arrives rather than blinks, so it catches the eye without shouting. */
+.assist--error, .assist--warning { animation: assist-in 220ms var(--ease) both; }
+@keyframes assist-in { from { opacity: 0; transform: translateY(-4px); } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+  /* An endless animation cut to 0.01ms flickers, so the arcs and the redirect ring stop instead. */
+  .arcs i, .leaving-mark::after { animation: none !important; }
+}
+
+/* More padding above laptop width, never more width. */
+@media (min-width: 1200px) {
+  .card { padding: 40px; }
+  .frame--narrow { width: min(460px, 100%); }
+  .columns { gap: 44px; }
+}
+
+@media (max-width: 720px) {
+  .card { padding: 24px 20px; border-radius: 14px; }
+  h1 { font-size: 24px; margin: 16px 0 22px; }
+  .columns { grid-template-columns: 1fr; gap: 24px; }
+  .columns .methods { margin-top: 0; }
+  /* Anything under 16px makes iOS Safari zoom on focus. */
+  input { font-size: 16px; }
+  .method { padding: 15px 16px; }
+}

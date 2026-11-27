@@ -74,7 +74,7 @@ var _ = Describe("OIDC userinfo endpoint", func() {
 			contact.PhoneNumber = phone
 		}
 		minter := jwtutil.NewMinter(backend.Issuer, backend.SigningKey, oidc.SigningKeyID)
-		token, err := minter.AccessToken(userID, testClientID, scope, "", "", contact)
+		token, err := minter.AccessToken(userID, testClientID, scope, "https://api.example.com", jwtutil.UserClaims{Contact: contact})
 		Expect(err).NotTo(HaveOccurred())
 		return token
 	}
@@ -115,6 +115,15 @@ var _ = Describe("OIDC userinfo endpoint", func() {
 		Expect(hasPhone).To(BeFalse())
 	})
 
+	It("answers for a token addressed to any of our APIs: it describes the sign-in, not an API (OIDC Core s5.3)", func() {
+		minter := jwtutil.NewMinter(backend.Issuer, backend.SigningKey, oidc.SigningKeyID)
+		token, err := minter.AccessToken("user-123", testClientID, "openid", "https://other.example.com", jwtutil.UserClaims{})
+		Expect(err).NotTo(HaveOccurred())
+		resp, err := handleUserinfoRequest(context.Background(), getRequest(token))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.StatusCode).To(Equal(200))
+	})
+
 	It("rejects a missing bearer token with 401 invalid_token (negative)", func() {
 		resp, err := handleUserinfoRequest(context.Background(), getRequest(""))
 		Expect(err).NotTo(HaveOccurred())
@@ -134,7 +143,7 @@ var _ = Describe("OIDC userinfo endpoint", func() {
 		// RFC 9700 §4: an id token is for the client, not a resource-server credential. userinfo
 		// must refuse it even though it is validly signed by the same issuer.
 		minter := jwtutil.NewMinter(backend.Issuer, backend.SigningKey, oidc.SigningKeyID)
-		idToken, err := minter.IDToken("user-123", testClientID, "", 0, jwtutil.Contact{})
+		idToken, err := minter.IDToken("user-123", testClientID, 0, jwtutil.UserClaims{})
 		Expect(err).NotTo(HaveOccurred())
 		resp, err := handleUserinfoRequest(context.Background(), getRequest(idToken))
 		Expect(err).NotTo(HaveOccurred())

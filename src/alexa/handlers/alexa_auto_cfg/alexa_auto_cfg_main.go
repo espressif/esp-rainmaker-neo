@@ -77,11 +77,10 @@ var errInvalidRequest = errors.New("invalid request")
 
 // accountLinkingConfig builds the account-linking inputs for the ESP User OIDC
 // provider: the authorize/token endpoints published in its discovery document and the
-// shared va-client credentials.
+// credentials of Alexa's own client.
 func accountLinkingConfig(ctx context.Context) (authURL, tokenURL, clientID, clientSecret string, err error) {
 	apiURL := strings.TrimSuffix(os.Getenv("ESP_USER_API_URL"), "/")
 	clientID = os.Getenv("OIDC_VA_CLIENT_ID")
-	// The secret's parameter name, not its value, is in the env: it comes from the same rmng base mirror as OIDC_VA_CLIENT_ID, so an installer override applies to both.
 	secretParam := os.Getenv("OIDC_VA_CLIENT_SECRET_PARAM")
 	if apiURL == "" || clientID == "" || secretParam == "" {
 		return "", "", "", "", rmerror.NewRMError(nil, "Account-linking config not set")
@@ -89,7 +88,7 @@ func accountLinkingConfig(ctx context.Context) (authURL, tokenURL, clientID, cli
 
 	clientSecret, err = ssmutil.GetParameterWithCaching(ctx, secretParam, true)
 	if err != nil || clientSecret == "" {
-		return "", "", "", "", rmerror.NewRMError(err, "Account-linking config not set: va-client secret unavailable")
+		return "", "", "", "", rmerror.NewRMError(err, "Account-linking config not set: the linking client's secret is unavailable")
 	}
 
 	return apiURL + "/oauth2/authorize", apiURL + "/oauth2/token", clientID, clientSecret, nil
@@ -344,7 +343,7 @@ func runConfigWorker(ctx context.Context, ev configWorkerEvent) {
 			return err
 		}) &&
 		// None when reusing the live skill without a named vendor: its URIs were registered when it went live.
-		(len(ev.RedirectURIs) == 0 || step("register va-client redirect URIs", func() error {
+		(len(ev.RedirectURIs) == 0 || step("register the linking client's redirect URIs", func() error {
 			return alexa_skill.UpdateVAClientRedirectURIs(ctx, os.Getenv("OIDC_VA_CLIENT_ID"), ev.RedirectURIs)
 		})) &&
 		// After the final manifest build, so the build does not reset it.

@@ -29,9 +29,9 @@ func TestSTCfg(t *testing.T) {
 	RunSpecs(t, "SmartThings Config Suite")
 }
 
-const vaClientID = "va-client"
+const vaClientID = "rainmaker-neo-smartthings-client"
 
-// seedVAClient adds the espuser-oauth-clients table and seeds the confidential va-client row Alexa/GVA/SmartThings update.
+// seedVAClient adds the espuser-oauth-clients table and seeds SmartThings' confidential client row the handler updates.
 func seedVAClient(ctx context.Context) {
 	awscommon.GetDynamoDBClient().(*mock.DynamoDBMock).AddTable("espuser-oauth-clients", "client_id", "")
 	svc := clients.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil))
@@ -45,7 +45,7 @@ func seedVAClient(ctx context.Context) {
 	Expect(err).To(BeNil())
 }
 
-// vaClientURIs reads the seeded va-client row's currently registered redirect URIs.
+// vaClientURIs reads the seeded client row's currently registered redirect URIs.
 func vaClientURIs(ctx context.Context) []string {
 	c, err := clients.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil)).Get(vaClientID)
 	Expect(err).To(BeNil())
@@ -101,7 +101,7 @@ var _ = Describe("SmartThings Config", func() {
 			Expect(ssmMock.Parameters[STSSMClientIDParam]).NotTo(BeNil())
 			Expect(ssmMock.Parameters[STSSMClientSecretParam]).NotTo(BeNil())
 
-			// The SmartThings callback URLs are registered on the OIDC va-client row
+			// The SmartThings callback URLs are registered on its own OIDC client
 			Expect(vaClientURIs(ctx)).To(ContainElements(stRedirectURIs))
 		})
 

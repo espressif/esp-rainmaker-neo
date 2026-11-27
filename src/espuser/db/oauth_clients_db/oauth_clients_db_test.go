@@ -79,6 +79,41 @@ var _ = Describe("OAuthClientsDB", func() {
 		})
 	})
 
+	Describe("BatchGetDisplays", func() {
+		BeforeEach(func() {
+			withLogo := newClient("rm_a")
+			withLogo.LogoURI = "data:image/png;base64,iVBORw0KGgo="
+			Expect(db.CreateClient(withLogo)).To(Succeed())
+			Expect(db.CreateClient(newClient("rm_b"))).To(Succeed())
+		})
+
+		It("reads only the id, name and logo of each registered client asked for, never its secret", func() {
+			got, err := db.BatchGetDisplays([]string{"rm_a", "rm_b"})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got).To(ConsistOf(
+				oauth_clients_db.OAuthClientEntry{ClientID: "rm_a", ClientName: "Test rm_a", LogoURI: "data:image/png;base64,iVBORw0KGgo="},
+				oauth_clients_db.OAuthClientEntry{ClientID: "rm_b", ClientName: "Test rm_b"},
+			))
+		})
+
+		It("omits an unknown id and answers no ids with an empty list (negative)", func() {
+			got, err := db.BatchGetDisplays([]string{"rm_a", "rm_missing"})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got).To(HaveLen(1))
+
+			none, err := db.BatchGetDisplays(nil)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(none).To(BeEmpty())
+		})
+
+		It("drains keys DynamoDB leaves unprocessed", func() {
+			dbMock.NextBatchGetUnprocessedCount = 2
+			got, err := db.BatchGetDisplays([]string{"rm_a", "rm_b"})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got).To(HaveLen(2))
+		})
+	})
+
 	Describe("CreateClient", func() {
 		It("fails on a duplicate client_id and leaves the existing row untouched", func() {
 			Expect(db.CreateClient(newClient("rm_dup"))).To(Succeed())

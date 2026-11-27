@@ -31,6 +31,8 @@ import (
 	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/jwtutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -1244,6 +1246,7 @@ var _ = Describe("MCP Main", func() {
 			Expect(err).NotTo(HaveOccurred())
 			os.Setenv("USER_JWKS_PARA_NAME", jwksParam)
 			os.Unsetenv("SSM_" + strings.ToUpper(jwksParam))
+			os.Setenv("ACCEPTED_AUDIENCES", mcpResource)
 			server = createServer()
 		})
 
@@ -1251,10 +1254,19 @@ var _ = Describe("MCP Main", func() {
 			jwksServer.Close()
 			os.Unsetenv("USER_ISSUER")
 			os.Unsetenv("USER_JWKS_PARA_NAME")
+			os.Unsetenv("ACCEPTED_AUDIENCES")
 		})
 
+		// mcpAccessToken mints an ESP User access token addressed to this MCP server.
+		mcpAccessToken := func() string {
+			token, err := jwtutil.NewMinter(issuer, test_utils.TestJWKUtil.SigningKey(), oidc.SigningKeyID).
+				AccessToken(userID, "mcp-oauth-client", "openid email", mcpResource, jwtutil.UserClaims{Contact: jwtutil.Contact{Email: "test@example.com"}})
+			Expect(err).NotTo(HaveOccurred())
+			return token
+		}
+
 		It("resolves the user by sub for a valid ESP User token", func() {
-			token := test_utils.TestJWKUtil.GetIdentityToken(userID, issuer, "access", false, false, "test@example.com", "")
+			token := mcpAccessToken()
 
 			testUser := user.NewUser(userID)
 			rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, testUser)
@@ -1267,7 +1279,7 @@ var _ = Describe("MCP Main", func() {
 		})
 
 		It("authenticates and returns node params with a valid ESP User token", func() {
-			token := test_utils.TestJWKUtil.GetIdentityToken(userID, issuer, "access", false, false, "test@example.com", "")
+			token := mcpAccessToken()
 
 			testUser := user.NewUser(userID)
 			rmngCtx := rmngctx.NewRmngContextWithCtx(ctx, testUser)
@@ -1356,6 +1368,9 @@ var _ = Describe("MCP Main", func() {
 	})
 
 })
+
+// mcpResource is the MCP server's RFC 8707 name, the audience its tokens must carry.
+const mcpResource = "https://mcp.example.com/v1/mcp"
 
 func TestMCP(t *testing.T) {
 	RegisterFailHandler(Fail)

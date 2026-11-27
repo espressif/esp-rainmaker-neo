@@ -26,7 +26,7 @@ from src.espuser.stacks.base_res_constants import (
 
 class AuthorizeAPI(Construct):
     """Browser authorization-code + PKCE login: GET /oauth2/authorize and the service-served
-    login UI at GET /oauth2/login. authorize validates the request against the client registry,
+    login UI under /user/ (GET /user/login). authorize validates the request against the client registry,
     writes a LOGIN flow record, and 302s to the login page (flow_id cookie); the page drives OTP
     against /v1/auth/otp/*. See espuser/docs/en/specs/authorize-code-flow.md.
     """
@@ -38,8 +38,9 @@ class AuthorizeAPI(Construct):
         function_name = "authorize"
         authorize_lambda_role = create_base_lambda_role(self, function_name, common_resources)
 
+        # DeleteItem ends a sign-in the person cancelled, on the consent screen or at a lone provider.
         authorize_lambda_role.add_to_policy(iam.PolicyStatement(
-            actions=["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:GetItem"],
+            actions=["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:GetItem", "dynamodb:DeleteItem"],
             resources=[get_table_arn(USER_TABLE_NAMES['AUTH_FLOWS'], region)],
         ))
 
@@ -79,10 +80,20 @@ class AuthorizeAPI(Construct):
             resources=[get_table_arn(USER_TABLE_NAMES['SESSIONS'], region)],
         ))
 
+        # POST /user/login/password checks the password against the provider row's pool.
+        authorize_lambda_role.add_to_policy(iam.PolicyStatement(
+            actions=["cognito-idp:InitiateAuth"],
+            # Unscoped because the provider's pool may be in another account, so there is no ARN of ours to name; InitiateAuth is unauthenticated, so the grant confers no privilege.
+            resources=["*"],
+        ))
+
         authorize_lambda_role.add_to_policy(iam.PolicyStatement(
             actions=["ssm:GetParameter"],
             resources=[
                 get_ssm_parameter_arn(USER_SSM_PARAMETERS['ESP_USER_REFRESH_SECRET'], region),
+                get_ssm_parameter_arn(USER_SSM_PARAMETERS['ESP_USER_SUPPORT_URL'], region),
+                get_ssm_parameter_arn(USER_SSM_PARAMETERS['ESP_USER_PRIVACY_URL'], region),
+                get_ssm_parameter_arn(USER_SSM_PARAMETERS['ESP_USER_TERMS_URL'], region),
             ],
         ))
 
@@ -96,57 +107,124 @@ class AuthorizeAPI(Construct):
                 # redirect_uri the hosted UI rejects with 400.
                 "ESPUSER_FEDERATION_CALLBACK_URL": f"{common_resources.esp_user_api_url}/oauth2/federation/callback",
                 "ESPUSER_REFRESH_SECRET_PARAM": USER_SSM_PARAMETERS['ESP_USER_REFRESH_SECRET'],
+                "ESPUSER_SUPPORT_URL_PARAM": USER_SSM_PARAMETERS['ESP_USER_SUPPORT_URL'],
+                "ESPUSER_PRIVACY_URL_PARAM": USER_SSM_PARAMETERS['ESP_USER_PRIVACY_URL'],
+                "ESPUSER_TERMS_URL_PARAM": USER_SSM_PARAMETERS['ESP_USER_TERMS_URL'],
             },
         )
 
-        # API Gateway resources via CFn to avoid cyclic dependencies. Both /oauth2/authorize
-        # and /oauth2/login are GET and unauthenticated (the login page is the entry point).
+        # API Gateway resources via CFn to avoid cyclic dependencies. All are GET (consent and the password form also POST) and unauthenticated: the authorize endpoint and the pages under /user/ are browser entry points.
+        api_id = common_resources.esp_user_api_id
         oauth2_parent_id = get_or_create_api_resource(
             self, "OAuth2Resource", common_resources,
             common_resources.esp_user_api_root_resource_id, "oauth2",
-            api_id=common_resources.esp_user_api_id
+            api_id=api_id
+        )
+        user_parent_id = get_or_create_api_resource(
+            self, "UserResource", common_resources,
+            common_resources.esp_user_api_root_resource_id, "user",
+            api_id=api_id
+        )
+        login_parent_id = get_or_create_api_resource(
+            self, "UserLoginResource", common_resources,
+            user_parent_id, "login",
+            api_id=api_id
         )
 
-        for verb_id, path_part in (("Authorize", "authorize"), ("Login", "login")):
-            resource_id = get_or_create_api_resource(
-                self, f"OAuth2{verb_id}Resource", common_resources,
-                oauth2_parent_id, path_part,
-                api_id=common_resources.esp_user_api_id
-            )
-
+        authorize_resource_id = get_or_create_api_resource(
+            self, "OAuth2AuthorizeResource", common_resources,
+            oauth2_parent_id, "authorize",
+            api_id=api_id
+        )
+        for method_id, resource_id in (("OAuth2Authorize", authorize_resource_id), ("UserLogin", login_parent_id)):
             create_cfn_api_method(
-                self, f"OAuth2{verb_id}GetMethod", common_resources,
+                self, f"{method_id}GetMethod", common_resources,
                 resource_id, "GET", self.authorize_function,
                 authorization_type="NONE",  # Browser entry point; no bearer yet
-                api_id=common_resources.esp_user_api_id
+                api_id=api_id
             )
 
             add_cors_options(
-                self, f"OAuth2{verb_id}OptionsMethod", common_resources,
+                self, f"{method_id}OptionsMethod", common_resources,
                 resource_id, allowed_methods=["GET"],
-                api_id=common_resources.esp_user_api_id
+                api_id=api_id
             )
 
-        # Unauthenticated: the HMAC-signed upstream state is the credential on the callback.
-        federation_parent_id = get_or_create_api_resource(
-            self, "OAuth2FederationResource", common_resources,
-            oauth2_parent_id, "federation",
-            api_id=common_resources.esp_user_api_id
+        create_cfn_api_method(
+            self, "UserLoginRestartMethod", common_resources,
+            get_or_create_api_resource(
+                self, "UserLoginRestartResource", common_resources,
+                login_parent_id, "restart",
+                api_id=api_id
+            ),
+            "GET", self.authorize_function,
+            authorization_type="NONE",  # a browser navigation, same as /user/login
+            api_id=api_id
         )
-        for verb_id, path_part in (("Start", "start"), ("Callback", "callback")):
+
+        # GET draws the consent screen and POST records the answer; the flow cookie, not a bearer, names the sign-in.
+        consent_resource_id = get_or_create_api_resource(
+            self, "UserLoginConsentResource", common_resources,
+            login_parent_id, "consent",
+            api_id=api_id
+        )
+        for verb in ("GET", "POST"):
+            create_cfn_api_method(
+                self, f"UserLoginConsent{verb.title()}Method", common_resources,
+                consent_resource_id, verb, self.authorize_function,
+                authorization_type="NONE",
+                api_id=api_id
+            )
+
+        # The page's password form; the flow cookie, not a bearer, names the sign-in.
+        create_cfn_api_method(
+            self, "UserLoginPasswordPostMethod", common_resources,
+            get_or_create_api_resource(
+                self, "UserLoginPasswordResource", common_resources,
+                login_parent_id, "password",
+                api_id=api_id
+            ),
+            "POST", self.authorize_function,
+            authorization_type="NONE",
+            api_id=api_id
+        )
+
+        # The sign-out question /oauth2/logout sends a browser to; its POST, the person's answer, is the sessions Lambda's.
+        create_cfn_api_method(
+            self, "UserLogoutGetMethod", common_resources,
+            get_or_create_api_resource(
+                self, "UserLogoutResource", common_resources,
+                user_parent_id, "logout",
+                api_id=api_id
+            ),
+            "GET", self.authorize_function,
+            authorization_type="NONE",  # a browser navigation, same as /user/login
+            api_id=api_id
+        )
+
+        # Unauthenticated: the start link is a button on the login page, and the HMAC-signed upstream state is the credential on the callback.
+        for verb_id, parent_id, parent_label in (
+            ("Start", login_parent_id, "UserLogin"),
+            ("Callback", oauth2_parent_id, "OAuth2"),
+        ):
+            federation_parent_id = get_or_create_api_resource(
+                self, f"{parent_label}FederationResource", common_resources,
+                parent_id, "federation",
+                api_id=api_id
+            )
             resource_id = get_or_create_api_resource(
                 self, f"Federation{verb_id}Resource", common_resources,
-                federation_parent_id, path_part,
-                api_id=common_resources.esp_user_api_id
+                federation_parent_id, verb_id.lower(),
+                api_id=api_id
             )
             create_cfn_api_method(
                 self, f"Federation{verb_id}GetMethod", common_resources,
                 resource_id, "GET", self.authorize_function,
                 authorization_type="NONE",
-                api_id=common_resources.esp_user_api_id
+                api_id=api_id
             )
             add_cors_options(
                 self, f"Federation{verb_id}OptionsMethod", common_resources,
                 resource_id, allowed_methods=["GET"],
-                api_id=common_resources.esp_user_api_id
+                api_id=api_id
             )

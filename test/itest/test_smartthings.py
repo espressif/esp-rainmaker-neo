@@ -26,7 +26,12 @@ import pytest
 import requests
 
 from py_sdk.test_group import Group
-from py_sdk.test_smartthings import cookie_for, st_external_device_id
+from py_sdk.test_smartthings import (
+    cookie_for,
+    discovery_request,
+    invoke_schema_app,
+    st_external_device_id,
+)
 from test.itest.conftest import REGION, accept_sharing_request_for, rmng_outputs
 
 # ---------------------------------------------------------------------------
@@ -369,6 +374,22 @@ def test_smartthings_state_refresh_rejects_foreign_device(victim_device_and_atta
     assert not leaked, (
         f"region {region}: user1's device state leaked to user2: {leaked}"
     )
+
+
+def test_smartthings_rejects_a_token_for_another_api(test_user1, st_region_arn):
+    """The Schema App accepts only tokens addressed to neo (RFC 9068 s4), so the same person's ESP User API token is answered isAuthenticated false."""
+    region, arn = st_region_arn
+    signin = test_user1.signin()
+    assert signin.status_code == 200, signin.text
+
+    accepted = invoke_schema_app(discovery_request(test_user1.access_token), arn, region)
+    assert accepted.get("isAuthenticated") is not False, f"region {region}: the neo token must authenticate: {accepted}"
+    assert accepted["headers"]["interactionType"] == "discoveryResponse", f"region {region}: {accepted}"
+
+    refused = invoke_schema_app(discovery_request(test_user1.user_api_token()), arn, region)
+    assert refused.get("isAuthenticated") is False, \
+        f"region {region}: a token addressed to the ESP User API must not authenticate: {refused}"
+    assert not refused.get("devices"), f"region {region}: {refused}"
 
 
 # ---------------------------------------------------------------------------

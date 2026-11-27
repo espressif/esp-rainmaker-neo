@@ -32,6 +32,10 @@ agent/
 .claude/settings*json
 rmng-inputs.json
 dist/
+# go:embed needs the directory to exist on a clean checkout; the bundle itself is still ignored.
+!src/espuser/hosted-ui/dist/
+src/espuser/hosted-ui/dist/*
+!src/espuser/hosted-ui/dist/.gitkeep
 misc/plans/IMPLEMENTATION_PLAN.md
 
 

@@ -42,6 +42,7 @@ jobs:
       api_docs: ${{ steps.filter.outputs.api_docs }}
       mqtt: ${{ steps.filter.outputs.mqtt }}
       cli: ${{ steps.filter.outputs.cli }}
+      hosted_ui: ${{ steps.filter.outputs.hosted_ui }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -56,6 +57,7 @@ jobs:
             echo "api_docs=true" >> "$GITHUB_OUTPUT"
             echo "mqtt=true" >> "$GITHUB_OUTPUT"
             echo "cli=true" >> "$GITHUB_OUTPUT"
+            echo "hosted_ui=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # merge-base, not the base tip: unrelated commits landing on main
@@ -70,6 +72,7 @@ jobs:
           echo "api_docs=$(check 'docs/api/**')" >> "$GITHUB_OUTPUT"
           echo "mqtt=$(check docs/api/MQTT_*.yaml docs/api/Push_*.yaml)" >> "$GITHUB_OUTPUT"
           echo "cli=$(check 'cli/**' 'py_sdk/**' 'scripts/rmng_outputs.py' 'tools/**' 'test/helpers/**')" >> "$GITHUB_OUTPUT"
+          echo "hosted_ui=$(check 'src/espuser/hosted-ui/**')" >> "$GITHUB_OUTPUT"
 
   # The esp-morpheus CLI's offline suite: the command tree, the shell and the output
   # formatter, plus a load check of the in-repo scripts built on the SDK. Needs no AWS credentials and no deployment.
@@ -90,10 +93,11 @@ jobs:
   # Ginkgo across all three go.work modules. `make test` delegates to each
   # submodule's own `make test` (TEST_SUBMODULES) because ginkgo's package
   # discovery stops at Go module boundaries.
+  # It also builds and unit-tests the sign-in page, whose tests run as TypeScript straight under Node 24.
   unittest:
     name: Unit tests
     needs: changes
-    if: needs.changes.outputs.go == 'true'
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.hosted_ui == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -102,6 +106,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: src/espuser/hosted-ui/package-lock.json
       - name: Install test tooling
         run: |
           go install github.com/onsi/ginkgo/v2/ginkgo@${GINKGO_VERSION}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/espressif/esp-rainmaker-neo/src/utils/oidc"
 
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/oauth_clients_db"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/user_details_db"
 	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/jwtutil"
@@ -38,6 +39,7 @@ var _ = Describe("User Common Handler", func() {
 	BeforeEach(func() {
 		ctx = context.Background()
 		backend = test_utils.SetupEspUserBackend(ctx, test_utils.EspUserBackendOpts{WithJWKS: true})
+		registerClient(ctx, testClientID, true)
 	})
 
 	AfterEach(func() {
@@ -56,7 +58,7 @@ var _ = Describe("User Common Handler", func() {
 			})).To(Succeed())
 
 			minter := jwtutil.NewMinter(backend.Issuer, backend.SigningKey, oidc.SigningKeyID)
-			token, err := minter.AccessToken(userID, testClientID, "openid email", "", "", jwtutil.Contact{})
+			token, err := minter.AccessToken(userID, testClientID, "openid email", "https://api.example.com", jwtutil.UserClaims{})
 			Expect(err).NotTo(HaveOccurred())
 			return token
 		}
@@ -80,6 +82,42 @@ var _ = Describe("User Common Handler", func() {
 			Expect(json.Unmarshal([]byte(response.Body), &body)).To(Succeed())
 			return response.StatusCode, body
 		}
+
+		// tokenFor mints an access token for userID from clientID, addressed to audience.
+		tokenFor := func(userID, clientID, audience string) string {
+			minter := jwtutil.NewMinter(backend.Issuer, backend.SigningKey, oidc.SigningKeyID)
+			token, err := minter.AccessToken(userID, clientID, "openid email", audience, jwtutil.UserClaims{})
+			Expect(err).NotTo(HaveOccurred())
+			return token
+		}
+
+		It("returns the profile for a token addressed to another of our APIs", func() {
+			userID, email := "get-user-any-api", "get-user-any-api@example.com"
+			seedUser(userID, email)
+
+			status, body := fetchProfile(buildGetUserRequest(tokenFor(userID, testClientID, "https://other-api.example.com"), "me"))
+			Expect(status).To(Equal(http.StatusOK))
+			Expect(body).To(Equal(GetUserResponse{UserID: userID, Email: email}))
+		})
+
+		It("403s a valid user token from a third-party client (negative, not first-party)", func() {
+			userID := "get-user-third-party"
+			seedUser(userID, "get-user-third-party@example.com")
+			registerClient(ctx, "va-client", false)
+
+			response, err := handleRequest(ctx, buildGetUserRequest(tokenFor(userID, "va-client", "https://api.example.com"), "me"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(response.StatusCode).To(Equal(http.StatusForbidden))
+		})
+
+		It("403s a token from a client that is not registered (negative)", func() {
+			userID := "get-user-unknown-client"
+			seedUser(userID, "get-user-unknown-client@example.com")
+
+			response, err := handleRequest(ctx, buildGetUserRequest(tokenFor(userID, "rm_unregistered", "https://api.example.com"), "me"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(response.StatusCode).To(Equal(http.StatusForbidden))
+		})
 
 		It("should return the caller's own profile when userId is 'me'", func() {
 			userID, email := "get-user-me", "get-user-me@example.com"
@@ -149,3 +187,10 @@ var _ = Describe("User Common Handler", func() {
 		})
 	})
 })
+
+// registerClient puts clientID in the client registry, which /v1/users/* reads for first-party standing.
+func registerClient(ctx context.Context, clientID string, firstParty bool) {
+	Expect(oauth_clients_db.NewOAuthClientsDB(rmngctx.NewRmngContextWithCtx(ctx, nil)).CreateClient(&oauth_clients_db.OAuthClientEntry{
+		ClientID: clientID, ClientType: oauth_clients_db.ClientTypePublic, FirstParty: firstParty,
+	})).To(Succeed())
+}

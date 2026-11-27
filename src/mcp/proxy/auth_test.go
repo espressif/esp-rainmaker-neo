@@ -25,7 +25,11 @@ func TestMCPAuth(t *testing.T) {
 	RunSpecs(t, "MCP OIDC Auth Suite")
 }
 
-const testClientID = "this-servers-client-id"
+// The MCP server's two names: its execute-api URL and its custom domain's, each with the /v1/mcp resource path.
+const (
+	mcpExecuteAPI = "https://abc123.execute-api.us-east-1.amazonaws.com/v1/mcp"
+	mcpDomain     = "https://mcp.example.com/v1/mcp"
+)
 
 type stubUser struct {
 	id  string
@@ -52,7 +56,7 @@ var _ = Describe("MCP OIDC authenticator", func() {
 		return jwt.MapClaims{
 			"iss":       backend.Issuer,
 			"sub":       "user-abc",
-			"aud":       testClientID,
+			"aud":       mcpDomain,
 			"exp":       time.Now().Add(time.Hour).Unix(),
 			"iat":       time.Now().Unix(),
 			"token_use": jwtutil.TokenUseAccess,
@@ -70,7 +74,7 @@ var _ = Describe("MCP OIDC authenticator", func() {
 			resolved = userID
 			return stubUser{id: userID, ctx: ctx}, nil
 		}
-		auth = NewOIDCAuthenticator(backend.Issuer, testClientID, test_utils.EspUserJWKSParam, resolver)
+		auth = NewOIDCAuthenticator(backend.Issuer, []string{mcpExecuteAPI, mcpDomain}, test_utils.EspUserJWKSParam, resolver)
 	})
 
 	AfterEach(func() { backend.Close() })
@@ -99,10 +103,29 @@ var _ = Describe("MCP OIDC authenticator", func() {
 		Expect(err).To(HaveOccurred())
 	})
 
-	It("rejects a token minted for a different audience/client (negative)", func() {
+	It("accepts a token addressed to the server's execute-api name, so tokens minted before a domain was mapped keep working", func() {
 		claims := validAccessClaims()
-		claims["aud"] = "some-other-client"
+		claims["aud"] = mcpExecuteAPI
 		_, err := auth(context.Background(), requestWith(signToken(oidc.SigningKeyID, claims)))
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	DescribeTable("rejects a token addressed to anything but this server (negative, RFC 9068 s4)",
+		func(aud string) {
+			claims := validAccessClaims()
+			claims["aud"] = aud
+			_, err := auth(context.Background(), requestWith(signToken(oidc.SigningKeyID, claims)))
+			Expect(err).To(HaveOccurred())
+		},
+		Entry("the proxy's client id", "mcp-oauth-client"),
+		Entry("another of our APIs", "https://api.example.com"),
+	)
+
+	It("rejects every token when the server was given no audiences (negative)", func() {
+		closed := NewOIDCAuthenticator(backend.Issuer, nil, test_utils.EspUserJWKSParam, func(ctx context.Context, userID string) (UserContext, error) {
+			return stubUser{id: userID, ctx: ctx}, nil
+		})
+		_, err := closed(context.Background(), requestWith(signToken(oidc.SigningKeyID, validAccessClaims())))
 		Expect(err).To(HaveOccurred())
 	})
 

@@ -24,6 +24,9 @@ const (
 
 	ClientTypePublic       = "public"
 	ClientTypeConfidential = "confidential"
+
+	ApplicationTypeWeb    = "web"
+	ApplicationTypeNative = "native"
 )
 
 var ErrOAuthClientNotFound = errors.New("oauth client not found")
@@ -45,11 +48,13 @@ func NewOAuthClientsDB(ctx *rmngctx.RmngContext) *OAuthClientsDB {
 
 // OAuthClientEntry is one registered client. Secret is stored plaintext so List can return it (get_secret).
 type OAuthClientEntry struct {
-	ClientID     string   `dynamodbav:"client_id"`
-	ClientName   string   `dynamodbav:"client_name,omitempty"`
-	ClientType   string   `dynamodbav:"client_type,omitempty"`
-	Secret       string   `dynamodbav:"secret,omitempty"`
-	RedirectURIs []string `dynamodbav:"redirect_uris,stringset,omitempty"`
+	ClientID   string `dynamodbav:"client_id"`
+	ClientName string `dynamodbav:"client_name,omitempty"`
+	ClientType string `dynamodbav:"client_type,omitempty"`
+	// ApplicationType is OIDC Dynamic Client Registration 1.0 s2's application_type; a native app's login gets a session of its own rather than the browser's that approved it. Absent reads as web.
+	ApplicationType string   `dynamodbav:"application_type,omitempty"`
+	Secret          string   `dynamodbav:"secret,omitempty"`
+	RedirectURIs    []string `dynamodbav:"redirect_uris,stringset,omitempty"`
 	// PostLogoutRedirectURIs is where /oauth2/logout may return the browser afterwards.
 	// Validated by EXACT match, exactly like redirect_uris and for exactly the same reason:
 	// an unvalidated return URL turns the logout endpoint into an open redirect that borrows
@@ -61,10 +66,10 @@ type OAuthClientEntry struct {
 	PostLogoutRedirectURIs []string `dynamodbav:"post_logout_redirect_uris,stringset,omitempty"`
 	GrantTypes             []string `dynamodbav:"grant_types,omitempty"`
 	Scopes                 []string `dynamodbav:"scopes,omitempty"`
-	// AllowedResources are the RFC 8707 resource identifiers this client may request an
-	// access token for. Empty means the client may request none -- a token then carries
-	// aud = client_id, which is what a deployment that never uses the extension sees.
+	// AllowedResources are the RFC 8707 resource identifiers this client may request an access token for. Empty means none.
 	AllowedResources []string `dynamodbav:"allowed_resources,omitempty"`
+	// DefaultResource is the one resource used when a request names none (RFC 9068 s3); empty means such a request fails with invalid_target.
+	DefaultResource string `dynamodbav:"default_resource,omitempty"`
 	// AllowedProviders narrows which identity providers this client offers at login.
 	//
 	// Absent means NO RESTRICTION -- the opposite of AllowedResources above, deliberately.
@@ -74,6 +79,9 @@ type OAuthClientEntry struct {
 
 	// FirstParty marks a client this account ships itself (web dashboard, mobile app) rather than a delegated third party (voice assistant, MCP). Only a first-party client may manage a user's own sessions. Absent reads as false: first-party is opt-in, set at registration, so a client made before this field, or any third party, is correctly not one.
 	FirstParty bool `dynamodbav:"first_party,omitempty"`
+
+	// LogoURI is an inline data: image shown on the consent screen; inline because the page's CSP admits no remote image origin.
+	LogoURI string `dynamodbav:"logo_uri,omitempty"`
 
 	// TokenEndpointAuthMethod overrides the value otherwise derived from client_type: none
 	// for public, client_secret_basic for confidential.
@@ -102,6 +110,22 @@ func (db *OAuthClientsDB) GetClient(clientID string) (*OAuthClientEntry, error) 
 		return nil, ErrOAuthClientNotFound
 	}
 	return &entry, nil
+}
+
+// BatchGetDisplays returns the registered clients among clientIDs with only client_id, client_name and logo_uri read, so a caller showing apps to their user never loads a secret; unknown ids are omitted.
+func (db *OAuthClientsDB) BatchGetDisplays(clientIDs []string) ([]OAuthClientEntry, error) {
+	if len(clientIDs) == 0 {
+		return []OAuthClientEntry{}, nil
+	}
+	keys := make([]ddbu.Key, 0, len(clientIDs))
+	for _, id := range clientIDs {
+		keys = append(keys, db.clients.Key(id))
+	}
+	entries, err := db.clients.BatchGet(db.Ctx.Context, keys, ddbu.ReadOpts{Project: []string{oauthClientsHashKey, "client_name", "logo_uri"}})
+	if err != nil {
+		return nil, rmerror.NewRMError(err, "failed to batch get oauth clients")
+	}
+	return entries, nil
 }
 
 // ListClients scans the whole (small, admin-only) table and returns every client.

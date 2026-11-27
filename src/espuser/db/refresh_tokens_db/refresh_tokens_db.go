@@ -11,6 +11,7 @@ import (
 	"errors"
 
 	ddbu "github.com/espressif/esp-rainmaker-neo/src/awsutils/dynamodbutil"
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/scope"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmerror"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
@@ -33,6 +34,10 @@ var (
 	// Presented counter is below the family's current counter: a spent/replayed token (reuse=theft).
 	ErrRefreshReuse   = errors.New("refresh token reuse detected")
 	ErrRefreshExpired = errors.New("refresh token expired")
+	// The token was issued to a different client than the one presenting it (RFC 6749 s6, RFC 7009 s2.1).
+	ErrRefreshClientMismatch = errors.New("refresh token client mismatch")
+	// The token is empty, malformed or not signed by us, so it names no family (RFC 7009 s2.2: revoking it is a no-op).
+	ErrRefreshInvalid = errors.New("invalid refresh token")
 )
 
 type RefreshTokensDB struct {
@@ -60,22 +65,31 @@ type FamilyEntry struct {
 	FamilyID     string `dynamodbav:"family_id,omitempty"`
 	Counter      int64  `dynamodbav:"counter"`
 	Scope        string `dynamodbav:"scope,omitempty"`
-	// Resource pins the audience of every access token this family will ever mint. The
-	// access token is renewed silently for as long as the login lasts, so a family that
-	// forgot it would start issuing tokens the resource server refuses, an hour after the
-	// login and nowhere near the cause. Empty on families minted before the field existed;
-	// those keep producing aud = client_id, which is what they always did.
-	Resource string `dynamodbav:"resource,omitempty"`
-	// SID names the browser session this login ran under (the sessions table's public id), so ending a session can end the refresh families created through it. Empty when the session write failed or the family predates sessions.
+	// Resources are the RFC 8707 resources the sign-in covers; every renewal mints its one audience from among them.
+	Resources []string `dynamodbav:"resources,omitempty"`
+	// SID names the browser session this login ran under (the sessions table's public id), so ending a session can end the refresh families created through it. Empty for an offline_access grant, or when the session write failed or the family predates sessions.
 	SID string `dynamodbav:"sid,omitempty"`
 	// AuthTime is the login's authentication time, so a refreshed ID token never claims a fresh sign-in; zero on older families.
-	AuthTime  int64 `dynamodbav:"auth_time,omitempty"`
-	ExpiresOn int64 `dynamodbav:"expires_on,omitempty"`
+	AuthTime int64 `dynamodbav:"auth_time,omitempty"`
+	// AMR and Provider are the login's methods and provider row, re-stamped as amr and idp on every renewal; empty when the login had none and on older families.
+	AMR       []string `dynamodbav:"amr,omitempty"`
+	Provider  string   `dynamodbav:"provider,omitempty"`
+	ExpiresOn int64    `dynamodbav:"expires_on,omitempty"`
 	// RotatedAt (unix secs) bounds the reuse grace so a lost rotation response can be retried.
 	RotatedAt int64 `dynamodbav:"rotated_at,omitempty"`
 	// CreatedAt is when this application first got a token under this login. A sessions
 	// screen reads it as "connected since"; rotated_at is the "last used" beside it.
 	CreatedAt int64 `dynamodbav:"created_at,omitempty"`
+}
+
+// IsOffline reports whether the family is an offline_access grant, the kind no sign-out ends (OIDC Core 1.0 s11).
+func (e *FamilyEntry) IsOffline() bool {
+	return scope.HasOfflineAccess(e.Scope)
+}
+
+// IsExpired reports whether the family is past its expiry at now; the table's TTL deletes it only some time later.
+func (e *FamilyEntry) IsExpired(now int64) bool {
+	return e.ExpiresOn > 0 && e.ExpiresOn <= now
 }
 
 // SetKey composes the SK from client_id + family_id.
@@ -139,21 +153,6 @@ func (db *RefreshTokensDB) DeleteFamily(userID, clientID, familyID string) error
 	return nil
 }
 
-// DeleteAllForUser removes every family row for a user — "sign out everywhere" / compromise
-// response. The user partition listed, then a delete per family; no GSI.
-func (db *RefreshTokensDB) DeleteAllForUser(userID string) error {
-	rows, err := db.ListByUser(userID)
-	if err != nil {
-		return err
-	}
-	for i := range rows {
-		if err := db.families.Delete(db.Ctx.Context, db.familyKey(rows[i].UserID, rows[i].ClientID, rows[i].FamilyID)); err != nil {
-			return rmerror.NewRMError(err, "failed to delete refresh token family")
-		}
-	}
-	return nil
-}
-
 // ListByUser returns every refresh family a user holds -- one per application per login.
 // The base table is already partitioned by user_id, so this is a plain Query and needs no
 // index: "what am I signed in to" was always answerable, it is reaching the SESSION rows
@@ -166,29 +165,13 @@ func (db *RefreshTokensDB) ListByUser(userID string) ([]FamilyEntry, error) {
 	return page.Items, nil
 }
 
-// DeleteBySID deletes every family created through one browser session, and reports how
-// many went. This is what makes one sign-out reach every product opened in that browser:
-// the session is the parent, the families are its children, and sid is the link already
-// stored on each row.
-//
-// Families with no sid are left alone. They predate sessions or were minted after a failed session write, and deleting a family we cannot prove belongs to this session would sign the user out of something they never asked about.
-func (db *RefreshTokensDB) DeleteBySID(userID, sid string) (int, error) {
-	if sid == "" {
-		return 0, nil
-	}
-	rows, err := db.ListByUser(userID)
+// ListByUserAndClient returns every family one client holds for a user; the "#" in the prefix keeps client "app" from matching client "app-2".
+func (db *RefreshTokensDB) ListByUserAndClient(userID, clientID string) ([]FamilyEntry, error) {
+	keyCond := expression.Key(refreshTokensHashKey).Equal(expression.Value(userID)).
+		And(expression.Key(refreshTokensRangeKey).BeginsWith(clientID + refreshTokensSKSep))
+	page, err := db.families.Query(db.Ctx.Context, keyCond)
 	if err != nil {
-		return 0, err
+		return nil, rmerror.NewRMError(err, "failed to query a client's refresh token families")
 	}
-	deleted := 0
-	for i := range rows {
-		if rows[i].SID != sid {
-			continue
-		}
-		if err := db.families.Delete(db.Ctx.Context, db.familyKey(rows[i].UserID, rows[i].ClientID, rows[i].FamilyID)); err != nil {
-			return deleted, rmerror.NewRMError(err, "failed to delete refresh token family")
-		}
-		deleted++
-	}
-	return deleted, nil
+	return page.Items, nil
 }

@@ -46,11 +46,16 @@ type ClientWriteRequest struct {
 	// AllowedResources are the RFC 8707 resource identifiers this client may request a
 	// token for. Absent means none -- never "any".
 	AllowedResources *[]string `json:"allowed_resources,omitempty"`
+	DefaultResource  *string   `json:"default_resource,omitempty"`
 	// Which identity providers this client offers at login. Absent means all of them.
 	AllowedProviders *[]string `json:"allowed_providers,omitempty"`
 	RequirePKCE      *bool     `json:"require_pkce,omitempty"`
 	// FirstParty marks a client we ship ourselves; only a first-party client may manage a user's own sessions.
 	FirstParty bool `json:"first_party,omitempty"`
+	// ApplicationType is web or native (OIDC Dynamic Client Registration 1.0 s2); an update that omits it keeps the stored one.
+	ApplicationType string `json:"application_type,omitempty"`
+	// LogoURI is shown on the consent screen: a data:image/png, jpeg or webp URI of at most 4 KiB.
+	LogoURI string `json:"logo_uri,omitempty"`
 }
 
 // requireAdmin gates on the token verifying against the admin user pool via auth.RequireAdmin, mapping its errors to status codes.
@@ -80,14 +85,17 @@ func handleCreate(ctx context.Context, request events.APIGatewayProxyRequest) (e
 		ClientID:               req.ClientID,
 		ClientName:             derefStr(req.ClientName),
 		ClientType:             req.ClientType,
+		ApplicationType:        req.ApplicationType,
 		RedirectURIs:           derefSlice(req.RedirectURIs),
 		PostLogoutRedirectURIs: derefSlice(req.PostLogoutRedirectURIs),
 		GrantTypes:             derefSlice(req.GrantTypes),
 		Scopes:                 derefSlice(req.Scopes),
 		AllowedResources:       derefSlice(req.AllowedResources),
+		DefaultResource:        derefStr(req.DefaultResource),
 		AllowedProviders:       derefSlice(req.AllowedProviders),
 		RequirePKCE:            req.RequirePKCE,
 		FirstParty:             req.FirstParty,
+		LogoURI:                req.LogoURI,
 	})
 	if err != nil {
 		// A validation failure or a duplicate client_id is a 400 (client's fault).
@@ -122,14 +130,17 @@ func handlePut(ctx context.Context, request events.APIGatewayProxyRequest) (even
 	// PUT is a full replace: the body is the complete desired state of the mutable fields.
 	client, err := clientsService(ctx).Update(clientID(request), clients.UpdateInput{
 		ClientName:             derefStr(req.ClientName),
+		ApplicationType:        req.ApplicationType,
 		RedirectURIs:           derefSlice(req.RedirectURIs),
 		PostLogoutRedirectURIs: derefSlice(req.PostLogoutRedirectURIs),
 		GrantTypes:             derefSlice(req.GrantTypes),
 		Scopes:                 derefSlice(req.Scopes),
 		AllowedResources:       derefSlice(req.AllowedResources),
+		DefaultResource:        derefStr(req.DefaultResource),
 		AllowedProviders:       derefSlice(req.AllowedProviders),
 		RequirePKCE:            req.RequirePKCE,
 		FirstParty:             req.FirstParty,
+		LogoURI:                req.LogoURI,
 	})
 	if err != nil {
 		if errors.Is(err, oauth_clients_db.ErrOAuthClientNotFound) {

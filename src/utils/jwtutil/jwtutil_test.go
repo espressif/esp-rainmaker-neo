@@ -307,7 +307,7 @@ var _ = Describe("Minter over a crypto.Signer", func() {
 		kid := jwtutil.RSAThumbprint(&priv.PublicKey)
 		minter := jwtutil.NewMinter("https://issuer.example", priv, kid)
 
-		token, err := minter.AccessToken("u1", "c1", "openid email", "", "", jwtutil.Contact{Email: "u@example.com"})
+		token, err := minter.AccessToken("u1", "c1", "openid email", "https://api.example.com", jwtutil.UserClaims{Contact: jwtutil.Contact{Email: "u@example.com"}})
 		Expect(err).NotTo(HaveOccurred())
 
 		jwks := jwtutil.BuildJWKS(jwtutil.BuildJWK(&priv.PublicKey, kid))
@@ -316,6 +316,79 @@ var _ = Describe("Minter over a crypto.Signer", func() {
 		claims, err := jwtutil.VerifyOIDCToken(string(jwksJSON), "https://issuer.example", token)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(claims["email"]).To(Equal("u@example.com"))
+		Expect(claims["aud"]).To(Equal("https://api.example.com"))
+	})
+
+	It("refuses to mint an access token that names no API, never falling back to the client id (negative)", func() {
+		priv, err := rsa.GenerateKey(rand.Reader, 2048)
+		Expect(err).NotTo(HaveOccurred())
+		minter := jwtutil.NewMinter("https://issuer.example", priv, jwtutil.RSAThumbprint(&priv.PublicKey))
+
+		_, err = minter.AccessToken("u1", "c1", "openid", "", jwtutil.UserClaims{})
+		Expect(err).To(MatchError(jwtutil.ErrNoAudience))
+		_, err = minter.ClientCredentialsToken("c1", "account.admin", "")
+		Expect(err).To(MatchError(jwtutil.ErrNoAudience))
+	})
+
+	Describe("the user's optional claims", func() {
+		var minter *jwtutil.Minter
+		BeforeEach(func() {
+			priv, err := rsa.GenerateKey(rand.Reader, 2048)
+			Expect(err).NotTo(HaveOccurred())
+			minter = jwtutil.NewMinter("https://issuer.example", priv, jwtutil.RSAThumbprint(&priv.PublicKey))
+		})
+		unverified := func(token string) jwt.MapClaims {
+			claims := jwt.MapClaims{}
+			_, _, err := jwt.NewParser().ParseUnverified(token, claims)
+			Expect(err).NotTo(HaveOccurred())
+			return claims
+		}
+		full := jwtutil.UserClaims{
+			Contact:     jwtutil.Contact{Email: "u@example.com", PhoneNumber: "+15550100", Name: "U", Locale: "en", Picture: "https://example.com/u.png"},
+			AuthEventID: "event-1", SID: "sid-1", AMR: []string{"pwd"}, Provider: "rainmaker",
+		}
+		optional := []string{"email", "phone_number", "name", "locale", "picture", "origin_jti", "sid", "amr", "idp"}
+
+		It("stamps every optional claim that is set on both tokens, amr as an array, and auth_time only on the ID token", func() {
+			access, err := minter.AccessToken("u1", "c1", "openid", "https://api.example.com", full)
+			Expect(err).NotTo(HaveOccurred())
+			id, err := minter.IDToken("u1", "c1", 1700000000, full)
+			Expect(err).NotTo(HaveOccurred())
+
+			for _, claims := range []jwt.MapClaims{unverified(access), unverified(id)} {
+				var got jwtutil.UserClaims
+				encoded, err := json.Marshal(claims)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(json.Unmarshal(encoded, &got)).To(Succeed())
+				Expect(got).To(Equal(full))
+			}
+			Expect(unverified(access)).NotTo(HaveKey("auth_time"))
+			Expect(unverified(id)).To(HaveKeyWithValue("auth_time", float64(1700000000)))
+		})
+
+		It("leaves out each optional claim that is zero rather than stamping it empty (negative)", func() {
+			access, err := minter.AccessToken("u1", "c1", "openid", "https://api.example.com", jwtutil.UserClaims{AMR: []string{}})
+			Expect(err).NotTo(HaveOccurred())
+			id, err := minter.IDToken("u1", "c1", 0, jwtutil.UserClaims{})
+			Expect(err).NotTo(HaveOccurred())
+
+			for _, claims := range []jwt.MapClaims{unverified(access), unverified(id)} {
+				for _, name := range optional {
+					Expect(claims).NotTo(HaveKey(name))
+				}
+			}
+			Expect(unverified(access)).NotTo(HaveKey("auth_time"))
+			Expect(unverified(id)["auth_time"]).To(BeNumerically("~", time.Now().Unix(), 5), "an unknown auth_time is now")
+		})
+
+		It("never stamps them on a client_credentials token, which has no sign-in (negative)", func() {
+			token, err := minter.ClientCredentialsToken("c1", "account.admin", "https://api.example.com")
+			Expect(err).NotTo(HaveOccurred())
+			claims := unverified(token)
+			for _, name := range optional {
+				Expect(claims).NotTo(HaveKey(name))
+			}
+		})
 	})
 })
 

@@ -14,7 +14,7 @@ import { openPreviewSignIn } from "@/lib/oauth";
  * against the client registry, so it can fail on permissions or on a client the deployment
  * never seeded — the caller gets a message to show rather than a silently dead button.
  */
-export function usePreviewSignIn() {
+export function usePreviewSignIn(clientId: string) {
   const { t } = useTranslation("voice-assistants");
   const [isPreparing, setIsPreparing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,7 +28,7 @@ export function usePreviewSignIn() {
     setError(null);
     setIsPreparing(true);
     try {
-      await openPreviewSignIn();
+      await openPreviewSignIn(clientId);
     } catch (caught) {
       setHasFailed(true);
       // The registry is admin-only, so this is the failure an expired or non-admin session hits.
@@ -52,7 +52,7 @@ export function usePreviewSignIn() {
     } finally {
       setIsPreparing(false);
     }
-  }, [t]);
+  }, [clientId, t]);
 
   return { start, isPreparing, error, hasFailed };
 }

@@ -15,34 +15,39 @@ Refresh tokens rotate on every use, per RFC 9700 §4.14.2 (BCP 240) / OAuth 2.1;
 
 **Redeeming a refresh token returns a brand-new one; the old one is spent.** The client trades its refresh token at `/oauth2/token` for a new access token and a new refresh token.
 
-**The token is signed and self-describing, not opaque.** A refresh token is a signed structure carrying `user_id`, `client_id`, `family_id`, and a monotonic `counter`, with an HMAC over those fields (keyed by the ESP User signing secret; RFC 8725 JWT-BCP signing discipline applies to the same key). The server verifies the signature first — a bad signature is rejected without any store read. Because the token carries its own `user_id`, the server never needs a lookup to locate the caller's partition. The fields are signed (tamper-proof) but not encrypted; `user_id` is the internal deterministic id, not PII.
+**The token is signed and self-describing, not opaque.** A refresh token is a signed structure carrying `user_id`, `client_id`, `family_id`, and a monotonic `counter`, with an HMAC-SHA256 over those fields. The HMAC key is a dedicated secret in SSM (`ESPUSER_REFRESH_SECRET_PARAM`), separate from the RS256 access-token signing key. The server verifies the signature first — a bad signature is rejected without any store read. Because the token carries its own `user_id`, the server never needs a lookup to locate the caller's partition. The fields are signed (tamper-proof) but not encrypted; `user_id` is the internal account id, not PII.
 
-**Family = one login's rotation chain, tracked by a single counter.** One login produces a family (`family_id`); each rotation increments the family's `counter`. The store holds **one row per family** — not one per token — whose value is the current `counter` (plus `user_id`, `scope`, `expires_on`). A presented token is current iff its `counter` equals the row's `counter`; any lower counter is a spent (or replayed) token. Revoked tokens are therefore **never stored** — revocation is the absence or advance of the family row, not a per-token tombstone.
+**Family = one login's rotation chain, tracked by a single counter.** One login produces a family (`family_id`); each rotation increments the family's `counter`. The store holds **one row per family** — not one per token — whose value is the current `counter` (plus the login's `scope`, `resources`, `sid`, `auth_time` and `expires_on`). A presented token is current iff its `counter` equals the row's `counter`; any lower counter is a spent (or replayed) token. Revoked tokens are therefore **never stored** — revocation is the absence or advance of the family row, not a per-token tombstone.
 
 **Rotation is atomic.** Redemption verifies the signature, reads the family row, checks the presented `counter` matches, then advances the counter with a conditional write (`counter = n+1` only `if counter = n`), so concurrent redemptions race and exactly one wins. The winner's new token carries `counter = n+1`; the loser's presented `counter = n` no longer matches and is rejected.
 
-**Replay = theft (RFC 9700 §4.14.2).** Re-presenting a token whose `counter` is below the family's current `counter` is reuse — the chain has already moved on. The server deletes the family row (killing the current token too), writes `refresh_reuse_detected`, and returns `invalid_grant`; the user re-authenticates and the thief is locked out. Clean expiry (DynamoDB TTL) is not theft.
+**Replay = theft (RFC 9700 §4.14.2).** Re-presenting a token whose `counter` is below the family's current `counter` is reuse — the chain has already moved on. The server deletes the family row (killing the current token too) and returns `invalid_grant`; the user re-authenticates and the thief is locked out. Clean expiry (DynamoDB TTL) is not theft.
+
+**A lost response is not theft.** A client whose refresh response never arrived re-presents the token it still holds, which is exactly one step behind. When that token's `counter` is the family's current `counter` minus one and the family rotated no more than 60 seconds ago, the server returns the current token again instead of deleting the family. Any older token, or the same token after those 60 seconds, is reuse.
 
 **Revocation is family-wide, and user-wide is one query.** `/oauth2/revoke` (RFC 7009 §2.1: revoking a token MAY revoke the underlying grant) deletes the presented token's family row, ending that login.
 
-**revoking every session for a user** — "sign out everywhere", password reset, compromise response — is a single `Query(user_id)` + delete of all its family rows, with **no GSI**. Access tokens are stateless RS256 JWTs and cannot be revoked server-side (the RFC 7009 §2.2 access-token SHOULD does not apply); they expire on their own within the hour. TODO: add an API for signout later
+**Revoking every session for a user** — sign out everywhere (`DELETE /v1/user/sessions`), a password change or a password reset — is a single `Query(user_id)` + delete of the family rows, with **no GSI**. Sign out everywhere and a password reset keep `offline_access` grants; a password change deletes them too ([sso-sessions.md](sso-sessions.md#when-refresh-families-are-deleted)). Access tokens are stateless RS256 JWTs and cannot be revoked server-side (the RFC 7009 §2.2 access-token SHOULD does not apply); they expire on their own within the hour.
 
 **Storage**:
 
 - TableName: `espuser-refresh-tokens`
-- Key: `user_id` (PK), `client_id#family_id` (SK) — one row per family
-- Attributes: `counter` (current rotation counter), `user_id`, `client_id`, `family_id`, `scope`, `expires_on`
+- Key: `user_id` (PK), `client_family` = `client_id#family_id` (SK) — one row per family
+- Attributes: `counter` (current rotation counter), `client_id`, `family_id`, `scope`, `resources`, `sid`, `auth_time`, `expires_on`, `rotated_at`, `created_at`
 - `user_id` (PK): every family for a user shares the partition, so user-wide revoke is one `Query(user_id)`; the signed token carries `user_id`, so the caller always supplies the partition key with no lookup
 - `client_id#family_id` (SK): identifies one login's family within the user; a refresh token is always tied to one client
 - `counter`: the family's current rotation number; a token is valid iff its signed `counter` equals this. Advanced by a conditional write on rotation; no per-token rows and no spent-token tombstones
-- `scope`: carried on the family row so a rotation can re-mint the access/id tokens without a separate lookup
+- `scope`, `resources`, `sid`, `auth_time`: carried on the family row so a rotation can re-mint the access/id tokens for the same login without a separate lookup
 - `expires_on`: DynamoDB TTL attribute; the refresh-token service (not the store) stamps it
+- `rotated_at`: when the family last rotated; it bounds the 60-second lost-response window
 
 The issued token is `base64(user_id | client_id | family_id | counter) . HMAC(secret, ·)`: the server verifies the HMAC, parses the fields, and does a direct `GetItem` on PK `user_id` + SK `client_id#family_id`, then compares the token's `counter` to the row's — no GSI, no per-token storage. The signature (not obscurity) is what makes the token unforgeable.
 
 ## Token endpoint (`POST /oauth2/token`)
 
-The standard OAuth 2.0 token endpoint (RFC 6749 §3.2). One endpoint dispatched on `grant_type`; the request is `application/x-www-form-urlencoded`. Implemented: **`authorization_code`**, **`refresh_token`** and **`client_credentials`**. Token exchange (RFC 8693, native social) is a later slice and MUST be rejected with `unsupported_grant_type` until built. `client_credentials` requires a confidential client registered for the grant and returns an access token only — no refresh token, no ID token; see [admin-clients.md](admin-clients.md) for the registry fields that gate it.
+The standard OAuth 2.0 token endpoint (RFC 6749 §3.2). One endpoint dispatched on `grant_type`; the request is `application/x-www-form-urlencoded`. Implemented: **`authorization_code`**, **`refresh_token`** and **`client_credentials`**; any other `grant_type` is rejected with `unsupported_grant_type`. `client_credentials` requires a confidential client registered for the grant and returns an access token only — no refresh token, no ID token; see [admin-clients.md](admin-clients.md) for the registry fields that gate it.
+
+**Client authentication.** A confidential client authenticates with HTTP Basic (`client_secret_basic`) or with `client_id` and `client_secret` in the form body (`client_secret_post`); when both are sent, Basic wins. A public client sends its `client_id` and no secret.
 
 ### refresh_token grant
 
@@ -56,15 +61,16 @@ refresh_token=a1b2c3d4.9f8e7d6c...
 client_id=rm_mobile
 ```
 
-> `client_id` is REQUIRED: the token is scoped per client (SK `client_id#refresh_hash`), so the server needs it to locate the token's row. Public clients send no secret; a confidential client additionally authenticates per its `token_endpoint_auth_method`.
+> `client_id` is REQUIRED: a refresh token is bound to the client it was issued to, and a token presented by any other client is refused. Public clients send no secret; a confidential client additionally authenticates as above. An optional `resource` picks which of the sign-in's APIs the new access token is for ([resource-indicators.md](resource-indicators.md)).
 
 **Process**:
 
 1. Parse the form body; require `grant_type=refresh_token`, `refresh_token`, `client_id`.
-2. Split the token, look up its row by `(family_id, client_id#refresh_hash)`. A missing/spent/revoked token is `invalid_grant` — and a spent/revoked one revokes the whole family (reuse = theft) and writes `refresh_reuse_detected`.
-3. Atomically rotate: mint the next token in the family, mark the old one spent.
-4. Re-mint an RS256 access token (1h) and, if the token's stored `scope` includes `openid`, an id token — using the `user_id` + `scope` carried on it.
-5. Write `refresh` to the audit log.
+2. Verify the token's HMAC and that it was issued to this client, then read its family row by `user_id` + `client_id#family_id`. A missing family is `invalid_grant`.
+3. Pick the access token's resource. A refusal is `invalid_target`, and nothing is spent.
+4. An expired family is deleted (`invalid_grant`). Then compare counters: a stale token is reuse, so the family is deleted and the answer is `invalid_grant` (see [Refresh tokens](#refresh-tokens), including the 60-second lost-response window).
+5. A family whose session has ended is deleted (`invalid_grant`). Otherwise, atomically rotate: advance the family's `counter` with a conditional write and issue the token carrying the new `counter`; a concurrent rotation that already advanced it makes this one `invalid_grant`.
+6. Re-mint an RS256 access token (1h) and, if the family's stored `scope` includes `openid`, an id token — using the `user_id`, `scope`, `sid` and `auth_time` carried on the family.
 
 **Response** (`200`, `application/json`):
 
@@ -79,14 +85,16 @@ client_id=rm_mobile
 
 > `refresh_token` is always a new value (the presented one is now spent). `id_token` is present only if `openid` is in the token's scope. `scope` echoes the token's stored scope.
 
-**Errors** — the OAuth token endpoint uses the RFC 6749 §5.2 error object `{ "error": "<code>", "error_description": "<detail>" }`, NOT the API's generic `{ "message": ... }`. `error` is one of the RFC-defined codes below; the OTP endpoints (`/v1/auth/otp/*`) are our own non-OAuth surface and keep `{ "message": ... }`.
+**Errors** — the OAuth token endpoint uses the RFC 6749 §5.2 error object `{ "error": "<code>", "error_description": "<detail>" }`, NOT the API's generic `{ "message": ... }`. `error` is one of the RFC-defined codes below.
 
 - `400 invalid_request` — missing/malformed `grant_type`, `refresh_token`, or `client_id`.
-- `400 invalid_grant` — unknown, expired, spent, or revoked refresh token, or one whose session has ended (uniform; no distinction between them, no reuse oracle).
-- `400 unsupported_grant_type` — any `grant_type` outside `authorization_code`, `refresh_token` and `client_credentials`; token exchange (RFC 8693) is not built yet and lands here.
+- `400 invalid_grant` — unknown, expired, spent, or revoked refresh token, one issued to another client, or one whose session has ended (uniform; no distinction between them, no reuse oracle).
+- `400 invalid_target` — the `resource` is not one this sign-in covers or the client may still request ([resource-indicators.md](resource-indicators.md)).
+- `400 unsupported_grant_type` — any `grant_type` outside `authorization_code`, `refresh_token` and `client_credentials`.
+- `400 unauthorized_client` — `client_credentials` from a public client, or from a client not registered for that grant.
+- `400 invalid_scope` — `client_credentials` asking for a scope the client is not registered for.
 - `401 invalid_client` — a confidential client that fails its auth method.
-
-- TODO: confirm where the `refresh` audit event is persisted.
+- `500 server_error` — a failure on our side.
 
 ## Userinfo endpoint (`GET /oauth2/userinfo`)
 
@@ -103,20 +111,25 @@ Authorization: Bearer <access_token>
 
 **Process**:
 
-1. Extract the bearer access token — from the `Authorization` header, or the `access_token` form field on a `POST`. A missing/blank one is `401` (`WWW-Authenticate: Bearer`).
-2. Verify it against the published JWKS (RS256, our issuer) exactly as any resource server would. An invalid/expired/wrong-signature token is `401 invalid_token`.
-3. `sub` is the `user_id`. Look the user up in `espuser-user-details`.
-4. Return the claims the token's `scope` authorizes — `sub` always; `email` only if `email` (or `profile`) is in scope; `phone_number` only if `phone` is in scope. We hold no other profile attributes in v1.
+1. Extract the bearer access token — from the `Authorization` header, or the `access_token` form field on a `POST`. A missing/blank one is `401 invalid_token`.
+2. Verify it against the published JWKS (RS256, our issuer) as any resource server would, except that any of our APIs may be its `aud`: userinfo describes the sign-in, not an API (OIDC Core §5.3). An invalid/expired/wrong-signature token, an ID token, or a `client_credentials` token is `401 invalid_token`.
+3. Return the claims carried in the access token. They were stamped when the token was minted, gated by its `scope`: `email` with `email` or `profile`; `phone_number` with `phone` or `profile`; `name`, `locale` and `picture` with `profile`. No user record is read.
 
 **Response** (`200`, `application/json`):
 
 | field | example | notes |
 |---|---|---|
-| `sub` | `9aXb7...` |  |
-| `email` | `user@example.com` |  |
-| `phone_number` | `+15551234567` |  |
+| `sub` | `9aXb7...` | always |
+| `user_id` | `9aXb7...` | always; the same value as `sub` |
+| `is_admin` | `false` | always; `false` for an ESP User token |
+| `is_super_admin` | `false` | always; `false` for an ESP User token |
+| `email` | `user@example.com` | `email` or `profile` scope |
+| `phone_number` | `+15551234567` | `phone` or `profile` scope |
+| `name` | `Jane Doe` | `profile` scope |
+| `locale` | `en-US` | `profile` scope |
+| `picture` | `https://example.com/jane.png` | `profile` scope |
 
-> `sub` is always present; `email` / `phone_number` appear only when the token's scope authorizes them and the user record has them. Contacts are OTP-verified by construction (D14), so no `email_verified` / `phone_number_verified` flags are emitted.
+> A scope-gated claim appears only when the token's scope authorizes it and the account had the value when the token was minted. Contacts are verified at sign-in, so no `email_verified` / `phone_number_verified` flags are emitted.
 
 **Errors** — this is a bearer-protected resource endpoint, so failures use the RFC 6750 `WWW-Authenticate` challenge, not the OAuth token-endpoint error body:
 
@@ -126,9 +139,9 @@ Authorization: Bearer <access_token>
 
 The RFC 7009 token-revocation endpoint. RFC 7009 §2.1 permits revoking a token to also revoke **"related tokens and the underlying authorization grant"**, so this endpoint revokes the presented token's **whole family** — the login's entire rotation chain — via `RevokeFamily`. Because rotation makes any earlier token already-spent, a single-token revoke would usually be a near no-op; family revocation is the useful, RFC-endorsed behavior. Theft detection (a *replay*, per RFC 9700 §4.14.2) calls the same `RevokeFamily`.
 
-The one cascade RFC 7009 §2.1 endorses — a refresh token additionally invalidating the access tokens minted from it — does not apply here: access tokens are short-lived RS256 JWTs we do not track (D13), so there is nothing to revoke; they expire on their own within the hour. A presented *access* token is therefore accepted and ignored. There is no introspection.
+The one cascade RFC 7009 §2.1 endorses — a refresh token additionally invalidating the access tokens minted from it — does not apply here: access tokens are short-lived RS256 JWTs we do not track, so there is nothing to revoke; they expire on their own within the hour. A presented *access* token is therefore accepted and ignored. There is no introspection.
 
-**The client must identify itself** (RFC 7009 §2.1/§5 → RFC 6749 §3.2.1). A **confidential** client authenticates with its secret via HTTP Basic (`Authorization: Basic base64(client_id:secret)`); a **public** client identifies with `client_id` — either the Basic username or the `client_id` form parameter — and presents no secret (RFC 6749 §3.2.1: a public client is identified, not authenticated). The request-body secret method (`client_secret_post`) is not accepted (§2.3.1 NOT RECOMMENDED). A request with neither Basic nor `client_id` is `400 invalid_request`; a bad/unknown client or a confidential client with a wrong secret is `401 invalid_client`. `client_id` is not used to locate the token (the token alone identifies its row).
+**The client must identify itself** (RFC 7009 §2.1/§5 → RFC 6749 §3.2.1). A **confidential** client authenticates with its secret via HTTP Basic (`Authorization: Basic base64(client_id:secret)`); a **public** client identifies with `client_id` — either the Basic username or the `client_id` form parameter — and presents no secret (RFC 6749 §3.2.1: a public client is identified, not authenticated). The request-body secret method (`client_secret_post`) is not accepted (§2.3.1 NOT RECOMMENDED). A request with neither Basic nor `client_id` is `400 invalid_request`; a bad/unknown client or a confidential client with a wrong secret is `401 invalid_client`. The token alone locates its family; the authenticated `client_id` must be the client the token was issued to (RFC 7009 §2.1: the server verifies that the token was issued to the requesting client).
 
 **Request** (form-encoded body + Basic header):
 
@@ -140,44 +153,37 @@ token_type_hint=refresh_token   (optional)
 
 **Process**:
 
-1. Authenticate the client from the Basic header against the registry: an unknown client or a confidential client with a missing/wrong secret is `401 invalid_client` (uniform — no oracle for which clients exist). A registered public client passes with an empty secret; a public client that presents a non-empty secret is rejected.
-2. Parse the form body; require `token`. `token_type_hint` is advisory and may be ignored.
-3. If `token` parses as one of our refresh tokens, revoke **its whole family** — the login the token belongs to (RFC 7009 §2.1: revoking a token MAY revoke the underlying grant). This ends the session on every user agent fed by that family. A malformed token or an access token is a no-op (access tokens are stateless RS256 JWTs, not revocable server-side).
-4. Always return `200` regardless of whether the token existed (RFC 7009 §2.2 — no oracle; an attacker learns nothing about validity). Only a truly malformed *request* (missing `token`) is `400 invalid_request`.
+1. Parse the form body; require `token` (else `400 invalid_request`). `token_type_hint` is advisory and ignored.
+2. Authenticate the client from the Basic header, or take the public client's `client_id` from the body, against the registry: an unknown client or a confidential client with a missing/wrong secret is `401 invalid_client` (uniform — no oracle for which clients exist). A registered public client passes with an empty secret; a public client that presents a non-empty secret is rejected.
+3. If `token` parses as one of our refresh tokens issued to the authenticated client, revoke **its whole family** — the login the token belongs to (RFC 7009 §2.1: revoking a token MAY revoke the underlying grant). A refresh token issued to another client is refused with `400 invalid_grant` and its family is untouched. A malformed token or an access token is a no-op (access tokens are stateless RS256 JWTs, not revocable server-side).
+4. If the family carried a `sid` and no other family of the person still does, delete that user agent row when it is a cookie-less `app` row; a `browser` row stays, because its cookie can still sign in ([sso-sessions.md](sso-sessions.md#when-the-user-agent-row-is-deleted)). A failure here is logged and does not fail the revocation.
+5. Otherwise return `200` whether or not the token existed (RFC 7009 §2.2 — no oracle; an attacker learns nothing about validity). Only a malformed *request* (missing `token`) is `400 invalid_request`. A storage failure while reading or deleting the family is `503 temporarily_unavailable` (§2.2.1), so the client keeps the token and retries.
 
 **Response**: `200` with an empty body (RFC 7009 §2.2).
 
 **Errors** — the endpoint follows RFC 7009 §2.2.1 and reuses the RFC 6749 §5.2 error object:
 
-- `400 invalid_request` — neither Basic credentials nor a `client_id` parameter was supplied.
+- `400 invalid_request` — the `token` parameter is missing, or neither Basic credentials nor a `client_id` parameter was supplied.
 - `401 invalid_client` — an unknown client, or a confidential client that fails its auth.
-- `400 invalid_request` — the `token` parameter is missing.
+- `400 invalid_grant` — the refresh token was issued to another client (RFC 7009 §2.1, RFC 6749 §5.2).
+- `503 temporarily_unavailable` — storage failed while reading or deleting the family; the token may still work (RFC 7009 §2.2.1).
 - Unknown, malformed, expired, or already-revoked tokens are **not** errors — they return `200`.
 
 ## Standards reference
 
-- **NIST SP 800-63B** — 6-digit ≥ 20-bit CSPRNG out-of-band secret, hashed, single-use, lockout under the 100-failure ceiling; SMS deprecated as a high-AAL factor.
-- **OAuth 2.1 / RFC 9700 (BCP 240)** — code + PKCE for the in-flow path; no implicit, no ROPC, no passwords. Refresh rotation + reuse detection. Direct-token is a documented first-party-only exception.
-- **OIDC Core 1.0** — `auth_time` / `nonce` semantics.
+- **[OAuth 2.1 (draft)](https://datatracker.ietf.org/doc/draft-ietf-oauth-v2-1/) / [RFC 9700 (BCP 240)](https://www.rfc-editor.org/rfc/rfc9700)** — code + PKCE; no implicit and no password grant. Refresh rotation + reuse detection ([§4.14.2](https://www.rfc-editor.org/rfc/rfc9700#section-4.14.2)).
+- **[RFC 7009](https://www.rfc-editor.org/rfc/rfc7009)** — token revocation.
+- **[OIDC Core 1.0](https://openid.net/specs/openid-connect-core-1_0.html)** — `auth_time` semantics; the UserInfo endpoint ([§5.3](https://openid.net/specs/openid-connect-core-1_0.html#UserInfo)).
 - Identifier canonicalization: emails are lowercased before any lookup, dispatch, or
   user creation (one canonical form end to end); E.164 phone numbers have no case.
 
 ## FAQs
 
-1. **Does OTP login create a user if none exists?**
-   - Yes. A first-time contact is JIT-provisioned; the OTP itself is the proof of verification.
-
-2. **A user has both email and phone — do both work?**
+1. **A user has both email and phone — do both work?**
    - Yes. Either resolves to the same `user_id` via the `by-email` / `by-phone` GSI.
 
-3. **Do I get all three tokens?**
-   - In-flow returns a redirect; tokens come from the later `/oauth2/token` exchange. Direct-token returns them directly — `id_token` only if `openid` was requested.
+2. **Do I get all three tokens?**
+   - From the `authorization_code` and `refresh_token` grants: an access token and a refresh token, plus an `id_token` only if `openid` is in scope. From `client_credentials`: an access token only.
 
-4. **Why does in-flow verify return a redirect instead of tokens?**
-   - `verify` only proves identity. Consent and code issuance still belong to `/oauth2/authorize`, and tokens must reach the client via the PKCE-bound code exchange, not the browser.
-
-5. **What stops a re-send from overwriting an in-flight code (and resetting the lockout)?**
-   - Each initiate mints a new `flow_id`, so a re-send is a new record; it cannot touch the prior challenge's `otp_attempts`.
-
-6. **Is the refresh token a JWT?**
-   - No. Access / id tokens are stateless JWTs; the refresh token is an opaque, server-stored string so it can be rotated and revoked.
+3. **Is the refresh token a JWT?**
+   - No. Access / id tokens are stateless JWTs; the refresh token is an HMAC-signed string backed by its family row, so it can be rotated and revoked. Clients treat it as opaque.

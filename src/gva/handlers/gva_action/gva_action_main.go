@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/gva"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rlog"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngrequest"
@@ -31,6 +32,9 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 			},
 		}, nil
 	}
+
+	// Google calls the neo API with its linked token, so that token must be addressed to this API.
+	ctx = auth.AddAcceptedAudiencesToCtx(ctx, rmngrequest.GetAcceptedAudiencesFromAPIRequest(event))
 
 	// Parse the GVA request from the body
 	var request gva.GVARequest

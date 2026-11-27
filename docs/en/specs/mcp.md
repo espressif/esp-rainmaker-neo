@@ -13,7 +13,7 @@ Two Lambdas sit behind a single HTTP API:
 - **`mcp-server`** answers JSON-RPC 2.0 on `POST /v1/mcp`. It implements `initialize`,
   `notifications/initialized`, `tools/list` and `tools/call`, and nothing else.
 - **`mcp-oauth-proxy`** serves the discovery and OAuth endpoints (`/.well-known/*`,
-  `/oauth2/authorize`, `/oauth2/callback`, `/oauth2/token`), brokering end-user
+  `/oauth2/authorize`, `/oauth2/callback`, `/oauth2/token`, `/oauth2/revoke`), brokering end-user
   authentication to the ESP User OIDC issuer as the `mcp-oauth-client` registry client.
 
 Both are deployed by the reusable `McpOAuthConstruct`
@@ -225,14 +225,45 @@ request returns `401` with a `WWW-Authenticate: Bearer resource_metadata="..."` 
 (RFC 9728). `initialize` and `notifications/initialized` do not *validate* the token;
 `tools/list` and `tools/call` do.
 
-Validation requires `aud == mcp-oauth-client`: a first-party app token must not authorize MCP
-calls (RFC 9700 audience restriction). ID tokens are rejected; only access tokens are
-accepted. The JWKS is read from SSM and cached in-process.
+Validation requires `aud` to be one of the server's own RFC 8707 names (`McpAudiences`: its
+`/v1/mcp` URL on the execute-api host and, once mapped, on its custom domain), so a token for
+another API must not authorize MCP calls (RFC 9068 §4, RFC 9700 audience restriction). The OAuth
+proxy asks ESP User for exactly that resource, the name its protected-resource metadata
+advertises (`McpResource`). ID tokens are rejected; only access tokens are accepted. The JWKS is
+read from SSM and cached in-process.
 
 The authenticated subject becomes an ordinary `rmngctx.RmngContext`, so every RBAC check in
 the DB layer applies exactly as it does for the REST API. Authorization is not re-implemented
 here: `authorizeNodeForUser` is the single chokepoint that checks both group access and node
 membership, and every node-scoped tool goes through it.
+
+The `mcp-oauth-client` registry client is seeded with `offline_access` (OIDC Core 1.0 §11), so
+a connector's grant is not tied to the browser session the person signed in with: a connector
+acts while the person is away, and signing out of that browser leaves it working until it is
+revoked or expires.
+
+### Offline access and revocation in the OAuth proxy
+
+The proxy always adds `offline_access` to the scope it sends ESP User, once, after whatever the
+client asked for (`openid email` becomes `openid email offline_access`). A connector acts while
+the person is away, so its grant must not end when they sign out of a browser (OIDC Core 1.0 §11);
+ESP User therefore always shows its consent screen for this client. Both metadata documents list
+`offline_access` in `scopes_supported`.
+
+The refresh token the proxy hands a client is ESP User's refresh token wrapped and bound to that
+client. `POST /oauth2/revoke` (RFC 7009, advertised as `revocation_endpoint` with
+`revocation_endpoint_auth_methods_supported: ["none"]`, since CIMD clients are public) takes
+`token` and `client_id`:
+
+| Request | Answer |
+|---|---|
+| `token` or `client_id` missing | `400 invalid_request` |
+| a token the proxy did not issue (an access token, a forged or unknown one) | `200`, nothing forwarded (§2.2) |
+| a wrapped refresh token issued to another client | `400 invalid_grant`, nothing forwarded (§2.1) |
+| a wrapped refresh token issued to `client_id` | forwarded to ESP User's revocation endpoint (read from its discovery document) as `mcp-oauth-client`, then `200`; ESP User ends the whole refresh family |
+| ESP User unreachable or not answering `200` | `503`, so the client keeps the token and retries (§2.2.1) |
+
+Access tokens are short-lived JWTs and are not revocable; they expire on their own.
 
 ## 6. Tool catalogue
 

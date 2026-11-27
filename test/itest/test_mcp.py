@@ -5,9 +5,10 @@
 """MCP server itests.
 
 The MCP server is an audience-confined resource server: it accepts only OUR access tokens whose
-aud is the MCP OAuth client (mcp-oauth-client) — the audience third-party AI clients receive via
-the MCP OAuth proxy. A first-party app token (aud user-pool-client) must NOT authorize MCP calls
-(RFC 9700 audience restriction; see test_mcp_rejects_first_party_audience).
+aud is its own RFC 8707 resource, <MCP_API_URL>/v1/mcp — what its protected-resource metadata
+advertises and what the MCP OAuth proxy requests for third-party AI clients. A token for any other
+API, such as the app's neo token, must NOT authorize MCP calls (RFC 9068 s4; see
+test_mcp_rejects_first_party_audience).
 
 Authenticated tests therefore mint an MCP-audience token for the SAME subject as the pooled test
 user, by driving the real flows end to end: our /oauth2/authorize as mcp-oauth-client → the
@@ -33,8 +34,8 @@ from py_sdk.test_mcp import Mcp, assert_matches_catalogue
 from test.itest.conftest import (
     MCP_API_URL,
     USER_API_GATEWAY_URL,
-    cognito_hosted_login,
     pkce_pair,
+    sign_in_on_our_page,
 )
 from test.itest.mcp_oauth import get_mcp_access_token
 
@@ -55,30 +56,24 @@ def _get_mcp_client_secret(admin):
 
 
 def _mint_mcp_token(user, admin):
-    """Mint OUR access token with aud=mcp-oauth-client for `user`'s subject via the real flows
-    (authorize → federation → hosted-UI login → code exchange). See module docstring."""
+    """Mint OUR access token addressed to the MCP server for `user`'s subject via the real flows
+    (authorize → the password on our sign-in page → code exchange), sending `resource` as the proxy does."""
     verifier, challenge = pkce_pair()
     proxy_callback = f"{MCP_API_URL}/oauth2/callback"
+    mcp_resource = f"{MCP_API_URL}/v1/mcp"
     base = USER_API_GATEWAY_URL.rstrip("/")
     session = requests.Session()
 
     authz = session.get(f"{base}/oauth2/authorize", params={
         "client_id": MCP_CLIENT_ID, "redirect_uri": proxy_callback, "response_type": "code",
-        "scope": "openid email", "state": "mcp-itest",
+        "scope": "openid email", "state": "mcp-itest", "resource": mcp_resource,
         "code_challenge": challenge, "code_challenge_method": "S256",
     }, allow_redirects=False)
     assert authz.status_code == 302, f"authorize failed: {authz.status_code} {authz.text[:300]}"
+    assert "error=" not in authz.headers.get("Location", ""), \
+        f"authorize refused ({authz.headers['Location']}): {MCP_CLIENT_ID} must list {mcp_resource} in allowed_resources"
 
-    # Deep-link the federation leg, so this works whether or not the deployment shows a chooser.
-    fed = session.get(f"{base}/oauth2/federation/start", params={"provider": "cognito"},
-                      allow_redirects=False)
-    assert fed.status_code == 302, f"federation start failed: {fed.status_code} {fed.text[:300]}"
-
-    # The callback's final redirect must not be followed: its Location carries our code.
-    our_callback = cognito_hosted_login(session, fed.headers["Location"], user.username, user.password)
-    cb = session.get(our_callback, allow_redirects=False)
-    assert cb.status_code == 302, f"federation callback failed: {cb.status_code} {cb.text[:300]}"
-    loc = cb.headers["Location"]
+    loc = sign_in_on_our_page(session, user.username, user.password)
     assert loc.startswith(proxy_callback), f"unexpected post-login redirect: {loc}"
     code = parse_qs(urlparse(loc).query)["code"][0]
 
@@ -86,7 +81,7 @@ def _mint_mcp_token(user, admin):
                         auth=(MCP_CLIENT_ID, _get_mcp_client_secret(admin)),
                         data={"grant_type": "authorization_code", "code": code,
                               "redirect_uri": proxy_callback, "client_id": MCP_CLIENT_ID,
-                              "code_verifier": verifier})
+                              "code_verifier": verifier, "resource": mcp_resource})
     assert tok.status_code == 200, f"code exchange failed: {tok.status_code} {tok.text[:300]}"
     return tok.json()["access_token"]
 
@@ -174,8 +169,7 @@ def test_mcp_tools_call_unauthenticated(anon_mcp):
 
 
 def test_mcp_rejects_first_party_audience(test_user1, anon_mcp):
-    """A first-party app token (aud=user-pool-client) must NOT authorize MCP calls — the MCP
-    server is audience-confined to mcp-oauth-client (RFC 9700 audience restriction)."""
+    """The app's own token, addressed to another API, must NOT authorize MCP calls (RFC 9068 s4)."""
     response = anon_mcp.post("tools/list", token=test_user1.access_token)
     assert response.status_code == 401, \
         f"first-party token must be rejected at MCP, got {response.status_code}"

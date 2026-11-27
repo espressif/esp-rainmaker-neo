@@ -104,8 +104,9 @@ var _ = Describe("OAuth Proxy", func() {
 		original := resolveOIDCEndpoints
 		resolveOIDCEndpoints = func() (oidc.DiscoveredEndpoints, error) {
 			return oidc.DiscoveredEndpoints{
-				AuthorizeURL: "https://espuser.example.com/oauth2/authorize",
-				TokenURL:     "https://espuser.example.com/oauth2/token",
+				AuthorizeURL:  "https://espuser.example.com/oauth2/authorize",
+				TokenURL:      "https://espuser.example.com/oauth2/token",
+				RevocationURL: "https://espuser.example.com/oauth2/revoke",
 			}, nil
 		}
 		restoreResolve = func() { resolveOIDCEndpoints = original }
@@ -131,7 +132,7 @@ var _ = Describe("OAuth Proxy", func() {
 			Expect(metadata["resource"]).To(Equal("https://api.example.com/v1/mcp"))
 			Expect(metadata["authorization_servers"]).To(ConsistOf("https://api.example.com"))
 			Expect(metadata["bearer_methods_supported"]).To(ConsistOf("header"))
-			Expect(metadata["scopes_supported"]).To(ConsistOf("openid", "email"))
+			Expect(metadata["scopes_supported"]).To(ConsistOf("openid", "email", "offline_access"))
 		})
 	})
 
@@ -155,7 +156,9 @@ var _ = Describe("OAuth Proxy", func() {
 			Expect(metadata["code_challenge_methods_supported"]).To(ConsistOf("S256"))
 			Expect(metadata["client_id_metadata_document_supported"]).To(BeTrue())
 			Expect(metadata["token_endpoint_auth_methods_supported"]).To(ConsistOf("none"))
-			Expect(metadata["scopes_supported"]).To(ConsistOf("openid", "email"))
+			Expect(metadata["scopes_supported"]).To(ConsistOf("openid", "email", "offline_access"))
+			Expect(metadata["revocation_endpoint"]).To(Equal("https://api.example.com/oauth2/revoke"))
+			Expect(metadata["revocation_endpoint_auth_methods_supported"]).To(ConsistOf("none"))
 		})
 	})
 
@@ -194,9 +197,37 @@ var _ = Describe("OAuth Proxy", func() {
 			Expect(location).To(ContainSubstring("redirect_uri="))
 			Expect(location).To(ContainSubstring("code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"))
 			Expect(location).To(ContainSubstring("code_challenge_method=S256"))
+			Expect(location).To(ContainSubstring("resource="+url.QueryEscape("https://api.example.com/v1/mcp")), "the token must be for this server, by the name its metadata advertises")
 			Expect(location).To(ContainSubstring("state="))
 			Expect(response.Headers["Cache-Control"]).To(Equal("no-store"))
 		})
+
+		DescribeTable("asks ESP User for offline_access exactly once",
+			func(requested, brokered string) {
+				restore := mockFetchCIMD(validCIMDDoc(
+					"https://mcp-client.example.com/.well-known/cimd.json",
+					"http://localhost:3000/callback",
+				), nil)
+				defer restore()
+				if requested == "" {
+					delete(baseQuery, "scope")
+				} else {
+					baseQuery["scope"] = requested
+				}
+				request := httpReq("GET", "/oauth2/authorize")
+				request.QueryStringParameters = baseQuery
+
+				response, err := handleRequest(context.TODO(), request)
+				Expect(err).To(BeNil())
+				Expect(response.StatusCode).To(Equal(http.StatusFound))
+				location, err := url.Parse(response.Headers["Location"])
+				Expect(err).To(BeNil())
+				Expect(location.Query().Get("scope")).To(Equal(brokered))
+			},
+			Entry("the client did not ask for it", "openid email", "openid email offline_access"),
+			Entry("the client asked for it", "openid offline_access email", "openid offline_access email"),
+			Entry("the client sent no scope", "", "offline_access"),
+		)
 
 		It("returns 400 when code_challenge is missing", func() {
 			delete(baseQuery, "code_challenge")
@@ -422,6 +453,7 @@ var _ = Describe("OAuth Proxy", func() {
 			Expect(capturedBody).NotTo(ContainSubstring("client_secret="))
 			Expect(capturedBody).To(ContainSubstring("code=auth-code-123"))
 			Expect(capturedBody).To(ContainSubstring("code_verifier=" + verifier))
+			Expect(capturedBody).To(ContainSubstring("resource=" + url.QueryEscape("https://api.example.com/v1/mcp")))
 			Expect(capturedBody).To(ContainSubstring(url.QueryEscape("https://api.example.com/oauth2/callback")))
 
 			var tokenResp map[string]interface{}
@@ -496,7 +528,7 @@ var _ = Describe("OAuth Proxy", func() {
 				Expect(body).To(ContainSubstring("grant_type=refresh_token"))
 				Expect(body).To(ContainSubstring("refresh_token=rt-esp"))
 				Expect(body).To(ContainSubstring("client_id=mcp-oauth-client"))
-				return mockHTTPResponse(200, `{"access_token":"new-tok","token_type":"Bearer","refresh_token":"rt-rotated"}`), nil
+				return mockHTTPResponse(200, `{"access_token":"new-tok","token_type":"Bearer","refresh_token":"rt-rotated","scope":"openid email offline_access"}`), nil
 			}))
 			defer func() { httpclient.Set(originalClient) }()
 
@@ -520,6 +552,8 @@ var _ = Describe("OAuth Proxy", func() {
 			Expect(openBlob(tokenResp["refresh_token"].(string), &wr)).To(BeNil())
 			Expect(wr.ESPRefresh).To(Equal("rt-rotated"))
 			Expect(wr.ClientID).To(Equal(cimdClient))
+			// RFC 6749 s3.3: the client learns it was granted offline_access, which the proxy added.
+			Expect(tokenResp["scope"]).To(Equal("openid email offline_access"))
 		})
 
 		It("rejects a refresh token presented by a different client", func() {
@@ -568,6 +602,162 @@ var _ = Describe("OAuth Proxy", func() {
 			Expect(err).To(BeNil())
 			Expect(response.StatusCode).To(Equal(http.StatusBadRequest))
 			Expect(response.Body).To(ContainSubstring("invalid_grant"))
+		})
+	})
+
+	DescribeTable("answers invalid_request to a body it cannot parse, without reaching ESP User",
+		func(path, body string, base64Encoded bool) {
+			called := false
+			originalClient := httpclient.Get()
+			httpclient.Set(newMockHTTPClient(func(req *http.Request) (*http.Response, error) {
+				called = true
+				return mockHTTPResponse(200, `{}`), nil
+			}))
+			defer func() { httpclient.Set(originalClient) }()
+
+			request := httpReq("POST", path)
+			request.Body = body
+			request.IsBase64Encoded = base64Encoded
+
+			response, err := handleRequest(context.TODO(), request)
+			Expect(err).To(BeNil())
+			Expect(response.StatusCode).To(Equal(http.StatusBadRequest))
+			Expect(response.Body).To(MatchJSON(`{"error":"invalid_request"}`))
+			Expect(called).To(BeFalse())
+		},
+		Entry("token: bad percent-encoding", "/oauth2/token", "grant_type=%zz", false),
+		Entry("revoke: bad base64", "/oauth2/revoke", "not base64!", true),
+	)
+
+	Describe("Revoke", func() {
+		const cimdClient = "https://mcp-client.example.com/cimd.json"
+
+		var upstreamCalls int
+		var upstreamRequest *http.Request
+		var upstreamBody string
+		var upstreamStatus int
+		var restoreClient func()
+
+		boundRefresh := func(espRefresh, clientID string) string {
+			token, err := signBlob(wrappedRefresh{ESPRefresh: espRefresh, ClientID: clientID})
+			Expect(err).To(BeNil())
+			return token
+		}
+		revoke := func(form url.Values) events.APIGatewayV2HTTPResponse {
+			request := httpReq("POST", "/oauth2/revoke")
+			request.Body = form.Encode()
+			response, err := handleRequest(context.TODO(), request)
+			Expect(err).To(BeNil())
+			Expect(response.Headers["Cache-Control"]).To(Equal("no-store"))
+			return response
+		}
+
+		BeforeEach(func() {
+			upstreamCalls, upstreamRequest, upstreamBody, upstreamStatus = 0, nil, "", http.StatusOK
+			originalClient := httpclient.Get()
+			httpclient.Set(newMockHTTPClient(func(req *http.Request) (*http.Response, error) {
+				upstreamCalls++
+				upstreamRequest = req
+				bodyBytes, _ := io.ReadAll(req.Body)
+				upstreamBody = string(bodyBytes)
+				return mockHTTPResponse(upstreamStatus, ""), nil
+			}))
+			restoreClient = func() { httpclient.Set(originalClient) }
+		})
+		AfterEach(func() {
+			restoreClient()
+			os.Unsetenv("MCP_OIDC_CLIENT_SECRET")
+		})
+
+		It("forwards ESP's refresh token with the proxy's own credentials", func() {
+			os.Setenv("MCP_OIDC_CLIENT_SECRET", "proxy-secret")
+
+			response := revoke(url.Values{
+				"token":           {boundRefresh("rt-esp", cimdClient)},
+				"token_type_hint": {"refresh_token"},
+				"client_id":       {cimdClient},
+			})
+
+			Expect(response.StatusCode).To(Equal(http.StatusOK))
+			Expect(upstreamCalls).To(Equal(1))
+			Expect(upstreamRequest.URL.String()).To(Equal("https://espuser.example.com/oauth2/revoke"))
+			user, pass, ok := upstreamRequest.BasicAuth()
+			Expect(ok).To(BeTrue())
+			Expect([]string{user, pass}).To(Equal([]string{"mcp-oauth-client", "proxy-secret"}))
+			form, err := url.ParseQuery(upstreamBody)
+			Expect(err).To(BeNil())
+			Expect(form).To(Equal(url.Values{"token": {"rt-esp"}, "token_type_hint": {"refresh_token"}}))
+		})
+
+		It("reads a base64-encoded body", func() {
+			request := httpReq("POST", "/oauth2/revoke")
+			request.Body = base64.StdEncoding.EncodeToString([]byte(url.Values{"token": {boundRefresh("rt-esp", cimdClient)}, "client_id": {cimdClient}}.Encode()))
+			request.IsBase64Encoded = true
+
+			response, err := handleRequest(context.TODO(), request)
+			Expect(err).To(BeNil())
+			Expect(response.StatusCode).To(Equal(http.StatusOK))
+			Expect(upstreamCalls).To(Equal(1))
+		})
+
+		DescribeTable("answers without reaching ESP User",
+			func(buildForm func() url.Values, status int, errorCode string) {
+				response := revoke(buildForm())
+
+				Expect(response.StatusCode).To(Equal(status))
+				if errorCode != "" {
+					Expect(response.Body).To(MatchJSON(`{"error":"` + errorCode + `"}`))
+				}
+				Expect(upstreamCalls).To(BeZero())
+			},
+			Entry("a token issued to another client", func() url.Values {
+				return url.Values{"token": {boundRefresh("rt-esp", cimdClient)}, "client_id": {"https://attacker.example.com/cimd.json"}}
+			}, http.StatusBadRequest, "invalid_grant"),
+			Entry("a token the proxy did not issue", func() url.Values {
+				return url.Values{"token": {"an-access-token"}, "client_id": {cimdClient}}
+			}, http.StatusOK, ""),
+			Entry("a proxy code blob passed as the token", func() url.Values {
+				token, err := signBlob(wrappedCode{ESPCode: "ac-esp", ClientID: cimdClient})
+				Expect(err).To(BeNil())
+				return url.Values{"token": {token}, "client_id": {cimdClient}}
+			}, http.StatusOK, ""),
+			Entry("no client_id", func() url.Values {
+				return url.Values{"token": {boundRefresh("rt-esp", cimdClient)}}
+			}, http.StatusBadRequest, "invalid_request"),
+		)
+
+		It("answers 503 when ESP User's discovery has no revocation_endpoint", func() {
+			resolveOIDCEndpoints = func() (oidc.DiscoveredEndpoints, error) {
+				return oidc.DiscoveredEndpoints{
+					AuthorizeURL: "https://espuser.example.com/oauth2/authorize",
+					TokenURL:     "https://espuser.example.com/oauth2/token",
+				}, nil
+			}
+
+			response := revoke(url.Values{"token": {boundRefresh("rt-esp", cimdClient)}, "client_id": {cimdClient}})
+
+			Expect(response.StatusCode).To(Equal(http.StatusServiceUnavailable))
+			Expect(response.Body).To(MatchJSON(`{"error":"temporarily_unavailable"}`))
+			Expect(upstreamCalls).To(BeZero())
+		})
+
+		It("answers 503 when ESP User fails, so the client retries", func() {
+			upstreamStatus = http.StatusInternalServerError
+
+			response := revoke(url.Values{"token": {boundRefresh("rt-esp", cimdClient)}, "client_id": {cimdClient}})
+
+			Expect(response.StatusCode).To(Equal(http.StatusServiceUnavailable))
+			Expect(upstreamCalls).To(Equal(1))
+		})
+
+		It("answers 503 when ESP User cannot be reached", func() {
+			httpclient.Set(newMockHTTPClient(func(*http.Request) (*http.Response, error) {
+				return nil, fmt.Errorf("connection refused")
+			}))
+
+			response := revoke(url.Values{"token": {boundRefresh("rt-esp", cimdClient)}, "client_id": {cimdClient}})
+
+			Expect(response.StatusCode).To(Equal(http.StatusServiceUnavailable))
 		})
 	})
 

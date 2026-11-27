@@ -12,7 +12,9 @@ import (
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/auth"
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/db/user_details_db"
+	"github.com/espressif/esp-rainmaker-neo/src/test/mock"
 	test_utils "github.com/espressif/esp-rainmaker-neo/src/test/testutil"
+	"github.com/espressif/esp-rainmaker-neo/src/utils/awscommon"
 	"github.com/espressif/esp-rainmaker-neo/src/utils/rmngctx"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -205,5 +207,93 @@ var _ = Describe("ResolveOrCreateUserByContacts", func() {
 	It("requires at least one verified contact (negative)", func() {
 		_, err := svc.ResolveOrCreateUserByContacts(rmngCtx, "", "", nil)
 		Expect(err).To(HaveOccurred())
+	})
+})
+
+var _ = Describe("AccountLabel", func() {
+	var (
+		svc     *auth.OAuthUserAuthService
+		rmngCtx *rmngctx.RmngContext
+	)
+
+	BeforeEach(func() {
+		test_utils.SetupEspUserBackend(context.Background())
+		var err error
+		svc, err = auth.NewOAuthUserAuthService(context.Background())
+		Expect(err).NotTo(HaveOccurred())
+		rmngCtx = rmngctx.NewRmngContextWithCtx(context.Background(), nil)
+	})
+
+	DescribeTable("names the person by their email, else their phone",
+		func(email, phone, want string) {
+			userID, err := svc.ResolveOrCreateUserByContacts(rmngCtx, email, phone, nil)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(svc.AccountLabel(context.Background(), userID)).To(Equal(want))
+		},
+		Entry("both", "ada@example.com", "+15550100", "ada@example.com"),
+		Entry("a phone only", "", "+15550100", "+15550100"),
+	)
+
+	It("fails for an account that does not exist (negative)", func() {
+		_, err := svc.AccountLabel(context.Background(), "no-such-user")
+		Expect(err).To(HaveOccurred())
+	})
+})
+
+var _ = Describe("ResolveOrCreateUserByContacts when the contact index cannot be read", func() {
+	It("fails rather than open a second account for a person who may already have one (negative)", func() {
+		backend := test_utils.SetupEspUserBackend(context.Background())
+		svc, err := auth.NewOAuthUserAuthService(context.Background())
+		Expect(err).NotTo(HaveOccurred())
+		rmngCtx := rmngctx.NewRmngContextWithCtx(context.Background(), nil)
+		_, err = svc.ResolveOrCreateUserByContacts(rmngCtx, "ada@example.com", "", nil)
+		Expect(err).NotTo(HaveOccurred())
+
+		awscommon.SetDynamoDBClient(&mock.FailingIndexQuery{DynamoDBMock: backend.DBMock, IndexName: "espuser-user-details-by-email"})
+		backend.DBMock.ProfileReset()
+		userID, err := svc.ResolveOrCreateUserByContacts(rmngCtx, "ada@example.com", "", nil)
+
+		Expect(err).To(HaveOccurred())
+		Expect(userID).To(BeEmpty())
+		for table, access := range backend.DBMock.ProfileGet().Accesses {
+			Expect(access.WriteCount).To(BeZero(), table)
+		}
+	})
+})
+
+var _ = Describe("UserIDByVerifiedContacts", func() {
+	var (
+		svc     *auth.OAuthUserAuthService
+		backend *test_utils.EspUserBackend
+		userID  string
+	)
+
+	BeforeEach(func() {
+		backend = test_utils.SetupEspUserBackend(context.Background())
+		var err error
+		svc, err = auth.NewOAuthUserAuthService(context.Background())
+		Expect(err).NotTo(HaveOccurred())
+		rmngCtx := rmngctx.NewRmngContextWithCtx(context.Background(), nil)
+		userID, err = svc.ResolveOrCreateUserByContacts(rmngCtx, "ada@example.com", "+15550100", nil)
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	DescribeTable("finds the one account the contacts name",
+		func(email, phone string) {
+			Expect(svc.UserIDByVerifiedContacts(context.Background(), email, phone)).To(Equal(userID))
+		},
+		Entry("an email", "ada@example.com", ""),
+		Entry("an email in another case", "Ada@Example.com", ""),
+		Entry("a phone", "", "+15550100"),
+		Entry("both, on the same account", "ada@example.com", "+15550100"),
+		Entry("both, only the email held", "ada@example.com", "+15550111"),
+	)
+
+	It("answers no id and no error for contacts nobody holds, and creates no account (negative)", func() {
+		backend.DBMock.ProfileReset()
+		Expect(svc.UserIDByVerifiedContacts(context.Background(), "nobody@example.com", "+15550111")).To(BeEmpty())
+		for table, access := range backend.DBMock.ProfileGet().Accesses {
+			Expect(access.WriteCount).To(BeZero(), table)
+		}
 	})
 })

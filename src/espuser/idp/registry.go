@@ -37,7 +37,7 @@ func (r *Registry) EnabledEntries() ([]identity_providers_db.ProviderEntry, erro
 	return identity_providers_db.NewIdentityProvidersDB(r.ctx).ListEnabled()
 }
 
-// OTP rows return nil: they are served by the addon's hosted page, not by a brokered upstream leg.
+// Provider returns nil for any row that does not redirect: an otp row, or an oidc row naming a password_verifier, signs in on our own page.
 func (r *Registry) Provider(name string) (Provider, error) {
 	entry, err := identity_providers_db.NewIdentityProvidersDB(r.ctx).GetProvider(name)
 	if err != nil {
@@ -46,7 +46,7 @@ func (r *Registry) Provider(name string) (Provider, error) {
 	if !entry.IsEnabled() {
 		return nil, identity_providers_db.ErrProviderNotFound
 	}
-	if entry.Type != identity_providers_db.TypeOIDC {
+	if !entry.RedirectsToProvider() {
 		return nil, nil
 	}
 	// Explicit row values win; anything missing resolves from discovery. There are no env fallbacks,

@@ -6,6 +6,8 @@ package clients_test
 
 import (
 	"context"
+	"encoding/base64"
+	"strings"
 	"testing"
 
 	"github.com/espressif/esp-rainmaker-neo/src/espuser/clients"
@@ -163,6 +165,61 @@ var _ = Describe("clients.Service", func() {
 			}
 		})
 
+		It("stores a default_resource that is one of allowed_resources", func() {
+			_, err := svc.Create(clients.CreateInput{
+				ClientID: "rm_def", ClientName: "S", ClientType: "confidential", GrantTypes: []string{"client_credentials"},
+				AllowedResources: []string{"https://api.example.com", "https://account.example.com"}, DefaultResource: "https://api.example.com",
+			})
+			Expect(err).NotTo(HaveOccurred())
+			got, err := svc.Get("rm_def")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got.DefaultResource).To(Equal("https://api.example.com"))
+		})
+
+		It("rejects a default_resource the client may not request (negative)", func() {
+			_, err := svc.Create(clients.CreateInput{
+				ClientID: "rm_def", ClientName: "S", ClientType: "confidential", GrantTypes: []string{"client_credentials"},
+				AllowedResources: []string{"https://api.example.com"}, DefaultResource: "https://other.example.com",
+			})
+			Expect(err).To(MatchError(ContainSubstring("default_resource")))
+		})
+
+		It("keeps a logo given as an inline PNG, JPEG or WebP image", func() {
+			in := publicClient("rm_logo")
+			in.LogoURI = "data:image/png;base64,iVBORw0KGgo="
+			_, err := svc.Create(in)
+			Expect(err).NotTo(HaveOccurred())
+			got, err := svc.Get("rm_logo")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got.LogoURI).To(Equal(in.LogoURI))
+		})
+
+		DescribeTable("rejects a logo the consent page could not show safely (negative)",
+			func(logo string) {
+				in := publicClient("rm_logo")
+				in.LogoURI = logo
+				_, err := svc.Create(in)
+				Expect(err).To(HaveOccurred())
+			},
+			Entry("a remote URL, which the page's img-src 'self' data: policy would block", "https://cdn.example.com/logo.png"),
+			Entry("SVG, which can carry script", "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4="),
+			Entry("not base64", "data:image/png;base64,not base64!"),
+			Entry("not an image", "data:text/html;base64,PGgxPmhpPC9oMT4="),
+			Entry("larger than the cap", "data:image/png;base64,"+strings.Repeat("A", 64*1024)),
+		)
+
+		It("caps a logo at 4 KiB decoded, so the client row the token path reads stays small", func() {
+			atCap := publicClient("rm_logo_cap")
+			atCap.LogoURI = "data:image/png;base64," + base64.StdEncoding.EncodeToString(make([]byte, 4*1024))
+			_, err := svc.Create(atCap)
+			Expect(err).NotTo(HaveOccurred())
+
+			overCap := publicClient("rm_logo_over")
+			overCap.LogoURI = "data:image/png;base64," + base64.StdEncoding.EncodeToString(make([]byte, 4*1024+1))
+			_, err = svc.Create(overCap)
+			Expect(err).To(MatchError(ContainSubstring("logo_uri may be at most 4 KiB")))
+		})
+
 		It("rejects an unknown client_type (negative)", func() {
 			in := publicClient("rm_x")
 			in.ClientType = "spaceship"
@@ -175,6 +232,119 @@ var _ = Describe("clients.Service", func() {
 			Expect(err).NotTo(HaveOccurred())
 			_, err = svc.Create(publicClient("rm_dup"))
 			Expect(err).To(HaveOccurred())
+		})
+	})
+
+	Describe("application_type", func() {
+		get := func(id string) *clients.ClientResponse {
+			c, err := svc.Get(id)
+			Expect(err).NotTo(HaveOccurred())
+			return c
+		}
+
+		It("registers a client as web unless it says native", func() {
+			_, err := svc.Create(publicClient("rm_web"))
+			Expect(err).NotTo(HaveOccurred())
+			native := publicClient("rm_native")
+			native.ApplicationType = "native"
+			_, err = svc.Create(native)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect([]string{get("rm_web").ApplicationType, get("rm_native").ApplicationType}).To(Equal([]string{"web", "native"}))
+			Expect([]bool{get("rm_web").IsNative(), get("rm_native").IsNative()}).To(Equal([]bool{false, true}))
+		})
+
+		It("refuses any other value (negative)", func() {
+			bad := publicClient("rm_bad")
+			bad.ApplicationType = "mobile"
+			_, err := svc.Create(bad)
+			Expect(err).To(MatchError(ContainSubstring("application_type must be web or native")))
+		})
+
+		It("keeps the stored type on an update that omits it, and replaces it on one that names it", func() {
+			native := publicClient("rm_native")
+			native.ApplicationType = "native"
+			_, err := svc.Create(native)
+			Expect(err).NotTo(HaveOccurred())
+
+			_, err = svc.Update("rm_native", clients.UpdateInput{ClientName: "Renamed", GrantTypes: []string{"authorization_code"}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(get("rm_native").ApplicationType).To(Equal("native"), "a seeded native app must not turn web on an ordinary edit")
+
+			_, err = svc.Update("rm_native", clients.UpdateInput{ClientName: "Renamed", ApplicationType: "web", GrantTypes: []string{"authorization_code"}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(get("rm_native").ApplicationType).To(Equal("web"))
+		})
+
+		Describe("native clients", func() {
+			native := func(id string, redirect string) clients.CreateInput {
+				in := publicClient(id)
+				in.ApplicationType = "native"
+				in.RedirectURIs = []string{redirect}
+				return in
+			}
+
+			It("refuses a confidential native client, since an app cannot keep a secret (negative)", func() {
+				in := native("rm_native_conf", "com.example.app:/cb")
+				in.ClientType = "confidential"
+				in.RequirePKCE = nil
+				_, err := svc.Create(in)
+				Expect(err).To(MatchError(ContainSubstring("application_type native requires client_type public")))
+			})
+
+			It("refuses turning a confidential client native on update (negative)", func() {
+				_, err := svc.Create(clients.CreateInput{ClientID: "rm_conf", ClientName: "S", ClientType: "confidential", GrantTypes: []string{"authorization_code"}})
+				Expect(err).NotTo(HaveOccurred())
+				_, err = svc.Update("rm_conf", clients.UpdateInput{ClientName: "S", ApplicationType: "native", GrantTypes: []string{"authorization_code"}})
+				Expect(err).To(MatchError(ContainSubstring("application_type native requires client_type public")))
+			})
+
+			DescribeTable("accepts its own scheme or an http loopback address",
+				func(redirect string) {
+					_, err := svc.Create(native("rm_native_ok", redirect))
+					Expect(err).NotTo(HaveOccurred())
+				},
+				Entry("a private-use scheme", "com.example.app:/callback"),
+				Entry("the shipped Home app scheme", "rainmaker://com.espressif.novahome/success"),
+				Entry("127.0.0.1", "http://127.0.0.1:8765/callback"),
+				Entry("[::1]", "http://[::1]:8765/callback"),
+				Entry("localhost", "http://localhost/callback"),
+			)
+
+			DescribeTable("refuses any other redirect (negative)",
+				func(redirect, msg string) {
+					_, err := svc.Create(native("rm_native_bad", redirect))
+					Expect(err).To(MatchError(ContainSubstring(msg)))
+				},
+				Entry("https", "https://app.example.com/callback", "register a web application for an https redirect"),
+				Entry("http off loopback", "http://app.example.com/callback", "may use http only for loopback"),
+			)
+
+			It("refuses an https redirect added by update (negative)", func() {
+				_, err := svc.Create(native("rm_native_upd", "com.example.app:/cb"))
+				Expect(err).NotTo(HaveOccurred())
+				_, err = svc.Update("rm_native_upd", clients.UpdateInput{ClientName: "T", RedirectURIs: []string{"https://app.example.com/cb"}, GrantTypes: []string{"authorization_code"}})
+				Expect(err).To(MatchError(ContainSubstring("not allowed for a native application")))
+			})
+
+			It("leaves post_logout_redirect_uris and web clients' https redirects alone", func() {
+				in := native("rm_native_logout", "com.example.app:/cb")
+				in.PostLogoutRedirectURIs = []string{"https://app.example.com/bye"}
+				_, err := svc.Create(in)
+				Expect(err).NotTo(HaveOccurred())
+
+				web := publicClient("rm_web_https")
+				web.RedirectURIs = []string{"https://app.example.com/callback"}
+				_, err = svc.Create(web)
+				Expect(err).NotTo(HaveOccurred())
+			})
+		})
+
+		It("reads a client registered before the field as web", func() {
+			Expect(oauth_clients_db.NewOAuthClientsDB(rmngctx.NewRmngContextWithCtx(context.Background(), nil)).CreateClient(&oauth_clients_db.OAuthClientEntry{
+				ClientID: "rm_old", ClientName: "Old", ClientType: "public",
+			})).To(Succeed())
+			Expect(get("rm_old").ApplicationType).To(Equal("web"))
 		})
 	})
 
@@ -222,6 +392,19 @@ var _ = Describe("clients.Service", func() {
 			Expect(got.RedirectURIs).To(BeEmpty())
 		})
 
+		It("rejects an update that takes the default_resource out of allowed_resources (negative)", func() {
+			_, err := svc.Create(clients.CreateInput{
+				ClientID: "rm_def", ClientName: "S", ClientType: "confidential", GrantTypes: []string{"client_credentials"},
+				AllowedResources: []string{"https://api.example.com"}, DefaultResource: "https://api.example.com",
+			})
+			Expect(err).NotTo(HaveOccurred())
+			_, err = svc.Update("rm_def", clients.UpdateInput{
+				ClientName: "S", GrantTypes: []string{"client_credentials"},
+				AllowedResources: []string{"https://account.example.com"}, DefaultResource: "https://api.example.com",
+			})
+			Expect(err).To(MatchError(ContainSubstring("default_resource")))
+		})
+
 		It("rejects a missing client_name (required)", func() {
 			_, _ = svc.Create(publicClient("rm_p"))
 			_, err := svc.Update("rm_p", clients.UpdateInput{GrantTypes: []string{"authorization_code"}})
@@ -251,6 +434,15 @@ var _ = Describe("clients.Service", func() {
 		It("returns not-found for an unknown id (negative)", func() {
 			_, err := svc.AddRedirectURIs("nope", []string{"com.example://x"})
 			Expect(err).To(HaveOccurred())
+		})
+
+		It("refuses a URI registration would refuse, and adds none of the batch (negative)", func() {
+			_, _ = svc.Create(publicClient("rm_v"))
+			_, err := svc.AddRedirectURIs("rm_v", []string{"https://ok.example.com/cb", "javascript:alert(1)"})
+			Expect(err).To(MatchError(clients.ErrInvalidRedirectURI))
+			got, err := svc.Get("rm_v")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got.RedirectURIs).To(ConsistOf("com.example://cb"))
 		})
 	})
 

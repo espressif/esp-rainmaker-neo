@@ -100,6 +100,8 @@ type LoginResponse struct {
 	IDToken      string
 	Success      bool
 	Message      string
+	// ChallengeName is set when the password was right but one more step is needed (forced password change, MFA), so it is not reported as a wrong password.
+	ChallengeName string
 }
 
 // NewCognitoService builds a service for a pool we own: the pool id enables the Admin* operations
@@ -250,11 +252,12 @@ func (c *CognitoService) InitiateAuth(ctx context.Context, req *LoginRequest) (*
 		}, err
 	}
 
-	// A challenge (MFA, ...) verifies the password but issues no tokens; nil would panic below.
+	// A challenge verifies the password but issues no tokens.
 	if output.AuthenticationResult == nil {
 		return &LoginResponse{
-			Success: false,
-			Message: "Authentication requires a challenge this surface does not support",
+			Success:       false,
+			Message:       "Authentication requires a challenge this surface does not support",
+			ChallengeName: string(output.ChallengeName),
 		}, nil
 	}
 

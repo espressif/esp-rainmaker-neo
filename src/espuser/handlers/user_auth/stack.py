@@ -77,6 +77,12 @@ class UserAuthAPI(Construct):
             ],
         ))
 
+        # Sign-in and refresh read the password client's allowed and default resources.
+        role.add_to_policy(iam.PolicyStatement(
+            actions=["dynamodb:GetItem"],
+            resources=[get_table_arn(USER_TABLE_NAMES['OAUTH_CLIENTS'], region)],
+        ))
+
         # The password app client is resolved from the provider registry, not from deployment config.
         role.add_to_policy(iam.PolicyStatement(
             actions=["dynamodb:Scan"],
@@ -86,8 +92,9 @@ class UserAuthAPI(Construct):
         # Legacy sign-in establishes a cookie-less app user agent (PutItem) and the grant clamp then
         # bumps its retention (Query the by-user index, GetItem the ceiling, UpdateItem expires_at),
         # so a legacy login is listed on the user agent screen and its refresh families stay clamped to it.
+        # A password change or reset signs every user agent out, and signout removes an app user agent once its last family is revoked (DeleteItem).
         role.add_to_policy(iam.PolicyStatement(
-            actions=["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:UpdateItem"],
+            actions=["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem"],
             resources=[get_table_arn(USER_TABLE_NAMES['SESSIONS'], region)],
         ))
         role.add_to_policy(iam.PolicyStatement(

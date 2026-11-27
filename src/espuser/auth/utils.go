@@ -34,11 +34,13 @@ type UserInfo struct {
 // JSON tags are the OAuth 2.0 token-response names (RFC 6749 §5.1); id_token is
 // omitempty since it is present only when openid is in scope.
 type UserTokens struct {
-	AccessToken        string `json:"access_token"`
-	RefreshToken       string `json:"refresh_token,omitempty"`
-	IDToken            string `json:"id_token,omitempty"`
-	TokenType          string `json:"token_type"`
-	ExpiresIn          int    `json:"expires_in"`
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	IDToken      string `json:"id_token,omitempty"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int    `json:"expires_in"`
+	// RFC 6749 s5.1: the granted scope, which a client cannot otherwise see when it was narrowed from the request.
+	Scope              string `json:"scope,omitempty"`
 	MustChangePassword bool   `json:"must_change_password,omitempty"`
 }
 
@@ -68,6 +70,12 @@ func IsUserNotConfirmedError(err error) bool {
 	}
 	var notConfirmed *types.UserNotConfirmedException
 	return errors.As(err, &notConfirmed)
+}
+
+// IsPasswordPolicyError reports the pool's password policy refusing a new password.
+func IsPasswordPolicyError(err error) bool {
+	var refused *types.InvalidPasswordException
+	return errors.As(err, &refused)
 }
 
 // IsUserAlreadyExistsError checks if an error indicates that a user already exists

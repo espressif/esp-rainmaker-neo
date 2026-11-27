@@ -31,8 +31,8 @@ REPO_ROOT = str(paths.repo_root()) if paths.repo_root() else None
 DEFAULT_OUTPUTS_FILE = 'rmng-outputs.json'
 
 
-# Seeded end-user OIDC client id, used when the outputs predate the EspUserClientId output.
-DEFAULT_ESP_USER_CLIENT_ID = 'user-pool-client'
+# The RainMaker Home app's client, which the password API issues to; used when the outputs lack HomeAppClientId.
+DEFAULT_HOME_APP_CLIENT_ID = 'rainmaker-neo-home-app-client'
 
 # Alexa smart-home region codes keyed by the AWS region the endpoint lives in. Alexa accepts
 # endpoints only in these three regions, wherever RMNG itself is deployed.
@@ -194,7 +194,7 @@ class RmngSettings:
     admin_client_id: str
     end_user_pool_id: str
     user_api_gateway_url: str
-    esp_user_client_id: str
+    home_app_client_id: str
     esp_user_discovery_issuer: str
 
     gva_fulfillment_url: str
@@ -235,7 +235,7 @@ class RmngSettings:
             admin_client_id=esp_user_base.get('EspAdminUserPoolClientId') or rmng_base.get('AdminUserPoolClientId', ''),
             end_user_pool_id=esp_user_base.get('EspEndUserPoolId', ''),
             user_api_gateway_url=esp_user_base.get('EspUserApiUrl', ''),
-            esp_user_client_id=esp_user_base.get('EspUserClientId') or DEFAULT_ESP_USER_CLIENT_ID,
+            home_app_client_id=esp_user_base.get('HomeAppClientId') or DEFAULT_HOME_APP_CLIENT_ID,
             esp_user_discovery_issuer=esp_user_base.get('EspUserDiscoveryIssuer', ''),
             # GVA moved to its own stack; fall back to rmng-core for deployments predating it.
             gva_fulfillment_url=rmng_gva_core.get('GVAFulfillmentUrl') or rmng_core.get('GVAFulfillmentUrl', ''),

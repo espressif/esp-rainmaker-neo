@@ -15,9 +15,20 @@ from ..outputs import oidc_endpoints
 from . import output
 from .context import Session
 
-VA_CLIENT_ID = 'va-client'
-VA_SECRET_HINT = ('the va-client secret from GET /v1/admin/clients?get_secret=true '
-                  '(or SSM /espuser/base/va-client-secret)')
+ALEXA_CLIENT_ID = 'rainmaker-neo-alexa-client'
+GVA_CLIENT_ID = 'rainmaker-neo-gva-client'
+SMART_THINGS_CLIENT_ID = 'rainmaker-neo-smartthings-client'
+# The SecureString each assistant's stack hands its client secret over in.
+CLIENT_SECRET_PARAMS = {
+    ALEXA_CLIENT_ID: '/rmng/alexa/esp-user-client-secret',
+    GVA_CLIENT_ID: '/rmng/gva/esp-user-client-secret',
+    SMART_THINGS_CLIENT_ID: '/rmng/smartthings/esp-user-client-secret',
+}
+
+
+def _secret_hint(client_id):
+    return (f'the {client_id} secret from GET /v1/admin/clients?get_secret=true '
+            f'(or SecureString SSM {CLIENT_SECRET_PARAMS[client_id]})')
 
 
 def _oidc(settings):
@@ -47,9 +58,9 @@ def print_alexa_instructions(settings):
     output.plain('2. On the Account Linking page:')
     output.plain(f'   - Your Web Authorization URL: {authorize_url}')
     output.plain(f'   - Access Token URI: {token_url}')
-    output.plain(f'   - Your Client Id: {VA_CLIENT_ID}')
-    output.plain(f'   - Your Secret: {VA_SECRET_HINT}')
-    output.plain('   - Scope: add openid email phone profile')
+    output.plain(f'   - Your Client Id: {ALEXA_CLIENT_ID}')
+    output.plain(f'   - Your Secret: {_secret_hint(ALEXA_CLIENT_ID)}')
+    output.plain('   - Scope: add openid email phone profile offline_access')
     output.plain('3. Store the credentials: esp-morpheus admin integrations alexa setup '
                  '<config_file>')
 
@@ -71,11 +82,11 @@ def print_smartthings_instructions(settings):
             if code in regions:
                 output.plain(f'     {label}: {regions[code]}')
     output.plain('3. Device Cloud Credentials (your cloud, given to SmartThings):')
-    output.plain(f'   - Client ID: {VA_CLIENT_ID}')
-    output.plain(f'   - Client Secret: {VA_SECRET_HINT}')
+    output.plain(f'   - Client ID: {SMART_THINGS_CLIENT_ID}')
+    output.plain(f'   - Client Secret: {_secret_hint(SMART_THINGS_CLIENT_ID)}')
     output.plain(f'   - OAuth URL: {authorize_url}')
     output.plain(f'   - Token URL: {token_url}')
-    output.plain('   - OAuth Scope: openid email phone profile')
+    output.plain('   - OAuth Scope: openid email phone profile offline_access')
     output.plain('4. Save. SmartThings then issues its OWN Client ID and Secret. Note the '
                  'direction: these differ from the credentials in step 3.')
     output.plain('5. Store them: esp-morpheus admin integrations smartthings setup '
@@ -93,12 +104,12 @@ def print_gva_instructions(settings):
     output.plain('Google Home configuration (https://console.home.google.com/projects):')
     output.plain('1. Create or open a Google Home project linked to your Google Cloud project')
     output.plain('2. Add a Cloud-to-cloud integration and configure under Develop > Setup:')
-    output.plain(f'   - OAuth Client ID: {VA_CLIENT_ID}')
-    output.plain(f'   - OAuth Client Secret: {VA_SECRET_HINT}')
+    output.plain(f'   - OAuth Client ID: {GVA_CLIENT_ID}')
+    output.plain(f'   - OAuth Client Secret: {_secret_hint(GVA_CLIENT_ID)}')
     output.plain(f'   - Authorization URL: {authorize_url}')
     output.plain(f'   - Token URL: {token_url}')
     output.plain(f'   - Fulfillment URL: {fulfillment_url}')
-    output.plain('   - Scopes: openid, email, phone, profile')
+    output.plain('   - Scopes: openid, email, phone, profile, offline_access')
     output.plain('   - App icon: the logo at assets/gva_logo.png')
     output.plain('3. Enable the HomeGraph API at')
     output.plain('   https://console.cloud.google.com/apis/library/homegraph.googleapis.com')

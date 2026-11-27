@@ -45,24 +45,26 @@ func DefaultRegionalLambdaClient(ctx context.Context, region string) (awscommon.
 	return lambda.NewFromConfig(cfg), nil
 }
 
-// UpdateVAClientRedirectURIs registers redirectURIs on the OIDC va-client registry row,
-// shared by Alexa, GVA and SmartThings (union semantics; other fields preserved). Account
-// linking runs against the ESP User provider, so this is what makes Alexa's redirect back
-// from the linking page acceptable.
+// UpdateVAClientRedirectURIs registers redirectURIs on Alexa's own OIDC client row (union semantics; other fields preserved). Account linking runs against the ESP User provider, so this is what makes Alexa's redirect back from the linking page acceptable.
 func UpdateVAClientRedirectURIs(ctx context.Context, clientID string, redirectURIs []string) error {
 	svc := clients.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil))
-	if _, err := svc.AddRedirectURIs(clientID, redirectURIs); err != nil {
-		return rmerror.NewRMError(err, "failed to add OIDC va-client redirect URIs")
+	_, err := svc.AddRedirectURIs(clientID, redirectURIs)
+	// A URI registration refuses keeps its own message, which says which URI and why, so the config API can answer it as bad input.
+	if errors.Is(err, clients.ErrInvalidRedirectURI) {
+		return err
+	}
+	if err != nil {
+		return rmerror.NewRMError(err, "failed to add the OIDC client's redirect URIs")
 	}
 	return nil
 }
 
-// VAClientRedirectURIs returns the va-client row's currently registered redirect URIs.
+// VAClientRedirectURIs returns the redirect URIs currently registered on an OIDC client row.
 func VAClientRedirectURIs(ctx context.Context, clientID string) ([]string, error) {
 	svc := clients.NewService(rmngctx.NewRmngContextWithCtx(ctx, nil))
 	current, err := svc.Get(clientID)
 	if err != nil {
-		return nil, rmerror.NewRMError(err, "failed to get OIDC va-client")
+		return nil, rmerror.NewRMError(err, "failed to get the OIDC client")
 	}
 	return current.RedirectURIs, nil
 }
