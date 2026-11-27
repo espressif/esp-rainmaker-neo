@@ -20,6 +20,8 @@ aws-sdk-go-v2/service/acmpca/types")
 ## Error Handling and Logging
 - Always wrap errors with `NewRMError()` and don't just return the error
 - If generating a new error (nothing to wrap), start by creating your own with `Errorf`
+- Return API errors with `utils.APIErrorRespJSON(err)`. Set the HTTP status and client message on the `RMError` where the cause is known: `rmerror.NewRMError(err, "subgroup not in db").WithClientStatus(http.StatusNotFound, "Subgroup not found")`. An outer level can replace only the message with `WithClientMessage()`; the outermost level that set each value wins. An error with no client status returns `500 Internal Server Error`
+- Never put `err.Error()` in a response body. `rmerror.TopMessage()` is temporary, for handlers not yet migrated; don't use it in new code
 - Log error once at outermost level (lambda function handler) and never log Error in internal functions
 - Don't add log Info/Debug/Trace unnecessarily, let the developer add them manually
 - Always log Warnings. When errors are not returned, they are logged as Warnings
